@@ -13,12 +13,6 @@ function expect(ψ::ITensorNetwork, obs; bp_update_kwargs=_default_bp_update_kwa
     return expect(ψIψ, obs; bp_update_kwargs, kwargs...)
 end
 
-function expect(ψIψ::BeliefPropagationCache, observables; kwargs...)
-    # when several expectation values are calculated at once, we can perform certain steps only once
-    # TODO: This might require some modilarization
-    # for now, just loop and return
-    return [expect(ψIψ, obs; kwargs...) for obs in observables]
-end
 
 function expect(ψIψ::BeliefPropagationCache, observable; max_loop_size=0, bp_update_kwargs=_default_bp_update_kwargs, kwargs...)
     # TODO: wll there be another option than this expect_loopcorrect function?
