@@ -24,7 +24,7 @@ function paulirotation(generator, θ, indices)
 
     if heisenberg
         # transform into PTMs
-        U = PP.calculateptm(U, heisenberg=true)  # not yet sure why "false" is correct
+        U = PP.calculateptm(U, heisenberg=true)
     end
 
     # check for physical dimension matching

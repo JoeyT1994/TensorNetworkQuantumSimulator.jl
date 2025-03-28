@@ -1,17 +1,42 @@
-function enumerate_cycles(pg::PartitionedGraph, args...)
-    return [PartitionEdge.(cycle) for cycle in enumerate_cycles(partitioned_graph(pg), args...)]
+# the main loop correctio function
+function loop_correction_factor(bpc::BeliefPropagationCache, max_circuit_size::Int; max_genus=2)
+    circuits = enumerate_circuits(bpc, max_circuit_size; max_genus)
+    return loop_correction_factor(bpc, circuits)
 end
 
+function loop_correction_factor(bpc::BeliefPropagationCache, circuits)
+    if isempty(circuits)
+        return 1
+    end
+
+    return 1 + sum(circuit_weights(bpc, circuits))
+end
+
+# finding all the loops in the network
 function enumerate_cycles(bpc::BeliefPropagationCache, args...)
     return enumerate_cycles(partitioned_tensornetwork(bpc), args...)
 end
 
-function enumerate_circuits(pg::PartitionedGraph, args...; kwargs...)
-    return [PartitionEdge.(circuit) for circuit in enumerate_circuits(partitioned_graph(pg), args...; kwargs...)]
+function enumerate_cycles(pg::PartitionedGraph, args...)
+    return [PartitionEdge.(cycle) for cycle in enumerate_cycles(partitioned_graph(pg), args...)]
+end
+
+function enumerate_cycles(g::NamedGraph, max_cycle_length::Int64)
+    vs = collect(vertices(g))
+    vertex_cycles = simplecycles_limited_length(position_graph(g), max_cycle_length)
+    vertex_cycles = [[vs[i] for i in cycle] for cycle in vertex_cycles]
+    cycles = vertex_cycle_to_cycle.(vertex_cycles)
+    cycles = filter(c -> is_valid_cycle(g, c), cycles)
+    return unique(cycles, edgevectors_equal)
 end
 
 function enumerate_circuits(bpc::BeliefPropagationCache, args...; kwargs...)
     return enumerate_circuits(partitioned_tensornetwork(bpc), args...; kwargs...)
+end
+
+function enumerate_circuits(pg::PartitionedGraph, args...; kwargs...)
+    # TODO: why is this recursive?
+    return [PartitionEdge.(circuit) for circuit in enumerate_circuits(partitioned_graph(pg), args...; kwargs...)]
 end
 
 function vertices_in_edgevector(edges::Vector)
@@ -94,22 +119,6 @@ end
 
 function circuit_weights(bpc, circuits, args...)
     return [circuit_weight(bpc, circuit, args...) for circuit in circuits]
-end
-
-function corrected_free_energy(bpc::BeliefPropagationCache, args...; kwargs...)
-    # TODO: enumerating the circuits can be done once per batch of observables and then reused
-    circuits = enumerate_circuits(bpc, args...)
-    isempty(circuits) && return 1
-    return 1 + sum(circuit_weights(bpc, circuits))
-end
-
-function enumerate_cycles(g::NamedGraph, max_cycle_length::Int64)
-    vs = collect(vertices(g))
-    vertex_cycles = simplecycles_limited_length(position_graph(g), max_cycle_length)
-    vertex_cycles = [[vs[i] for i in cycle] for cycle in vertex_cycles]
-    cycles = vertex_cycle_to_cycle.(vertex_cycles)
-    cycles = filter(c -> is_valid_cycle(g, c), cycles)
-    return unique(cycles, edgevectors_equal)
 end
 
 function cycles_to_circuit(cycles::Vector)

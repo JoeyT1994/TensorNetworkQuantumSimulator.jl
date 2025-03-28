@@ -1,3 +1,4 @@
+# TODO: Allow for update of BP cache to take defaults and not error
 
 function build_bp_cache(ψ::AbstractITensorNetwork; kwargs...)
     bpc = BeliefPropagationCache(QuadraticFormNetwork(ψ))
