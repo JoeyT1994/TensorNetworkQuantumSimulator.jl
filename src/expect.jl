@@ -68,11 +68,11 @@ function loopcorrected_unnormalized_expectation(bp_cache::BeliefPropagationCache
         bp_cache = update(bp_cache; bp_update_kwargs...)
     end
 
-    scalingI = scalar(bp_cache)
-    ψIψ = normalize(bp_cache)
+    scaling = scalar(bp_cache)
+    bp_cache = normalize(bp_cache)
 
     # this is the denominator of the expectation fraction
-    return scalingI * loop_correction_factor(ψIψ, circuits)
+    return scaling * loop_correction_factor(bp_cache, circuits)
 end
 
 
