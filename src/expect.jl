@@ -20,30 +20,6 @@ function expect(ψIψ::BeliefPropagationCache, observable; max_loop_size=0, bp_u
     return val
 end
 
-function collectobservable(obs::Tuple)
-    # unpack
-    op = obs[1]
-    qinds = obs[2]
-    if length(obs) == 2
-        coeff = 1.0
-    else
-        coeff = obs[3]
-    end
-
-    # when the observable is "I" or an empty string, just return the coefficient
-    # this is dangeriously assuming that the norm of the network is one
-    # TODO: how to make this more general?
-    if op == "" && isempty(qinds)
-        # if this is the case, we assume that this is a norm contraction with identity observable
-        op = "I"
-        qinds = [first(TN.vertices(ψIψ))[1]] # the first vertex
-    end
-
-    op_vec = [string(o) for o in op]
-    qinds_vec = vec(collect(qinds))
-    return op_vec, qinds_vec, coeff
-end
-
 
 function expect_loopcorrect(
     ψIψ::BeliefPropagationCache, observable, max_circuit_size; max_genus::Int64=2, bp_update_kwargs=_default_bp_update_kwargs
@@ -86,6 +62,7 @@ function expect_loopcorrect(
 
 end
 
+
 function loopcorrected_unnormalized_expectation(bp_cache::BeliefPropagationCache, circuits; update_bp_cache=true, bp_update_kwargs=_default_bp_update_kwargs)
     if update_bp_cache
         bp_cache = update(bp_cache; bp_update_kwargs...)
@@ -97,6 +74,7 @@ function loopcorrected_unnormalized_expectation(bp_cache::BeliefPropagationCache
     # this is the denominator of the expectation fraction
     return scalingI * loop_correction_factor(ψIψ, circuits)
 end
+
 
 function insert_observable(ψIψ, obs::Tuple)
     op_strings, qinds, coeff = collectobservable(obs)
@@ -113,6 +91,31 @@ function insert_observable(ψIψ, obs::Tuple)
 
     ψOψ = update_factors(ψIψ, Dictionary([(v, "operator") for v in qinds], operators))
     return ψOψ
+end
+
+
+function collectobservable(obs::Tuple)
+    # unpack
+    op = obs[1]
+    qinds = obs[2]
+    if length(obs) == 2
+        coeff = 1.0
+    else
+        coeff = obs[3]
+    end
+
+    # when the observable is "I" or an empty string, just return the coefficient
+    # this is dangeriously assuming that the norm of the network is one
+    # TODO: how to make this more general?
+    if op == "" && isempty(qinds)
+        # if this is the case, we assume that this is a norm contraction with identity observable
+        op = "I"
+        qinds = [first(TN.vertices(ψIψ))[1]] # the first vertex
+    end
+
+    op_vec = [string(o) for o in op]
+    qinds_vec = vec(collect(qinds))
+    return op_vec, qinds_vec, coeff
 end
 
 
