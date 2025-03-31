@@ -1,10 +1,10 @@
-function expect(tn1::ITensorNetwork, tn2::ITensorNetwork; imag_tol=1e-14)
-    # this is pure state fidelity
+# function expect(tn1::ITensorNetwork, tn2::ITensorNetwork; imag_tol=1e-14)
+#     # this is pure state fidelity
+#     # TODO: make this function not just an alias for inner() but something that can be loop-corrected
+#     val = inner(tn1, tn2; alg="bp")
 
-    val = inner(tn1, tn2; alg="bp")
-
-    return val
-end
+#     return val
+# end
 
 
 function expect(ψ::ITensorNetwork, obs; bp_update_kwargs=_default_bp_update_kwargs, kwargs...)
@@ -13,28 +13,16 @@ function expect(ψ::ITensorNetwork, obs; bp_update_kwargs=_default_bp_update_kwa
     return expect(ψIψ, obs; bp_update_kwargs, kwargs...)
 end
 
-function expect(ψIψ::BeliefPropagationCache, obs::Tuple; max_loop_size=0, bp_update_kwargs=_default_bp_update_kwargs, kwargs...)
-    # unpack
-    op = obs[1]
-    qinds = obs[2]
-    if length(obs) == 2
-        coeff = 1.0
-    else
-        coeff = obs[3]
-    end
 
-    op_vec = [string(o) for o in op]
-    qinds_vec = vec(collect(qinds))
-
-    # TODO: expect for vectors of observables. Re-use the same BP caches.
-    val = expect_loopcorrect(ψIψ, op_vec, qinds_vec, max_loop_size; bp_update_kwargs, kwargs...) * coeff
-
+function expect(ψIψ::BeliefPropagationCache, observable; max_loop_size=0, bp_update_kwargs=_default_bp_update_kwargs, kwargs...)
+    # TODO: wll there be another option than this expect_loopcorrect function?
+    val = expect_loopcorrect(ψIψ, observable, max_loop_size; bp_update_kwargs, kwargs...)
     return val
 end
 
 
 function expect_loopcorrect(
-    ψIψ::BeliefPropagationCache, op_strings::Vector, verts::Vector, max_circuit_size::Int64; max_genus::Int64=2, bp_update_kwargs=_default_bp_update_kwargs
+    ψIψ::BeliefPropagationCache, observable, max_circuit_size; max_genus::Int64=2, bp_update_kwargs=_default_bp_update_kwargs
 )
 
     # TODO: default max genus to ceil(max_circuit_size/min_loop_size)
@@ -45,29 +33,89 @@ function expect_loopcorrect(
         flush(stdout)
     end
 
+    # first get all the cycles
+    circuits = enumerate_circuits(ψIψ, max_circuit_size; max_genus)
+
+    # update the norm cache once and hope that it is a good initialization for the ones with operator insterted
+    ψIψ = update(ψIψ; bp_update_kwargs...)
+
+    # this is the denominator of the expectation fraction
+    value_without_observable = loopcorrected_unnormalized_expectation(ψIψ, circuits; update_bp_cache=false)
+
+    # this is when it is just a single observable
+    if observable isa Tuple
+        ψOψ = insert_observable(ψIψ, observable)
+        value_with_observable = loopcorrected_unnormalized_expectation(ψOψ, circuits; bp_update_kwargs)
+        return value_with_observable / value_without_observable
+    end
+
+    # this is when it is a vector of observables
+    all_values_with_observable = [
+        begin
+            ψOψ = insert_observable(ψIψ, obs)
+            loopcorrected_unnormalized_expectation(ψOψ, circuits; bp_update_kwargs)
+        end for obs in observable
+    ]
+
+    return [value_with_observable / value_without_observable for value_with_observable in all_values_with_observable]
+
+
+end
+
+
+function loopcorrected_unnormalized_expectation(bp_cache::BeliefPropagationCache, circuits; update_bp_cache=true, bp_update_kwargs=_default_bp_update_kwargs)
+    if update_bp_cache
+        bp_cache = update(bp_cache; bp_update_kwargs...)
+    end
+
+    scaling = scalar(bp_cache)
+    bp_cache = normalize(bp_cache)
+
+    # this is the denominator of the expectation fraction
+    return scaling * loop_correction_factor(bp_cache, circuits)
+end
+
+
+function insert_observable(ψIψ, obs::Tuple)
+    op_strings, qinds, coeff = collectobservable(obs)
 
     ψIψ_tn = tensornetwork(ψIψ)
-    ψIψ_vs = [ψIψ_tn[operator_vertex(ψIψ_tn, v)] for v in verts]
-    sinds = [commonind(ψIψ_tn[ket_vertex(ψIψ_tn, v)], ψIψ_vs[i]) for (i, v) in enumerate(verts)]
-    operators = [ITensors.op(op_strings[i], sinds[i]) for i in 1:length(op_strings)]
+    ψIψ_vs = [ψIψ_tn[operator_vertex(ψIψ_tn, v)] for v in qinds]
+    sinds = [commonind(ψIψ_tn[ket_vertex(ψIψ_tn, v)], ψIψ_vs[i]) for (i, v) in enumerate(qinds)]
+    operators = [ITensors.op(op_strings[i], sinds[i]) for i in eachindex(op_strings)]
 
-    ψOψ = update_factors(ψIψ, Dictionary([(v, "operator") for v in verts], operators))
+    # scale the first operator with the coefficient
+    # TODO: is evenly better?
+    operators[1] = operators[1] * coeff
 
-    sI = scalar(ψIψ)
-    # this normalization can be done only once.
-    ψIψ = normalize(ψIψ)
-    # TODO: enumerating the circuits can be done once per batch of observables and then reused
-    denom = sI * corrected_free_energy(ψIψ, max_circuit_size; max_genus)
 
-    ψOψ = update(ψOψ; bp_update_kwargs...)
-    sO = scalar(ψOψ)
-    ψOψ = normalize(ψOψ)
-    numer = sO * corrected_free_energy(ψOψ, max_circuit_size; max_genus)
+    ψOψ = update_factors(ψIψ, Dictionary([(v, "operator") for v in qinds], operators))
+    return ψOψ
+end
 
-    # TODO: something like this
-    # identities = [ITensors.op("I", sinds[i]) for i in 1:length(op_strings)]
-    # ψIψ = update_factors(ψOψ, Dictionary([(v, "operator") for v in verts], identities))
-    return numer / denom
+
+function collectobservable(obs::Tuple)
+    # unpack
+    op = obs[1]
+    qinds = obs[2]
+    if length(obs) == 2
+        coeff = 1.0
+    else
+        coeff = obs[3]
+    end
+
+    # when the observable is "I" or an empty string, just return the coefficient
+    # this is dangeriously assuming that the norm of the network is one
+    # TODO: how to make this more general?
+    if op == "" && isempty(qinds)
+        # if this is the case, we assume that this is a norm contraction with identity observable
+        op = "I"
+        qinds = [first(TN.vertices(ψIψ))[1]] # the first vertex
+    end
+
+    op_vec = [string(o) for o in op]
+    qinds_vec = vec(collect(qinds))
+    return op_vec, qinds_vec, coeff
 end
 
 
