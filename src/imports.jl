@@ -81,7 +81,8 @@ using ITensorNetworks:
     default_bp_maxiter,
     # update_message,
     tree_orthogonalize,
-    gauge_walk
+    gauge_walk,
+    maxlinkdim
 
 
 
