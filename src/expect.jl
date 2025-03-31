@@ -1,10 +1,10 @@
-function expect(tn1::ITensorNetwork, tn2::ITensorNetwork; imag_tol=1e-14)
-    # this is pure state fidelity
+# function expect(tn1::ITensorNetwork, tn2::ITensorNetwork; imag_tol=1e-14)
+#     # this is pure state fidelity
+#     # TODO: make this function not just an alias for inner() but something that can be loop-corrected
+#     val = inner(tn1, tn2; alg="bp")
 
-    val = inner(tn1, tn2; alg="bp")
-
-    return val
-end
+#     return val
+# end
 
 
 function expect(ψ::ITensorNetwork, obs; bp_update_kwargs=_default_bp_update_kwargs, kwargs...)
