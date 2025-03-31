@@ -1,10 +1,15 @@
-# TODO: Allow for update of BP cache to take defaults and not error
+function updatecache(bp_cache::BeliefPropagationCache; bp_update_kwargs...)
+    # merge provided kwargs with the defaults
+    bp_update_kwargs = merge(get_global_bp_update_kwargs(), bp_update_kwargs)
+    return update(bp_cache; bp_update_kwargs...)
+end
+
 
 function build_bp_cache(ψ::AbstractITensorNetwork; kwargs...)
     bpc = BeliefPropagationCache(QuadraticFormNetwork(ψ))
     # TODO: QuadraticFormNetwork() builds ψIψ network, but for Pauli picture `norm_sqr_network()` is enough
     # https://github.com/ITensor/ITensorNetworks.jl/blob/main/test/test_belief_propagation.jl line 49 to construct the cache without the identities.
-    bpc = update(bpc; merge(_default_bp_update_kwargs, kwargs)...)
+    bpc = updatecache(bpc; kwargs...)
     return bpc
 end
 
@@ -16,7 +21,7 @@ end
 
 
 function LinearAlgebra.normalize(
-    ψ::ITensorNetwork; cache_update_kwargs=(; maxiter=30, tol=1e-12)
+    ψ::ITensorNetwork; cache_update_kwargs=get_global_bp_update_kwargs()
 )
     ψψ = norm_sqr_network(ψ)
     ψψ_bpc = BeliefPropagationCache(ψψ, group(v -> first(v), vertices(ψψ)))
@@ -24,11 +29,15 @@ function LinearAlgebra.normalize(
     return ψ, ψψ_bpc
 end
 
-function LinearAlgebra.normalize(ψAψ_bpc::BeliefPropagationCache;
-    cache_update_kwargs=default_cache_update_kwargs(ψAψ_bpc), update_cache=true, sf::Float64=1.0)
+function LinearAlgebra.normalize(
+    ψAψ_bpc::BeliefPropagationCache;
+    cache_update_kwargs=get_global_bp_update_kwargs(),
+    update_cache=true,
+    sf::Float64=1.0
+)
 
     if update_cache
-        ψAψ_bpc = update(ψAψ_bpc; cache_update_kwargs...)
+        ψAψ_bpc = updatecache(ψAψ_bpc; cache_update_kwargs...)
     end
     ψAψ_bpc = normalize_messages(ψAψ_bpc)
     ψψ = tensornetwork(ψAψ_bpc)
@@ -49,13 +58,13 @@ end
 function LinearAlgebra.normalize(
     ψ::ITensorNetwork,
     ψAψ_bpc::BeliefPropagationCache;
-    cache_update_kwargs=default_cache_update_kwargs(ψAψ_bpc),
+    cache_update_kwargs=get_global_bp_update_kwargs(),
     update_cache=true,
     sf::Float64=1.0,
 )
     ψ = copy(ψ)
     if update_cache
-        ψAψ_bpc = update(ψAψ_bpc; cache_update_kwargs...)
+        ψAψ_bpc = updatecache(ψAψ_bpc; cache_update_kwargs...)
     end
     ψAψ_bpc = normalize_messages(ψAψ_bpc)
     ψψ = tensornetwork(ψAψ_bpc)

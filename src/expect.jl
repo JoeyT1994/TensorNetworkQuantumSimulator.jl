@@ -7,14 +7,14 @@
 # end
 
 
-function expect(ψ::ITensorNetwork, obs; bp_update_kwargs=_default_bp_update_kwargs, kwargs...)
+function expect(ψ::ITensorNetwork, obs; bp_update_kwargs=get_global_bp_update_kwargs(), kwargs...)
     ## this is the entry point for when the state network is passed, and not the BP cache 
     ψIψ = build_bp_cache(ψ; bp_update_kwargs...)
     return expect(ψIψ, obs; bp_update_kwargs, kwargs...)
 end
 
 
-function expect(ψIψ::BeliefPropagationCache, observable; max_loop_size=0, bp_update_kwargs=_default_bp_update_kwargs, kwargs...)
+function expect(ψIψ::BeliefPropagationCache, observable; max_loop_size=0, bp_update_kwargs=get_global_bp_update_kwargs(), kwargs...)
     # TODO: wll there be another option than this expect_loopcorrect function?
     val = expect_loopcorrect(ψIψ, observable, max_loop_size; bp_update_kwargs, kwargs...)
     return val
@@ -22,7 +22,7 @@ end
 
 
 function expect_loopcorrect(
-    ψIψ::BeliefPropagationCache, observable, max_circuit_size; max_genus::Int64=2, bp_update_kwargs=_default_bp_update_kwargs
+    ψIψ::BeliefPropagationCache, observable, max_circuit_size; max_genus::Int64=2, bp_update_kwargs=get_global_bp_update_kwargs()
 )
 
     # TODO: default max genus to ceil(max_circuit_size/min_loop_size)
@@ -37,10 +37,10 @@ function expect_loopcorrect(
     circuits = enumerate_circuits(ψIψ, max_circuit_size; max_genus)
 
     # update the norm cache once and hope that it is a good initialization for the ones with operator insterted
-    ψIψ = update(ψIψ; bp_update_kwargs...)
+    ψIψ = updatecache(ψIψ; bp_update_kwargs...)
 
     # this is the denominator of the expectation fraction
-    value_without_observable = loopcorrected_unnormalized_expectation(ψIψ, circuits; update_bp_cache=false)
+    value_without_observable = loopcorrected_unnormalized_expectation(ψIψ, circuits; bp_update_kwargs, update_bp_cache=false)
 
     # this is when it is just a single observable
     if observable isa Tuple
@@ -63,9 +63,9 @@ function expect_loopcorrect(
 end
 
 
-function loopcorrected_unnormalized_expectation(bp_cache::BeliefPropagationCache, circuits; update_bp_cache=true, bp_update_kwargs=_default_bp_update_kwargs)
+function loopcorrected_unnormalized_expectation(bp_cache::BeliefPropagationCache, circuits; update_bp_cache=true, bp_update_kwargs=get_global_bp_update_kwargs())
     if update_bp_cache
-        bp_cache = update(bp_cache; bp_update_kwargs...)
+        bp_cache = updatecache(bp_cache; bp_update_kwargs...)
     end
 
     scaling = scalar(bp_cache)

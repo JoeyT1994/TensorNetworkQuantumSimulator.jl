@@ -2,7 +2,7 @@
 # BP update control via "update_every" parameter?
 # What about normalization?
 # How do we handle the BP cache? Build a new object that has both?
-const _default_bp_update_kwargs = (maxiter=20, tol=1e-6, message_update=ms -> make_eigs_real.(default_message_update(ms)))
+
 const _default_apply_kwargs = (maxdim=Inf, cutoff=1e-10, normalize=false)
 
 # import ITensorNetworks.apply for less clutter down below
@@ -13,7 +13,7 @@ const _default_apply_kwargs = (maxdim=Inf, cutoff=1e-10, normalize=false)
 function ITensors.apply(
     circuit::AbstractVector,
     ψ::ITensorNetwork;
-    bp_update_kwargs=_default_bp_update_kwargs,
+    bp_update_kwargs=get_global_bp_update_kwargs(),
     kwargs...
 )
     ψψ = build_bp_cache(ψ; bp_update_kwargs...)
@@ -39,14 +39,13 @@ function ITensors.apply(
     ψ::ITensorNetwork,
     ψψ::BeliefPropagationCache;
     apply_kwargs=_default_apply_kwargs,
-    bp_update_kwargs=_default_bp_update_kwargs,
+    bp_update_kwargs=get_global_bp_update_kwargs(),
     update_every=1,
     verbose=false
 )
 
     # merge all the kwargs with the defaults 
     apply_kwargs = merge(_default_apply_kwargs, apply_kwargs)
-    bp_update_kwargs = merge(_default_bp_update_kwargs, bp_update_kwargs)
 
     # we keep track of the vertices that have been acted on by 2-qubit gates
     # only they increase the counter
@@ -76,7 +75,7 @@ function ITensors.apply(
                 println("Updating BP cache")
             end
 
-            t = @timed ψψ = update(ψψ; bp_update_kwargs...)
+            t = @timed ψψ = updatecache(ψψ; bp_update_kwargs...)
 
             if verbose
                 println("Done in $(t.time) secs")
@@ -110,7 +109,7 @@ function ITensors.apply(
     ψψ = copy(ψψ)
     ψ = copy(ψ)
     vs = neighbor_vertices(ψ, gate)
-    envs = environment(ψψ, PartitionVertex.(vs))
+    envs = incoming_messages(ψψ, PartitionVertex.(vs))
     singular_values! = Ref(ITensor())
 
     # this is the only call to a lower-level apply that we currently do.
@@ -189,7 +188,7 @@ function truncate(ψ::ITensorNetwork, maxdim; cutoff=nothing, bp_update_kwargs=(
         ψ, ψψ = apply(id, ψ, ψψ; reset_all_messages=false, apply_kwargs)
     end
 
-    ψψ = update(ψψ; bp_update_kwargs...)
+    ψψ = updatecache(ψψ; bp_update_kwargs...)
 
     return ψ, ψψ
 end

@@ -5,7 +5,7 @@ using Dictionaries: Dictionary, set!
 using Graphs: simplecycles_limited_length, has_edge, SimpleGraph, center
 
 using NamedGraphs
-using NamedGraphs: AbstractGraph, position_graph, rename_vertices, edges, vertextype, add_vertex!, neighbors
+using NamedGraphs: AbstractNamedGraph, AbstractGraph, position_graph, rename_vertices, edges, vertextype, add_vertex!, neighbors
 using NamedGraphs.GraphsExtensions:
     src,
     dst,
@@ -20,6 +20,10 @@ using NamedGraphs.GraphsExtensions:
     post_order_dfs_edges
 
 using NamedGraphs.PartitionedGraphs: PartitionedGraphs, partitioned_vertices, partitionedges, unpartitioned_graph
+
+using SimpleGraphConverter: UG
+using SimpleGraphAlgorithms
+using SimpleGraphAlgorithms: edge_color
 
 using ITensors
 using ITensors: Index, ITensor, inner, itensor, apply, map_diag!
@@ -46,6 +50,7 @@ using ITensorNetworks:
     apply,
     neighbor_vertices,
     environment,
+    incoming_messages,
     partitionedge,
     messages,
     update_factor,
@@ -74,7 +79,7 @@ using ITensorNetworks:
     edge_tag,
     default_edge_sequence,
     default_bp_maxiter,
-    update_message,
+    # update_message,
     tree_orthogonalize,
     gauge_walk
 

@@ -303,7 +303,7 @@ end
 """
 Update the MPS message in the planar belief propagation cache along the edge pe of the partitioned graph. Use a 1 site DMRG routine
 """
-function ITensorNetworks.update_message(
+function update_message(
     ψIψ::BoundaryMPSBeliefPropagationCache,
     pe::PartitionEdge;
     density_matrix_alg=true,
