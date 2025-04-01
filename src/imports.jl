@@ -17,19 +17,28 @@ using NamedGraphs.GraphsExtensions:
     add_edge!,
     edgetype,
     leaf_vertices,
-    post_order_dfs_edges
+    post_order_dfs_edges,
+    decorate_graph_edges,
+    add_vertex!,
+    add_vertex,
+    rem_edge,
+    add_edges
 
 using NamedGraphs.PartitionedGraphs: PartitionedGraphs, partitioned_vertices, partitionedges, unpartitioned_graph
+
+using NamedGraphs.NamedGraphGenerators:
+    named_grid, named_hexagonal_lattice_graph
 
 using SimpleGraphConverter: UG
 using SimpleGraphAlgorithms
 using SimpleGraphAlgorithms: edge_color
 
 using ITensors
-using ITensors: Index, ITensor, inner, itensor, apply, map_diag!
+using ITensors: Index, ITensor, inner, itensor, apply, map_diag!, @Algorithm_str
 
 using ITensorNetworks
 using ITensorNetworks:
+    AbstractBeliefPropagationCache,
     AbstractITensorNetwork,
     AbstractIndsNetwork,
     Indices,
