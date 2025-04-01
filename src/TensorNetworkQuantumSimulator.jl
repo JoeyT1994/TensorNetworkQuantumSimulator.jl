@@ -26,6 +26,9 @@ export
     maxlinkdim,
     siteinds,
     edge_color,
-    zerostate
+    zerostate,
+    getnqubits,
+    heavy_hexagonal_lattice_grid,
+    named_grid
 
 end
