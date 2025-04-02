@@ -22,6 +22,8 @@ export
     set_global_bp_update_kwargs!,
     reset_global_bp_update_kwargs!,
     expect,
+    expect_boundarymps,
+    build_boundarymps_cache,
     truncate,
     maxlinkdim,
     siteinds,
