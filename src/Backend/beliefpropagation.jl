@@ -13,7 +13,7 @@ function build_bp_cache(ψ::AbstractITensorNetwork; kwargs...)
     return bpc
 end
 
-function ITensors.scalar(bp_cache::BeliefPropagationCache)
+function ITensors.scalar(bp_cache::AbstractBeliefPropagationCache)
     numers, denoms = scalar_factors_quotient(bp_cache)
     isempty(denoms) && return prod(numers)
     return prod(numers) / prod(denoms)
