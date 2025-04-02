@@ -9,7 +9,8 @@ end
 """Create heavy-hex lattice geometry"""
 function heavy_hexagonal_lattice_grid(nx::Int64, ny::Int64)
     g = named_hexagonal_lattice_graph(nx, ny)
-    g = rename_vertices(v -> (2 * first(v), 2 * last(v)), g)
+    # create some space for inserting the new vertices
+    g = rename_vertices(v -> (2 * first(v) - 1, 2 * last(v) - 1), g)
     for e in edges(g)
         vsrc, vdst = src(e), dst(e)
         v_new = ((first(vsrc) + first(vdst)) / 2, (last(vsrc) + last(vdst)) / 2)
