@@ -25,8 +25,8 @@ end
 
 function reset_global_boundarymps_update_kwargs!()
     empty!(_global_bp_update_kwargs)
-    _global_boundarymps_update_kwargs[:alg] = _default_boundarymps_update_maxiter
-    _global_boundarymps_update_kwargs[:message_update_kwargs] = _default_message_update_function
+    _global_boundarymps_update_kwargs[:alg] = _default_boundarymps_update_alg
+    _global_boundarymps_update_kwargs[:message_update_kwargs] = (; maxiter=_default_boundarymps_update_maxiter, tolerance=_default_boundarymps_update_tolerance)
     return get_global_boundarymps_update_kwargs()
 end
 

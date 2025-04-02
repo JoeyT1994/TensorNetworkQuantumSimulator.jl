@@ -16,7 +16,7 @@ function expect(tn, observable; max_loop_size=nothing, message_rank=nothing, kwa
         if !isnothing(max_loop_size)
             throw(ArgumentError(
                 "Both `max_loop_size` and `message_rank` are set. " *
-                "Use `max_loop_size` to for belief propagation and optional loop corrections. " *
+                "Use `max_loop_size` for belief propagation with optional loop corrections. " *
                 "Use `message_rank` to use boundary MPS."
             ))
         end
@@ -92,7 +92,7 @@ function loopcorrected_unnormalized_expectation(bp_cache::BeliefPropagationCache
     end
 
     scaling = scalar(bp_cache)
-    bp_cache = normalize(bp_cache)
+    bp_cache = normalize(bp_cache; update_cache=false)
 
     # this is the denominator of the expectation fraction
     return scaling * loop_correction_factor(bp_cache, circuits)
@@ -100,18 +100,6 @@ end
 
 ## boundary MPS
 # TODO: function that takes BP cache and turns it into MPS cache
-function expect_boundarymps(
-    ψIψ::BoundaryMPSCache, observable::Tuple; boundary_mps_kwargs=get_global_boundarymps_update_kwargs()
-)
-    ψOψ = insert_observable(ψIψ, observable)
-
-    denom = scalar(ψIψ)
-
-    ψOψ = update(ψOψ; boundary_mps_kwargs...)
-    numer = scalar(ψOψ)
-
-    return numer / denom
-end
 
 function expect_boundarymps(
     ψ::AbstractITensorNetwork, observable, message_rank::Integer;
@@ -125,7 +113,22 @@ function expect_boundarymps(
 end
 
 
+function expect_boundarymps(
+    ψIψ::BoundaryMPSCache, observable::Tuple; boundary_mps_kwargs=get_global_boundarymps_update_kwargs()
+)
 
+    # TODO: modularize this with loop correction function for vectors of observables.
+
+    ψOψ = insert_observable(ψIψ, observable)
+
+    denom = scalar(ψIψ)
+
+
+    ψOψ = update(ψOψ; boundary_mps_kwargs...)
+    numer = scalar(ψOψ)
+
+    return numer / denom
+end
 
 
 
@@ -168,8 +171,11 @@ function collectobservable(obs::Tuple)
     end
 
     op_vec = [string(o) for o in op]
-    qinds_vec = vec(collect(qinds))
+    qinds_vec = _tovec(qinds)
     return op_vec, qinds_vec, coeff
 end
+
+_tovec(qinds) = vec(collect(qinds))
+_tovec(qinds::NamedEdge) = [qinds.src, qinds.dst]
 
 

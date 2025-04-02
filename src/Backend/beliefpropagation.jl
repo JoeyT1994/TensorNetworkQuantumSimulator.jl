@@ -27,7 +27,7 @@ function reset_global_bp_update_kwargs!()
     empty!(_global_bp_update_kwargs)
     _global_bp_update_kwargs[:maxiter] = _default_bp_update_maxiter
     _global_bp_update_kwargs[:tol] = _default_bp_update_tol
-    _global_bp_update_kwargs[:message_update_kwargs] = _default_message_update_function
+    _global_bp_update_kwargs[:message_update_kwargs] = (; message_update_function=_default_message_update_function)
     return get_global_bp_update_kwargs()
 end
 
@@ -36,6 +36,10 @@ end
 function updatecache(bp_cache::BeliefPropagationCache; bp_update_kwargs...)
     # merge provided kwargs with the defaults
     bp_update_kwargs = merge(get_global_bp_update_kwargs(), bp_update_kwargs)
+    # if bp_update_kwargs[:maxiter] > 0
+    #     @show "updating"
+    # end
+
     return update(bp_cache; bp_update_kwargs...)
 end
 
