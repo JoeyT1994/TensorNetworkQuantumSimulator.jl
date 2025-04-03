@@ -90,7 +90,7 @@ function loopcorrected_unnormalized_expectation(bp_cache::BeliefPropagationCache
     if update_bp_cache
         bp_cache = updatecache(bp_cache; bp_update_kwargs...)
     end
-
+    # TODO: separate out the scalar part which is also used elsewhere from the loop correction factor
     scaling = scalar(bp_cache)
     bp_cache = normalize(bp_cache; update_cache=false)
 

@@ -1,6 +1,6 @@
 ## Utilities to globally set boundary MPS_update_kwargs 
 const _default_boundarymps_update_alg = "orthogonal"
-const _default_boundarymps_update_maxiter = 20
+const _default_boundarymps_update_niters = 20
 const _default_boundarymps_update_tolerance = 1e-8
 
 
@@ -8,7 +8,7 @@ const _default_boundarymps_update_tolerance = 1e-8
 # TODO: make this is not quite correct for boundary MPS
 const _global_boundarymps_update_kwargs::Dict{Symbol,Any} = Dict(
     :alg => _default_boundarymps_update_alg,
-    :message_update_kwargs => (; maxiter=_default_boundarymps_update_maxiter, tolerance=_default_boundarymps_update_tolerance)
+    :message_update_kwargs => (; niters=_default_boundarymps_update_niters, tolerance=_default_boundarymps_update_tolerance)
 )
 
 function set_global_boundarymps_update_kwargs!(; kwargs...)
@@ -26,7 +26,7 @@ end
 function reset_global_boundarymps_update_kwargs!()
     empty!(_global_bp_update_kwargs)
     _global_boundarymps_update_kwargs[:alg] = _default_boundarymps_update_alg
-    _global_boundarymps_update_kwargs[:message_update_kwargs] = (; maxiter=_default_boundarymps_update_maxiter, tolerance=_default_boundarymps_update_tolerance)
+    _global_boundarymps_update_kwargs[:message_update_kwargs] = (; niters=_default_boundarymps_update_niters, tolerance=_default_boundarymps_update_tolerance)
     return get_global_boundarymps_update_kwargs()
 end
 
@@ -566,10 +566,10 @@ function default_cache_prep_function(
     return switch_messages(bmpsc, partitionpair)
 end
 
-default_niters(alg::Algorithm"orthogonal") = 25
-default_niters(alg::Algorithm"biorthogonal") = 3
-default_tolerance(alg::Algorithm"orthogonal") = 1e-10
-default_tolerance(alg::Algorithm"biorthogonal") = nothing
+# default_niters(alg::Algorithm"orthogonal") = 25
+# default_niters(alg::Algorithm"biorthogonal") = 3
+# default_tolerance(alg::Algorithm"orthogonal") = 1e-10
+# default_tolerance(alg::Algorithm"biorthogonal") = nothing
 
 #Cost functions
 function default_costfunction(
@@ -621,7 +621,7 @@ function ITensorNetworks.update(
     updater=default_updater,
     extracter=default_extracter,
     cache_prep_function=default_cache_prep_function,
-    maxiter::Int64=default_niters(alg),
+    niters::Int64=default_niters(alg),
     tolerance=default_tolerance(alg),
     normalize=true,
     nsites::Int64=1,
@@ -629,7 +629,7 @@ function ITensorNetworks.update(
     bmpsc = cache_prep_function(alg, bmpsc, partitionpair)
     update_seq = update_sequence(alg, bmpsc, partitionpair; nsites)
     prev_cf = 0
-    for i in 1:maxiter
+    for i in 1:niters
         cf = 0
         for (j, update_pe_region) in enumerate(update_seq)
             prev_pe_region = j == 1 ? nothing : update_seq[j-1]

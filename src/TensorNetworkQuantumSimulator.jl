@@ -18,6 +18,7 @@ export
     vertices,
     edges,
     apply,
+    truncate,
     get_global_bp_update_kwargs,
     set_global_bp_update_kwargs!,
     reset_global_bp_update_kwargs!,

@@ -58,7 +58,11 @@ end
 
 function ITensors.scalar(bp_cache::AbstractBeliefPropagationCache)
     numers, denoms = scalar_factors_quotient(bp_cache)
-    isempty(denoms) && return prod(numers)
+
+    if isempty(denoms)
+        return prod(numers)
+    end
+
     return prod(numers) / prod(denoms)
 end
 
