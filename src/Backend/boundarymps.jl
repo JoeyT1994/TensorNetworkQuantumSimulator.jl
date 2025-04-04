@@ -1,3 +1,9 @@
+struct BoundaryMPSCache{BPC,PG} <: AbstractBeliefPropagationCache
+    bp_cache::BPC
+    partitionedplanargraph::PG
+    maximum_virtual_dimension::Int64
+end
+
 ## Utilities to globally set boundary MPS_update_kwargs 
 const _default_boundarymps_update_alg = "orthogonal"
 const _default_boundarymps_update_niters = 20
@@ -32,6 +38,13 @@ end
 
 ## Frontend functions
 
+function updatecache(bp_cache::BoundaryMPSCache; boundarymps_update_kwargs...)
+    # merge provided kwargs with the defaults
+    boundarymps_update_kwargs = merge(get_global_boundarymps_update_kwargs(), boundarymps_update_kwargs)
+
+    return update(bp_cache; boundarymps_update_kwargs...)
+end
+
 function build_boundarymps_cache(
     ψ::AbstractITensorNetwork,
     message_rank::Int64;
@@ -39,6 +52,8 @@ function build_boundarymps_cache(
     bp_update_kwargs=get_global_bp_update_kwargs(),
     boundary_mps_kwargs=get_global_boundarymps_update_kwargs()
 )
+    # update the cache later unless we are in symmetric gauge
+    update_cache = true
     if transform_to_symmetric_gauge
         ψIψ = build_bp_cache(ψ; bp_update_kwargs...)
         ψ, ψIψ = normalize(ψ, ψIψ; update_cache=false)
@@ -46,23 +61,41 @@ function build_boundarymps_cache(
             ψ; (cache!)=Ref(ψIψ), update_cache=false, cache_update_kwargs=(; maxiter=0)
         )
         ψ = ITensorNetwork(ψ)
+
+        update_cache = false
     end
 
-    ψIψ = BoundaryMPSCache(build_bp_cache(ψ; update_cache=false); message_rank)
+    # build the BP cache and update if not in symmetric gauge
+    ψIψ = build_bp_cache(ψ; bp_update_kwargs..., update_cache)
+
+    # convert BP cache to boundary MPS cache, no further update needed
+    return build_boundarymps_cache(
+        ψIψ, message_rank; bp_update_kwargs, boundary_mps_kwargs, update_cache=false
+    )
+end
+
+function build_boundarymps_cache(
+    ψIψ::AbstractBeliefPropagationCache,
+    message_rank::Int64;
+    bp_update_kwargs=get_global_bp_update_kwargs(),
+    boundary_mps_kwargs=get_global_boundarymps_update_kwargs(),
+    update_cache=true
+)
+
+    if update_cache
+        ψIψ = updatecache(ψIψ; bp_update_kwargs...)
+    end
+
+    ψIψ = BoundaryMPSCache(ψIψ; message_rank)
     ψIψ = update(ψIψ; boundary_mps_kwargs...)
     return ψIψ
 end
 
-# TODO: do the same `updatecache()` thing for boundary MPS, with default arguments.
-
-## Backend functions
-
-struct BoundaryMPSCache{BPC,PG} <: AbstractBeliefPropagationCache
-    bp_cache::BPC
-    partitionedplanargraph::PG
-    maximum_virtual_dimension::Int64
+function build_boundarymps_cache(ψIψ::BoundaryMPSCache, args...; kwargs...)
+    return ψIψ
 end
 
+## Backend functions
 bp_cache(bmpsc::BoundaryMPSCache) = bmpsc.bp_cache
 partitionedplanargraph(bmpsc::BoundaryMPSCache) = bmpsc.partitionedplanargraph
 ppg(bmpsc) = partitionedplanargraph(bmpsc)
@@ -113,9 +146,9 @@ function ITensorNetworks.default_cache_construction_kwargs(alg::Algorithm"bounda
     )
 end
 
-# function ITensorNetworks.default_cache_update_kwargs(alg::Algorithm"boundarymps")
-#     return (; alg="orthogonal", message_update_kwargs=(; niters=25, tolerance=1e-10))
-# end
+function ITensorNetworks.default_cache_update_kwargs(alg::Algorithm"boundarymps")
+    return get_global_boundarymps_update_kwargs()
+end
 
 function Base.copy(bmpsc::BoundaryMPSCache)
     return BoundaryMPSCache(

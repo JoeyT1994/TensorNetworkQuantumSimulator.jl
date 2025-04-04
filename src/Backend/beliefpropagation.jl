@@ -36,9 +36,6 @@ end
 function updatecache(bp_cache::BeliefPropagationCache; bp_update_kwargs...)
     # merge provided kwargs with the defaults
     bp_update_kwargs = merge(get_global_bp_update_kwargs(), bp_update_kwargs)
-    # if bp_update_kwargs[:maxiter] > 0
-    #     @show "updating"
-    # end
 
     return update(bp_cache; bp_update_kwargs...)
 end

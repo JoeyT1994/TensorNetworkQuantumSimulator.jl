@@ -49,6 +49,7 @@ using ITensorNetworks:
     PartitionedGraph,
     IndsNetwork,
     ITensorNetwork,
+    inner_network,
     PartitionVertex,
     PartitionEdge,
     Algorithm,

@@ -1,13 +1,51 @@
-# function expect(tn1::ITensorNetwork, tn2::ITensorNetwork; imag_tol=1e-14)
-#     # this is pure state fidelity
-#     # TODO: make this function not just an alias for inner() but something that can be loop-corrected
-#     val = inner(tn1, tn2; alg="bp")
+const CacheNetwork = Union{BeliefPropagationCache,BoundaryMPSCache}
 
-#     return val
-# end
+"""
+    expect(ψIψ::CacheNetwork, obs::Tuple; bp_update_kwargs=get_global_bp_update_kwargs())
+
+Foundational expectation function for a given (norm) cache network with an observable. 
+This can be a `BeliefPropagationCache` or a `BoundaryMPSCache`.
+Valid observables are tuples of the form `(op, qinds)` or `(op, qinds, coeff)`, 
+where `op` is a string or vector of strings, `qinds` is a vector of indices, and `coeff` is a coefficient (default 1.0).
+"""
+function expect(ψIψ::CacheNetwork, obs::Tuple; bp_update_kwargs=get_global_bp_update_kwargs(), update_cache=true)
+    if update_cache
+        ψIψ = updatecache(ψIψ; bp_update_kwargs...)
+    end
+    ψOψ = insert_observable(ψIψ, obs)
+
+    return scalar(ψOψ) / scalar(ψIψ)
+end
+
+"""
+    expect(ψ::AbstractITensorNetwork, obs::Tuple; bp_update_kwargs=get_global_bp_update_kwargs())
+
+Calculate the expectation value of an `ITensorNetwork` `ψ` with an observable `obs` using belief propagation.
+This function first builds a `BeliefPropagationCache` `ψIψ` from the input state `ψ` and then calls the `expect(ψIψ, obs)` function on the cache.
+"""
+function expect(ψ::AbstractITensorNetwork, obs::Tuple; bp_update_kwargs=get_global_bp_update_kwargs())
+    ψIψ = build_bp_cache(ψ; bp_update_kwargs...)
+    return expect(ψIψ, obs; bp_update_kwargs, update_cache=false)
+end
 
 
-function expect(tn, observable; max_loop_size=nothing, message_rank=nothing, kwargs...)
+function expect(ψ::ITensorNetwork, ϕ::ITensorNetwork; bp_update_kwargs=get_global_bp_update_kwargs())
+    # is 
+    ψψ = build_bp_cache(ψ; bp_update_kwargs...)
+    ϕϕ = build_bp_cache(ϕ; bp_update_kwargs...)
+
+    ψϕ = inner_network(ψ, ϕ)
+    ψϕ = updatecache(ψϕ; bp_update_kwargs...)
+
+    # TODO: do we need a sqrt or something here?
+    # TODO: integrate this for loop-correct and boundary MPS
+    expectation = scalar(ψϕ) / scalar(ψψ) / scalar(ϕϕ)
+
+    return expectation
+end
+
+
+function expect(tn, observable::Tuple; max_loop_size=nothing, message_rank=nothing, kwargs...)
     # max_loop_size determines whether we use BP and loop correction
     # message_rank determines whether we use boundary MPS
 
@@ -34,73 +72,55 @@ function expect(tn, observable; max_loop_size=nothing, message_rank=nothing, kwa
 end
 
 
-function expect(tn::BoundaryMPSCache, args...; kwargs...)
-    return expect_boundarymps(tn, args...; kwargs...)
-end
 
 function expect_loopcorrect(ψ::ITensorNetwork, obs, max_circuit_size::Integer; max_genus::Integer=2, bp_update_kwargs=get_global_bp_update_kwargs())
     ## this is the entry point for when the state network is passed, and not the BP cache 
     ψIψ = build_bp_cache(ψ; bp_update_kwargs...)
-    return expect_loopcorrect(ψIψ, obs, max_circuit_size; max_genus, bp_update_kwargs)
+    return expect_loopcorrect(ψIψ, obs, max_circuit_size; max_genus, bp_update_kwargs, update_cache=false)
 end
 
 function expect_loopcorrect(
-    ψIψ::BeliefPropagationCache, observable, max_circuit_size::Integer; max_genus::Integer=2, bp_update_kwargs=get_global_bp_update_kwargs()
+    ψIψ::BeliefPropagationCache, obs::Tuple, max_circuit_size::Integer;
+    max_genus::Integer=2, bp_update_kwargs=get_global_bp_update_kwargs(), update_cache=true
 )
 
     # TODO: default max genus to ceil(max_circuit_size/min_loop_size)
     # Warn if max_genus is 3 or larger lol
     if max_genus > 2
-        @warn "Expectation value calculation with max_genus > 2 is not supported."
+        @warn "Expectation value calculation with max_genus > 2 is not advised."
         # flush to instantly see the warning
         flush(stdout)
     end
 
+    if update_cache
+        ψIψ = updatecache(ψIψ; bp_update_kwargs...)
+    end
+
+    ψOψ = insert_observable(ψIψ, obs)
+
+    expectation = scalar(ψOψ) / scalar(ψIψ)
+
+    # without loop correction, we can just return the expectation
+    if max_circuit_size <= 0
+        return expectation
+    end
+
+    # now to getting the corrections
+
+    ψIψ = normalize(ψIψ; update_cache=false)
+    ψOψ = normalize(ψOψ; update_cache=false)
+
     # first get all the cycles
     circuits = enumerate_circuits(ψIψ, max_circuit_size; max_genus)
 
-    # update the norm cache once and hope that it is a good initialization for the ones with operator insterted
-    ψIψ = updatecache(ψIψ; bp_update_kwargs...)
+    # TODO: clever caching for multiple observables
+    ψIψ_corrections = loop_correction_factor(ψIψ, circuits)
+    ψOψ_corrections = loop_correction_factor(ψOψ, circuits)
 
-    # this is the denominator of the expectation fraction
-    value_without_observable = loopcorrected_unnormalized_expectation(ψIψ, circuits; bp_update_kwargs, update_bp_cache=false)
-
-    # this is when it is just a single observable
-    if observable isa Tuple
-        ψOψ = insert_observable(ψIψ, observable)
-        value_with_observable = loopcorrected_unnormalized_expectation(ψOψ, circuits; bp_update_kwargs)
-        return value_with_observable / value_without_observable
-    end
-
-    # this is when it is a vector of observables
-    all_values_with_observable = [
-        begin
-            ψOψ = insert_observable(ψIψ, obs)
-            loopcorrected_unnormalized_expectation(ψOψ, circuits; bp_update_kwargs)
-        end for obs in observable
-    ]
-
-    return [value_with_observable / value_without_observable for value_with_observable in all_values_with_observable]
-
-
-end
-
-
-function loopcorrected_unnormalized_expectation(bp_cache::BeliefPropagationCache, circuits; update_bp_cache=true, bp_update_kwargs=get_global_bp_update_kwargs())
-    if update_bp_cache
-        bp_cache = updatecache(bp_cache; bp_update_kwargs...)
-    end
-    # TODO: separate out the scalar part which is also used elsewhere from the loop correction factor
-    scaling = scalar(bp_cache)
-    bp_cache = normalize(bp_cache; update_cache=false)
-
-    # this is the denominator of the expectation fraction
-    return scaling * loop_correction_factor(bp_cache, circuits)
+    return expectation * ψOψ_corrections / ψIψ_corrections
 end
 
 ## boundary MPS
-# TODO: function that takes BP cache and turns it into MPS cache
-
 function expect_boundarymps(
     ψ::AbstractITensorNetwork, observable, message_rank::Integer;
     transform_to_symmetric_gauge=false,
@@ -114,22 +134,16 @@ end
 
 
 function expect_boundarymps(
-    ψIψ::BoundaryMPSCache, observable::Tuple; boundary_mps_kwargs=get_global_boundarymps_update_kwargs()
+    ψIψ::BoundaryMPSCache, obs::Tuple; boundary_mps_kwargs=get_global_boundarymps_update_kwargs(), update_cache=true
 )
+    # TODO: validate the observable at this point
 
-    # TODO: modularize this with loop correction function for vectors of observables.
+    if update_cache
+        ψIψ = updatecache(ψIψ; boundary_mps_kwargs...)
+    end
 
-    ψOψ = insert_observable(ψIψ, observable)
-
-    denom = scalar(ψIψ)
-
-
-    ψOψ = update(ψOψ; boundary_mps_kwargs...)
-    numer = scalar(ψOψ)
-
-    return numer / denom
+    return expect(ψIψ, obs; update_cache=false)
 end
-
 
 
 ## utilites

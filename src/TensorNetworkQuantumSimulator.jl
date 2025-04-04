@@ -12,6 +12,8 @@ include("apply.jl")
 include("expect.jl")
 
 
+const CacheNetwork = Union{AbstractBeliefPropagationCache,BoundaryMPSCache}
+
 export
     updatecache,
     build_bp_cache,
