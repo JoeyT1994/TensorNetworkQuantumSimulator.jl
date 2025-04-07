@@ -33,7 +33,7 @@ end
 
 ## Frontend functions
 
-function updatecache(bp_cache::BeliefPropagationCache; bp_update_kwargs...)
+function updatecache(bp_cache::AbstractBeliefPropagationCache; bp_update_kwargs...)
     # merge provided kwargs with the defaults
     bp_update_kwargs = merge(get_global_bp_update_kwargs(), bp_update_kwargs)
 
@@ -49,6 +49,16 @@ function build_bp_cache(ψ::AbstractITensorNetwork; update_cache=true, bp_update
         bpc = updatecache(bpc; bp_update_kwargs...)
     end
     return bpc
+end
+
+# BP cache for the inner product of two state networks
+function build_bp_cache(ψ::AbstractITensorNetwork, ϕ::AbstractITensorNetwork; update_cache=true, bp_update_kwargs...)
+    ψϕ = BeliefPropagationCache(inner_network(ψ, ϕ))
+
+    if update_cache
+        ψϕ = updatecache(ψϕ; bp_update_kwargs...)
+    end
+    return ψϕ
 end
 
 ## Backend functions

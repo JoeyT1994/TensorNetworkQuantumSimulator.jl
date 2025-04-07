@@ -5,14 +5,24 @@ end
 
 # conversion of the tuple gate to an ITensor
 function toitensor(gate::Tuple, sinds::IndsNetwork)
+
     gate_symbol = gate[1]
     gate_inds = gate[2]
-    θ = gate[3]
-
     # if it is a NamedEdge, we need to convert it to a tuple
     gate_inds = _ensuretuple(gate_inds)
 
-    return paulirotation(gate_symbol, gate_inds, θ, sinds)
+    if length(gate) == 3
+        # This is a parametrized gate like exp(-i * θ * P)
+        θ = gate[3]
+        return paulirotation(gate_symbol, gate_inds, θ, sinds)
+    elseif length(gate) == 2
+        # This is straight up applying a Pauli operator
+
+        return prod(ITensors.op(string(op), only(sinds[v])) for (op, v) in zip(gate_symbol, gate_inds))
+    else
+        throw(ArgumentError("Wrong gate format"))
+    end
+
 end
 
 # conversion retruns the gate itself if it is already

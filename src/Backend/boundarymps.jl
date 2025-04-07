@@ -48,48 +48,57 @@ end
 function build_boundarymps_cache(
     ψ::AbstractITensorNetwork,
     message_rank::Int64;
-    transform_to_symmetric_gauge=false,
-    bp_update_kwargs=get_global_bp_update_kwargs(),
-    boundary_mps_kwargs=get_global_boundarymps_update_kwargs()
+    boundary_mps_kwargs...
 )
-    # update the cache later unless we are in symmetric gauge
-    update_cache = true
-    if transform_to_symmetric_gauge
-        ψIψ = build_bp_cache(ψ; bp_update_kwargs...)
-        ψ, ψIψ = normalize(ψ, ψIψ; update_cache=false)
-        ψ = VidalITensorNetwork(
-            ψ; (cache!)=Ref(ψIψ), update_cache=false, cache_update_kwargs=(; maxiter=0)
-        )
-        ψ = ITensorNetwork(ψ)
-
-        update_cache = false
-    end
+    # # update the cache later unless we are in symmetric gauge
+    # if transform_to_symmetric_gauge
+    #     ψIψ = build_bp_cache(ψ; bp_update_kwargs...)
+    #     ψ, ψIψ = normalize(ψ, ψIψ; update_cache=false)
+    #     ψ = VidalITensorNetwork(
+    #         ψ; (cache!)=Ref(ψIψ), update_cache=false, cache_update_kwargs=(; maxiter=0)
+    #     )
+    #     ψ = ITensorNetwork(ψ)
+    # end
 
     # build the BP cache and update if not in symmetric gauge
-    ψIψ = build_bp_cache(ψ; bp_update_kwargs..., update_cache)
+    ψIψ = build_bp_cache(ψ; update_cache=false)
 
     # convert BP cache to boundary MPS cache, no further update needed
-    return build_boundarymps_cache(
-        ψIψ, message_rank; bp_update_kwargs, boundary_mps_kwargs, update_cache=false
-    )
+    return build_boundarymps_cache(ψIψ, message_rank; boundary_mps_kwargs...)
 end
 
 function build_boundarymps_cache(
     ψIψ::AbstractBeliefPropagationCache,
     message_rank::Int64;
-    bp_update_kwargs=get_global_bp_update_kwargs(),
-    boundary_mps_kwargs=get_global_boundarymps_update_kwargs(),
-    update_cache=true
+    update_cache=true,
+    boundary_mps_kwargs...
 )
 
+    ψIψ = BoundaryMPSCache(ψIψ; message_rank)
+
     if update_cache
-        ψIψ = updatecache(ψIψ; bp_update_kwargs...)
+        # update the cache
+        ψIψ = updatecache(ψIψ; boundary_mps_kwargs...)
     end
 
-    ψIψ = BoundaryMPSCache(ψIψ; message_rank)
-    ψIψ = update(ψIψ; boundary_mps_kwargs...)
     return ψIψ
 end
+
+# a version for the inner product of two state networks
+function build_boundarymps_cache(
+    ψ::AbstractITensorNetwork,
+    ϕ::AbstractITensorNetwork,
+    message_rank::Int64;
+    boundary_mps_kwargs...
+)
+
+    ψϕ = build_bp_cache(ψ, ϕ; update_cache=false)
+
+    # convert BP cache to boundary MPS cache, no further update needed
+    return build_boundarymps_cache(ψϕ, message_rank; boundary_mps_kwargs...)
+end
+
+
 
 function build_boundarymps_cache(ψIψ::BoundaryMPSCache, args...; kwargs...)
     return ψIψ

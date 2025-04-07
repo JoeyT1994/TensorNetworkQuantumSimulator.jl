@@ -70,9 +70,7 @@ function expect(ψ::AbstractITensorNetwork, ϕ::AbstractITensorNetwork; bp_updat
     # is 
     ψψ = build_bp_cache(ψ; bp_update_kwargs...)
     ϕϕ = build_bp_cache(ϕ; bp_update_kwargs...)
-
-    ψϕ = inner_network(ψ, ϕ)
-    ψϕ = updatecache(ψϕ; bp_update_kwargs...)
+    ψϕ = build_bp_cache(ψ, ϕ; bp_update_kwargs...)
 
     return expect(ψψ, ϕϕ, ψϕ)
 end
@@ -114,17 +112,33 @@ function expect_loopcorrect(
 
     ψOψ = insert_observable(ψIψ, obs)
 
-    expectation = expect(ψIψ, ψOψ)
+    # now to getting the corrections
+    return expect(ψIψ, ψOψ) * loop_corrections(ψIψ, ψOψ, max_circuit_size; max_genus)
+end
 
-    # without loop correction, we can just return the expectation
-    if max_circuit_size <= 0
-        return expectation
+# between two states
+function expect_loopcorrect(
+    ψ::AbstractITensorNetwork, ϕ::AbstractITensorNetwork, max_circuit_size::Integer;
+    max_genus::Integer=2, bp_update_kwargs=get_global_bp_update_kwargs()
+)
+
+    # TODO: default max genus to ceil(max_circuit_size/min_loop_size)
+    # Warn if max_genus is 3 or larger lol
+    if max_genus > 2
+        @warn "Expectation value calculation with max_genus > 2 is not advised."
+        # flush to instantly see the warning
+        flush(stdout)
     end
 
-    # now to getting the corrections
+    ψψ = build_bp_cache(ψ; bp_update_kwargs...)
+    ϕϕ = build_bp_cache(ϕ; bp_update_kwargs...)
+    ψϕ = build_bp_cache(ψ, ϕ; bp_update_kwargs...)
 
-    return expectation * loop_corrections(ψIψ, ψOψ, max_circuit_size; max_genus)
+
+    # now to getting the corrections
+    return expect(ψψ, ϕϕ, ψϕ) * loop_corrections(ψψ, ϕϕ, ψϕ, max_circuit_size; max_genus)
 end
+
 
 function loop_corrections(ψIψ::CacheNetwork, ψOψ::CacheNetwork, max_circuit_size::Integer; max_genus::Integer=2)
 
@@ -165,11 +179,10 @@ end
 function expect_boundarymps(
     ψ::AbstractITensorNetwork, observable, message_rank::Integer;
     transform_to_symmetric_gauge=false,
-    bp_update_kwargs=get_global_bp_update_kwargs(),
-    boundary_mps_kwargs=get_global_boundarymps_update_kwargs()
+    boundary_mps_kwargs...
 )
 
-    ψIψ = build_boundarymps_cache(ψ, message_rank; transform_to_symmetric_gauge, bp_update_kwargs, boundary_mps_kwargs)
+    ψIψ = build_boundarymps_cache(ψ, message_rank; boundary_mps_kwargs...)
     return expect_boundarymps(ψIψ, observable; boundary_mps_kwargs)
 end
 
@@ -190,9 +203,7 @@ function expect_boundarymps(ψ::AbstractITensorNetwork, ϕ::AbstractITensorNetwo
     # is 
     ψψ = build_boundarymps_cache(ψ, message_rank; boundary_mps_kwargs...)
     ϕϕ = build_boundarymps_cache(ϕ, message_rank; boundary_mps_kwargs...)
-
-    ψϕ = inner_network(ψ, ϕ)
-    ψϕ = build_boundarymps_cache(ψϕ, message_rank; boundary_mps_kwargs...)
+    ψϕ = build_boundarymps_cache(ψ, ϕ, message_rank; boundary_mps_kwargs...)
 
     return expect(ψψ, ϕϕ, ψϕ)
 end

@@ -90,6 +90,17 @@ function ITensors.apply(
     return ψ, ψψ
 end
 
+# for convenience an apply function for a single gate
+function ITensors.apply(
+    gate::Tuple,
+    ψ::ITensorNetwork;
+    apply_kwargs=_default_apply_kwargs,
+    bp_update_kwargs=get_global_bp_update_kwargs()
+)
+    ψ, ψψ = apply(gate, ψ, build_bp_cache(ψ; bp_update_kwargs...); apply_kwargs)
+    # because the cache is not passed, we return the state only
+    return ψ
+end
 
 # gate apply function for tuple gates. The gate gets converted to an ITensor first.
 function ITensors.apply(gate::Tuple, ψ::ITensorNetwork, ψψ::BeliefPropagationCache; apply_kwargs=_default_apply_kwargs)
@@ -160,7 +171,7 @@ function _check_and_update_counter(counter::Integer, affected_vertices::Set, gat
 end
 
 
-function truncate(ψ::ITensorNetwork, maxdim; cutoff=nothing, bp_update_kwargs=(; maxiter=25, tol=1e-8))
+function truncate(ψ::ITensorNetwork, maxdim; cutoff=nothing, bp_update_kwargs=get_global_bp_update_kwargs())
     ψψ = build_bp_cache(ψ; bp_update_kwargs...)
     apply_kwargs = (; maxdim, cutoff, normalize=false)
     for e in edges(ψ)
