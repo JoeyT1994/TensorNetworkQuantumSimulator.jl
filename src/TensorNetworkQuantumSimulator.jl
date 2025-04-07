@@ -1,18 +1,23 @@
 module TensorNetworkQuantumSimulator
 
+
 include("imports.jl")
-include("graph_ops.jl")
 include("Backend/beliefpropagation.jl")
 include("Backend/loopcorrection.jl")
 include("Backend/boundarymps.jl")
+
+# a helpful union types for the caches that we use
+const CacheNetwork = Union{AbstractBeliefPropagationCache,BoundaryMPSCache}
+const TensorNetwork = Union{AbstractITensorNetwork,CacheNetwork}
+
+
+include("graph_ops.jl")
 include("utils.jl")
 include("constructors.jl")
 include("gates.jl")
 include("apply.jl")
 include("expect.jl")
 
-
-const CacheNetwork = Union{AbstractBeliefPropagationCache,BoundaryMPSCache}
 
 export
     updatecache,
