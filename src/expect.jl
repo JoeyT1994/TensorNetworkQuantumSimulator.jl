@@ -37,12 +37,22 @@ end
 Calculate the fidelity between two `ITensorNetwork`s `ψ` and `ϕ` using belief propagation.
 """
 function fidelity(ψ::AbstractITensorNetwork, ϕ::AbstractITensorNetwork; bp_update_kwargs=get_global_bp_update_kwargs())
-    # is 
     ψψ = build_bp_cache(ψ; bp_update_kwargs...)
     ϕϕ = build_bp_cache(ϕ; bp_update_kwargs...)
     ψϕ = build_bp_cache(ψ, ϕ; bp_update_kwargs...)
 
     return fidelityratio(ψϕ, ψψ, ϕϕ)
+end
+
+
+function fidelity_expect(ψ::AbstractITensorNetwork, obs::Tuple; bp_update_kwargs=get_global_bp_update_kwargs())
+
+    ψO = apply(obs, ψ)
+
+    ψψ = build_bp_cache(ψ; bp_update_kwargs...)
+    ψOψ = build_bp_cache(ψO, ψ; bp_update_kwargs...)
+
+    return ratio(ψOψ, ψψ)
 end
 
 
@@ -89,6 +99,15 @@ function fidelity_boundarymps(ψ::AbstractITensorNetwork, ϕ::AbstractITensorNet
     return fidelityratio(ψϕ, ψψ, ϕϕ)
 end
 
+function fidelity_expect_boundarymps(ψ::AbstractITensorNetwork, obs::Tuple, message_rank::Integer; boundary_mps_kwargs=get_global_boundarymps_update_kwargs())
+
+    ψO = apply(obs, ψ)
+
+    ψψ = build_boundarymps_cache(ψ, message_rank; boundary_mps_kwargs...)
+    ψOψ = build_boundarymps_cache(ψO, ψ, message_rank; boundary_mps_kwargs...)
+
+    return ratio(ψOψ, ψψ)
+end
 
 ## Loop loop_corrections
 function expect_loopcorrect(ψ::AbstractITensorNetwork, obs, max_circuit_size::Integer; max_genus::Integer=2, bp_update_kwargs=get_global_bp_update_kwargs())
@@ -102,7 +121,7 @@ function expect_loopcorrect(
     max_genus::Integer=2, bp_update_kwargs=get_global_bp_update_kwargs(), update_cache=true
 )
 
-    # TODO: default max genus to ceil(max_circuit_size/min_loop_size)
+    # TODO: default max max_genus to ceil(max_circuit_size/min_loop_size)
     # Warn if max_genus is 3 or larger lol
     if max_genus > 2
         @warn "Expectation value calculation with max_genus > 2 is not advised."
@@ -126,7 +145,7 @@ function fidelity_loopcorrect(
     max_genus::Integer=2, bp_update_kwargs=get_global_bp_update_kwargs()
 )
 
-    # TODO: default max genus to ceil(max_circuit_size/min_loop_size)
+    # TODO: default max max_genus to ceil(max_circuit_size/min_loop_size)
     # Warn if max_genus is 3 or larger lol
     if max_genus > 2
         @warn "Expectation value calculation with max_genus > 2 is not advised."
@@ -141,6 +160,24 @@ function fidelity_loopcorrect(
 
     # now to getting the corrections
     return fidelityratio(ψϕ, ψψ, ϕϕ) * loop_corrections(ψϕ, ψψ, ϕϕ, max_circuit_size; max_genus)
+end
+
+function fidelity_expect_loopcorrect(ψ::AbstractITensorNetwork, obs::Tuple, max_circuit_size::Integer; bp_update_kwargs=get_global_bp_update_kwargs(), max_genus::Integer=2)
+
+    # TODO: default max max_genus to ceil(max_circuit_size/min_loop_size)
+    # Warn if max_genus is 3 or larger lol
+    if max_genus > 2
+        @warn "Expectation value calculation with max_genus > 2 is not advised."
+        # flush to instantly see the warning
+        flush(stdout)
+    end
+
+    ψO = apply(obs, ψ)
+
+    ψψ = build_bp_cache(ψ; bp_update_kwargs...)
+    ψOψ = build_bp_cache(ψO, ψ; bp_update_kwargs...)
+
+    return ratio(ψOψ, ψψ) * loop_corrections(ψOψ, ψψ, max_circuit_size; max_genus)
 end
 
 
@@ -215,7 +252,7 @@ function collectobservable(obs::Tuple)
     if op == "" && isempty(qinds)
         # if this is the case, we assume that this is a norm contraction with identity observable
         op = "I"
-        qinds = [first(TN.vertices(ψIψ))[1]] # the first vertex
+        qinds = [first(ertices(ψIψ))[1]] # the first vertex
     end
 
     op_vec = [string(o) for o in op]
