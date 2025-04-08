@@ -1,29 +1,14 @@
-# TODO: somehow this high-level function gets confused
-# function expect(tn, observable::Tuple; max_loop_size=nothing, message_rank=nothing, kwargs...)
-#     # max_loop_size determines whether we use BP and loop correction
-#     # message_rank determines whether we use boundary MPS
+"""
+    expect(ψ::AbstractITensorNetwork, obs::Tuple; bp_update_kwargs=get_global_bp_update_kwargs())
 
-#     # first determine whether to work with boundary MPS
-#     if !isnothing(message_rank)
-#         if !isnothing(max_loop_size)
-#             throw(ArgumentError(
-#                 "Both `max_loop_size` and `message_rank` are set. " *
-#                 "Use `max_loop_size` for belief propagation with optional loop corrections. " *
-#                 "Use `message_rank` to use boundary MPS."
-#             ))
-#         end
+Calculate the expectation value of an `ITensorNetwork` `ψ` with an observable `obs` using belief propagation.
+This function first builds a `BeliefPropagationCache` `ψIψ` from the input state `ψ` and then calls the `expect(ψIψ, obs)` function on the cache.
+"""
+function expect(ψ::AbstractITensorNetwork, obs::Tuple; bp_update_kwargs=get_global_bp_update_kwargs())
+    ψIψ = build_bp_cache(ψ; bp_update_kwargs...)
+    return expect(ψIψ, obs; update_cache=false)
+end
 
-#         return expect_boundarymps(tn, observable, message_rank; kwargs...)
-#     end
-
-
-#     if isnothing(max_loop_size)
-#         # this is the default case of BP expectation value
-#         max_loop_size = 0
-#     end
-
-#     return expect_loopcorrect(tn, observable, max_loop_size; kwargs...)
-# end
 
 """
     expect(ψIψ::CacheNetwork, obs::Tuple; bp_update_kwargs=get_global_bp_update_kwargs())
@@ -42,51 +27,70 @@ function expect(ψIψ::CacheNetwork, obs::Tuple; update_cache=true)
 
     ψOψ = insert_observable(ψIψ, obs)
 
-    return expect(ψIψ, ψOψ)
+    return ratio(ψOψ, ψIψ)
 end
 
 
-function expect(ψIψ::CacheNetwork, ψOψ::CacheNetwork)
-    return scalar(ψOψ) / scalar(ψIψ)
-end
-
 """
-    expect(ψ::AbstractITensorNetwork, obs::Tuple; bp_update_kwargs=get_global_bp_update_kwargs())
+    fidelity(ψ::AbstractITensorNetwork, ϕ::AbstractITensorNetwork; bp_update_kwargs=get_global_bp_update_kwargs())
 
-Calculate the expectation value of an `ITensorNetwork` `ψ` with an observable `obs` using belief propagation.
-This function first builds a `BeliefPropagationCache` `ψIψ` from the input state `ψ` and then calls the `expect(ψIψ, obs)` function on the cache.
+Calculate the fidelity between two `ITensorNetwork`s `ψ` and `ϕ` using belief propagation.
 """
-function expect(ψ::AbstractITensorNetwork, obs::Tuple; bp_update_kwargs=get_global_bp_update_kwargs())
-    ψIψ = build_bp_cache(ψ; bp_update_kwargs...)
-    return expect(ψIψ, obs; update_cache=false)
-end
-
-"""
-    expect(ψ::AbstractITensorNetwork, ϕ::AbstractITensorNetwork; bp_update_kwargs=get_global_bp_update_kwargs())
-
-Calculate the overlap between two `ITensorNetwork`s `ψ` and `ϕ` using belief propagation.
-"""
-function expect(ψ::AbstractITensorNetwork, ϕ::AbstractITensorNetwork; bp_update_kwargs=get_global_bp_update_kwargs())
+function fidelity(ψ::AbstractITensorNetwork, ϕ::AbstractITensorNetwork; bp_update_kwargs=get_global_bp_update_kwargs())
     # is 
     ψψ = build_bp_cache(ψ; bp_update_kwargs...)
     ϕϕ = build_bp_cache(ϕ; bp_update_kwargs...)
     ψϕ = build_bp_cache(ψ, ϕ; bp_update_kwargs...)
 
-    return expect(ψψ, ϕϕ, ψϕ)
+    return fidelityratio(ψϕ, ψψ, ϕϕ)
 end
 
-"""
-    expect(ψψ::CacheNetwork, ϕϕ::CacheNetwork, ψϕ::CacheNetwork)
 
-Calculate the overlap between networks `ψ` and `ϕ` using the provided cache networks `ψψ`, `ϕϕ` and `ψϕ`.
-Those caches can be `BeliefPropagationCache` or `BoundaryMPSCache`.
-"""
-function expect(ψψ::CacheNetwork, ϕϕ::CacheNetwork, ψϕ::CacheNetwork)
+function ratio(ψOψ::CacheNetwork, ψIψ::CacheNetwork)
+    return scalar(ψOψ) / scalar(ψIψ)
+end
+
+
+function fidelityratio(ψϕ::CacheNetwork, ψψ::CacheNetwork, ϕϕ::CacheNetwork)
     # TODO: update cache option?
     return scalar(ψϕ) / sqrt(scalar(ψψ)) / sqrt(scalar(ϕϕ))
 end
 
+## boundary MPS
+function expect_boundarymps(
+    ψ::AbstractITensorNetwork, obs, message_rank::Integer;
+    boundary_mps_kwargs...
+)
 
+    ψIψ = build_boundarymps_cache(ψ, message_rank; boundary_mps_kwargs...)
+    return expect_boundarymps(ψIψ, obs; boundary_mps_kwargs)
+end
+
+
+function expect_boundarymps(
+    ψIψ::BoundaryMPSCache, obs::Tuple; boundary_mps_kwargs=get_global_boundarymps_update_kwargs(), update_cache=true
+)
+    # TODO: validate the observable at this point
+
+    if update_cache
+        ψIψ = updatecache(ψIψ; boundary_mps_kwargs...)
+    end
+
+    return expect(ψIψ, obs; update_cache=false)
+end
+
+
+function fidelity_boundarymps(ψ::AbstractITensorNetwork, ϕ::AbstractITensorNetwork, message_rank::Integer; boundary_mps_kwargs=get_global_boundarymps_update_kwargs())
+    # is 
+    ψψ = build_boundarymps_cache(ψ, message_rank; boundary_mps_kwargs...)
+    ϕϕ = build_boundarymps_cache(ϕ, message_rank; boundary_mps_kwargs...)
+    ψϕ = build_boundarymps_cache(ψ, ϕ, message_rank; boundary_mps_kwargs...)
+
+    return fidelityratio(ψϕ, ψψ, ϕϕ)
+end
+
+
+## Loop loop_corrections
 function expect_loopcorrect(ψ::AbstractITensorNetwork, obs, max_circuit_size::Integer; max_genus::Integer=2, bp_update_kwargs=get_global_bp_update_kwargs())
     ## this is the entry point for when the state network is passed, and not the BP cache 
     ψIψ = build_bp_cache(ψ; bp_update_kwargs...)
@@ -113,11 +117,11 @@ function expect_loopcorrect(
     ψOψ = insert_observable(ψIψ, obs)
 
     # now to getting the corrections
-    return expect(ψIψ, ψOψ) * loop_corrections(ψIψ, ψOψ, max_circuit_size; max_genus)
+    return ratio(ψOψ, ψIψ) * loop_corrections(ψOψ, ψIψ, max_circuit_size; max_genus)
 end
 
 # between two states
-function expect_loopcorrect(
+function fidelity_loopcorrect(
     ψ::AbstractITensorNetwork, ϕ::AbstractITensorNetwork, max_circuit_size::Integer;
     max_genus::Integer=2, bp_update_kwargs=get_global_bp_update_kwargs()
 )
@@ -136,11 +140,11 @@ function expect_loopcorrect(
 
 
     # now to getting the corrections
-    return expect(ψψ, ϕϕ, ψϕ) * loop_corrections(ψψ, ϕϕ, ψϕ, max_circuit_size; max_genus)
+    return fidelityratio(ψϕ, ψψ, ϕϕ) * loop_corrections(ψϕ, ψψ, ϕϕ, max_circuit_size; max_genus)
 end
 
 
-function loop_corrections(ψIψ::CacheNetwork, ψOψ::CacheNetwork, max_circuit_size::Integer; max_genus::Integer=2)
+function loop_corrections(ψOψ::CacheNetwork, ψIψ::CacheNetwork, max_circuit_size::Integer; max_genus::Integer=2)
 
     ψIψ = normalize(ψIψ; update_cache=false)
     ψOψ = normalize(ψOψ; update_cache=false)
@@ -156,7 +160,7 @@ function loop_corrections(ψIψ::CacheNetwork, ψOψ::CacheNetwork, max_circuit_
 end
 
 
-function loop_corrections(ψψ::CacheNetwork, ϕϕ::CacheNetwork, ψϕ::CacheNetwork, max_circuit_size::Integer; max_genus::Integer=2)
+function loop_corrections(ψϕ::CacheNetwork, ψψ::CacheNetwork, ϕϕ::CacheNetwork, max_circuit_size::Integer; max_genus::Integer=2)
     # all three need to be one the same partition graph
 
     ψψ = normalize(ψψ; update_cache=false)
@@ -174,39 +178,6 @@ function loop_corrections(ψψ::CacheNetwork, ϕϕ::CacheNetwork, ψϕ::CacheNet
     return ψϕ_corrections / sqrt(ϕϕ_corrections) / sqrt(ψψ_corrections)
 end
 
-
-## boundary MPS
-function expect_boundarymps(
-    ψ::AbstractITensorNetwork, observable, message_rank::Integer;
-    transform_to_symmetric_gauge=false,
-    boundary_mps_kwargs...
-)
-
-    ψIψ = build_boundarymps_cache(ψ, message_rank; boundary_mps_kwargs...)
-    return expect_boundarymps(ψIψ, observable; boundary_mps_kwargs)
-end
-
-
-function expect_boundarymps(
-    ψIψ::BoundaryMPSCache, obs::Tuple; boundary_mps_kwargs=get_global_boundarymps_update_kwargs(), update_cache=true
-)
-    # TODO: validate the observable at this point
-
-    if update_cache
-        ψIψ = updatecache(ψIψ; boundary_mps_kwargs...)
-    end
-
-    return expect(ψIψ, obs; update_cache=false)
-end
-
-function expect_boundarymps(ψ::AbstractITensorNetwork, ϕ::AbstractITensorNetwork, message_rank::Integer; boundary_mps_kwargs=get_global_boundarymps_update_kwargs())
-    # is 
-    ψψ = build_boundarymps_cache(ψ, message_rank; boundary_mps_kwargs...)
-    ϕϕ = build_boundarymps_cache(ϕ, message_rank; boundary_mps_kwargs...)
-    ψϕ = build_boundarymps_cache(ψ, ϕ, message_rank; boundary_mps_kwargs...)
-
-    return expect(ψψ, ϕϕ, ψϕ)
-end
 
 
 ## utilites
