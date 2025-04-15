@@ -18,6 +18,7 @@ include("gates.jl")
 include("apply.jl")
 include("expect.jl")
 include("sample.jl")
+include("imaginarytimeevolution.jl")
 
 
 export updatecache,
