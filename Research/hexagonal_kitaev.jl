@@ -32,85 +32,80 @@ function hexagonal_kitaev_observables(Jx::Float64, Jy::Float64, Jz::Float64, ec)
     return xx_observables, yy_observables, zz_observables
 end
 
+#Project spins on sites v1 and v2 to v1_val (1 = up, 2 = down) and v2_val
+function project(ψIψ, v1, v2, v1_val::Int64 = 1, v2_val::Int64=1)
+    ψIψ = copy(ψIψ)
+    s1 = only(inds(only(TN.factors(ψIψ, [(v1, "operator")])); plev = 0))
+    s2 = only(inds(only(TN.factors(ψIψ, [(v2, "operator")])); plev = 0))
+    ψIψ = TN.update_factor(ψIψ, (v1, "operator"), onehot(s1 => v1_val) * dag(onehot(s1' => v1_val)))
+    ψIψ = TN.update_factor(ψIψ, (v2, "operator"), onehot(s2 => v2_val) * dag(onehot(s2' => v2_val)))
+
+    return ψIψ
+end 
+
 function main()
-    nx, ny = 4,4
-    #Build a qubit layout of a 3x3x3 periodic cube
-    g =named_hexagonal_lattice_graph(nx, ny; periodic = true)
 
-    nqubits = length(vertices(g))
-    s = ITN.siteinds("S=1/2", g)
-    ψ = ITensorNetwork(v -> "X+", s)
+    f = load("Research/nx3ny3nz8Chi16DisorderNo10AnnealingTime7.jld2")
+    ψ = f["Wavefunction"]
+    ψIψ = build_bp_cache(ψ)
 
-    maxdim, cutoff = 6, 1e-12
-    apply_kwargs = (; maxdim, cutoff, normalize = true)
-    #Parameters for BP, as the graph is not a tree (it has loops), we need to specify these
-    set_global_bp_update_kwargs!(;
-        maxiter = 30,
-        tol = 1e-10,
-        message_update_kwargs = (;
-            message_update_function = ms -> make_eigs_real.(ITN.default_message_update(ms))
-        ),
-    )
+    ψ, ψIψ = normalize(ψ, ψIψ)
 
-    ψψ = build_bp_cache(ψ)
-    Jx, Jy, Jz = 1.0, 1.0, 1.0
-    δβs = [0.5, 0.1, 0.01, 0.001]
-    n_steps_per_period = [50, 100, 100, 100]
-    no_periods = length(δβs)
+    v1, v2 = 11, 17
 
-    ec = edge_color(g, 3)
+    bp_update_kwargs = get_global_bp_update_kwargs()
 
-    xx_observables, yy_observables, zz_observables = hexagonal_kitaev_observables(Jx, Jy, Jz, ec)
+    obs = ("ZZ", [v1, v2])
+    ψOψ = project(ψIψ, v1, v2, 1, 1)
+    ψOψ = TN.update(ψOψ; bp_update_kwargs...)
+    pupup = scalar(ψOψ) * scalar(normalize(ψOψ; update_cache = false); alg = "loopcorrections", max_configuration_size = 16)
 
-    #Vertices to measure "Z" on
-    vs_measure = [first(center(g))]
-    observables = [("Z", [v]) for v in vs_measure]
+    ψOψ = project(ψIψ, v1, v2, 1, 2)
+    ψOψ = TN.update(ψOψ; bp_update_kwargs...)
+    pupdown = scalar(ψOψ) * scalar(normalize(ψOψ; update_cache = false); alg = "loopcorrections", max_configuration_size = 16)
 
-    #Edges to measure bond entanglement on:
-    e_ent = first(edges(g))
+    denom = scalar(ψIψ; alg = "loopcorrections", max_configuration_size = 16)
 
-    χinit = maxlinkdim(ψ)
-    println("Initial bond dimension of the state is $χinit")
+    @show pupdown + pupup
+    @show denom
+    szsz = 2*(pupup - pupdown) / denom
 
-    expect_sigmaz = real.(expect(ψ, observables; (cache!) = Ref(ψψ)))
-    println("Initial Sigma Z on selected sites is $expect_sigmaz")
+    @show pupup
+    @show pupdown
+    @show szsz
 
-    time = 0
+    @show expect(ψ, obs; alg = "bp")
+    # nx, ny = 4,4
+    # g =named_hexagonal_lattice_graph(nx, ny; periodic = true)
 
-    Zs = Float64[]
+    # nqubits = length(vertices(g))
+    # s = ITN.siteinds("S=1/2", g)
+    # ψ = ITensorNetwork(v -> "X+", s)
 
-    # evolve! The first evaluation will take significantly longer because of compilation.
-    for l = 1:no_periods
-        #printing
-        println("Period $l")
-        δβ = δβs[l]
+    # maxdim, cutoff = 4, 1e-12
+    # apply_kwargs = (; maxdim, cutoff, normalize = true)
+    # #Parameters for BP, as the graph is not a tree (it has loops), we need to specify these
+    # set_global_bp_update_kwargs!(;
+    #     maxiter = 30,
+    #     tol = 1e-10,
+    #     message_update_kwargs = (;
+    #         message_update_function = ms -> make_eigs_real.(ITN.default_message_update(ms))
+    #     ),
+    # )
 
+    # Jx, Jy, Jz = 1.0, 1.0, 1.0
+    # no_eras = 6
+    # ec = edge_color(g, 3)
+    # xx_observables, yy_observables, zz_observables = hexagonal_kitaev_observables(Jx, Jy, Jz, ec)
+    # layer_generating_function = δβ -> hexagonal_kitaev_layer(Jx, Jy, Jz, δβ, ec)
+    # obs = [xx_observables; yy_observables; zz_observables]
+    # energy_calculation_function = ψψ -> sum(real.(expect(ψψ, obs)))
 
-        t = @timed for step in 1:n_steps_per_period[l]
+    # ψ, ψψ = imaginary_time_evolution(ψ, layer_generating_function, energy_calculation_function, no_eras; apply_kwargs);
 
-            layer = hexagonal_kitaev_layer(Jx, Jy, Jz, δβ, ec)
-
-            # pass BP cache manually
-            # only update cache every `update_every` overlapping 2-qubit gates
-            ψ, ψψ, errors =
-                apply(layer, ψ, ψψ; apply_kwargs, update_every = 1, verbose = false);
-
-        end
-
-        # printing
-        println("Took time: $(t.time) [s]. Max bond dimension: $(maxlinkdim(ψ))")
-        expect_sigmaz = real.(expect(ψ, observables; (cache!) = Ref(ψψ)))
-
-        zzs = real.(expect(ψ, zz_observables; (cache!) = Ref(ψψ)))
-        yys = real.(expect(ψ, yy_observables; (cache!) = Ref(ψψ)))
-        xxs = real.(expect(ψ, xx_observables; (cache!) = Ref(ψψ)))
-        total_energy = sum(zzs) + sum(yys) + sum(xxs)
-        println("Sigma Z on selected site is $expect_sigmaz")
-
-        println("Total energy is $(total_energy)")
-
-        @show zzs
-    end
+    # zzs = expect(ψψ, zz_observables)
+    # @show zzs
+    
 end
 
 main()
