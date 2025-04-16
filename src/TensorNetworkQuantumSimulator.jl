@@ -49,6 +49,7 @@ export updatecache,
     getnqubits,
     heavy_hexagonal_lattice_grid,
     named_grid,
-    sample
+    sample,
+    imaginary_time_evolution
 
 end
