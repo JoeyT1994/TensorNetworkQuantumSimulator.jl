@@ -52,7 +52,7 @@ using SimpleGraphAlgorithms: edge_color
 using TensorOperations
 
 using ITensors
-using ITensors: Index, ITensor, inner, itensor, apply, map_diag!, @Algorithm_str, scalar, OpSum
+using ITensors: Index, ITensor, inner, itensor, apply, map_diag!, @Algorithm_str, scalar, @OpName_str, @SiteType_str
 
 using ITensorNetworks
 using ITensorNetworks:

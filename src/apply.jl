@@ -1,8 +1,3 @@
-### Questions:
-# BP update control via "update_every" parameter?
-# What about normalization?
-# How do we handle the BP cache? Build a new object that has both?
-
 const _default_apply_kwargs =
     (maxdim = Inf, cutoff = 1e-10, normalize = true, use_relative_cutoff = true)
 
@@ -41,7 +36,7 @@ function ITensors.apply(
     ψψ::BeliefPropagationCache;
     apply_kwargs = _default_apply_kwargs,
     bp_update_kwargs = get_global_bp_update_kwargs(),
-    update_every = 1,
+    update_cache = true,
     verbose = false,
 )
 
@@ -51,15 +46,35 @@ function ITensors.apply(
     # we keep track of the vertices that have been acted on by 2-qubit gates
     # only they increase the counter
     # this is the set that keeps track.
-    affected_vertices = Set{Index{Int64}}()
-    counter = 0
+    affected_indices = Set{Index{Int64}}()
     truncation_errors = zeros((length(circuit)))
 
     # If the circuit is applied in the Heisenberg picture, the circuit needs to already be reversed
     for (ii, gate) in enumerate(circuit)
 
+        # check if the gate is a 2-qubit gate and whether it affects the counter
+        # we currently only increment the counter if the gate affects vertices that have already been affected
+        cache_update_required = _cacheupdate_check(affected_indices, gate)
+
+        # update the BP cache
+        if update_cache && cache_update_required
+            if verbose
+                println("Updating BP cache")
+            end
+
+            t = @timed ψψ = updatecache(ψψ; bp_update_kwargs...)
+
+            affected_indices = Set{Index{Int64}}()
+
+            if verbose
+                println("Done in $(t.time) secs")
+            end
+
+        end
+
         # actually apply the gate
         t = @timed ψ, ψψ, truncation_errors[ii] = apply(gate, ψ, ψψ; apply_kwargs)
+        affected_indices = union(affected_indices, Set(inds(gate)))
 
         if verbose
             println(
@@ -67,30 +82,10 @@ function ITensors.apply(
             )
         end
 
-        # TODO: the update should actual happen before the gate is applied
-        # check if the gate is a 2-qubit gate and whether it affects the counter
-        # we currently only increment the counter if the gate affects vertices that have already been affected
-        counter, affected_vertices =
-            _check_and_update_counter(counter, affected_vertices, gate)
-
-        # update the BP cache
-        if (counter > 0) && (counter % update_every == 0)
-            if verbose
-                println("Updating BP cache")
-            end
-
-            t = @timed ψψ = updatecache(ψψ; bp_update_kwargs...)
-
-            if verbose
-                println("Done in $(t.time) secs")
-            end
-
-            # reset counter and affected_vertices
-            counter = 0
-            empty!(affected_vertices)
-        end
-
     end
+
+    ψψ = updatecache(ψψ; bp_update_kwargs...)
+
     return ψ, ψψ, truncation_errors
 end
 
@@ -174,21 +169,10 @@ function ITensors.apply(
 end
 
 
-function _check_and_update_counter(counter::Integer, affected_vertices::Set, gate::ITensor)
+function _cacheupdate_check(affected_indices::Set, gate::ITensor)
     indices = inds(gate)
 
-    # there is no scenario where we want to increment the counter for a single-qubit gate
-    # they also don't count as affected vertices
-    if length(indices) == 4
-        # check if any of the qinds are in the affected_vertices
-        # this increments the counter to update the cache
-        if any(ind in affected_vertices for ind in indices)
-            counter += 1
-        end
-
-        # if any of them is already contained, the set will take care of that
-        affected_vertices = union(affected_vertices, Set(indices))
-    end
-
-    return counter, affected_vertices
+    # check if we have a two-site gate and any of the qinds are in the affected_indices. If so update cache
+    length(indices) == 4 && any(ind in affected_indices for ind in indices) && return true
+    return false
 end

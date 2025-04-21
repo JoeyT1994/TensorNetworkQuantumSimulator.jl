@@ -68,9 +68,8 @@ function main()
         println("Layer $l")
 
         # pass BP cache manually
-        # only update cache every `update_every` overlapping 2-qubit gates
         t = @timed ψ, ψψ, errors =
-            apply(layer, ψ, ψψ; apply_kwargs, update_every = 1, verbose = false);
+            apply(layer, ψ, ψψ; apply_kwargs, verbose = false);
 
         # push expectation to list
         push!(Zs, only(real(expect(ψ, observables; (cache!) = Ref(ψψ)))))

@@ -198,11 +198,12 @@ function virtual_index_dimension(
     end
     inds_above = reduce(vcat, linkinds.((bmpsc,), partitionedges_above(bmpsc, lower_pe)))
     inds_below = reduce(vcat, linkinds.((bmpsc,), partitionedges_below(bmpsc, upper_pe)))
-    return minimum((
-        prod(dim.(inds_above)),
-        prod(dim.(inds_below)),
-        maximum_virtual_dimension(bmpsc),
-    ))
+
+    return Int(minimum((
+        prod(Float64.(dim.(inds_above))),
+        prod(Float64.(dim.(inds_below))),
+        Float64(maximum_virtual_dimension(bmpsc)),
+    )))
 end
 
 #Vertices of the planargraph

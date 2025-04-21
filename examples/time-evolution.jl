@@ -84,9 +84,8 @@ function main()
         println("Layer $l")
 
         # pass BP cache manually
-        # only update cache every `update_every` overlapping 2-qubit gates
         t1 = @timed ψ, ψψ, errors =
-            apply(layer, ψ, ψψ; apply_kwargs, update_every = 1, verbose = false);
+            apply(layer, ψ, ψψ; apply_kwargs, verbose = false);
 
         ## could also update outside 
         # t2 = @timed ψψ = updatecache(ψψ)
