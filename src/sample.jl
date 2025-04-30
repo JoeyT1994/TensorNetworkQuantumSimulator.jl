@@ -40,22 +40,21 @@ end
 function sample(ψ::ITensorNetwork, nsamples::Int64; kwargs...)
     probs_and_bitstrings, _ = _sample(ψ::ITensorNetwork, nsamples::Int64; kwargs...)
     # returns just the bitstrings
-    return last.(probs_and_bitstrings)
+    return getindex.(probs_and_bitstrings, :bitstring)
 end
 
 #Compute bitstrings and corresponding p/qs : a sufficiently large left message rank should be used
 function sample_directly_certified(ψ::ITensorNetwork, nsamples::Int64; left_message_rank=5 * maxlinkdim(ψ), kwargs...)
     probs_and_bitstrings, _ = _sample(ψ::ITensorNetwork, nsamples::Int64; left_message_rank, kwargs...)
-    # returns the self-certified p/q and bitstrings
-    return [(poverq=poverq, bitstring=bitstring) for (poverq, logq, bitstring) in probs_and_bitstrings]
+    # returns the self-certified p/q, logq and bitstrings
+    return probs_and_bitstrings
 end
 
 #Compute bitstrings and independently computed p/qs : a sufficiently large certification message rank should be used
 function sample_certified(ψ::ITensorNetwork, nsamples::Int64; certification_message_rank=5 * maxlinkdim(ψ), boundary_mps_kwargs=(; message_update_kwargs=(; niters=75, tolerance=1e-12)), kwargs...)
-    bitstrings, ψ = _sample(ψ::ITensorNetwork, nsamples::Int64; boundary_mps_kwargs, kwargs...)
-    logqs = last.(first.(bitstrings))
-    bitstrings = last.(bitstrings)
-    return certify_samples(ψ, bitstrings, logqs; boundary_mps_kwargs, certification_message_rank, symmetrize_and_normalize=false)
+    probs_and_bitstrings, ψ = _sample(ψ::ITensorNetwork, nsamples::Int64; boundary_mps_kwargs, kwargs...)
+    # send the bitstrings and the logq to the certification function
+    return certify_samples(ψ, probs_and_bitstrings; boundary_mps_kwargs, certification_message_rank, symmetrize_and_normalize=false)
 end
 
 function _get_one_sample(
@@ -164,8 +163,8 @@ function certify_samples(ψ::ITensorNetwork, bitstrings, logqs::Vector{<:Number}
     return [certify_sample(ψ, bitstring, logq; kwargs...) for (bitstring, logq) in zip(bitstrings, logqs)]
 end
 
-function certify_samples(ψ::ITensorNetwork, logq_and_bitstrings::Vector{<:NamedTuple}; kwargs...)
-    return [certify_sample(ψ, logq_and_bitstring; kwargs...) for logq_and_bitstring in logq_and_bitstrings]
+function certify_samples(ψ::ITensorNetwork, probs_and_bitstrings::Vector{<:NamedTuple}; kwargs...)
+    return [certify_sample(ψ, prob_and_bitstring; kwargs...) for prob_and_bitstring in probs_and_bitstrings]
 end
 
 #Sample along the column/ row specified by pv with the left incoming MPS message input and the right extractable from the cache
