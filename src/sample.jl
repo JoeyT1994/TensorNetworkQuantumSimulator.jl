@@ -8,7 +8,7 @@ function _sample(
     nsamples::Int64;
     left_message_rank::Int64,
     right_message_rank::Int64,
-    boundary_mps_kwargs= (; message_update_kwargs = (; niters = 75, tolerance = 1e-12)),
+    boundary_mps_kwargs=(; message_update_kwargs=(; niters=75, tolerance=1e-12)),
     kwargs...,
 )
     ψ, ψψ = symmetric_gauge(ψ)
@@ -20,51 +20,54 @@ function _sample(
         sorted_partitions[i] => sorted_partitions[i-1] for
         i = length(sorted_partitions):-1:2
     ]
-    right_message_update_kwargs = (; boundary_mps_kwargs[:message_update_kwargs]..., normalize = false)
+    right_message_update_kwargs = (; boundary_mps_kwargs[:message_update_kwargs]..., normalize=false)
     right_MPScache = update(Algorithm("orthogonal"), right_MPScache, seq; right_message_update_kwargs...)
 
     left_MPScache = BoundaryMPSCache(ψ; message_rank=left_message_rank)
 
     #Generate the bit_strings moving left to right through the network
-    bit_strings = []
+    probs_and_bitstrings = NamedTuple[]
     for j = 1:nsamples
-        p_over_q_approx, logq, bit_string = get_one_sample(
+        p_over_q_approx, logq, bitstring = _get_one_sample(
             right_MPScache, left_MPScache, sorted_partitions; boundary_mps_kwargs, kwargs...)
-        push!(bit_strings, ((p_over_q_approx, logq), bit_string))
+        push!(probs_and_bitstrings, (poverq=p_over_q_approx, logq=logq, bitstring=bitstring))
     end
 
-    return bit_strings, ψ
+    return probs_and_bitstrings, ψ
 end
 
 #Compute bitstrings conditioned on whatever kwargs used
-function StatsBase.sample(ψ::ITensorNetwork, nsamples::Int64; kwargs...)
-    bitstrings, _ = _sample(ψ::ITensorNetwork, nsamples::Int64; kwargs...)
-    return last.(bitstrings)
+function sample(ψ::ITensorNetwork, nsamples::Int64; kwargs...)
+    probs_and_bitstrings, _ = _sample(ψ::ITensorNetwork, nsamples::Int64; kwargs...)
+    # returns just the bitstrings
+    return last.(probs_and_bitstrings)
 end
 
 #Compute bitstrings and corresponding p/qs : a sufficiently large left message rank should be used
-function sample_directly_certified(ψ::ITensorNetwork, nsamples::Int64; left_message_rank = 5*maxlinkdim(ψ), kwargs...)
-    bitstrings, _ = _sample(ψ::ITensorNetwork, nsamples::Int64; left_message_rank, kwargs...)
-    return [(scalars[1], bitstring) for (scalars, bitstring) in bitstrings]
+function sample_directly_certified(ψ::ITensorNetwork, nsamples::Int64; left_message_rank=5 * maxlinkdim(ψ), kwargs...)
+    probs_and_bitstrings, _ = _sample(ψ::ITensorNetwork, nsamples::Int64; left_message_rank, kwargs...)
+    # returns the self-certified p/q and bitstrings
+    return [(poverq=poverq, bitstring=bitstring) for (poverq, logq, bitstring) in probs_and_bitstrings]
 end
 
 #Compute bitstrings and independently computed p/qs : a sufficiently large certification message rank should be used
-function sample_certified(ψ::ITensorNetwork, nsamples::Int64; certification_message_rank = 5*maxlinkdim(ψ), boundary_mps_kwargs= (; message_update_kwargs = (; niters = 75, tolerance = 1e-12)), kwargs...)
+function sample_certified(ψ::ITensorNetwork, nsamples::Int64; certification_message_rank=5 * maxlinkdim(ψ), boundary_mps_kwargs=(; message_update_kwargs=(; niters=75, tolerance=1e-12)), kwargs...)
     bitstrings, ψ = _sample(ψ::ITensorNetwork, nsamples::Int64; boundary_mps_kwargs, kwargs...)
     logqs = last.(first.(bitstrings))
     bitstrings = last.(bitstrings)
-    return certified_samples(ψ, bitstrings, logqs; boundary_mps_kwargs, certification_message_rank)
+    return certify_samples(ψ, bitstrings, logqs; boundary_mps_kwargs, certification_message_rank, symmetrize_and_normalize=false)
 end
 
-function get_one_sample(
+function _get_one_sample(
     right_MPScache::BoundaryMPSCache,
     left_MPScache::BoundaryMPSCache,
     sorted_partitions;
-    boundary_mps_kwargs=(; message_update_kwargs = (; niters = 75, tolerance = 1e-12)),
+    boundary_mps_kwargs=(; message_update_kwargs=(; niters=75, tolerance=1e-12)),
     kwargs...
 )
 
-    left_message_update_kwargs = (; boundary_mps_kwargs[:message_update_kwargs]..., truncate_at_end = true, truncate_kwargs = (; cutoff = 1e-10), normalize=false)
+    # TODO: this is not used?
+    left_message_update_kwargs = (; boundary_mps_kwargs[:message_update_kwargs]..., truncate_at_end=true, truncate_kwargs=(; cutoff=1e-10), normalize=false)
 
     right_MPScache = copy(right_MPScache)
 
@@ -101,7 +104,7 @@ function get_one_sample(
                 Algorithm("ITensorMPS"),
                 left_MPScache,
                 partition => next_partition;
-                cutoff = 1e-10, maxdim = maximum_virtual_dimension(left_MPScache))
+                cutoff=1e-10, maxdim=maximum_virtual_dimension(left_MPScache))
 
             pes = planargraph_sorted_partitionedges(right_MPScache, partition => next_partition)
 
@@ -118,16 +121,27 @@ function get_one_sample(
     return p_over_q_approx, logq, bit_string
 end
 
-function certified_sample(ψ::ITensorNetwork, bitstring, logq::Number; certification_message_rank::Int64, boundary_mps_kwargs=(; message_update_kwargs = (; niters = 75, tolerance = 1e-12)))
+function certify_sample(
+    ψ::ITensorNetwork, bitstring, logq::Number;
+    certification_message_rank::Int64,
+    boundary_mps_kwargs=(; message_update_kwargs=(; niters=75, tolerance=1e-12)),
+    symmetrize_and_normalize=true,
+)
+    if symmetrize_and_normalize
+        ψ, ψψ = symmetric_gauge(ψ)
+        ψ, _ = normalize(ψ, ψψ)
+    end
+
     ψproj = copy(ψ)
     s = siteinds(ψ)
-    qv = sqrt(exp((1/ length(vertices(ψ))) * logq))
+    qv = sqrt(exp((1 / length(vertices(ψ))) * logq))
     for v in vertices(ψ)
         ψproj[v] = ψ[v] * onehot(only(s[v]) => bitstring[v] + 1) / qv
     end
 
-    message_update_kwargs = (; boundary_mps_kwargs[:message_update_kwargs]..., truncate_at_end = true, truncate_kwargs = (; cutoff = 1e-12), normalize=false)
-    bmpsc = BoundaryMPSCache(ψproj; message_rank = certification_message_rank)
+    # TODO: this is not used?
+    message_update_kwargs = (; boundary_mps_kwargs[:message_update_kwargs]..., truncate_at_end=true, truncate_kwargs=(; cutoff=1e-12), normalize=false)
+    bmpsc = BoundaryMPSCache(ψproj; message_rank=certification_message_rank)
 
     pg = partitioned_graph(ppg(bmpsc))
     partition = first(center(pg))
@@ -136,16 +150,22 @@ function certified_sample(ψ::ITensorNetwork, bitstring, logq::Number; certifica
     #bmpsc = update(Algorithm("orthogonal"), bmpsc, seq; message_update_kwargs...)
 
     #Alternate fitting procedure here which is faster for small bond dimensions but may be bad for large
-    bmpsc = update(Algorithm("ITensorMPS"), bmpsc, seq; cutoff = 1e-10, maxdim = certification_message_rank)
+    bmpsc = update(Algorithm("ITensorMPS"), bmpsc, seq; cutoff=1e-10, maxdim=certification_message_rank)
 
     p_over_q = region_scalar(bmpsc, partition)
     p_over_q *= conj(p_over_q)
-    
-    return (p_over_q, bitstring)
+
+    return (poverq=p_over_q, bitstring=bitstring)
 end
 
-function certified_samples(ψ::ITensorNetwork, bitstrings, logqs::Vector{<:Number}; kwargs...)
-    return [certified_sample(ψ, bitstring, logq; kwargs...) for (bitstring, logq) in zip(bitstrings, logqs)]
+certify_sample(ψ, logq_and_bitstring::NamedTuple; kwargs...) = certify_sample(ψ, logq_and_bitstring.bitstring, logq_and_bitstring.logq; kwargs...)
+
+function certify_samples(ψ::ITensorNetwork, bitstrings, logqs::Vector{<:Number}; kwargs...)
+    return [certify_sample(ψ, bitstring, logq; kwargs...) for (bitstring, logq) in zip(bitstrings, logqs)]
+end
+
+function certify_samples(ψ::ITensorNetwork, logq_and_bitstrings::Vector{<:NamedTuple}; kwargs...)
+    return [certify_sample(ψ, logq_and_bitstring; kwargs...) for logq_and_bitstring in logq_and_bitstrings]
 end
 
 #Sample along the column/ row specified by pv with the left incoming MPS message input and the right extractable from the cache
@@ -163,7 +183,7 @@ function sample_partition(
             !isnothing(prev_v) ? partition_update(ψIψ, [prev_v], [v]) :
             partition_update(ψIψ, [v])
         env = environment(bp_cache(ψIψ), [(v, "operator")])
-        seq = contraction_sequence(env; alg = "optimal")
+        seq = contraction_sequence(env; alg="optimal")
         ρ = contract(env; sequence=seq)
         ρ_tr = tr(ρ)
         push!(traces, ρ_tr)
