@@ -8,6 +8,16 @@ function SimpleGraphAlgorithms.edge_color(g::AbstractGraph, k::Int64)
     ]
 end
 
+function SimpleGraphAlgorithms.vertex_color(g::AbstractGraph, k::Int64)
+    pg, vs = position_graph(g), collect(vertices(g))
+    vc_dict = vertex_color(UG(pg), k)
+    # returns k vectors which contain the colored/commuting edges
+    return [
+        [vs[first(v)] for v in vc_dict if last(v) == i] for
+        i = 1:k
+    ]
+end
+
 """Create heavy-hex lattice geometry"""
 function heavy_hexagonal_lattice(nx::Int64, ny::Int64)
     g = named_hexagonal_lattice_graph(nx, ny)
@@ -37,6 +47,17 @@ function lieb_lattice(nx::Int64, ny::Int64; periodic = false)
     return g
 
 end
+
+function named_biclique(na::Int64, nb::Int64)
+    g = NamedGraph([i for i in 1:(na+nb)])
+    for i in 1:na
+        for j in 1:nb
+            g = add_edge(g, NamedEdge(i => (na + j)))
+        end
+    end
+    return g
+end
+
 
 function topologytograph(topology)
     # TODO: adapt this to named graphs with non-integer labels

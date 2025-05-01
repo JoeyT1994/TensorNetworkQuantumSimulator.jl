@@ -73,8 +73,8 @@ function build_bp_cache(
     return ψϕ
 end
 
-function symmetric_gauge(ψ::AbstractITensorNetwork; cache_update_kwargs = (;))
-    ψ_vidal = VidalITensorNetwork(ψ; cache_update_kwargs)
+function symmetric_gauge(ψ::AbstractITensorNetwork; cache_update_kwargs = get_global_bp_update_kwargs(), kwargs...)
+    ψ_vidal = VidalITensorNetwork(ψ; cache_update_kwargs, kwargs...)
     cache_ref = Ref{BeliefPropagationCache}()
     ψ_symm = ITensorNetwork(ψ_vidal; (cache!) = cache_ref)
     bp_cache = cache_ref[]

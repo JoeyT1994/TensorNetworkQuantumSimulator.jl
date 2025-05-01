@@ -15,7 +15,19 @@ using NamedGraphs.GraphsExtensions: add_edges, add_vertices
 using Random
 using TOML
 
+using JLD2
+
 include("utils.jl")
+
+using Base.Threads
+using MKL
+using LinearAlgebra
+using NPZ
+
+BLAS.set_num_threads(min(6, Sys.CPU_THREADS))
+println("Julia is using "*string(nthreads()))
+println("BLAS is using "*string(BLAS.get_num_threads()))
+@show BLAS.get_config()
 
 #Construct a graph with edges everywhere a two-site gate appears.
 function build_graph_from_interactions(list; sort_vertices = false)
@@ -44,7 +56,7 @@ function build_graph_from_interactions(list; sort_vertices = false)
 end
   
 function hyperhoneycomb_graph(L; kwargs...)
-      file = pwd()*"/Research/Data/hyperhoneycomb."*string(L)*".pbc.HB.Kitaev.nosyminfo.toml"
+      file = "/mnt/home/jtindall/ceph/Data/StructureFactors/Hyperhoneycomb/LatticeFiles/hyperhoneycomb."*string(L)*".pbc.HB.Kitaev.nosyminfo.toml"
       data = TOML.parsefile(file)
       interactions = data["Interactions"]
       heisenberg_interactions = filter(d -> first(d) == "HB", interactions)
@@ -52,22 +64,24 @@ function hyperhoneycomb_graph(L; kwargs...)
       return g
 end
 
-function main()
+function main(i::Int64, maxdim::Int64)
 
     #Get the graph and interactions from the .tomls. Flag ensures Vertices are ordered consistent with the .toml file
-    L = 16
-    g = hyperhoneycomb_graph(L; sort_vertices = true)
+    g = TN.named_biclique(3,3)
 
     ec = edge_color(g, 3)
 
-    θ = pi + 0.1
+    n = 144
+    θ = (2 * pi * i) / (n)
     K, J = sin(θ), cos(θ)
+    println("Beginning simulation with theta = $(θ), J = $(J), K = $(K) and a maxdim of $(maxdim).")
 
-    s = ITN.siteinds("S=1/2", g)
-    #ψ = ITensorNetwork(v -> "Z+", s)
-    ψ = ITN.random_tensornetwork(s; link_space = 1)
+    s = ITN.siteinds("S=1/2", g; conserve_qns = false)
+    Random.seed!(1234)
+    ψ = ITN.ITensorNetwork(v -> "X+", s)
+    #ψ = ITN.random_tensornetwork(s; link_space = 1)
 
-    maxdim, cutoff = 4, 1e-12
+    cutoff = 1e-12
     apply_kwargs = (; maxdim, cutoff, normalize = true)
     # #Parameters for BP, as the graph is not a tree (it has loops), we need to specify these
     set_global_bp_update_kwargs!(;
@@ -78,15 +92,28 @@ function main()
         ),
     )
 
-    no_eras = 6
+    no_eras = 8
     xx_observables, yy_observables, zz_observables = honeycomb_kitaev_heisenberg_observables(J, K, ec)
     layer_generating_function = δβ -> honeycomb_kitaev_heisenberg_layer(J, K, δβ, ec)
     obs = [xx_observables; yy_observables; zz_observables]
     energy_calculation_function = ψψ -> sum(real.(expect(ψψ, obs)))
 
-    ψ, ψψ = imaginary_time_evolution(ψ, layer_generating_function, energy_calculation_function, no_eras; apply_kwargs);
+    ψ, ψψ, energy = imaginary_time_evolution(ψ, layer_generating_function, energy_calculation_function, no_eras; apply_kwargs);
 
+    local_zs = expect(ψψ, [("Z", [v]) for v in vertices(ψ)])
+
+    sum_z = sum(local_zs)
+
+    # zzs = expect(ψψ, zz_observables)
+    # yys = expect(ψψ, yy_observables)
+    # xxs = expect(ψψ, xx_observables)
+    # @show zzs, yys, xxs
+
+    file_name = "i"*string(i)*"maxdim"*string(maxdim)
+    jldsave("/mnt/home/jtindall/ceph/Data/StructureFactors/Hyperhoneycomb/GroundStateWavefunctions/"*file_name*".jld2"; wavefunction = ψ, bp_cache = ψψ, energy = energy, Z = sum_z)
 
 end
 
-main()
+#i, maxdim = 0, 4
+i, maxdim = parse(Int64, ARGS[1]), parse(Int64, ARGS[2])
+main(i, maxdim)

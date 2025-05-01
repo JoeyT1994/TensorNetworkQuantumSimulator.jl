@@ -158,10 +158,10 @@ function files_to_corrs_cylinder(g::AbstractGraph, radius::Int64, annealing_time
 end
 
 function main_diamond()
-    disorder_nos = [i for i in 1:1]
+    disorder_nos = [i for i in 2:2]
     ns =[(8,8,8)]
     annealing_times =[7]
-    tns_bond_dimension = 32
+    tns_bond_dimension =48
     max_loop_lengths =[0,6]
     no_corrs_per_job = 25
     no_jobs = 326
@@ -282,6 +282,6 @@ end
 
 
 
-#main_diamond()
+main_diamond()
 #main_cylinder()
-main_cubic()
+#main_cubic()

@@ -47,7 +47,7 @@ using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_grap
 
 using SimpleGraphConverter: UG
 using SimpleGraphAlgorithms
-using SimpleGraphAlgorithms: edge_color
+using SimpleGraphAlgorithms: edge_color, vertex_color
 
 using TensorOperations
 

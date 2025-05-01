@@ -11,6 +11,10 @@ function _takes_theta_argument(string::String)
     return string ∈ ["Rx", "Ry", "Rz", "CRx", "CRy", "CRz", "Rxxyy", "Rxxyyzz"]
 end
 
+function _takes_thetaxyz_argument(string::String)
+    return string ∈ ["RxxRyyRzz"]
+end
+
 
 function _takes_phi_argument(string::String)
     return string ∈ ["Rxx", "Ryy", "Rzz", "P", "CPHASE"]
@@ -37,6 +41,8 @@ function toitensor(gate::Tuple, sinds::IndsNetwork)
         gate = ITensors.op(gate_symbol, s_inds...; θ = gate[3])
     elseif _takes_phi_argument(gate_symbol)
         gate = ITensors.op(gate_symbol, s_inds...; ϕ = 0.5 * gate[3])
+    elseif _takes_thetaxyz_argument(gate_symbol)
+        gate = ITensors.op(gate_symbol, s_inds...; θx = gate[3], θy = gate[4], θz = gate[5])
     else
         throw(ArgumentError("Wrong gate format"))
     end
@@ -77,7 +83,7 @@ function _ensuretuple(gate_inds::NamedEdge)
 end
 
 function ITensors.op(
-    ::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Float64
+    ::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Number
   )
     mat = zeros(ComplexF64, 4, 4)
     mat[1, 1] = 1
@@ -90,7 +96,7 @@ function ITensors.op(
 end
 
 function ITensors.op(
-    ::OpName"Rxxyyzz", ::SiteType"S=1/2"; θ::Float64
+    ::OpName"Rxxyyzz", ::SiteType"S=1/2"; θ::Number
   )
     a = exp( im * θ * 0.5)
     mat = zeros(ComplexF64, 4, 4)
@@ -100,5 +106,22 @@ function ITensors.op(
     mat[3, 2] = -1.0 * im * a * sin(θ)
     mat[3, 3] = cos(θ) * a
     mat[4,4] = conj(a)
+    return mat
+end
+
+function ITensors.op(
+    ::OpName"RxxRyyRzz", ::SiteType"S=1/2"; θx::Number, θy::Number, θz::Number
+  )
+    ap, am = exp( im * θz * 0.5), exp( -im * θz * 0.5)
+    cm, cp, sm, sp = cos(0.5*(θx - θy)), cos(0.5*(θx + θy)), sin(0.5*(θx - θy)), sin(0.5*(θx + θy)) 
+    mat = zeros(ComplexF64, 4, 4)
+    mat[1, 1] = am * cm
+    mat[1,4] = -1.0 * im * am * sm
+    mat[2, 2] = cp * ap
+    mat[2, 3] = -1.0 * im * ap * sp
+    mat[3, 2] = -1.0 * im * ap * sp
+    mat[3, 3] = cp * ap
+    mat[4,1] = -1.0 * im * am * sm
+    mat[4,4] = am * cm
     return mat
 end

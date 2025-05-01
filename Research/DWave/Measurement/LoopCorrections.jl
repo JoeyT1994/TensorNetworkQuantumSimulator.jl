@@ -110,22 +110,22 @@ end
     
 function main_diamond()
     println("Diamond Regular analysis")
-    # nx, ny, nz = parse(Int64, ARGS[1]), parse(Int64, ARGS[2]), parse(Int64, ARGS[3])
-    # max_loop_length = parse(Int64, ARGS[4])
-    # disorder_no = parse(Int64, ARGS[5])
-    # annealing_time = parse(Int64, ARGS[6])
-    # χ_state = parse(Int64, ARGS[7])
-    # job_no = parse(Int64, ARGS[8])
-    # no_corrs_per_job = parse(Int64, ARGS[9])
+    nx, ny, nz = parse(Int64, ARGS[1]), parse(Int64, ARGS[2]), parse(Int64, ARGS[3])
+    max_loop_length = parse(Int64, ARGS[4])
+    disorder_no = parse(Int64, ARGS[5])
+    annealing_time = parse(Int64, ARGS[6])
+    χ_state = parse(Int64, ARGS[7])
+    job_no = parse(Int64, ARGS[8])
+    no_corrs_per_job = parse(Int64, ARGS[9])
 
-    nx, ny, nz = 4,4,8
-    max_loop_length = 6
-    disorder_no = 1
-    annealing_time = 20
-    χ_state = 16
-    job_no = 13
+    # nx, ny, nz = 4,4,8
+    # max_loop_length = 6
+    # disorder_no = 1
+    # annealing_time = 20
+    # χ_state = 16
+    # job_no = 13
 
-    no_corrs_per_job = 10
+    # no_corrs_per_job = 10
 
 
     f = nothing
@@ -221,6 +221,6 @@ function main_cubic()
     end
 end
 
-#main_diamond()
+main_diamond()
 #main_cylinder()
-main_cubic()
+#main_cubic()

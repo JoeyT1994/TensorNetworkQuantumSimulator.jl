@@ -43,17 +43,11 @@ function honeycomb_kitaev_heisenberg_layer(J::Float64, K::Float64, δβ::Float64
     layer = []
     for (i, colored_edges) in enumerate(ec)
         if i == 1
-            append!(layer, ("Rxx", pair, -2*(K + J)*δβ * im) for pair in colored_edges)
-            append!(layer, ("Ryy", pair, -2*(J)*δβ * im) for pair in colored_edges)
-            append!(layer, ("Rzz", pair, -2*(J)*δβ * im) for pair in colored_edges)
+            append!(layer, ("RxxRyyRzz", pair, -2*(K + J)*δβ * im, -2*(J)*δβ * im, -2*(J)*δβ * im) for pair in colored_edges)
         elseif i == 2
-            append!(layer, ("Rxx", pair, -2*(J)*δβ * im) for pair in colored_edges)
-            append!(layer, ("Ryy", pair, -2*(K + J)*δβ * im) for pair in colored_edges)
-            append!(layer, ("Rzz", pair, -2*(J)*δβ * im) for pair in colored_edges)
+            append!(layer, ("RxxRyyRzz", pair, -2*(J)*δβ * im, -2*(K + J)*δβ * im, -2*(J)*δβ * im) for pair in colored_edges)
         elseif i == 3
-            append!(layer, ("Rxx", pair, -2*(J)*δβ * im) for pair in colored_edges)
-            append!(layer, ("Ryy", pair, -2*(J)*δβ * im) for pair in colored_edges)
-            append!(layer, ("Rzz", pair, -2*(K + J)*δβ * im) for pair in colored_edges)
+            append!(layer, ("RxxRyyRzz", pair, -2*(J)*δβ * im, -2*(J)*δβ * im, -2*(K + J)*δβ * im) for pair in colored_edges)
         end
     end
     return layer
