@@ -100,6 +100,7 @@ using ITensorNetworks:
     partitioned_graph,
     powerset,
     boundary_partitionedges,
+    rescale,
     message,
     factors,
     contraction_sequence,
