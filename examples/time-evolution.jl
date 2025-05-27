@@ -10,7 +10,7 @@ function main()
     nx = 5
     ny = 5
 
-    # the graph is your main friend in working with the TNs
+    # the graph is your main friend. This will be the geometry of the TN you wull work with
     g = named_grid((nx, ny))
     nq = length(vertices(g))
 
@@ -20,7 +20,7 @@ function main()
     hz = 0.8
     J = 0.5
 
-    # pauli rotations are tuples like `(pauli_string, [site_labels], parameter)`
+    #Build a layer of the circuit. Pauli rotations are tuples like `(pauli_string, [site_labels], parameter)`
     layer = []
     append!(layer, ("Rx", [v], 2*hx*dt) for v in vertices(g))
     append!(layer, ("Rz", [v], 2*hz*dt) for v in vertices(g))
@@ -62,12 +62,6 @@ function main()
 
     ## A few more advanced options
     # we will still do exactly the same evolution but also do boundary mps for expectation values
-
-    # these kwargs are used every time the BP is updated, but you can pass other kwargs to individual functions 
-    set_global_bp_update_kwargs!(maxiter = 25, tol = 1e-6)
-    set_global_boundarymps_update_kwargs!(
-        message_update_kwargs = (; niters = 20, tolerance = 1e-10),
-    )
 
     # the initial state
     ψ = zerostate(g)

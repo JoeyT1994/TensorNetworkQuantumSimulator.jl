@@ -1,62 +1,51 @@
-struct BoundaryMPSCache{BPC,PG} <: AbstractBeliefPropagationCache
+struct BoundaryMPSCache{V, PV, BPC<:AbstractBeliefPropagationCache{V, PV},PG} <: AbstractBeliefPropagationCache{V, PV}
     bp_cache::BPC
     partitionedplanargraph::PG
     maximum_virtual_dimension::Int64
 end
 
-## Utilities to globally set boundary MPS_update_kwargs 
 const _default_boundarymps_update_alg = "orthogonal"
-const _default_boundarymps_update_niters = 25
-const _default_boundarymps_update_tolerance = 1e-10
+const _default_boundarymps_update_niters = 40
+const _default_boundarymps_update_tolerance = 1e-12
+const _default_boundarymps_update_cutoff = 1e-12
 
-
-# we make this a Dict that it can be pushed to with kwargs that we haven't thought of
-# TODO: make this is not quite correct for boundary MPS
-const _global_boundarymps_update_kwargs::Dict{Symbol,Any} = Dict(
-    :alg => _default_boundarymps_update_alg,
-    :message_update_kwargs => (;
-        niters = _default_boundarymps_update_niters,
-        tolerance = _default_boundarymps_update_tolerance,
-    ),
-)
-
-function set_global_boundarymps_update_kwargs!(; kwargs...)
-    for (arg, val) in kwargs
-        _global_boundarymps_update_kwargs[arg] = val
-    end
-    return get_global_boundarymps_update_kwargs()
+function default_boundarymps_update_kwargs(; cache_is_flat = false, kwargs...)
+    alg = ITensorNetworks.default_message_update_alg(cache_is_flat)
+    return (; alg, message_update_kwargs = ITensorNetworks.default_message_update_kwargs(; cache_is_flat, kwargs...))
 end
 
-function get_global_boundarymps_update_kwargs()
-    # return as a named tuple
-    return (; _global_boundarymps_update_kwargs...)
+ITensorNetworks.default_message_update_alg(cache_is_flat::Bool = false) = cache_is_flat ? "ITensorMPS" : "orthogonal"
+
+function ITensorNetworks.default_message_update_kwargs(; cache_is_flat = false, cutoff = _default_boundarymps_update_cutoff, kwargs...)
+    !cache_is_flat && return return (; niters = _default_boundarymps_update_niters, tolerance = _default_boundarymps_update_tolerance)
+    return (; cutoff = cutoff, kwargs...)
 end
 
-function reset_global_boundarymps_update_kwargs!()
-    empty!(_global_bp_update_kwargs)
-    _global_boundarymps_update_kwargs[:alg] = _default_boundarymps_update_alg
-    _global_boundarymps_update_kwargs[:message_update_kwargs] = (;
-        niters = _default_boundarymps_update_niters,
-        tolerance = _default_boundarymps_update_tolerance,
-    )
-    return get_global_boundarymps_update_kwargs()
-end
+ITensorNetworks.default_cache_update_kwargs(alg::Algorithm"boundarymps") = default_boundarymps_update_kwargs()
 
 ## Frontend functions
 
-function updatecache(bp_cache::BoundaryMPSCache; boundarymps_update_kwargs...)
-    # merge provided kwargs with the defaults
-    boundarymps_update_kwargs =
-        merge(get_global_boundarymps_update_kwargs(), boundarymps_update_kwargs)
+"""
+    updatecache(bmpsc::BoundaryMPSCache; alg, message_update_kwargs = (; niters, tolerance))
 
-    return update(bp_cache; boundarymps_update_kwargs...)
+Update the MPS messages inside a boundaryMPS-cache. 
+"""
+function updatecache(bmpsc::BoundaryMPSCache, args...; alg = ITensorNetworks.default_message_update_alg(is_flat(bmpsc)),
+    message_update_kwargs = ITensorNetworks.default_message_update_kwargs(; cache_is_flat = is_flat(bmpsc), maxdim = maximum_virtual_dimension(bmpsc)), kwargs...)
+    return update(bmpsc, args...; alg, message_update_kwargs, kwargs...)
 end
 
+"""
+    build_boundarymps_cache(ψ::AbstractITensorNetwork, message_rank::Int64; cache_construction_kwargs = (;), cache_update_kwargs = default_posdef_boundarymps_update_kwargs())
+
+Build the Boundary MPS cache for ψIψ  and update it appropriately
+"""
 function build_boundarymps_cache(
     ψ::AbstractITensorNetwork,
     message_rank::Int64;
     cache_construction_kwargs = (;),
-    boundary_mps_kwargs...,
+    cache_update_kwargs = default_boundarymps_update_kwargs(; cache_is_flat = false, maxdim = message_rank),
+    update_cache = true
 )
     # build the BP cache
     ψIψ = build_bp_cache(ψ; update_cache = false)
@@ -66,7 +55,8 @@ function build_boundarymps_cache(
         ψIψ,
         message_rank;
         cache_construction_kwargs,
-        boundary_mps_kwargs...,
+        cache_update_kwargs,
+        update_cache
     )
 end
 
@@ -75,38 +65,20 @@ function build_boundarymps_cache(
     message_rank::Int64;
     update_cache = true,
     cache_construction_kwargs = (;),
-    boundary_mps_kwargs...,
+    cache_update_kwargs = default_boundarymps_update_kwargs(; cache_is_flat = is_flat(ψIψ), maxdim = message_rank),
 )
 
     ψIψ = BoundaryMPSCache(ψIψ; message_rank, cache_construction_kwargs...)
 
     if update_cache
         # update the cache
-        ψIψ = updatecache(ψIψ; boundary_mps_kwargs...)
+        ψIψ = updatecache(ψIψ; cache_update_kwargs...)
     end
 
     return ψIψ
 end
 
-# a version for the inner product of two state networks
-function build_boundarymps_cache(
-    ψ::AbstractITensorNetwork,
-    ϕ::AbstractITensorNetwork,
-    message_rank::Int64;
-    boundary_mps_kwargs...,
-)
-
-    ψϕ = build_bp_cache(ψ, ϕ; update_cache = false)
-
-    # convert BP cache to boundary MPS cache, no further update needed
-    return build_boundarymps_cache(ψϕ, message_rank; boundary_mps_kwargs...)
-end
-
-
-
-function build_boundarymps_cache(ψIψ::BoundaryMPSCache, args...; kwargs...)
-    return ψIψ
-end
+is_flat(bmpsc::BoundaryMPSCache) = is_flat(bp_cache(bmpsc))
 
 ## Backend functions
 bp_cache(bmpsc::BoundaryMPSCache) = bmpsc.bp_cache
@@ -120,10 +92,8 @@ function ITensorNetworks.partitioned_tensornetwork(bmpsc::BoundaryMPSCache)
 end
 ITensorNetworks.messages(bmpsc::BoundaryMPSCache) = messages(bp_cache(bmpsc))
 
-ITensorNetworks.default_message_update_alg(bmpsc::BoundaryMPSCache) = "orthogonal"
-
 function ITensorNetworks.default_bp_maxiter(
-    alg::Algorithm"orthogonal",
+    alg::Algorithm,
     bmpsc::BoundaryMPSCache,
 )
     return default_bp_maxiter(partitioned_graph(ppg(bmpsc)))
@@ -134,13 +104,10 @@ function ITensorNetworks.default_edge_sequence(alg::Algorithm, bmpsc::BoundaryMP
     return pair.(default_edge_sequence(ppg(bmpsc)))
 end
 
-function default_message_update_kwargs(alg::Algorithm"orthogonal", bmpsc::BoundaryMPSCache)
-    return (; niters = 50, tolerance = 1e-10)
-end
 default_boundarymps_message_rank(tn::AbstractITensorNetwork) = maxlinkdim(tn)^2
 ITensorNetworks.partitions(bmpsc::BoundaryMPSCache) =
     parent.(collect(partitionvertices(ppg(bmpsc))))
-ITensorNetworks.partitionpairs(bmpsc::BoundaryMPSCache) = pair.(partitionedges(ppg(bmpsc)))
+NamedGraphs.PartitionedGraphs.partitionedges(bmpsc::BoundaryMPSCache) = pair.(partitionedges(ppg(bmpsc)))
 
 function ITensorNetworks.cache(
     alg::Algorithm"boundarymps",
@@ -161,10 +128,6 @@ function ITensorNetworks.default_cache_construction_kwargs(alg::Algorithm"bounda
             tn,
         )
     )
-end
-
-function ITensorNetworks.default_cache_update_kwargs(alg::Algorithm"boundarymps")
-    return get_global_boundarymps_update_kwargs()
 end
 
 function Base.copy(bmpsc::BoundaryMPSCache)
@@ -523,16 +486,17 @@ function default_inserter(
     inserter_transform = default_inserter_transform(alg),
     region_transform = default_region_transform(alg),
     nsites::Int64 = 1,
-    cutoff = nothing,
+    cutoff = 1e-12,
     normalize = true,
 )
+    bmpsc = copy(bmpsc)
     update_pe_region = region_transform.(update_pe_region)
     m = contract(ms; sequence = "automatic")
     if normalize
         m /= norm(m)
     end
     if nsites == 1
-        bmpsc = set_message(bmpsc, only(update_pe_region), ITensor[inserter_transform(m)])
+        set_message!(bmpsc, only(update_pe_region), ITensor[inserter_transform(m)])
     elseif nsites == 2
         pe1, pe2 = first(update_pe_region), last(update_pe_region)
         me1, me2 = only(message(bmpsc, pe1)), only(message(bmpsc, pe2))
@@ -544,8 +508,8 @@ function default_inserter(
             cutoff,
             maxdim = maximum_virtual_dimension(bmpsc),
         )
-        bmpsc = set_message(bmpsc, pe1, ITensor[inserter_transform(me1)])
-        bmpsc = set_message(bmpsc, pe2, ITensor[inserter_transform(me2)])
+        set_message!(bmpsc, pe1, ITensor[inserter_transform(me1)])
+        set_message!(bmpsc, pe2, ITensor[inserter_transform(me2)])
     else
         error("Nsites > 2 not supported at the moment for Boundary MPS updating")
     end
@@ -653,6 +617,7 @@ function default_cache_prep_function(
     bmpsc::BoundaryMPSCache,
     partitionpair,
 )
+    bmpsc = delete_partition_messages!(bmpsc, first(partitionpair))
     return bmpsc
 end
 function default_cache_prep_function(
@@ -660,6 +625,8 @@ function default_cache_prep_function(
     bmpsc::BoundaryMPSCache,
     partitionpair,
 )
+    bmpsc = copy(bmpsc)
+    bmpsc = delete_partition_messages!(bmpsc, first(partitionpair))
     return switch_messages(bmpsc, partitionpair)
 end
 
@@ -708,6 +675,57 @@ function update_sequence(
     end
 end
 
+function merge_internal_tensors(O::Union{MPS, MPO})
+    internal_inds = filter(i -> isempty(ITensorMPS.siteinds(O, i)), [i for i in 1:length(O)])
+
+    while !isempty(internal_inds)
+        site = first(internal_inds)
+        tensors = [O[i] for i in setdiff([i for i in 1:length(O)], [site])]
+        if site != length(O)
+            tensors[site] = tensors[site] * O[site]
+        else
+            tensors[site - 1] = tensors[site - 1] * O[site]
+        end
+
+        O = typeof(O)(tensors)
+
+        internal_inds = filter(i -> isempty(ITensorMPS.siteinds(O, i)), [i for i in 1:length(O)])
+    end
+    return O
+end
+
+function ITensorMPS.MPO(bmpsc::BoundaryMPSCache, partition)
+    sorted_vs = sort(planargraph_vertices(bmpsc, partition))
+    ts = [copy(bmpsc[v]) for v in sorted_vs]
+    O = ITensorMPS.MPO(ts)
+    #O = merge_internal_tensors(O)
+    return O
+end
+
+function ITensorMPS.MPS(bmpsc::BoundaryMPSCache, partitionpair::Pair)
+    sorted_pes = planargraph_sorted_partitionedges(bmpsc, partitionpair)
+    ms = [only(message(bmpsc, pe)) for pe in sorted_pes]
+    return ITensorMPS.MPS(ms)
+end
+
+function ITensorNetworks.truncate(bmpsc::BoundaryMPSCache, partitionpair::Pair; truncate_kwargs...)
+    bmpsc = copy(bmpsc)
+    M = ITensorMPS.MPS(bmpsc, partitionpair)
+    M = ITensorMPS.truncate(M; truncate_kwargs...)
+    return set_interpartition_message(bmpsc, M, partitionpair)
+end
+
+function set_interpartition_message(bmpsc::BoundaryMPSCache, M::Union{MPS, MPO}, partitionpair::Pair)
+    bmpsc = copy(bmpsc)
+    sorted_pes = planargraph_sorted_partitionedges(bmpsc, partitionpair)
+    ms = messages(bmpsc)
+    for i in 1:length(M)
+        set!(ms, sorted_pes[i], ITensor[M[i]])
+    end
+    return bmpsc
+end
+
+
 #Update all the message tensors on an interpartition via an n-site fitting procedure 
 function ITensorNetworks.update(
     alg::Algorithm,
@@ -721,6 +739,8 @@ function ITensorNetworks.update(
     niters::Int64,
     tolerance,
     normalize = true,
+    truncate_at_end = false,
+    truncate_kwargs = (;),
     nsites::Int64 = 1,
 )
     bmpsc = cache_prep_function(alg, bmpsc, partitionpair)
@@ -737,12 +757,70 @@ function ITensorNetworks.update(
         end
         epsilon = abs(cf - prev_cf) / length(update_seq)
         if !isnothing(tolerance) && epsilon < tolerance
-            return cache_prep_function(alg, bmpsc, partitionpair)
+            bmpsc = cache_prep_function(alg, bmpsc, partitionpair)
+            if truncate_at_end
+                bmpsc = truncate(bmpsc, partitionpair; truncate_kwargs...)
+            end
+            return bmpsc
         else
             prev_cf = cf
         end
     end
-    return cache_prep_function(alg, bmpsc, partitionpair)
+    bmpsc = cache_prep_function(alg, bmpsc, partitionpair)
+    if truncate_at_end
+        bmpsc = truncate(bmpsc, partitionpair; truncate_kwargs...)
+    end
+    return bmpsc
+end
+
+function prev_partitionpair(bmpsc::BoundaryMPSCache, partitionpair::Pair)
+    pppg = partitioned_graph(ppg(bmpsc))
+    vns = neighbors(pppg, first(partitionpair))
+    length(vns) == 1 && return nothing
+
+    @assert length(vns) == 2
+    v1, v2 = first(vns), last(vns)
+    last(partitionpair) == v1 && return v2 => first(partitionpair)
+    last(partitionpair) == v2 && return v1 => first(partitionpair)
+end
+
+function generic_apply(O::MPO, M::MPS; kwargs...)
+    length(O) == length(M) && return ITensorMPS.apply(O, M; kwargs...)
+
+    O_tensors = ITensor[]
+    for i in 1:length(O)
+        m_ind = filter(j -> !isempty(ITensors.commoninds(O[i], M[j])), [j for j in 1:length(M)])
+        if isempty(m_ind)
+            push!(O_tensors, O[i])
+        else
+            m_ind = only(m_ind)
+            push!(O_tensors, O[i] * M[m_ind])
+        end
+    end
+    O = ITensorNetwork([i for i in 1:length(O_tensors)], O_tensors)
+    O = ITensorNetworks.combine_linkinds(O)
+    O = ITensorMPS.MPS([O[v] for v in vertices(O)])
+    O = merge_internal_tensors(O)
+    return truncate(O; kwargs...)
+end
+
+#Update all the message tensors on an interpartition via the ITensorMPS apply function
+function ITensorNetworks.update(
+    alg::Algorithm"ITensorMPS",
+    bmpsc::BoundaryMPSCache,
+    partitionpair::Pair;
+    cutoff::Number = _default_boundarymps_update_cutoff, 
+    maxdim::Int = maximum_virtual_dimension(bmpsc),
+    kwargs...
+)
+    prev_pp = prev_partitionpair(bmpsc, partitionpair)
+    O = ITensorMPS.MPO(bmpsc, first(partitionpair))
+    O = ITensorMPS.truncate(O; cutoff, maxdim)
+    isnothing(prev_pp) && return set_interpartition_message(bmpsc, merge_internal_tensors(O), partitionpair)
+    
+    M = ITensorMPS.MPS(bmpsc, prev_pp)
+    M_out = generic_apply(O, M; cutoff, maxdim)
+    return set_interpartition_message(bmpsc, M_out, partitionpair)
 end
 
 #Environment support, assume all vertices live in the same partition for now
@@ -811,3 +889,15 @@ function insert_pseudo_planar_edges(
 end
 
 pair(pe::PartitionEdge) = parent(src(pe)) => parent(dst(pe))
+
+function delete_partition_messages!(bmpsc::BoundaryMPSCache, partition)
+    vs = sort(planargraph_vertices(bmpsc, partition))
+    pes = partition_update_sequence(bmpsc, [first(vs)])
+    pes = vcat(pes, reverse.(pes))
+    return delete_messages!(bmpsc, pes)
+end
+
+function delete_partitionpair_messages!(bmpsc::BoundaryMPSCache, partitionpair::Pair)
+    pes = planargraph_sorted_partitionedges(bmpsc, partitionpair)
+    return delete_messages!(bmpsc, pes)
+end

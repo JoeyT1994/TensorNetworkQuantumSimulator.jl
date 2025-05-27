@@ -41,17 +41,24 @@ end
 
 function honeycomb_kitaev_heisenberg_layer(J::Float64, K::Float64, δβ::Float64, ec)
     layer = []
-    for (i, colored_edges) in enumerate(ec)
-        if i == 1
-            append!(layer, ("RxxRyyRzz", pair, -2*(K + J)*δβ * im, -2*(J)*δβ * im, -2*(J)*δβ * im) for pair in colored_edges)
-        elseif i == 2
-            append!(layer, ("RxxRyyRzz", pair, -2*(J)*δβ * im, -2*(K + J)*δβ * im, -2*(J)*δβ * im) for pair in colored_edges)
-        elseif i == 3
-            append!(layer, ("RxxRyyRzz", pair, -2*(J)*δβ * im, -2*(J)*δβ * im, -2*(K + J)*δβ * im) for pair in colored_edges)
-        end
-    end
+    append!(layer, ("RxxRyyRzz", pair, -(K + J)*δβ * im, -(J)*δβ * im, -(J)*δβ * im) for pair in ec[1])
+    append!(layer, ("RxxRyyRzz", pair, -(J)*δβ * im, -(K + J)*δβ * im, -(J)*δβ * im) for pair in ec[2])
+    append!(layer, ("RxxRyyRzz", pair, -2*(J)*δβ * im, -2*(J)*δβ * im, -2*(K + J)*δβ * im) for pair in ec[3])
+    append!(layer, ("RxxRyyRzz", pair, -(J)*δβ * im, -(K + J)*δβ * im, -(J)*δβ * im) for pair in ec[2])
+    append!(layer, ("RxxRyyRzz", pair, -(K + J)*δβ * im, -(J)*δβ * im, -(J)*δβ * im) for pair in ec[1])
     return layer
 end
+
+function honeycomb_kitaev_heisenberg_realtime_layer(J::Float64, K::Float64, δt::Float64, ec)
+    layer = []
+    append!(layer, ("RxxRyyRzz", pair, (K + J)*δt, (J)*δt, (J)*δt) for pair in ec[1])
+    append!(layer, ("RxxRyyRzz", pair, (J)*δt, (K + J)*δt, (J)*δt) for pair in ec[2])
+    append!(layer, ("RxxRyyRzz", pair, 2*(J)*δt, 2*(J)*δt, 2*(K + J)*δt) for pair in ec[3])
+    append!(layer, ("RxxRyyRzz", pair, (J)*δt, (K + J)*δt, (J)*δt) for pair in ec[2])
+    append!(layer, ("RxxRyyRzz", pair, (K + J)*δt, (J)*δt, (J)*δt) for pair in ec[1])
+    return layer
+end
+
 
 function honeycomb_kitaev_heisenberg_observables(J::Float64, K::Float64, ec)
     xx_observables = vcat([("XX", pair, (J + K)) for pair in ec[1]], [("XX", pair, (J)) for pair in vcat(ec[2], ec[3])])

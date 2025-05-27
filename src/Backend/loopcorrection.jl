@@ -1,12 +1,15 @@
+"""
+    ITensors.scalar(alg::Algorithm"loopcorrections", bp_cache::AbstractBeliefPropagationCache; max_configuration_size::Int64)
+
+Compute the contraction of the tensor network in the bp cache with loop corrections, up to configurations of a specific size
+"""
 function ITensors.scalar(
     alg::Algorithm"loopcorrections",
     bp_cache::AbstractBeliefPropagationCache;
-    normalize_cache = true,
     max_configuration_size::Int64,
 )
-    bp_cache = normalize_messages(bp_cache)
     zbp = scalar(bp_cache; alg = "bp")
-    bp_cache = normalize_cache ? normalize(bp_cache) : bp_cache
+    bp_cache = rescale(bp_cache)
     #Count the cycles using NamedGraphs
     egs =
         edgeinduced_subgraphs_no_leaves(partitioned_graph(bp_cache), max_configuration_size)
@@ -15,6 +18,7 @@ function ITensors.scalar(
     return zbp*(1 + sum(ws))
 end
 
+#Function for allowing ITensorNetwork scalar() and inner()  to work with alg = "loopcorrections"
 function ITensors.scalar(
     alg::Algorithm"loopcorrections",
     tn::AbstractITensorNetwork;
@@ -22,7 +26,7 @@ function ITensors.scalar(
     (cache!) = nothing,
     cache_construction_kwargs = default_cache_construction_kwargs(Algorithm("bp"), tn),
     update_cache = isnothing(cache!),
-    cache_update_kwargs = default_cache_update_kwargs(Algorithm("bp")),
+    cache_update_kwargs = default_nonposdef_bp_update_kwargs(; cache_is_tree = is_tree(tn)),
 )
     if isnothing(cache!)
         cache! = Ref(cache(Algorithm("bp"), tn; cache_construction_kwargs...))
@@ -35,6 +39,7 @@ function ITensors.scalar(
     return scalar(cache![]; alg, max_configuration_size)
 end
 
+#Transform the indices in the given subgraph of the tensornetwork so that antiprojectors can be inserted without duplicate indices appearing
 function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
     bpc = copy(bpc)
     pvs = PartitionVertex.(collect(vertices(eg)))
@@ -52,13 +57,13 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
             set!(ms, reverse(pe), ITensor[mer])
             verts = vertices(bpc, src(pe))
             for v in verts
-                t = only(factors(bpc, [v]))
+                t = bpc[v]
                 t_inds = filter(i -> i ∈ linds, inds(t))
                 if !isempty(t_inds)
                     t_ind = only(t_inds)
                     t_ind_pos = findfirst(x -> x == t_ind, linds)
                     t = replaceind(t, t_ind, linds_sim[t_ind_pos])
-                    bpc = update_factor(bpc, v, t)
+                    setindex_preserve_graph!(bpc, t, v)
                 end
             end
             push!(updated_pes, pe)
@@ -78,6 +83,7 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
     return bpc, antiprojectors
 end
 
+#Get the all edges incident to the region specified by the vector of edges passed
 function ITensorNetworks.boundary_partitionedges(
     bpc::BeliefPropagationCache,
     pes::Vector{<:PartitionEdge},
@@ -92,7 +98,7 @@ function ITensorNetworks.boundary_partitionedges(
     return bpes
 end
 
-#Return weight of term with anti projectors on all edges in the edge induced subgraph and messages everywhere else
+#Compute the contraction of the bp configuration specified by the edge induced subgraph eg
 function weight(bpc::BeliefPropagationCache, eg)
     pvs = PartitionVertex.(collect(vertices(eg)))
     pes = PartitionEdge.(collect(edges(eg)))
@@ -105,6 +111,7 @@ function weight(bpc::BeliefPropagationCache, eg)
     return contract(ts; sequence = seq)[]
 end
 
+#Vectorized version of weight
 function weights(bpc, egs, args...)
     return [weight(bpc, eg, args...) for eg in egs]
 end

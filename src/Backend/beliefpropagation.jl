@@ -1,212 +1,119 @@
-## Utilities to globally set bp_update_kwargs
 const _default_bp_update_maxiter = 25
 const _default_bp_update_tol = 1e-10
-_default_message_update_function(ms) = make_eigs_real.(default_message_update(ms))
-
-
-# we make this a Dict that it can be pushed to with kwargs that we haven't thought of
-const _global_bp_update_kwargs::Dict{Symbol,Any} = Dict(
-    :maxiter => _default_bp_update_maxiter,
-    :tol => _default_bp_update_tol,
-    :message_update_kwargs =>
-        (; message_update_function = _default_message_update_function),
-)
-
-function set_global_bp_update_kwargs!(; kwargs...)
-    for (arg, val) in kwargs
-        _global_bp_update_kwargs[arg] = val
-    end
-    return get_global_bp_update_kwargs()
-end
-
-function get_global_bp_update_kwargs()
-    # return as a named tuple
-    return (; _global_bp_update_kwargs...)
-end
-
-function reset_global_bp_update_kwargs!()
-    empty!(_global_bp_update_kwargs)
-    _global_bp_update_kwargs[:maxiter] = _default_bp_update_maxiter
-    _global_bp_update_kwargs[:tol] = _default_bp_update_tol
-    _global_bp_update_kwargs[:message_update_kwargs] =
-        (; message_update_function = _default_message_update_function)
-    return get_global_bp_update_kwargs()
-end
 
 ## Frontend functions
 
-function updatecache(bp_cache::AbstractBeliefPropagationCache; bp_update_kwargs...)
-    # merge provided kwargs with the defaults
-    bp_update_kwargs = merge(get_global_bp_update_kwargs(), bp_update_kwargs)
+# `default_message_update` lives in ITensorNetworks.jl
+default_posdef_message_update_function(ms) = make_hermitian.(default_message_update(ms))
 
-    return update(bp_cache; bp_update_kwargs...)
+function default_posdef_bp_update_kwargs(; cache_is_tree = false)
+    message_update_function = default_posdef_message_update_function
+    return (; maxiter=default_bp_update_maxiter(cache_is_tree), tol=_default_bp_update_tol, message_update_kwargs=(; message_update_function))
 end
 
+function default_nonposdef_bp_update_kwargs(; cache_is_tree = false)
+    message_update_function = default_message_update
+    return (;  maxiter=default_bp_update_maxiter(cache_is_tree), tol=_default_bp_update_tol, message_update_kwargs=(; message_update_function))
+end
 
+function default_bp_update_maxiter(cache_is_tree::Bool = false)
+    !cache_is_tree && return _default_bp_update_maxiter
+    return 1
+end
+
+"""
+    updatecache(bp_cache::BeliefPropagationCache; maxiter::Int64, tol::Number, message_update_kwargs = (; message_update_function = default_message_update))
+
+Update the message tensors inside a bp-cache, running over the graph up to maxiter times until convergence to the desired tolerance `tol`.
+If the cache is positive definite, the message update function can
+"""
+function updatecache(bp_cache; maxiter=default_bp_update_maxiter(is_tree(partitioned_graph(bp_cache))), tol=_default_bp_update_tol, message_update_kwargs=(; message_update_function=default_message_update))
+    return update(bp_cache; maxiter, tol, message_update_kwargs)
+end
+
+"""
+    build_bp_cache(ψ::ITensorNetwork, args...; kwargs...)
+
+Build the tensornetwork and cache of message tensors for the norm square network `ψIψ`.
+"""
 function build_bp_cache(
     ψ::AbstractITensorNetwork,
     args...;
-    update_cache = true,
-    bp_update_kwargs...,
+    update_cache=true,
+    cache_update_kwargs=default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ)),
 )
     bp_cache = BeliefPropagationCache(QuadraticFormNetwork(ψ), args...)
     # TODO: QuadraticFormNetwork() builds ψIψ network, but for Pauli picture `norm_sqr_network()` is enough
     # https://github.com/ITensor/ITensorNetworks.jl/blob/main/test/test_belief_propagation.jl line 49 to construct the cache without the identities.
     if update_cache
-        bp_cache = updatecache(bp_cache; bp_update_kwargs...)
+        bp_cache = updatecache(bp_cache; cache_update_kwargs...)
     end
     return bp_cache
 end
 
-# BP cache for the inner product of two state networks
-function build_bp_cache(
-    ψ::AbstractITensorNetwork,
-    ϕ::AbstractITensorNetwork;
-    update_cache = true,
-    bp_update_kwargs...,
-)
-    ψϕ = BeliefPropagationCache(inner_network(ψ, ϕ))
+"""
+    is_flat(bpc::BeliefPropagationCache)
 
-    if update_cache
-        ψϕ = updatecache(ψϕ; bp_update_kwargs...)
-    end
-    return ψϕ
+Is the network inside bpc `flat', i.e. does every partition contain only one tensor
+"""
+function is_flat(bpc::BeliefPropagationCache)
+    pg = partitioned_tensornetwork(bpc)
+    return all([length(vertices(pg, pv)) == 1 for pv in partitionvertices(pg)])
 end
 
-function symmetric_gauge(ψ::AbstractITensorNetwork; cache_update_kwargs = get_global_bp_update_kwargs(), kwargs...)
+"""
+    symmetric_gauge(ψ::AbstractITensorNetwork; cache_update_kwargs = default_posdef_bp_update_kwargs(), kwargs...)
+
+Transform a tensor netework into the symmetric gauge, where the BP message tensors are all diagonal
+"""
+function symmetric_gauge(ψ::AbstractITensorNetwork; cache_update_kwargs=default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ)), kwargs...)
     ψ_vidal = VidalITensorNetwork(ψ; cache_update_kwargs, kwargs...)
     cache_ref = Ref{BeliefPropagationCache}()
-    ψ_symm = ITensorNetwork(ψ_vidal; (cache!) = cache_ref)
+    ψ_symm = ITensorNetwork(ψ_vidal; (cache!)=cache_ref)
     bp_cache = cache_ref[]
     return ψ_symm, bp_cache
 end
 
+"""
+    LinearAlgebra.normalize(ψ::ITensorNetwork, ψψ_bpc::BeliefPropagationCache; cache_update_kwargs = default_posdef_bp_update_kwargs(), update_cache = false)
 
-## Backend functions
-
-function ITensors.scalar(bp_cache::AbstractBeliefPropagationCache)
-    numers, denoms = scalar_factors_quotient(bp_cache)
-
-    if isempty(denoms)
-        return prod(numers)
-    end
-
-    return prod(numers) / prod(denoms)
-end
-
-
-function LinearAlgebra.normalize(
-    ψ::ITensorNetwork;
-    cache_update_kwargs = get_global_bp_update_kwargs(),
-)
-    ψψ = norm_sqr_network(ψ)
-    ψψ_bpc = BeliefPropagationCache(ψψ, group(v -> first(v), vertices(ψψ)))
-    ψ, ψψ_bpc = normalize(ψ, ψψ_bpc; cache_update_kwargs)
-    return ψ, ψψ_bpc
-end
-
-function LinearAlgebra.normalize(
-    ψAψ_bpc::BeliefPropagationCache;
-    cache_update_kwargs = get_global_bp_update_kwargs(),
-    update_cache = true,
-    sf::Float64 = 1.0,
-)
-
-    if update_cache
-        ψAψ_bpc = update(ψAψ_bpc; cache_update_kwargs...)
-    end
-    ψAψ_bpc = normalize_messages(ψAψ_bpc)
-    ψψ = tensornetwork(ψAψ_bpc)
-
-    for v in parent.(partitionvertices(ψAψ_bpc))
-        v_ket, v_bra = (v, "ket"), (v, "bra")
-        pv = only(partitionvertices(ψAψ_bpc, [v_ket]))
-        vn = region_scalar(ψAψ_bpc, pv)
-
-        # avoid numerical issues with negative vertex norm
-        vertex_normalization = sqrt(sf * abs(vn))
-        state = copy(ψψ[v_ket]) / (sign(vn) * vertex_normalization)
-        state_dag = copy(ψψ[v_bra]) / vertex_normalization
-        vertices_states = Dictionary([v_ket, v_bra], [state, state_dag])
-        ψAψ_bpc = update_factors(ψAψ_bpc, vertices_states)
-    end
-
-    return ψAψ_bpc
-end
-
-# TODO: these two functions are very similar, we should re-use code
+Scale a tensor netework and its norm_sqr cache such that ψIψ = 1 under the BP approximation
+"""
 function LinearAlgebra.normalize(
     ψ::ITensorNetwork,
-    ψAψ_bpc::BeliefPropagationCache;
-    cache_update_kwargs = get_global_bp_update_kwargs(),
-    update_cache = true,
-    sf::Float64 = 1.0,
+    ψψ_bpc::BeliefPropagationCache;
+    cache_update_kwargs=default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ)),
+    update_cache=false,
 )
-    ψ = copy(ψ)
-    if update_cache
-        ψAψ_bpc = update(ψAψ_bpc; cache_update_kwargs...)
-    end
-    ψAψ_bpc = normalize_messages(ψAψ_bpc)
-    ψψ = tensornetwork(ψAψ_bpc)
+    ψψ_bpc_ref = Ref(copy(ψψ_bpc))
+    ψ = normalize(ψ; alg="bp", (cache!)=ψψ_bpc_ref, cache_update_kwargs, update_cache)
 
-    for v in vertices(ψ)
-        v_ket, v_bra = (v, "ket"), (v, "bra")
-        pv = only(partitionvertices(ψAψ_bpc, [v_ket]))
-        vn = region_scalar(ψAψ_bpc, pv)
-
-        # avoid numerical issues with negative vertex norm
-        vertex_normalization = sqrt(sf * abs(vn))
-        state = copy(ψψ[v_ket]) / (sign(vn) * vertex_normalization)
-        state_dag = copy(ψψ[v_bra]) / vertex_normalization
-        vertices_states = Dictionary([v_ket, v_bra], [state, state_dag])
-        ψAψ_bpc = update_factors(ψAψ_bpc, vertices_states)
-        ψ[v] = state
-    end
-
-    return ψ, ψAψ_bpc
+    return ψ, ψψ_bpc_ref[]
 end
 
-function normalize_messages(bp_cache::BeliefPropagationCache, pes::Vector{<:PartitionEdge})
-    bp_cache = copy(bp_cache)
-    mts = messages(bp_cache)
-    for pe in pes
-        me, mer = only(mts[pe]), only(mts[reverse(pe)])
-        set!(mts, pe, ITensor[me/norm(me)])
-        set!(mts, reverse(pe), ITensor[mer/norm(mer)])
-        n = region_scalar(bp_cache, pe)
-        set!(mts, pe, ITensor[(1/(sign(n)*sqrt(abs(n))))*me])
-        set!(mts, reverse(pe), ITensor[(1/(sqrt(abs(n))))*mer])
-    end
-    return bp_cache
-end
+"""
+    ITensors.scalar(bp_cache::AbstractBeliefPropagationCache; alg = "bp", cache_update_kwargs)
 
-function normalize_message(bp_cache::BeliefPropagationCache, pe::PartitionEdge)
-    return normalize_messages(bp_cache, PartitionEdge[pe])
-end
-
-function normalize_messages(bp_cache::BeliefPropagationCache)
-    return normalize_messages(bp_cache, partitionedges(partitioned_tensornetwork(bp_cache)))
-end
-
-
+Compute the contraction of the tensor network inside the bp_cache with different algorithm choices
+"""
 function ITensors.scalar(
     bp_cache::AbstractBeliefPropagationCache,
     args...;
-    alg = "bp",
+    alg="bp",
     kwargs...,
 )
     return scalar(Algorithm(alg), bp_cache, args...; kwargs...)
 end
 
-
 function ITensors.scalar(alg::Algorithm"bp", bp_cache::AbstractBeliefPropagationCache)
-    numers, denoms = scalar_factors_quotient(bp_cache)
-    if isempty(denoms)
-        return prod(numers)
-    end
-    return prod(numers) / prod(denoms)
+    return scalar(bp_cache)
 end
 
+"""
+    ITensorNetworks.region_scalar(bpc::BeliefPropagationCache, verts::Vector)
+
+Compute contraction involving incoming messages to the contiguous set of tensors on the given vertices
+"""
 function ITensorNetworks.region_scalar(bpc::BeliefPropagationCache, verts::Vector)
     partitions = partitionvertices(bpc, verts)
     length(partitions) == 1 && return region_scalar(bpc, only(partitions))
@@ -220,32 +127,28 @@ function ITensorNetworks.region_scalar(bpc::BeliefPropagationCache, verts::Vecto
         ms = incoming_messages(bpc, partitions)
         local_tensors = factors(bpc, partitions)
         ts = [ms; local_tensors]
-        seq = contraction_sequence(ts; alg = "optimal")
-        return contract(ts; sequence = seq)[]
+        seq = contraction_sequence(ts; alg="optimal")
+        return contract(ts; sequence=seq)[]
     end
     error("Contractions involving more than 2 partitions not currently supported")
     return nothing
 end
 
 
-"""Bipartite entanglement entropy, estimated as the spectrum of the bond tensor on the bipartition edge."""
+"""
+    entanglement(ψ::ITensorNetwork, e::NamedEdge; (cache!) = nothing, cache_update_kwargs = default_posdef_bp_update_kwargs())
+
+Bipartite Von-Neumann entanglement entropy, estimated, via BP, using the spectrum of the bond tensor on the given edge.
+"""
 function entanglement(
     ψ::ITensorNetwork,
     e::NamedEdge;
-    (cache!) = nothing,
-    cache_update_kwargs = get_global_bp_update_kwargs(),
+    (cache!)=nothing,
+    cache_update_kwargs=default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ)),
 )
-    cache = isnothing(cache!) ? build_bp_cache(ψ; cache_update_kwargs...) : cache![]
+    cache = isnothing(cache!) ? build_bp_cache(ψ; cache_update_kwargs) : cache![]
     ψ_vidal = VidalITensorNetwork(ψ; cache)
-    bt = bond_tensor(ψ_vidal, e)
-    ee = 0
-    for d in diag(bt)
-        ee -= abs(d) >= eps(eltype(bt)) ? d * d * log2(d * d) : 0
-    end
-    return abs(ee)
-    cache = isnothing(cache!) ? build_bp_cache(ψ; cache_update_kwargs...) : cache![]
-    ψ_vidal = VidalITensorNetwork(ψ; cache)
-    bt = bond_tensor(ψ_vidal, e)
+    bt = ITensorNetworks.bond_tensor(ψ_vidal, e)
     ee = 0
     for d in diag(bt)
         ee -= abs(d) >= eps(eltype(bt)) ? d * d * log2(d * d) : 0
@@ -253,17 +156,22 @@ function entanglement(
     return abs(ee)
 end
 
-
-function make_eigs_real(A::ITensor)
-    return map_eigvals(x -> real(x), A, first(inds(A)), last(inds(A)); ishermitian = true)
+function make_hermitian(A::ITensor)
+    A_inds = inds(A)
+    @assert length(A_inds) == 2
+    return (A + ITensors.swapind(conj(A), first(A_inds), last(A_inds))) / 2
 end
 
-function make_eigs_positive(A::ITensor, tol::Real = 1e-14)
-    return map_eigvals(
-        x -> max(x, tol),
-        A,
-        first(inds(A)),
-        last(inds(A));
-        ishermitian = true,
-    )
+#Delete the message tensor on partition edge pe from the cache
+function delete_message!(bpc::AbstractBeliefPropagationCache, pe::PartitionEdge)
+    return delete_messages!(bpc, [pe])
+end
+
+#Delete the message tensors on the vector of partition edges pes from the cache
+function delete_messages!(bpc::AbstractBeliefPropagationCache, pes::Vector)
+    ms = messages(bpc)
+    for pe in pes
+        haskey(ms, pe) && delete!(ms, pe)
+    end
+    return bpc
 end

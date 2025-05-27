@@ -1,6 +1,6 @@
 function default_schedule(no_eras::Int64)
     no_steps = 1000
-    schedule = [(0.25, 50), (0.1, 250), (0.05, no_steps),  (0.01, no_steps),  (0.005, no_steps)]
+    schedule = [(0.25, 50), (0.1, 250), (0.05, 250),  (0.01, no_steps),  (0.005, no_steps)]
     no_eras <= length(schedule) && return schedule[1:no_eras]
     return vcat(schedule, [(first(last(schedule)) * (2.0^-i), no_steps) for i in 1:(no_eras - length(schedule))])
 end

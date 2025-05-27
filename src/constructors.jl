@@ -1,6 +1,10 @@
 const stringtointmap = Dict("I" => 1, "X" => 2, "Y" => 3, "Z" => 4)
 
+"""
+    zerostate(g::NamedGraph; pauli_basis = false)
 
+Tensor network for vacuum state on given graph, i.e all spins up
+"""
 function zerostate(g::NamedGraph; pauli_basis = false)
     if !pauli_basis
         # the most common case 
@@ -10,6 +14,11 @@ function zerostate(g::NamedGraph; pauli_basis = false)
     end
 end
 
+"""
+    zerostate(indices::IndsNetwork)
+
+Tensor network for vacuum state on given indsnetwork
+"""
 function zerostate(indices::IndsNetwork)
     inds = reduce(vcat, [indices[v] for v in vertices(indices)])
     dims = dim.(inds)
@@ -22,11 +31,20 @@ function zerostate(indices::IndsNetwork)
     end
 end
 
+"""
+    topaulitensornetwork(op, g::NamedGraph)
 
+Tensor network (in Heisenberg picture) for given pauli string on given graph
+"""
 function topaulitensornetwork(op, g::NamedGraph)
     return topaulitensornetwork(op, siteinds(4, g))
 end
 
+""" 
+    topaulitensornetwork(op, tninds::IndsNetwork)
+
+Tensor network (in Heisenberg picture) for given pauli string on given IndsNetwork
+"""
 function topaulitensornetwork(op, tninds::IndsNetwork)
     nq = getnqubits(tninds)
 
@@ -80,4 +98,13 @@ function topaulitensornetwork(op, tninds::IndsNetwork)
 
 
     return ITensorNetwork(map_f, tninds)
+end
+
+"""
+    identitytensornetwork(tninds::IndsNetwork)
+
+Tensor network (in Heisenberg picture) for identity matrix on given IndsNetwork
+"""
+function identitytensornetwork(tninds::IndsNetwork)
+    return topaulitensornetwork(("I", [first(vertices(tninds))]), tninds)
 end

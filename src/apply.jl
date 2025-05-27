@@ -1,24 +1,27 @@
 const _default_apply_kwargs =
-    (maxdim = Inf, cutoff = 1e-10, normalize = true, use_relative_cutoff = true)
+    (maxdim = Inf, cutoff = 1e-10, normalize = true)
 
 # import ITensorNetworks.apply for less clutter down below
 # import ITensors.apply
 # import ITensorNetworks.apply
 
-# apply a circuit to a tensor network without BP cache being passed
+"""
+    ITensors.apply(circuit::AbstractVector, ψ::ITensorNetwork; bp_update_kwargs = default_posdef_bp_update_kwargs() apply_kwargs = (; maxdim, cutoff))
+
+Apply a circuit to a tensor network with the cache built and updated internally
+"""
 function ITensors.apply(
     circuit::AbstractVector,
     ψ::ITensorNetwork;
-    bp_update_kwargs = get_global_bp_update_kwargs(),
+    bp_update_kwargs = default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ)),
     kwargs...,
 )
-    ψψ = build_bp_cache(ψ; bp_update_kwargs...)
+    ψψ = build_bp_cache(ψ; cache_update_kwargs = bp_update_kwargs)
     ψ, ψψ, truncation_errors = apply(circuit, ψ, ψψ; kwargs...)
-    # given that people used this function, we assume they don't want the cache
     return ψ, truncation_errors
 end
 
-# convert the circuit to a vector of itensors
+#Convert a circuit in (gate_str, sites_to_act_on, params) form to ITensors and then apply it
 function ITensors.apply(
     circuit::AbstractVector,
     ψ::ITensorNetwork,
@@ -29,13 +32,17 @@ function ITensors.apply(
     return apply(circuit, ψ, ψψ; kwargs...)
 end
 
-# the main simulation function
+"""
+    ITensors.apply(circuit::AbstractVector{<:ITensor}, ψ::ITensorNetwork, ψψ::BeliefPropagationCache; apply_kwargs = _default_apply_kwargs, bp_update_kwargs = default_posdef_bp_update_kwargs(), update_cache = true, verbose = false)
+
+Apply a sequence of itensors to the network with its corresponding cache. Apply kwargs should be a NamedTuple containing desired maxdim and cutoff. Update the cache every time an overlapping gate is encountered.
+"""
 function ITensors.apply(
     circuit::AbstractVector{<:ITensor},
     ψ::ITensorNetwork,
     ψψ::BeliefPropagationCache;
     apply_kwargs = _default_apply_kwargs,
-    bp_update_kwargs = get_global_bp_update_kwargs(),
+    bp_update_kwargs = default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ)),
     update_cache = true,
     verbose = false,
 )
@@ -89,41 +96,42 @@ function ITensors.apply(
     return ψ, ψψ, truncation_errors
 end
 
-# for convenience an apply function for a single gate
+#Apply function for a single gate
 function ITensors.apply(
     gate::Tuple,
     ψ::ITensorNetwork;
     apply_kwargs = _default_apply_kwargs,
-    bp_update_kwargs = get_global_bp_update_kwargs(),
+    bp_update_kwargs = default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ)),
 )
     ψ, ψψ, truncation_error =
-        apply(gate, ψ, build_bp_cache(ψ; bp_update_kwargs...); apply_kwargs)
+        apply(gate, ψ, build_bp_cache(ψ; cache_update_kwargs = bp_update_kwargs); apply_kwargs)
     # because the cache is not passed, we return the state only
     return ψ, truncation_error
 end
 
-# gate apply function for tuple gates. The gate gets converted to an ITensor first.
+#Apply function for a single gate
 function ITensors.apply(
     gate::Tuple,
     ψ::ITensorNetwork,
     ψψ::BeliefPropagationCache;
     apply_kwargs = _default_apply_kwargs,
+    bp_update_kwargs = default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ))
 )
-    return apply(
+    ψ, ψψ, truncation_error = apply(
         toitensor(gate, siteinds(ψ)),
         ψ,
         ψψ;
-        reset_all_messages = false,
         apply_kwargs,
     )
+    ψψ = updatecache(ψψ; bp_update_kwargs...)
+    return ψ, ψψ, truncation_error
 end
 
-
+#Apply function for a single gate. All apply functions will pass through here
 function ITensors.apply(
     gate::ITensor,
     ψ::AbstractITensorNetwork,
     ψψ::BeliefPropagationCache;
-    reset_all_messages = false,
     apply_kwargs = _default_apply_kwargs,
 )
     # TODO: document each line
@@ -148,27 +156,22 @@ function ITensors.apply(
     if length(vs) == 2
         v1, v2 = vs
         pe = partitionedge(ψψ, (v1, "bra") => (v2, "bra"))
-        mts = messages(ψψ)
         ind2 = commonind(s_values, ψ[v1])
         δuv = dag(copy(s_values))
         δuv = replaceind(δuv, ind2, ind2')
         map_diag!(sign, δuv, δuv)
         s_values = denseblocks(s_values) * denseblocks(δuv)
-        if !reset_all_messages
-            set!(mts, pe, dag.(ITensor[s_values]))
-            set!(mts, reverse(pe), ITensor[s_values])
-        else
-            ψψ = BeliefPropagationCache(partitioned_tensornetwork(ψψ))
-        end
+        set_message!(ψψ, pe, dag.(ITensor[s_values]))
+        set_message!(ψψ, reverse(pe), ITensor[s_values])
     end
     for v in vs
-        ψψ = update_factor(ψψ, (v, "ket"), ψ[v])
-        ψψ = update_factor(ψψ, (v, "bra"), ψdag[v])
+        setindex_preserve_graph!(ψψ, copy(ψ[v]), (v, "ket"))
+        setindex_preserve_graph!(ψψ, copy(ψdag[v]), (v, "bra"))
     end
     return ψ, ψψ, err
 end
 
-
+#Checker for whether the cache needs updating (overlapping gate encountered)
 function _cacheupdate_check(affected_indices::Set, gate::ITensor)
     indices = inds(gate)
 

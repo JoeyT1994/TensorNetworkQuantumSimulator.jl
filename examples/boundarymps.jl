@@ -21,10 +21,6 @@ function main()
     χ = 2
     ITensors.disable_warn_order()
 
-    set_global_boundarymps_update_kwargs!(
-        message_update_kwargs = (; niters = 25, tolerance = 1e-12),
-    )
-
     gs = [
         (named_grid((nx, 1)), "line"),
         (named_hexagonal_lattice_graph(nx - 2, ny - 2), "hexagonal"),
@@ -37,7 +33,13 @@ function main()
         s = ITN.siteinds(ψ)
         v_centre = first(G.center(g))
 
+        ψ, _ = TN.symmetric_gauge(ψ)
+
         println("Computing single site expectation value via various means")
+
+        sz_bp = expect(ψ, ("Z", [v_centre]); alg = "bp")
+        println("BP value for Z is $sz_bp")
+
         boundary_mps_ranks = [1, 2, 4, 8, 16, 32]
         for r in boundary_mps_ranks
             sz_boundarymps = expect(
@@ -56,13 +58,17 @@ function main()
             v_centre_neighbor =
                 first(filter(v -> first(v) == first(v_centre), neighbors(g, v_centre)))
             println("Computing two site, neighboring, expectation value via various means")
+
+            sz_bp = expect(ψ, ("ZZ", [v_centre, v_centre_neighbor]); alg = "bp")
+            println("BP value for ZZ is $sz_bp")
+
             boundary_mps_ranks = [1, 2, 4, 8, 16, 32]
             for r in boundary_mps_ranks
                 sz_boundarymps = expect(
                     ψ,
                     ("ZZ", [v_centre, v_centre_neighbor]);
                     alg = "boundarymps",
-                    cache_construction_kwargs = (; message_rank = r),
+                    message_rank = r,
                 )
                 println("Boundary MPS Value for ZZ at Rank $r is $sz_boundarymps")
             end

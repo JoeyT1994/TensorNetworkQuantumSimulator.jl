@@ -67,13 +67,15 @@ end
 function main(i::Int64, maxdim::Int64)
 
     #Get the graph and interactions from the .tomls. Flag ensures Vertices are ordered consistent with the .toml file
-    g = TN.named_biclique(3,3)
+    L = 128
+    g = hyperhoneycomb_graph(L; sort_vertices = true)
+    #g = TN.named_biclique(3,3)
 
     ec = edge_color(g, 3)
 
     n = 144
     θ = (2 * pi * i) / (n)
-    K, J = sin(θ), cos(θ)
+    K, J = 2*sin(θ), cos(θ)
     println("Beginning simulation with theta = $(θ), J = $(J), K = $(K) and a maxdim of $(maxdim).")
 
     s = ITN.siteinds("S=1/2", g; conserve_qns = false)
@@ -83,14 +85,6 @@ function main(i::Int64, maxdim::Int64)
 
     cutoff = 1e-12
     apply_kwargs = (; maxdim, cutoff, normalize = true)
-    # #Parameters for BP, as the graph is not a tree (it has loops), we need to specify these
-    set_global_bp_update_kwargs!(;
-        maxiter = 30,
-        tol = 1e-10,
-        message_update_kwargs = (;
-            message_update_function = ms -> make_eigs_real.(ITN.default_message_update(ms))
-        ),
-    )
 
     no_eras = 8
     xx_observables, yy_observables, zz_observables = honeycomb_kitaev_heisenberg_observables(J, K, ec)
@@ -100,20 +94,32 @@ function main(i::Int64, maxdim::Int64)
 
     ψ, ψψ, energy = imaginary_time_evolution(ψ, layer_generating_function, energy_calculation_function, no_eras; apply_kwargs);
 
-    local_zs = expect(ψψ, [("Z", [v]) for v in vertices(ψ)])
+    @show energy / (4*length(vertices(g)))
 
-    sum_z = sum(local_zs)
+    local_zs = expect(ψψ, [("Z", [v]) for v in vertices(ψ)])
+    local_xs = expect(ψψ, [("X", [v]) for v in vertices(ψ)])
+    local_ys = expect(ψψ, [("Y", [v]) for v in vertices(ψ)])
+
+    sum_z, sum_x, sum_y = sum(local_zs), sum(local_ys), sum(local_xs)
+
+    @show sum_z, sum_x, sum_y
+
+    @show local_zs
+
+    M = sqrt(sum(abs.(local_zs))*sum(abs.(local_zs)) + sum(abs.(local_ys))*sum(abs.(local_ys)) + sum(abs.(local_xs))*sum(abs.(local_xs)))
+
+    @show M / L
 
     # zzs = expect(ψψ, zz_observables)
     # yys = expect(ψψ, yy_observables)
     # xxs = expect(ψψ, xx_observables)
     # @show zzs, yys, xxs
 
-    file_name = "i"*string(i)*"maxdim"*string(maxdim)
+    file_name = "L"*string(L)*"i"*string(i)*"maxdim"*string(maxdim)
     jldsave("/mnt/home/jtindall/ceph/Data/StructureFactors/Hyperhoneycomb/GroundStateWavefunctions/"*file_name*".jld2"; wavefunction = ψ, bp_cache = ψψ, energy = energy, Z = sum_z)
 
 end
 
-#i, maxdim = 0, 4
+#i, maxdim = 108, 4
 i, maxdim = parse(Int64, ARGS[1]), parse(Int64, ARGS[2])
 main(i, maxdim)

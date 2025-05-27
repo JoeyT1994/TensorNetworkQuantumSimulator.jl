@@ -1,24 +1,8 @@
-function SimpleGraphAlgorithms.edge_color(g::AbstractGraph, k::Int64)
-    pg, vs = position_graph(g), collect(vertices(g))
-    ec_dict = edge_color(UG(pg), k)
-    # returns k vectors which contain the colored/commuting edges
-    return [
-        [(vs[first(first(e))], vs[last(first(e))]) for e in ec_dict if last(e) == i] for
-        i = 1:k
-    ]
-end
+"""
+    heavy_hexagonal_lattice(nx::Int64, ny::Int64)
 
-function SimpleGraphAlgorithms.vertex_color(g::AbstractGraph, k::Int64)
-    pg, vs = position_graph(g), collect(vertices(g))
-    vc_dict = vertex_color(UG(pg), k)
-    # returns k vectors which contain the colored/commuting edges
-    return [
-        [vs[first(v)] for v in vc_dict if last(v) == i] for
-        i = 1:k
-    ]
-end
-
-"""Create heavy-hex lattice geometry"""
+Create heavy-hexagonal lattice geometry with nx columns of heavy-hexes and ny rows
+"""
 function heavy_hexagonal_lattice(nx::Int64, ny::Int64)
     g = named_hexagonal_lattice_graph(nx, ny)
     # create some space for inserting the new vertices
@@ -33,6 +17,11 @@ function heavy_hexagonal_lattice(nx::Int64, ny::Int64)
     return g
 end
 
+"""
+    lieb_lattice(nx::Int64, ny::Int64; periodic = false)
+
+Create Lieb lattice geometry with nx columns of decorated squared and ny rows
+"""
 function lieb_lattice(nx::Int64, ny::Int64; periodic = false)
     @assert (!periodic && isodd(nx) && isodd(ny)) || (periodic && iseven(nx) && iseven(ny))
     g = named_grid((nx, ny); periodic)
@@ -73,20 +62,4 @@ end
 
 function graphtotopology(g)
     return [[edge.src, edge.dst] for edge in edges(g)]
-end
-
-function NamedGraphs.GraphsExtensions.rem_vertex(bpc::AbstractBeliefPropagationCache, v)
-    return rem_vertices(bpc, [v])
-end
-
-function NamedGraphs.GraphsExtensions.rem_vertices(bpc::BeliefPropagationCache, vs::Vector)
-    pg = partitioned_tensornetwork(bpc)
-    pg = rem_vertices(pg, vs)
-    return BeliefPropagationCache(pg, messages(bpc))
-end
-
-function NamedGraphs.GraphsExtensions.rem_vertices(bmpsc::BoundaryMPSCache, vs::Vector)
-    bpc = bp_cache(bmpsc)
-    bpc = rem_vertices(bpc, vs)
-    return BoundaryMPSCache(bpc, ppg(bmpsc), maximum_virtual_dimension(bmpsc))
 end

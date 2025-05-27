@@ -3,10 +3,12 @@ function toitensor(circuit, sinds::IndsNetwork)
     return [toitensor(gate, sinds) for gate in circuit]
 end
 
+#Determine if a string represents a pauli string
 function _ispaulistring(string::String)
-    return all(s ∈ ['X', 'Y', 'X', 'x', 'y', 'x'] for s in string)
+    return all(s ∈ ['X', 'Y', 'X', 'x', 'y', 'z'] for s in string)
 end
 
+#Gates which take a single theta argument (rotation argument)
 function _takes_theta_argument(string::String)
     return string ∈ ["Rx", "Ry", "Rz", "CRx", "CRy", "CRz", "Rxxyy", "Rxxyyzz"]
 end
@@ -15,12 +17,12 @@ function _takes_thetaxyz_argument(string::String)
     return string ∈ ["RxxRyyRzz"]
 end
 
-
+#Gates which take a single phi argument (rotation argument)
 function _takes_phi_argument(string::String)
     return string ∈ ["Rxx", "Ryy", "Rzz", "P", "CPHASE"]
 end
 
-# conversion of the tuple gate to an ITensor
+#Convert a gate to the corrresponding ITensor
 function toitensor(gate::Tuple, sinds::IndsNetwork)
 
     gate_symbol = gate[1]
@@ -30,7 +32,7 @@ function toitensor(gate::Tuple, sinds::IndsNetwork)
     s_inds = [only(sinds[v]) for v in gate_inds]
 
     all(map(sind -> dim(sind) == 4, s_inds)) &&
-        return toitensor_heisenberg(gate_symbol, gate[3], sinds)
+        return toitensor_heisenberg(gate_symbol, gate[3], s_inds)
 
     if _ispaulistring(gate_symbol)
         gate =
@@ -51,10 +53,22 @@ function toitensor(gate::Tuple, sinds::IndsNetwork)
 
 end
 
+
+"""
+    paulirotationmatrix(generator, θ)
+"""
+function paulirotationmatrix(generator, θ)
+    symbols = [Symbol(s) for s in generator]
+    pauli_rot = PP.PauliRotation(symbols, 1:length(symbols))
+    return PP.tomatrix(pauli_rot, θ)
+end
+
+#Convert a gate that's in the Heisenberg picture to an ITensor for the Pauli Transfer Matrix
 function toitensor_heisenberg(generator, θ, indices)
     @assert first(generator) == 'R'
     generator = generator[2:length(generator)]
     @assert _ispaulistring(generator)
+    generator = uppercase.(generator)
     U = paulirotationmatrix(generator, θ)
     U = PP.calculateptm(U, heisenberg = true)
 
@@ -68,20 +82,26 @@ function toitensor_heisenberg(generator, θ, indices)
     return itensor(transpose(U), legs)
 end
 
-# conversion retruns the gate itself if it is already
+#Return itself as the type is already correct
 function toitensor(gate::ITensor, sinds::IndsNetwork)
     return gate
 end
 
-# conversion of the gate indices to a tuple
+#Conversion of the gate indices to a tuple
 function _ensuretuple(gate_inds::Union{Tuple,AbstractArray})
     return gate_inds
 end
 
+#Conversion of a NamedEdge to a tuple
 function _ensuretuple(gate_inds::NamedEdge)
     return (gate_inds.src, gate_inds.dst)
 end
 
+"""
+    ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Float64)
+
+Gate for rotation by XXYY at a given angle
+"""
 function ITensors.op(
     ::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Number
   )
@@ -95,6 +115,11 @@ function ITensors.op(
     return mat
 end
 
+"""
+    ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2"; θ::Float64)
+
+Gate for rotation by XXYYZZ at a given angle
+"""
 function ITensors.op(
     ::OpName"Rxxyyzz", ::SiteType"S=1/2"; θ::Number
   )
