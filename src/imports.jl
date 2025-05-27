@@ -58,6 +58,7 @@ using ITensorMPS
 using ITensorNetworks
 using ITensorNetworks:
     AbstractBeliefPropagationCache,
+    AbstractFormNetwork,
     AbstractITensorNetwork,
     AbstractIndsNetwork,
     Indices,

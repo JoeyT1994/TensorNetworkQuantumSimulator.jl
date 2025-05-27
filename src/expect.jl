@@ -42,7 +42,7 @@ function ITensorNetworks.expect(alg::Algorithm"exact",
     observable::Tuple;
     kwargs...
 )
-    return expect(alg, ψ, [observable]; kwargs...)
+    return only(expect(alg, ψ, [observable]; kwargs...))
 end
 
 
@@ -61,10 +61,7 @@ function ITensorNetworks.expect(
     (cache!)=nothing,
     update_cache=isnothing(cache!),
     cache_update_kwargs=alg == Algorithm("bp") ? default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ)) : ITensorNetworks.default_cache_update_kwargs(alg),
-    cache_construction_kwargs=default_cache_construction_kwargs(
-        alg,
-        QuadraticFormNetwork(ψ),
-    ),
+    cache_construction_kwargs= (;),
     message_rank = nothing,
     kwargs...,
 )
@@ -72,8 +69,8 @@ function ITensorNetworks.expect(
     if alg == Algorithm("boundarymps") && !isnothing(message_rank)
         cache_construction_kwargs = merge(cache_construction_kwargs, (; message_rank))
     end
-    ψIψ = QuadraticFormNetwork(ψ)
     if isnothing(cache!)
+        ψIψ = QuadraticFormNetwork(ψ)
         cache! = Ref(cache(alg, ψIψ; cache_construction_kwargs...))
     end
 
