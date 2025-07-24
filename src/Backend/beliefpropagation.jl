@@ -22,12 +22,12 @@ function default_bp_update_maxiter(cache_is_tree::Bool = false)
 end
 
 """
-    updatecache(bp_cache::BeliefPropagationCache; maxiter::Int64, tol::Number, message_update_kwargs = (; message_update_function = default_message_update))
+    updatecache(bp_cache::BeliefPropagationCache; maxiter::Int64, tol::Number, message_update_kwargs = (; message_update_function = default_posdef_message_update_function))
 
 Update the message tensors inside a bp-cache, running over the graph up to maxiter times until convergence to the desired tolerance `tol`.
 If the cache is positive definite, the message update function can
 """
-function updatecache(bp_cache; maxiter=default_bp_update_maxiter(is_tree(partitioned_graph(bp_cache))), tol=_default_bp_update_tol, message_update_kwargs=(; message_update_function=default_message_update))
+function updatecache(bp_cache; maxiter=default_bp_update_maxiter(is_tree(partitioned_graph(bp_cache))), tol=_default_bp_update_tol, message_update_kwargs=(; message_update_function=default_posdef_message_update_function))
     return update(bp_cache; maxiter, tol, message_update_kwargs)
 end
 

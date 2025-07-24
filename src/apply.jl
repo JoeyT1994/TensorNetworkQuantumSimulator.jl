@@ -15,7 +15,9 @@ function ITensors.apply(
     kwargs...,
 )
     ψψ = build_bp_cache(ψ; cache_update_kwargs = bp_update_kwargs)
-    ψ, ψψ, truncation_errors = apply(circuit, ψ, ψψ; kwargs...)
+
+    ψ, ψψ, truncation_errors = apply(circuit, ψ, ψψ; update_cache = false, kwargs...)
+
     return ψ, truncation_errors
 end
 
@@ -91,7 +93,9 @@ function ITensors.apply(
 
     end
 
-    ψψ = updatecache(ψψ; bp_update_kwargs...)
+    if update_cache
+        ψψ = updatecache(ψψ; bp_update_kwargs...)
+    end
 
     return ψ, ψψ, truncation_errors
 end
@@ -109,7 +113,7 @@ function ITensors.apply(
     bp_update_kwargs = default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ)),
 )
     ψ, ψψ, truncation_error =
-        apply(gate, ψ, build_bp_cache(ψ; cache_update_kwargs = bp_update_kwargs); apply_kwargs)
+        apply(gate, ψ, build_bp_cache(ψ; cache_update_kwargs = bp_update_kwargs); apply_kwargs, update_cache = false)
     # because the cache is not passed, we return the state only
     return ψ, truncation_error
 end
@@ -124,7 +128,8 @@ function ITensors.apply(
     ψ::ITensorNetwork,
     ψψ::BeliefPropagationCache;
     apply_kwargs = _default_apply_kwargs,
-    bp_update_kwargs = default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ))
+    bp_update_kwargs = default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ)),
+    update_cache = true,
 )
     ψ, ψψ, truncation_error = apply(
         toitensor(gate, siteinds(ψ)),
@@ -132,7 +137,9 @@ function ITensors.apply(
         ψψ;
         apply_kwargs,
     )
-    ψψ = updatecache(ψψ; bp_update_kwargs...)
+    if update_cache
+        ψψ = updatecache(ψψ; bp_update_kwargs...)
+    end
     return ψ, ψψ, truncation_error
 end
 
@@ -141,13 +148,20 @@ end
 
 Apply a single gate in the form of an ITensor to the network with a pre-initialised bp cache. The gate should be of the form (gate_str::String, vertices_to_act_on::Union{Vector, NamedEdge}, optional_parameter::Number). Apply kwargs should be a NamedTuple containing desired maxdim and cutoff.
 """
-function ITensors.apply(gate::ITensor,
+function ITensors.apply(
+    gate::ITensor,
     ψ::AbstractITensorNetwork,
     ψψ::BeliefPropagationCache;
     apply_kwargs = _default_apply_kwargs,
+    bp_update_kwargs = default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ)),
+    update_cache = true,
 )
     ψ, ψψ = copy(ψ), copy(ψψ)
-    return apply!(gate, ψ, ψψ; apply_kwargs)
+    ψ, ψψ, truncation_error = apply!(gate, ψ, ψψ; apply_kwargs)
+    if update_cache
+        ψψ = updatecache(ψψ; bp_update_kwargs...)
+    end
+    return ψ, ψψ, truncation_error
 end
 
 #Apply function for a single gate. All apply functions will pass through here
