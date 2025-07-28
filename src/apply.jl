@@ -16,7 +16,7 @@ function ITensors.apply(
 )
     ψψ = build_bp_cache(ψ; cache_update_kwargs = bp_update_kwargs)
 
-    ψ, ψψ, truncation_errors = apply(circuit, ψ, ψψ; update_cache = false, kwargs...)
+    ψ, ψψ, truncation_errors = apply(circuit, ψ, ψψ; kwargs...)
 
     return ψ, truncation_errors
 end
