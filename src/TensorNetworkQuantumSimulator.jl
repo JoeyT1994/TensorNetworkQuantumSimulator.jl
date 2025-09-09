@@ -16,6 +16,7 @@ include("utils.jl")
 include("constructors.jl")
 include("gates.jl")
 include("apply.jl")
+include("apply_sqrt.jl")
 include("expect.jl")
 include("sample.jl")
 

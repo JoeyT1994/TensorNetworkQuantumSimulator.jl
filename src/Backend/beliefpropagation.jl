@@ -7,6 +7,10 @@ function default_posdef_bp_update_kwargs(; cache_is_tree = false)
     return (; maxiter=default_bp_update_maxiter(cache_is_tree), tol=_default_bp_update_tol, message_update_alg = Algorithm("posdef_contract"))
 end
 
+function default_qr_bp_update_kwargs(; cache_is_tree = false)
+    return (; maxiter=default_bp_update_maxiter(cache_is_tree), tol=_default_bp_update_tol, message_update_alg = Algorithm("qr"))
+end
+
 function default_nonposdef_bp_update_kwargs(; cache_is_tree = false)
     return (;  maxiter=default_bp_update_maxiter(cache_is_tree), tol=_default_bp_update_tol, message_update_alg = Algorithm("contract"))
 end
@@ -226,4 +230,54 @@ function loop_correlations(bpc::BeliefPropagationCache, smallest_loop_size::Int;
         corrs = append!(corrs, loop_correlation(bpc, PartitionEdge.(loop[1:(length(loop)-1)]), reverse(PartitionEdge(last(loop))); kwargs...))
     end
     return corrs
+end
+
+default_normalize(::Algorithm"qr") = true
+default_sequence_alg(::Algorithm"qr") = "optimal"
+function ITensorNetworks.set_default_kwargs(alg::Algorithm"qr")
+    normalize = get(alg.kwargs, :normalize, default_normalize(alg))
+    sequence_alg = get(alg.kwargs, :sequence_alg, default_sequence_alg(alg))
+    return Algorithm("qr"; normalize, sequence_alg)
+end
+
+function initialize_sqrt_bp_messages!(bpc::BeliefPropagationCache)
+    for pe in vcat(partitionedges(bpc), reverse.(partitionedges(bpc)))
+        lind = only(ITensorNetworks.linkinds(bpc, pe))
+        ITensorNetworks.set_message!(bpc, pe, ITensor[delta(lind, lind')])
+    end
+end
+
+function ITensorNetworks.updated_message(alg::Algorithm"qr", bpc::AbstractBeliefPropagationCache, edge::PartitionEdge)
+    vertex = src(edge)
+    incoming_ms = ITensorNetworks.incoming_messages(bpc, vertex; ignore_edges = PartitionEdge[reverse(edge)])
+    state = ITensorNetworks.factors(bpc, vertex)
+    contract_list = ITensor[incoming_ms; state]
+    sequence = ITensorNetworks.contraction_sequence(contract_list; alg = alg.kwargs.sequence_alg)
+    m = ITensors.contract(contract_list; sequence)
+
+    rinds = ITensorNetworks.linkinds(bpc, edge)
+    linds = setdiff(inds(m), rinds)
+    Q, R = ITensors.qr(m, linds)
+
+    message_norm = norm(R)
+
+    if alg.kwargs.normalize && !iszero(message_norm)
+        R /= message_norm
+    end
+
+    previous_rinds =inds(only(ITensorNetworks.message(bpc, edge)))
+    R = ITensors.replaceind(R, commonind(Q, R), prime(noncommonind(R, Q)))
+    return ITensor[R]
+end
+
+function square_bpc(bpc::BeliefPropagationCache)
+    sqr_bpc = BeliefPropagationCache(ITensorNetworks.QuadraticFormNetwork(ITensorNetworks.tensornetwork(bpc)))
+    for pe in keys(ITensorNetworks.messages(bpc))
+        m = only(ITensorNetworks.message(bpc, pe))
+        mdag = mapprime(dag(m), 0=>2)
+        sqr_m = mapprime(m * mdag, 2=> 1)
+        sqr_m /= norm(sqr_m)
+        ITensorNetworks.set_message!(sqr_bpc, pe, [sqr_m])
+    end
+    return sqr_bpc
 end
