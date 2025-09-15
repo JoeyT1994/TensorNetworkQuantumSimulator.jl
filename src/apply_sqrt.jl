@@ -83,11 +83,11 @@ function apply_via_sqrt(
         t = @timed ψ_bpc, truncation_errors[ii] = apply!(gate, ψ_bpc; v⃗ = gate_vertices[ii], apply_kwargs)
         affected_indices = union(affected_indices, Set(inds(gate)))
 
-        if verbose
-            println(
-                "Gate $ii:    Simulation time: $(t.time) secs,    Max χ: $(maxlinkdim(ψ)),     Error: $(truncation_errors[ii])",
-            )
-        end
+        # if verbose
+        #     println(
+        #         "Gate $ii:    Simulation time: $(t.time) secs,    Max χ: $(maxlinkdim(ψ_bpc)),     Error: $(truncation_errors[ii])",
+        #     )
+        # end
 
     end
 

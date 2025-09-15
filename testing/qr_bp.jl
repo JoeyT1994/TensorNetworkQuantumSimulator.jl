@@ -19,12 +19,14 @@ using NamedGraphs.PartitionedGraphs: PartitionEdge, partitionedges
 
 using Random
 
+using CUDA
+
 function main()
     g = named_grid((5,5))
     s = siteinds("S=1/2", g)
 
     Random.seed!(1234)
-    ψ0 = ITensorNetworks.random_tensornetwork(ComplexF64, s; link_space = 3)
+    ψ0 = ITensorNetworks.random_tensornetwork(ComplexF32, s; link_space = 2)
     #ψ0 = ITensorNetworks.ITensorNetwork(v -> "X+", s)
 
     # ψ_bpc = ITensorNetworks.BeliefPropagationCache(ψ)
@@ -39,39 +41,44 @@ function main()
     # @show expect(ψ, ("Z", [(1,1)]); alg = "bp")
 
     h, J = -1.0, -1.0
-    no_trotter_steps = 20
+    no_trotter_steps = 10
     δt = 0.1
 
     #Do a 7-way edge coloring then Trotterise the Hamiltonian into commuting groups
     layer = []
-    ec = edge_color(g, 6)
+    ec = edge_color(g, 4)
     append!(layer, ("Rz", [v], h*δt) for v in vertices(g))
     for colored_edges in ec
         append!(layer, ("Rxx", pair, 2*J*δt) for pair in colored_edges)
     end
     append!(layer, ("Rz", [v], h*δt) for v in vertices(g))
 
-    ψ = copy(ψ0)
+    ψ = CUDA.cu(copy(ψ0))
 
+    t1 = time()
     for i in 1:no_trotter_steps
-        ψ, errs = TensorNetworkQuantumSimulator.apply_via_sqrt(layer, ψ; apply_kwargs = (; maxdim = 2, cutoff = 1e-10))
+        ψ, errs = TensorNetworkQuantumSimulator.apply(layer, ψ; apply_kwargs = (; maxdim = 32, cutoff = 1e-10))
 
         #println("    Max bond dimension: $(maxlinkdim(ψ))")
         #println("    Maximum Gate error for layer was $(maximum(errs))")
     end
+    t2 = time()
+
+    println("Time evo took $(t2-t1) secs")
 
     @show expect(ψ, ("Z", [(1,1)]); alg = "bp")
 
-    ψ = copy(ψ0)
-
-    bp_update_kwargs = TensorNetworkQuantumSimulator.default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ))
-
+    ψ = CUDA.cu(copy(ψ0))
+    t1 = time()
     for i in 1:no_trotter_steps
-        ψ, errs = TensorNetworkQuantumSimulator.apply(layer, ψ; bp_update_kwargs, apply_kwargs = (; maxdim = 2, cutoff = 1e-10))
+        ψ, errs = TensorNetworkQuantumSimulator.apply_via_sqrt(layer, ψ; apply_kwargs = (; maxdim = 32, cutoff = 1e-10))
 
         #println("    Max bond dimension: $(maxlinkdim(ψ))")
         #println("    Maximum Gate error for layer was $(maximum(errs))")
     end
+    t2 = time()
+
+    println("Time evo took $(t2-t1) secs")
 
     @show expect(ψ, ("Z", [(1,1)]); alg = "bp")
 end

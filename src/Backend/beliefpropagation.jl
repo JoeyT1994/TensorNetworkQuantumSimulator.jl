@@ -243,7 +243,8 @@ end
 function initialize_sqrt_bp_messages!(bpc::BeliefPropagationCache)
     for pe in vcat(partitionedges(bpc), reverse.(partitionedges(bpc)))
         lind = only(ITensorNetworks.linkinds(bpc, pe))
-        ITensorNetworks.set_message!(bpc, pe, ITensor[delta(lind, lind')])
+        m = adapt(datatype(bpc))(denseblocks(delta(lind, lind')))
+        ITensorNetworks.set_message!(bpc, pe, ITensor[m])
     end
 end
 

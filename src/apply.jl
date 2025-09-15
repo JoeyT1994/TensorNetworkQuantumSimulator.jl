@@ -28,6 +28,7 @@ function ITensors.apply(
 )
     gate_vertices = [_tovec(gate[2]) for gate in circuit]
     circuit = toitensor(circuit, siteinds(ψ))
+    circuit = adapt(datatype(ψ)).(circuit)
     return apply(circuit, ψ, ψψ; gate_vertices, kwargs...)
 end
 
@@ -85,11 +86,11 @@ function ITensors.apply(
         t = @timed ψ, ψψ, truncation_errors[ii] = apply!(gate, ψ, ψψ; v⃗ = gate_vertices[ii], apply_kwargs)
         affected_indices = union(affected_indices, Set(inds(gate)))
 
-        if verbose
-            println(
-                "Gate $ii:    Simulation time: $(t.time) secs,    Max χ: $(maxlinkdim(ψ)),     Error: $(truncation_errors[ii])",
-            )
-        end
+        # if verbose
+        #     println(
+        #         "Gate $ii:    Simulation time: $(t.time) secs,    Max χ: $(maxlinkdim(ψ)),     Error: $(truncation_errors[ii])",
+        #     )
+        # end
 
     end
 
@@ -242,3 +243,14 @@ function ITensors.apply(
     end
     return ψ
   end
+
+  function ITensors.sqrt_decomp(D::ITensor, u::Index, v::Index)
+    sqrtDL = adapt(datatype(D))(diag_itensor(u, dag(u)'))
+    sqrtDR = adapt(datatype(D))(diag_itensor(v, dag(v)'))
+    map_diag!(sqrt ∘ abs, sqrtDL, D)
+    map_diag!(sqrt ∘ abs, sqrtDR, D)
+    δᵤᵥ = copy(D)
+    map_diag!(sign, δᵤᵥ, D)
+    return sqrtDL, prime(δᵤᵥ), sqrtDR
+  end
+  
