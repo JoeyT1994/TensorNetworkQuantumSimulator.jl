@@ -1,10 +1,10 @@
 """
-    ITensors.scalar(alg::Algorithm"loopcorrections", bp_cache::AbstractBeliefPropagationCache; max_configuration_size::Int64)
+    ITensors.scalar(alg::Union{Algorithm"loopcorrections",Algorithm"clusterexpansion"}, bp_cache::AbstractBeliefPropagationCache; max_configuration_size::Int64)
 
-Compute the contraction of the tensor network in the bp cache with loop corrections, up to configurations of a specific size
+Compute the contraction of the tensor network in the bp cache with a cluster or loop expansion, up to terms of a specific size
 """
 function ITensors.scalar(
-    alg::Algorithm"loopcorrections",
+    alg::Union{Algorithm"loopcorrections",Algorithm"clusterexpansion"},
     bp_cache::AbstractBeliefPropagationCache;
     max_configuration_size::Int64,
 )
@@ -16,12 +16,13 @@ function ITensors.scalar(
         edgeinduced_subgraphs_no_leaves(partitioned_tensornetwork(bp_cache).partitions_graph, max_configuration_size)
     isempty(egs) && return zbp
     ws = weights(bp_cache, egs)
-    return zbp*(1 + sum(ws))
+    alg == Algorithm("loopcorrections") && return zbp*(1 + sum(ws))
+    return zbp*(exp(sum(ws)))
 end
 
-#Function for allowing ITensorNetwork scalar() and inner()  to work with alg = "loopcorrections"
+#Function for allowing ITensorNetwork scalar() and inner()  to work with alg = "loopcorrections" or alg = "clusterexpansion"
 function ITensors.scalar(
-    alg::Algorithm"loopcorrections",
+    alg::Union{Algorithm"loopcorrections",Algorithm"clusterexpansion"},
     tn::AbstractITensorNetwork;
     max_configuration_size::Int64,
     (cache!) = nothing,

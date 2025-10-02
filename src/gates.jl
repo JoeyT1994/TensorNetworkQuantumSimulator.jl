@@ -102,7 +102,7 @@ end
 Gate for rotation by XXYY at a given angle
 """
 function ITensors.op(
-    ::OpName"Rxxyy", ::Union{SiteType"S=1/2", SiteType"Qubit"}; θ::Number
+    ::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Number
   )
     mat = zeros(ComplexF64, 4, 4)
     mat[1, 1] = 1

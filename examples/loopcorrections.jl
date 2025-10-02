@@ -14,10 +14,10 @@ using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_grap
 using EinExprs: Greedy
 
 using Random
-Random.seed!(1634)
+Random.seed!(1984)
 
 function main()
-    nx, ny = 4,4
+    nx, ny = 7,7
     χ = 3
     ITensors.disable_warn_order()
     gs = [
@@ -38,18 +38,26 @@ function main()
             ψ,
             ψ;
             alg = "loopcorrections",
-            max_configuration_size = 2*(smallest_loop_size) - 1,
+            max_configuration_size = smallest_loop_size,
+            cache_update_kwargs = TN.default_posdef_bp_update_kwargs()
+        )
+        norm_sqr_cluster = inner(
+            ψ,
+            ψ;
+            alg = "clusterexpansion",
+            max_configuration_size =  smallest_loop_size,
             cache_update_kwargs = TN.default_posdef_bp_update_kwargs()
         )
         norm_sqr_exact = inner(
             ψ,
             ψ;
-            alg = "exact",
-            contraction_sequence_kwargs = (; alg = "einexpr", optimizer = Greedy()),
+            alg = "boundarymps",
+            cache_construction_kwargs = (; message_rank = 25),
         )
 
         println("Bp Value for norm is $norm_sqr_bp")
         println("1st Order Loop Corrected Value for norm is $norm_sqr")
+        println("1st Order Cluster Corrected Value for norm is $norm_sqr_cluster")
         println("Exact Value for norm is $norm_sqr_exact")
     end
 end

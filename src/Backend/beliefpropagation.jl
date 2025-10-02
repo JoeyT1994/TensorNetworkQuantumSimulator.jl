@@ -172,7 +172,7 @@ end
 function make_hermitian(A::ITensor)
     A_inds = ITensors.inds(A)
     @assert length(A_inds) == 2
-    return (A + ITensors.swapind(conj(A), first(A_inds), last(A_inds))) / 2
+    return (A + ITensors.swapind(dag(A), first(A_inds), last(A_inds))) / 2
 end
 
 function ITensorNetworks.ket_network(bpc::AbstractBeliefPropagationCache)
