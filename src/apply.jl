@@ -23,7 +23,7 @@ function apply_gates(
     ψ_bpc = BeliefPropagationCache(ψ)
     initialize_square_bp_messages!(ψ_bpc)
     ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
-    ψ_bpc, truncation_errors = apply_gates(circuit, ψ_bpc; kwargs...)
+    ψ_bpc, truncation_errors = apply_gates(circuit, ψ_bpc; bp_update_kwargs, kwargs...)
     return tensornetwork(ψ_bpc), truncation_errors
 end
 

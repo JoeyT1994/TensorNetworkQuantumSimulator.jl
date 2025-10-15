@@ -18,6 +18,10 @@ function _takes_phi_argument(string::String)
     return string ∈ ["Rxx", "Ryy", "Rzz", "P", "CPHASE"]
 end
 
+function _takes_theta_beta_argument(string::String)
+    return string ∈ ["xx_plus_yy"]
+end
+
 #Gates which need to have parameter rescaled to match qiskit convention
 function param_rescaling(string::String, param::Number)
     string ∈ ["Rxx", "Ryy", "Rzz", "Rxxyy", "Rxxyyzz"] && return param / 2
@@ -45,6 +49,8 @@ function toitensor(gate::Tuple, sinds::IndsNetwork)
         gate = ITensors.op(gate_symbol, s_inds...; θ = param_rescaling(gate_symbol, gate[3]))
     elseif _takes_phi_argument(gate_symbol)
         gate = ITensors.op(gate_symbol, s_inds...; ϕ = param_rescaling(gate_symbol, gate[3]))
+    elseif _takes_theta_beta_argument(gate_symbol)
+        gate = ITensors.op(gate_symbol, s_inds...; θ = first(gate[3]), β = last(gate[3]))
     else
         throw(ArgumentError("Wrong gate format"))
     end
@@ -96,6 +102,20 @@ function _ensuretuple(gate_inds::NamedEdge)
     return (gate_inds.src, gate_inds.dst)
 end
 
+"""
+    ITensors.op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Number)
+
+Gate for rotation by XX+YY at a given angle with Rz rotations either size. Consistent with qiskit.
+"""
+function ITensors.op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Number)
+    return [
+        [1 0 0 0];
+        [0 cos(θ / 2) -im * sin(θ / 2) * exp(-im * β) 0]
+        [0 -im * sin(θ / 2) * exp(im * β) cos(θ / 2) 0]
+        [0 0 0 1]
+    ]
+end
+ 
 """
     ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Number)
 
