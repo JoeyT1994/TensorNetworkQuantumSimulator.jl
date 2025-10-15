@@ -57,6 +57,7 @@ function apply_gates(
     apply_kwargs = _default_apply_kwargs,
     bp_update_kwargs = is_flat(ψ_bpc) ? default_square_bp_update_kwargs(; cache_is_tree = is_tree(ψ_bpc)) : default_posdef_bp_update_kwargs(; cache_is_tree = is_tree(ψ_bpc)),
     update_cache = true,
+    eager = true,
     verbose = false,
     update_bra_space = !is_flat(ψ_bpc),
     inds_per_site=1
@@ -74,26 +75,28 @@ function apply_gates(
     # If the circuit is applied in the Heisenberg picture, the circuit needs to already be reversed
     for (ii, gate) in enumerate(circuit)
 
+        if eager
         # check if the gate is a 2-qubit gate and whether it affects the counter
         # we currently only increment the counter if the gate affects vertices that have already been affected
-        cache_update_required = _cacheupdate_check(affected_indices, gate; inds_per_site)
+            cache_update_required = _cacheupdate_check(affected_indices, gate; inds_per_site)
 
-        # update the BP cache
-        if update_cache && cache_update_required
-            if verbose
-                println("Updating BP cache")
-            end
+            # update the BP cache
+            if update_cache && cache_update_required
+                if verbose
+                    println("Updating BP cache")
+                end
 
-            t = @timed ψ_bpc = updatecache(ψ_bpc; update_bra_space, bp_update_kwargs...)
+                t = @timed ψ_bpc = updatecache(ψ_bpc; update_bra_space, bp_update_kwargs...)
 
-            affected_indices = Set{Index{Int64}}()
+                affected_indices = Set{Index{Int64}}()
 
-            if verbose
-                println("Done in $(t.time) secs")
+                if verbose
+                    println("Done in $(t.time) secs")
+                end
+
             end
 
         end
-
         # actually apply the gate
         t = @timed ψ_bpc, truncation_errors[ii] = apply_gate!(gate, ψ_bpc; v⃗ = gate_vertices[ii], update_bra_space, apply_kwargs)
         affected_indices = union(affected_indices, Set(inds(gate)))
