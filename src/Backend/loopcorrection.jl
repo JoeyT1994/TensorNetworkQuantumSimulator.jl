@@ -2,9 +2,9 @@ using NamedGraphs.GraphsExtensions: boundary_edges
 using ITensorNetworks: underlying_graph
 
 function loopcorrected_partitionfunction(
-        bp_cache::BeliefPropagationCache,
-        max_configuration_size::Int64,
-    )
+    bp_cache::BeliefPropagationCache,
+    max_configuration_size::Int64,
+)
     zbp = partitionfunction(bp_cache)
     bp_cache = rescale(bp_cache)
     #TODO: Fix edgeinduced_subgraphs_no_leaves for PartitionedGraphView type
@@ -13,7 +13,7 @@ function loopcorrected_partitionfunction(
         edgeinduced_subgraphs_no_leaves(underlying_graph(bp_cache), max_configuration_size)
     isempty(egs) && return zbp
     ws = weights(bp_cache, egs)
-    return zbp * (1 + sum(ws))
+    return zbp*(1 + sum(ws))
 end
 
 #Transform the indices in the given subgraph of the tensornetwork so that antiprojectors can be inserted without duplicate indices appearing
@@ -27,7 +27,7 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
     for e in es
         if reverse(e) ∉ updated_es
             mer = message(bpc, reverse(e))
-            linds = filter(i -> plev(i) == 0, inds(mer))
+            linds = filter(i -> plev(i) ==0, inds(mer))
             linds_sim = sim.(linds)
             mer = replaceinds(mer, linds, linds_sim)
             if network(bpc) isa TensorNetworkState
@@ -65,9 +65,9 @@ end
 
 #Get the all edges incident to the region specified by the vector of edges passed
 function NamedGraphs.GraphsExtensions.boundary_edges(
-        bpc::BeliefPropagationCache,
-        es::Vector{<:NamedEdge},
-    )
+    bpc::BeliefPropagationCache,
+    es::Vector{<:NamedEdge},
+)
     vs = unique(vcat(src.(es), dst.(es)))
     bpes = NamedEdge[]
     for v in vs

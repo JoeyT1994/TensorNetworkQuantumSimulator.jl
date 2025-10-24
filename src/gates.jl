@@ -55,6 +55,7 @@ function toitensor(gate::Tuple, siteinds::Dictionary)
     else
         throw(ArgumentError("Wrong gate format"))
     end
+
     return gate
 end
 
@@ -93,7 +94,7 @@ function toitensor(gate::ITensor, sinds::Dictionary)
 end
 
 #Conversion of the gate indices to a tuple
-function _ensuretuple(gate_inds::Union{Tuple, AbstractArray})
+function _ensuretuple(gate_inds::Union{Tuple,AbstractArray})
     return gate_inds
 end
 
@@ -115,15 +116,15 @@ function ITensors.op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Nu
         [0 0 0 1]
     ]
 end
-
+ 
 """
     ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Number)
 
 Gate for rotation by XXYY at a given angle
 """
 function ITensors.op(
-        ::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Number
-    )
+    ::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Number
+  )
     mat = zeros(ComplexF64, 4, 4)
     mat[1, 1] = 1
     mat[4, 4] = 1
@@ -140,16 +141,16 @@ end
 Gate for rotation by XXYYZZ at a given angle
 """
 function ITensors.op(
-        ::OpName"Rxxyyzz", ::SiteType"S=1/2"; θ::Number
-    )
-    a = exp(im * θ * 0.5)
+    ::OpName"Rxxyyzz", ::SiteType"S=1/2"; θ::Number
+  )
+    a = exp( im * θ * 0.5)
     mat = zeros(ComplexF64, 4, 4)
     mat[1, 1] = conj(a)
     mat[2, 2] = cos(θ) * a
     mat[2, 3] = -1.0 * im * a * sin(θ)
     mat[3, 2] = -1.0 * im * a * sin(θ)
     mat[3, 3] = cos(θ) * a
-    mat[4, 4] = conj(a)
+    mat[4,4] = conj(a)
     return mat
 end
 

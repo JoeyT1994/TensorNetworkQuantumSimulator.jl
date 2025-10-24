@@ -1,9 +1,5 @@
 using Dictionaries: Dictionary
 
-function default_siteinds(g::AbstractGraph)
-    return siteinds(g, "S=1/2")
-end
-
 function siteinds(g::AbstractGraph, sitetype::String, sitedimension::Int = site_dimension(sitetype))
     vs = collect(vertices(g))
     return Dictionary(vs, [Index[Index(sitedimension, site_tag(sitetype))] for v in vs])

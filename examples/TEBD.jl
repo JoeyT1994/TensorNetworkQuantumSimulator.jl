@@ -17,7 +17,7 @@ function main()
     nqubits = length(vertices(g))
     ψ0 = tensornetworkstate(ComplexF32, v -> "↑", g, "S=1/2")
 
-    maxdim, cutoff = 4, 1.0e-10
+    maxdim, cutoff = 4, 1e-10
     apply_kwargs = (; maxdim, cutoff, normalize_tensors = true)
 
     ψ_bpc = BeliefPropagationCache(ψ0)
@@ -28,11 +28,11 @@ function main()
     #Do a 7-way edge coloring then Trotterise the Hamiltonian into commuting groups
     layer = []
     ec = edge_color(g, 7)
-    append!(layer, ("Rz", [v], h * δt) for v in vertices(g))
+    append!(layer, ("Rz", [v], h*δt) for v in vertices(g))
     for colored_edges in ec
-        append!(layer, ("Rxx", pair, 2 * J * δt) for pair in colored_edges)
+        append!(layer, ("Rxx", pair, 2*J*δt) for pair in colored_edges)
     end
-    append!(layer, ("Rz", [v], h * δt) for v in vertices(g))
+    append!(layer, ("Rz", [v], h*δt) for v in vertices(g))
 
     #Vertices to measure "Z" on
     vs_measure = [first(center(g))]
@@ -52,13 +52,13 @@ function main()
     Zs = []
 
     # evolve! The first evaluation will take significantly longer because of compilation.
-    for l in 1:no_trotter_steps
+    for l = 1:no_trotter_steps
         #printing
         println("Layer $l")
 
         # pass BP cache manually
         t = @timed ψ_bpc, errors =
-            apply_gates(layer, ψ_bpc; apply_kwargs, verbose = false)
+            apply_gates(layer, ψ_bpc; apply_kwargs, verbose = false);
 
         # push BP measured expectation to list
         push!(Zs, only(real(expect(ψ_bpc, observables))))
@@ -68,7 +68,6 @@ function main()
         println("Maximum Gate error for layer was $(maximum(errors))")
         println("Sigma z on central site is $(last(Zs))")
     end
-    return
 end
 
 main()

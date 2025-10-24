@@ -7,7 +7,7 @@ function state_error()
 end
 
 """
-    norm_sqr(ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}; alg, kwargs...)
+    norm_sqr(ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}; alg = nothing, kwargs...)
     Compute the squared norm of a `TensorNetworkState` or the state wrapped in an updated  `Cache` using the specified algorithm.
     # Arguments
     - `ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}`: The tensor network state or updated cache wrapping the state.
@@ -39,18 +39,15 @@ end
     ```
 """
 
-function norm_sqr(tns::Union{TensorNetworkState, BeliefPropagationCache}; alg, kwargs...)
-    algorithm_check(tns, "norm_sqr", alg)
+function norm_sqr(tns::Union{TensorNetworkState, BeliefPropagationCache}; alg = nothing, kwargs...)
     return norm_sqr(Algorithm(alg), tns; kwargs...)
 end
 
-function norm_sqr(
-        alg::Algorithm"exact", ψ::TensorNetworkState;
-        contraction_sequence_kwargs = (; alg = "einexpr", optimizer = Greedy())
-    )
+function norm_sqr(alg::Algorithm"exact", ψ::TensorNetworkState;
+    contraction_sequence_kwargs=(; alg="einexpr", optimizer=Greedy()))
     ψIψ_tensors = norm_factors(ψ, collect(vertices(ψ)))
     denom_seq = contraction_sequence(ψIψ_tensors; contraction_sequence_kwargs...)
-    return contract(ψIψ_tensors; sequence = denom_seq)[]
+    return contract(ψIψ_tensors; sequence=denom_seq)[]
 end
 
 function norm_sqr(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
@@ -61,11 +58,11 @@ function norm_sqr(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_con
     elseif alg == Algorithm("loopcorrections")
         z = loopcorrected_partitionfunction(cache, max_configuration_size)
     else
-        return algorithm_error()
+       return algorithm_error()
     end
 
     tn isa TensorNetworkState && return z
-    tn isa ITensorNetwork && return z * z
+    tn isa ITensorNetwork && return z*z
     return state_error()
 end
 
@@ -77,7 +74,7 @@ end
 
 function norm_sqr(alg::Algorithm"boundarymps", ψ::TensorNetworkState; mps_bond_dimension::Int, partition_by = "row", cache_update_kwargs = default_bmps_update_kwargs(ψ), kwargs...)
     ψ_bmps = BoundaryMPSCache(ψ, mps_bond_dimension; partition_by)
-    maxiter = get(cache_update_kwargs, :maxiter, default_bp_maxiter(ψ_bmps))
+    maxiter = get(cache_update_kwargs, :maxiter,  default_bp_maxiter(ψ_bmps))
     cache_update_kwargs = (; cache_update_kwargs..., maxiter)
     ψ_bmps = update(ψ_bmps; cache_update_kwargs...)
     return norm_sqr(alg, ψ_bmps; kwargs...)

@@ -29,6 +29,9 @@ function main()
         ψ = random_tensornetworkstate(ComplexF32, g, "S=1/2"; bond_dimension = χ)
         v_centre = first(G.center(g))
 
+        #Gauge and rescale the state so the BP norm is 1 (helps with numerical stability)
+        ψ = gauge_and_scale(ψ)
+
         sz_bp = expect(ψ, ("Z", [v_centre]); alg = "bp")
         println("BP value for Z is $sz_bp")
 
@@ -70,7 +73,6 @@ function main()
             println("Exact value for ZZ is $sz_exact")
         end
     end
-    return
 end
 
 main()

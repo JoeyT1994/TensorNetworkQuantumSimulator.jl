@@ -12,18 +12,18 @@ Base.copy(blf::BilinearForm) = BilinearForm(copy(blf.ket), copy(blf.operator), c
 
 #Forward onto the ket
 for f in [
-        :(ITensorNetworks.underlying_graph),
-        :(ITensorNetworks.data_graph_type),
-        :(ITensorNetworks.data_graph),
-        :(ITensors.datatype),
-        :(ITensors.NDTensors.scalartype),
-        :(NamedGraphs.edgeinduced_subgraphs_no_leaves),
-    ]
-    @eval begin
-        function $f(blf::BilinearForm, args...; kwargs...)
-            return $f(ket(blf), args...; kwargs...)
-        end
+    :(ITensorNetworks.underlying_graph),
+    :(ITensorNetworks.data_graph_type),
+    :(ITensorNetworks.data_graph),
+    :(ITensors.datatype),
+    :(ITensors.NDTensors.scalartype),
+    :(NamedGraphs.edgeinduced_subgraphs_no_leaves)
+]
+@eval begin
+    function $f(blf::BilinearForm, args...; kwargs...)
+        return $f(ket(blf), args...; kwargs...)
     end
+end
 end
 
 #Constructor, bra is taken to be in the vector space of ket so the dual is taken
@@ -50,7 +50,7 @@ end
 function bp_factors(blf::BilinearForm, verts::Vector)
     factors = ITensor[]
     for v in verts
-        append!(factors, ITensor[ket(blf)[v], operator(blf)[v], bra(blf)[v]])
+        append!(factors, ITensor[ket(blf)[v], operator(blf)[v],bra(blf)[v]])
     end
     return factors
 end

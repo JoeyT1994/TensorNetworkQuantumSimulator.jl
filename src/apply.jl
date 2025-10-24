@@ -1,21 +1,16 @@
 """
-    apply_gates(circuit::Vector, ψ::Union{TensorNetworkState, BeliefPropagationCache}; bp_update_kwargs = default_bp_update_kwargs(ψ), kwargs...)
-    Apply a sequence of gates to a `TensorNetworkState` or a `BeliefPropagationCache`` wrapping a `TensorNetworkState`` using Belief Propagation to update the environment.
-    # Arguments
-    - `circuit::Vector`: A vector of tuples where each tuple contains a gate (as an `ITensor`) and the vertices it acts on.
-    - `ψ::TensorNetworkState`: The tensor network state to which the gates will be applied.
-    - `bp_update_kwargs`: Keyword arguments for updating the Belief Propagation cache between gates (reasonable defaults are set).
-    - `apply_kwargs`: Keyword arguments for the gate application. These include options like `maxdim` and `cutoff` for bond dimension truncation during gate application.
-    # Returns
-    - A tuple containing the updated `TensorNetworkState` or `BeliefPropagationCache` and a vector of truncation errors for each gate application.
-end
+    apply_gates(circuit::AbstractVector, ψ::ITensorNetwork; bp_update_kwargs = default_posdef_bp_update_kwargs() apply_kwargs = (; maxdim, cutoff))
+
+Apply a circuit (list of gates) to a tensor network.
+The circuit should take the form of a vector of Tuples (gate_str, qubits_to_act_on, optional_param) or a vector of ITensors.
+Returns the final state and an approximate list of errors when applying each gate
 """
 function apply_gates(
-        circuit::Vector,
-        ψ::TensorNetworkState;
-        bp_update_kwargs = default_bp_update_kwargs(ψ),
-        kwargs...,
-    )
+    circuit::Vector,
+    ψ::TensorNetworkState;
+    bp_update_kwargs = default_bp_update_kwargs(ψ),
+    kwargs...,
+)
     ψ_bpc = BeliefPropagationCache(ψ)
     ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
     ψ_bpc, truncation_errors = apply_gates(circuit, ψ_bpc; bp_update_kwargs, kwargs...)
@@ -23,18 +18,15 @@ function apply_gates(
 end
 
 function apply_gates(
-        circuit::Vector,
-        ψ_bpc::BeliefPropagationCache;
-        kwargs...,
-    )
+    circuit::Vector,
+    ψ_bpc::BeliefPropagationCache;
+    kwargs...,
+)
     gate_vertices = [_tovec(gate[2]) for gate in circuit]
     circuit = toitensor(circuit, siteinds(network(ψ_bpc)))
+    circuit = [adapt(ComplexF32, gate) for gate in circuit]
+    circuit = [adapt(unspecify_type_parameters(datatype(ψ_bpc)), gate) for gate in circuit]
     return apply_gates(circuit, ψ_bpc; gate_vertices, kwargs...)
-end
-
-function adapt_gate(gate::ITensor, ψ_bpc::BeliefPropagationCache)
-    gate = scalartype(gate) <: Complex ? adapt(complex(scalartype(ψ_bpc)), gate) : adapt(scalartype(ψ_bpc), gate)
-    return adapt(unspecify_type_parameters(datatype(ψ_bpc)), gate)
 end
 
 function apply_gates(
@@ -45,6 +37,7 @@ function apply_gates(
     bp_update_kwargs = default_bp_update_kwargs(ψ_bpc),
     update_cache = true,
     verbose = false,
+    inds_per_site=1,
     transfer_to_gpu = false,
 )
     ψ_bpc = copy(ψ_bpc)
@@ -52,7 +45,7 @@ function apply_gates(
     # we keep track of the vertices that have been acted on by 2-qubit gates
     # only they increase the counter
     # this is the set that keeps track.
-    affected_vertices = Set()
+    affected_indices = Set{Index{Int64}}()
     truncation_errors = zeros((length(circuit)))
 
     # If the circuit is applied in the Heisenberg picture, the circuit needs to already be reversed
@@ -60,7 +53,7 @@ function apply_gates(
 
         # check if the gate is a 2-qubit gate and whether it affects the counter
         # we currently only increment the counter if the gate affects vertices that have already been affected
-        cache_update_required = length(gate_vertices[ii]) >= 2 && any(vert in affected_vertices for vert in gate_vertices[ii])
+        cache_update_required = _cacheupdate_check(affected_indices, gate; inds_per_site)
 
         # update the BP cache
         if update_cache && cache_update_required
@@ -70,7 +63,7 @@ function apply_gates(
 
             t = @timed ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
 
-            affected_vertices = Set()
+            affected_indices = Set{Index{Int64}}()
             if verbose
                 println("Done in $(t.time) secs")
             end
@@ -78,9 +71,8 @@ function apply_gates(
         end
 
         # actually apply the gate
-        gate = adapt_gate(gate, ψ_bpc)
         t = @timed ψ_bpc, truncation_errors[ii] = apply_gate!(gate, ψ_bpc; v⃗ = gate_vertices[ii], apply_kwargs, transfer_to_gpu)
-        affected_vertices = union(affected_vertices, Set(gate_vertices[ii]))
+        affected_indices = union(affected_indices, Set(inds(gate)))
     end
 
     if update_cache
@@ -126,8 +118,8 @@ function apply_gate!(
 end
 
 function simple_update(
-        o::ITensor, ψ, v⃗; envs, normalize_tensors = true, apply_kwargs...
-    )
+    o::ITensor, ψ, v⃗; envs, normalize_tensors = true, apply_kwargs...
+  )
 
     if length(v⃗) == 1
         updated_tensors = ITensor[ITensors.apply(o, ψ[first(v⃗)])]
@@ -155,12 +147,12 @@ function simple_update(
         e = v⃗[1] => v⃗[2]
         singular_values! = Ref(ITensor())
         Rᵥ₁, Rᵥ₂, spec = factorize_svd(
-            oR,
-            unioninds(rᵥ₁, sᵥ₁);
-            ortho = "none",
-            tags = edge_tag(e),
-            singular_values!,
-            apply_kwargs...,
+        oR,
+        unioninds(rᵥ₁, sᵥ₁);
+        ortho="none",
+        tags=edge_tag(e),
+        singular_values!,
+        apply_kwargs...,
         )
         err = spec.truncerr
         s_values = singular_values![]

@@ -20,13 +20,13 @@ function main()
 
     #Build a layer of the circuit. Pauli rotations are tuples like `(pauli_string, [site_labels], parameter)`
     layer = []
-    append!(layer, ("Rx", [v], 2 * hx * dt) for v in vertices(g))
-    append!(layer, ("Rz", [v], 2 * hz * dt) for v in vertices(g))
+    append!(layer, ("Rx", [v], 2*hx*dt) for v in vertices(g))
+    append!(layer, ("Rz", [v], 2*hz*dt) for v in vertices(g))
 
     #For two site gates do an edge coloring to Trotterise the circuit
     ec = edge_color(g, 4)
     for colored_edges in ec
-        append!(layer, ("Rzz", pair, 2 * J * dt) for pair in colored_edges)
+        append!(layer, ("Rzz", pair, 2*J*dt) for pair in colored_edges)
     end
 
     # observables are tuples like `(pauli_string, [site_labels], optional:coefficient)`
@@ -40,7 +40,7 @@ function main()
     ψ0 = tensornetworkstate(ComplexF32, v -> "↑", g, "S=1/2")
 
     # max bond dimension for the TN
-    apply_kwargs = (maxdim = 5, cutoff = 1.0e-10, normalize_tensors = false)
+    apply_kwargs = (maxdim = 5, cutoff = 1e-10, normalize_tensors = false)
 
     # create the BP cache representing the square of the tensor network
     ψ_bpc = BeliefPropagationCache(ψ0)
@@ -52,18 +52,18 @@ function main()
     mps_bond_dimension = 4
 
     # evolve! (First step takes long due to compilation)
-    for l in 1:nl
+    for l = 1:nl
         println("Layer $l")
 
         t1 = @timed ψ_bpc, errors =
-            apply_gates(layer, ψ_bpc; apply_kwargs, verbose = false)
+            apply_gates(layer, ψ_bpc; apply_kwargs, verbose = false);
 
         #BP expectation (already have an up-to-date BP cache)
         sz_bp = expect(ψ_bpc, obs)
 
-        #Boundary MPS expectation
+        #Boundary MPS expectation 
         ψ = network(ψ_bpc)
-        sz_boundarymps = expect(ψ, obs; alg = "boundarymps", mps_bond_dimension)
+        sz_boundarymps = expect(ψ,obs;alg = "boundarymps", mps_bond_dimension)
 
         println("    Took time: $(t1.time) [s]. Max bond dimension: $(maxlinkdim(ψ_bpc))")
         println("    Maximum Gate error for layer was $(maximum(errors))")
@@ -71,7 +71,6 @@ function main()
         println("    BP Measured Sigmaz is $(sz_bp)")
         println("    Boundary MPS Measured Sigmaz is $(sz_boundarymps)")
     end
-    return
 end
 
 main()

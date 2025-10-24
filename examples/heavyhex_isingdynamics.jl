@@ -9,7 +9,7 @@ using ITensors: ITensor, ITensors
 
 function main()
     #Define the lattice
-    g = TN.heavy_hexagonal_lattice(5, 5)
+    g = TN.heavy_hexagonal_lattice(5,5)
 
     #Define an edge coloring
     ec = edge_color(g, 3)
@@ -22,14 +22,14 @@ function main()
     Rx_layer = [("Rx", [v], θh) for v in collect(vertices(g))]
     Rzz_layer = []
     for edge_group in ec
-        append!(Rzz_layer, ("Rzz", pair, 2 * J) for pair in edge_group)
+        append!(Rzz_layer, ("Rzz", pair, 2*J) for pair in edge_group)
     end
     layer = vcat(Rx_layer, Rzz_layer)
 
     #Depth of the circuit and apply parameters
     no_trotter_steps = 20
     χ = 8
-    apply_kwargs = (; cutoff = 1.0e-12, maxdim = χ, normalize_tensors = true)
+    apply_kwargs = (; cutoff = 1e-12, maxdim = χ, normalize_tensors = true)
 
     #Initial state
     ψ = tensornetworkstate(ComplexF32, v -> "↑", g, "S=1/2")
@@ -49,9 +49,9 @@ function main()
 
     println("Total final fidelity is $(prod(fidelities))")
     ntwo_site_gates = length(edges(g)) * no_trotter_steps
-    println("Avg gate fidelity is $((prod(fidelities))^((1 / ntwo_site_gates)))")
+    println("Avg gate fidelity is $((prod(fidelities)) ^((1 / ntwo_site_gates)))")
 
-    central_site = (11, 5)
+    central_site = (11,5)
 
     #Use BP to get an observable, as we have the BP cache with messages already in it. We can use that.
     sz_bp = expect(ψ_bpc, [("Z", [central_site])])
@@ -72,8 +72,8 @@ function main()
     println("Standard deviation of p(x) / q(x) is $(st_dev)")
 
     #Measure observable with sample approach (use importance sampling to correct)
-    sampled_sz = sum([first(b) * (-2 * last(b)[central_site] + 1) for b in bitstrings]) / Statistics.sum(first.(bitstrings))
-    return println("Importance sampled value for magnetisation is $(sampled_sz)")
+    sampled_sz = sum([first(b) * (-2*last(b)[central_site] + 1) for b in bitstrings]) / Statistics.sum(first.(bitstrings))
+    println("Importance sampled value for magnetisation is $(sampled_sz)")
 
 end
 
