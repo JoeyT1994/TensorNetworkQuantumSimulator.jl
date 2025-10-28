@@ -44,18 +44,14 @@ function ITensors.op(
     return mat
 end
 
-function main()
+function main(n, hx, nsteps; use_gpu::Bool = true, χ::Int=4, MPS_message_rank::Int = 10)
 
-    n = 6
     g = named_grid((n,n))
     s = siteinds(g, "Pauli")
     ρ = identitytensornetworkstate(ComplexF64, g, s)
     ITensors.disable_warn_order()
 
-    use_gpu = true
-
     δβ = 0.01 
-    hx = -3.1
     J = -1
 
     # #Do a custom 4-way edge coloring then Trotterise the Hamiltonian into commuting groups
@@ -66,10 +62,7 @@ function main()
     ec = [ec1, ec2, ec3, ec4]
 
     @assert length(reduce(vcat, ec)) == length(edges(g))
-    nsteps = 50
     apply_kwargs = (; maxdim = 4, cutoff = 1e-12)
-
-    MPS_message_rank = 10
     
     β = 0
     for i in 1:nsteps
