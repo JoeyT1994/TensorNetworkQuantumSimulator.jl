@@ -27,10 +27,13 @@ using CUDA
 
 using Adapt
 using Dictionaries
+using JLD2
 
 BLAS.set_num_threads(min(6, Sys.CPU_THREADS))
 println("Julia is using "*string(nthreads()))
 println("BLAS is using "*string(BLAS.get_num_threads()))
+
+DATA_DIR = "/mnt/ceph/users/gsommers/data/"
 
 #Gate : rho -> rho .X
 function ITensors.op(
@@ -44,17 +47,8 @@ function ITensors.op(
     return mat
 end
 
-function main(n, hx, nsteps; use_gpu::Bool = true, χ::Int=4, MPS_message_rank::Int = 10)
-
-    g = named_grid((n,n))
-    s = siteinds(g, "Pauli")
-    ρ = identitytensornetworkstate(ComplexF64, g, s)
-    ITensors.disable_warn_order()
-
-    δβ = 0.01 
-    J = -1
-
-    # #Do a custom 4-way edge coloring then Trotterise the Hamiltonian into commuting groups
+function prep_edges(n::Int, g::AbstractNamedGraph)
+    # #Do a custom 4-way edge coloring then Trotterize the Hamiltonian into commuting groups
     ec1 = reduce(vcat, [[NamedEdge((j, i) => (j+1, i)) for j in 1:2:(n-1)] for i in 1:n])
     ec2 = reduce(vcat, [[NamedEdge((j, i) => (j+1, i)) for j in 2:2:(n-1)] for i in 1:n])
     ec3 = reduce(vcat, [[NamedEdge((i,j) => (i, j+1)) for j in 1:2:(n-1)] for i in 1:n])
@@ -62,62 +56,127 @@ function main(n, hx, nsteps; use_gpu::Bool = true, χ::Int=4, MPS_message_rank::
     ec = [ec1, ec2, ec3, ec4]
 
     @assert length(reduce(vcat, ec)) == length(edges(g))
-    apply_kwargs = (; maxdim = 4, cutoff = 1e-12)
+    ec
+end
+
+# apply layer of single qubit gates
+function apply_single_qubit_layer!(ρ::TensorNetworkState, gates::Dict)
+    for v=keys(gates)
+        setindex_preserve_graph!(ρ, normalize(apply(gates[v], ρ[v])), v)
+    end
+end
+
+#Apply the two site rotations, use a boundary MPS cache to apply them (need to run column or row wise depending on the gates)
+function apply_two_qubit_layer!(ρ::TensorNetworkState, ec::Array, gates::Dict; MPS_message_rank::Int, use_gpu::Bool=true, apply_kwargs...)
+    for (k, colored_edges) in enumerate(ec)
+
+        #Only if you want to use GPU to do boundary MPS
+        if use_gpu
+            ρ_gpu =CUDA.cu(ρ)
+            ρρ = TN.BoundaryMPSCache(ρ_gpu, MPS_message_rank; partition_by = (k== 1 || k == 2) ? "col" : "row", gauge_state = false)
+        else
+            ρρ = TN.BoundaryMPSCache(ρ, MPS_message_rank; partition_by = (k== 1 || k == 2) ? "col" : "row", gauge_state = false)
+        end
+        @time ρρ = TN.update(ρρ)
+        TN.update_partitions!(ρρ, collect(TN.partitionvertices(TN.supergraph(ρρ))))
+
+	for pair in colored_edges
+	    apply_two_qubit_gate!(ρ,ρρ, gates[pair], pair; apply_kwargs...)
+        end
+    end
+end
+   
+function apply_two_qubit_gate!(ρ::TensorNetworkState,ρρ::TN.BoundaryMPSCache, gate::ITensor, pair::NamedEdge; apply_kwargs...)
+    envs = TN.incoming_messages(ρρ, [src(pair), dst(pair)])
+    envs = adapt(datatype(ρ)).(envs)
+    ρv1, ρv2  = ITensorNetworks.full_update_bp(gate, TN.tensornetwork(ρ), [src(pair), dst(pair)]; envs, apply_kwargs...)
+    ρ[src(pair)], ρ[dst(pair)] = normalize(ρv1), normalize(ρv2)
+end
+
+function intermediate_save(sqrtρ, β; δβ::Float64, χ::Int, n::Int, MPS_message_rank, save_tag = "", hx = -3.04438)
+    dat = Dict("L"=>n, "δβ"=>δβ, "β"=>β, "χ"=>χ, "sqrtρ"=>sqrtρ, "mps_rank"=>MPS_message_rank, "hx"=>hx)
+    save(DATA_DIR * "$(save_tag)L$(n)_χ$(χ)_D$(MPS_message_rank)_step$(round(δβ,digits=3))_$(round(β,digits=3)).jld2", dat)
+end
+
+function intermediate_save_bp(ρ, errs, β; δβ::Float64, χ::Int, n::Int, save_tag = "", hx = -3.04438)
+    dat = Dict("L"=>n, "δβ"=>δβ, "β"=>β, "χ"=>χ, "ρ"=>ρ, "errs"=>errs, "hx"=>hx)
+    save(DATA_DIR * "$(save_tag)L$(n)_χ$(χ)_step$(round(δβ,digits=3))_$(round(β,digits=3)).jld2", dat)
+end
+
+function expect_bmps(n::Int, nsteps::Int; hx=-3.04438, δβ = 0.01, χ::Int=4, MPS_message_rank::Int = 10, save_tag = "", load_tag = "")
+end
+
+function evolve_bmps(n::Int, nsteps::Int; hx=-3.04438, δβ = 0.01, use_gpu::Bool = true, χ::Int=4, MPS_message_rank::Int = 10, save_tag = "")
+
+    g = named_grid((n,n))
+    s = siteinds("Pauli", g)
+    ρ = identitytensornetworkstate(ComplexF64, g, s)
+    evolve_bmps(ρ, n, nsteps; β=0, hx=hx, δβ=δβ, use_gpu = use_gpu, χ=χ, MPS_message_rank = MPS_message_rank, save_tag = save_tag)
     
-    β = 0
+end
+
+function evolve_bmps(ρ::TensorNetworkState, n::Int, nsteps::Int; β = 0, hx=-3.04438, δβ = 0.01, use_gpu::Bool=true, χ::Int=4, MPS_message_rank::Int = 10, save_tag = "")
+    g = ρ.tensornetwork.data_graph.underlying_graph
+    s = siteinds(ρ)
+    ITensors.disable_warn_order()
+
+    J = -1
+
+    ec = prep_edges(n, g)
+    apply_kwargs = (; maxdim = χ, cutoff = 1e-12)
+
+    two_qubit_gates = Dict(pair=>adapt(datatype(ρ), TN.toitensor(("Rzz", [src(pair), dst(pair)], -0.5*im * J * δβ), s)) for pair=vcat(ec...))
+
+    single_qubit_gates = Dict(v=>adapt(datatype(ρ), TN.toitensor(("Rx", [v], -0.25 * im * hx *δβ), s)) for v=vertices(g))
+    
     for i in 1:nsteps
         #Apply the singsite rotations half way
-        for v in vertices(g)
-            gate = TN.toitensor(("Rx", [v], -0.25 * im * hx *δβ), s)
-            gate = adapt(datatype(ρ), gate)
-            setindex_preserve_graph!(ρ, normalize(apply(gate, ρ[v])), v)
-        end
+	apply_single_qubit_layer!(ρ, single_qubit_gates)
 
-        #Apply the two site rotations, use a boundary MPS cache to apply them (need to run column or row wise depending on the gates)
-        for (k, colored_edges) in enumerate(ec)
+        @time apply_two_qubit_layer!(ρ, ec, two_qubit_gates; MPS_message_rank = MPS_message_rank, use_gpu = use_gpu, apply_kwargs...)
 
-            #Only if you want to use GPU to do boundary MPS
-            if use_gpu
-                ρ_gpu =CUDA.cu(ρ)
-                ρρ = TN.BoundaryMPSCache(ρ_gpu, MPS_message_rank; partition_by = (k== 1 || k == 2) ? "col" : "row", gauge_state = false)
-            else
-                ρρ = TN.BoundaryMPSCache(ρ, MPS_message_rank; partition_by = (k== 1 || k == 2) ? "col" : "row", gauge_state = false)
-            end
-            ρρ = TN.update(ρρ)
-            TN.update_partitions!(ρρ, collect(TN.partitionvertices(TN.supergraph(ρρ))))
-
-            for pair in colored_edges
-                gate = TN.toitensor(("Rzz", [src(pair), dst(pair)], -0.5*im * J * δβ), s)
-                gate = adapt(datatype(ρ), gate)
-                envs = TN.incoming_messages(ρρ, [src(pair), dst(pair)])
-                envs = adapt(datatype(ρ)).(envs)
-                ρv1, ρv2  = ITensorNetworks.full_update_bp(gate, TN.tensornetwork(ρ), [src(pair), dst(pair)]; envs, apply_kwargs...)
-                ρ[src(pair)], ρ[dst(pair)] = normalize(ρv1), normalize(ρv2)
-            end
-        end
-
-
-        for v in vertices(g)
-            gate = TN.toitensor(("Rx", [v], -0.25 * im * hx *δβ), s)
-            gate = adapt(datatype(ρ), gate)
-            setindex_preserve_graph!(ρ, normalize(apply(gate, ρ[v])), v)
-        end
+        apply_single_qubit_layer!(ρ, single_qubit_gates)
 
         β += δβ
 
-        if use_gpu
-            sz_doubled = TN.expect(ρ, ("X", [(2,2)]); alg = "boundarymps", mps_bond_dimension = MPS_message_rank)
-        else
-            sz_doubled = TN.expect(CUDA.cu(ρ), ("X", [(2,2)]); alg = "boundarymps", mps_bond_dimension = MPS_message_rank)
-        end
+        println("Inverse Temperature is $(2*β)"); flush(stdout)
 
-        println("Inverse Temperature is $β")
-        println("Bond dimension of PEPO $(ITensorNetworks.maxlinkdim(ρ))")
-
-        println("Expectation value at beta  = $(2*β) is $(sz_doubled)")
+	intermediate_save(ρ,β; χ=χ,n=n,MPS_message_rank = MPS_message_rank, δβ=δβ, hx=hx, save_tag = save_tag)
     end
-
-
 end
 
-main()
+function evolve_bp(n::Int, nsteps::Int; hx=-3.04438, δβ = 0.01, use_gpu::Bool=true, χ::Int=4, save_tag = "")
+    g = named_grid((n,n))
+    s = siteinds("Pauli", g)
+    ρ = identitytensornetworkstate(ComplexF64, g, s)
+    evolve_bp(ρ, n, nsteps; β=0, hx=hx, δβ=δβ, use_gpu = use_gpu, χ=χ, save_tag = save_tag)
+end
+
+function evolve_bp(ρ::TensorNetworkState, n::Int, nsteps::Int; β = 0, hx=-3.04438, δβ = 0.01, use_gpu::Bool=true, χ::Int=4, save_tag = "")
+    g = ρ.tensornetwork.data_graph.underlying_graph
+    s = siteinds(ρ)
+    ITensors.disable_warn_order()
+
+    J = -1
+
+    ec = prep_edges(n, g)
+    apply_kwargs = (; maxdim = χ, cutoff = 1e-12)
+
+    ρρ = BeliefPropagationCache(ρ)
+    
+    two_qubit_gates = [adapt(datatype(ρ), TN.toitensor(("Rzz", [src(pair), dst(pair)], -0.5*im * J * δβ), s)) for pair=vcat(ec...)]
+
+    single_qubit_gates = [adapt(datatype(ρ), TN.toitensor(("Rx", [v], -0.25 * im * hx *δβ), s)) for v=vertices(g)]
+
+    layer = vcat(single_qubit_gates, two_qubit_gates, single_qubit_gates)
+    for i in 1:nsteps
+
+    	@time ρρ, errs = apply_gates(layer, ρρ; apply_kwargs, verbose = false)
+
+        β += δβ
+
+        println("Inverse Temperature is $(2*β)"); flush(stdout)
+	println("X_center: $(expect(ρρ, ("X", [(n÷2,n÷2)])))")
+	intermediate_save_bp(ρρ,errs,β; χ=χ,n=n, δβ=δβ, hx=hx, save_tag = save_tag)
+    end
+end

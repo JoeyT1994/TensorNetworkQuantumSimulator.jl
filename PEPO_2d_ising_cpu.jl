@@ -46,11 +46,9 @@ function main()
 
     n = 6
     g = named_grid((n,n))
-    s = siteinds(g, "Pauli")
+    s = siteinds("Pauli", g)
     ρ = identitytensornetworkstate(ComplexF64, g, s)
     ITensors.disable_warn_order()
-
-    use_gpu = true
 
     δβ = 0.01 
     hx = -3.1
