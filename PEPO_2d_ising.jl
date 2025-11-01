@@ -108,7 +108,7 @@ function expect_bmps(dat::Dict; obs = "X", MPS_message_rank::Int = 10, save_tag 
     expect_vals = zeros(length(all_verts), length(dat["sqrtρ"]))
     for i=1:length(dat["sqrtρ"])
          @time expect_vals[:,i] = real.(TN.expect(dat["sqrtρ"][i], [(obs, [v]) for v=all_verts]; alg = "boundarymps", mps_bond_dimension = MPS_message_rank))
-	 save(DATA_DIR * "$(save_tag)L$(n)_χ$(dat["χ"])_D$(MPS_message_rank)_step$(dat["δβ"])_$(dat["β"][i]).jld2", Dict(obs=>expect_vals[:,i], "verts"=>all_verts, "hx"=>dat["hx"], "β"=>dat["β"][i], χ=>[dat["χ"],maxlinkdim(dat["sqrtρ"][i])], mps_rank=>MPS_message_rank, "δβ"=>dat["δβ"], "L"=>dat["L"]))
+	 save(DATA_DIR * "$(save_tag)L$(dat["L"])_χ$(dat["χ"])_D$(MPS_message_rank)_step$(dat["δβ"])_$(dat["β"][i]).jld2", Dict(obs=>expect_vals[:,i], "verts"=>all_verts, "hx"=>dat["hx"], "β"=>dat["β"][i], χ=>[dat["χ"],maxlinkdim(dat["sqrtρ"][i])], mps_rank=>MPS_message_rank, "δβ"=>dat["δβ"], "L"=>dat["L"]))
     end
     all_verts, expect_vals
 end
