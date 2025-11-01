@@ -103,7 +103,14 @@ function intermediate_save_bp(ρ, errs, β; δβ::Float64, χ::Int, n::Int, save
     save(DATA_DIR * "$(save_tag)L$(n)_χ$(χ)_step$(round(δβ,digits=3))_$(round(β,digits=3)).jld2", dat)
 end
 
-function expect_bmps(n::Int, nsteps::Int; hx=-3.04438, δβ = 0.01, χ::Int=4, MPS_message_rank::Int = 10, save_tag = "", load_tag = "")
+function expect_bmps(dat::Dict; obs = "X", MPS_message_rank::Int = 10, save_tag = "")
+    all_verts = collect(vertices(dat["sqrtρ"][1].tensornetwork.data_graph.underlying_graph))
+    expect_vals = zeros(length(all_verts), length(dat["sqrtρ"]))
+    for i=1:length(dat["sqrtρ"])
+         @time expect_vals[:,i] = real.(TN.expect(dat["sqrtρ"][i], [(obs, [v]) for v=all_verts]; alg = "boundarymps", mps_bond_dimension = MPS_message_rank))
+	 save(DATA_DIR * "$(save_tag)L$(n)_χ$(dat["χ"])_D$(MPS_message_rank)_step$(dat["δβ"])_$(dat["β"][i]).jld2", Dict(obs=>expect_vals[:,i], "verts"=>all_verts, "hx"=>dat["hx"], "β"=>dat["β"][i], χ=>[dat["χ"],maxlinkdim(dat["sqrtρ"][i])], mps_rank=>MPS_message_rank, "δβ"=>dat["δβ"], "L"=>dat["L"]))
+    end
+    all_verts, expect_vals
 end
 
 function evolve_bmps(n::Int, nsteps::Int; hx=-3.04438, δβ = 0.01, use_gpu::Bool = true, χ::Int=4, MPS_message_rank::Int = 10, save_tag = "")
