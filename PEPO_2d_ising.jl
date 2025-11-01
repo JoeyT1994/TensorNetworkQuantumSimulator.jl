@@ -71,6 +71,7 @@ function apply_two_qubit_layer!(ρ::TensorNetworkState, ec::Array, gates::Dict; 
     for (k, colored_edges) in enumerate(ec)
 
         #Only if you want to use GPU to do boundary MPS
+	println("Starting boundary MPS cache")
         if use_gpu
             ρ_gpu =CUDA.cu(ρ)
             ρρ = TN.BoundaryMPSCache(ρ_gpu, MPS_message_rank; partition_by = (k== 1 || k == 2) ? "col" : "row", gauge_state = false)
@@ -80,8 +81,9 @@ function apply_two_qubit_layer!(ρ::TensorNetworkState, ec::Array, gates::Dict; 
         @time ρρ = TN.update(ρρ)
         TN.update_partitions!(ρρ, collect(TN.partitionvertices(TN.supergraph(ρρ))))
 
+	println("Starting two-qubit gates")
 	for pair in colored_edges
-	    apply_two_qubit_gate!(ρ,ρρ, gates[pair], pair; apply_kwargs...)
+	    @time apply_two_qubit_gate!(ρ,ρρ, gates[pair], pair; apply_kwargs...)
         end
     end
 end
