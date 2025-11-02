@@ -73,18 +73,20 @@ function apply_two_qubit_layer!(ρ::TensorNetworkState, ec::Array, gates::Dict; 
         #Only if you want to use GPU to do boundary MPS
 	println("Starting boundary MPS cache")
         if use_gpu
-            ρ_gpu =CUDA.cu(ρ)
-            ρρ = TN.BoundaryMPSCache(ρ_gpu, MPS_message_rank; partition_by = (k== 1 || k == 2) ? "col" : "row", gauge_state = false)
+            @time ρ_gpu =CUDA.cu(ρ)
+            @time ρρ = TN.BoundaryMPSCache(ρ_gpu, MPS_message_rank; partition_by = (k== 1 || k == 2) ? "col" : "row", gauge_state = false)
         else
-            ρρ = TN.BoundaryMPSCache(ρ, MPS_message_rank; partition_by = (k== 1 || k == 2) ? "col" : "row", gauge_state = false)
+            @time ρρ = TN.BoundaryMPSCache(ρ, MPS_message_rank; partition_by = (k== 1 || k == 2) ? "col" : "row", gauge_state = false)
         end
         @time ρρ = TN.update(ρρ)
-        TN.update_partitions!(ρρ, collect(TN.partitionvertices(TN.supergraph(ρρ))))
+        @time TN.update_partitions!(ρρ, collect(TN.partitionvertices(TN.supergraph(ρρ))))
 
 	println("Starting two-qubit gates")
-	for pair in colored_edges
-	    @time apply_two_qubit_gate!(ρ,ρρ, gates[pair], pair; apply_kwargs...)
-        end
+	@time begin
+	    for pair in colored_edges
+	        apply_two_qubit_gate!(ρ,ρρ, gates[pair], pair; apply_kwargs...)
+            end
+	end
     end
 end
    
@@ -105,11 +107,16 @@ function intermediate_save_bp(ρ, errs, β; δβ::Float64, χ::Int, n::Int, save
     save(DATA_DIR * "$(save_tag)L$(n)_χ$(χ)_step$(round(δβ,digits=3))_$(round(β,digits=3)).jld2", dat)
 end
 
-function expect_bmps(dat::Dict; obs = "X", MPS_message_rank::Int = 10, save_tag = "")
+function expect_bmps(dat::Dict; obs = "X", MPS_message_rank::Int = 10, save_tag = "", use_gpu::Bool = true)
     all_verts = collect(vertices(dat["sqrtρ"][1].tensornetwork.data_graph.underlying_graph))
     expect_vals = zeros(length(all_verts), length(dat["sqrtρ"]))
     for i=1:length(dat["sqrtρ"])
-         @time expect_vals[:,i] = real.(TN.expect(dat["sqrtρ"][i], [(obs, [v]) for v=all_verts]; alg = "boundarymps", mps_bond_dimension = MPS_message_rank))
+        if use_gpu
+            sqrtρ = CUDA.cu(dat["sqrtρ"][i])
+	else
+	    sqrtρ = dat["sqrtρ"][i]
+	end
+	@time expect_vals[:,i] = real.(TN.expect(dat["sqrtρ"][i], [(obs, [v]) for v=all_verts]; alg = "boundarymps", mps_bond_dimension = MPS_message_rank))
 	 save(DATA_DIR * "$(save_tag)L$(dat["L"])_χ$(dat["χ"])_D$(MPS_message_rank)_step$(dat["δβ"])_$(dat["β"][i]).jld2", Dict(obs=>expect_vals[:,i], "verts"=>all_verts, "hx"=>dat["hx"], "β"=>dat["β"][i], χ=>[dat["χ"],maxlinkdim(dat["sqrtρ"][i])], mps_rank=>MPS_message_rank, "δβ"=>dat["δβ"], "L"=>dat["L"]))
     end
     all_verts, expect_vals
