@@ -104,20 +104,22 @@ end
 
 function intermediate_save_bp(ρ, errs, β; δβ::Float64, χ::Int, n::Int, save_tag = "", hx = -3.04438)
     dat = Dict("L"=>n, "δβ"=>δβ, "β"=>β, "χ"=>χ, "ρ"=>ρ, "errs"=>errs, "hx"=>hx)
+    dat["X"] = 	expect(ρ, [("X", [v]) for v=vertices(network(ρ).tensornetwork.data_graph.underlying_graph)])
     save(DATA_DIR * "$(save_tag)L$(n)_χ$(χ)_step$(round(δβ,digits=3))_$(round(β,digits=3)).jld2", dat)
 end
 
-function expect_bmps(dat::Dict; obs = "X", MPS_message_rank::Int = 10, save_tag = "", use_gpu::Bool = true)
+function expect_bmps(dat::Dict; obs = "X", MPS_message_rank::Int = 10, save_tag = "", use_gpu::Bool = true, start_i::Int = 1)
     all_verts = collect(vertices(dat["sqrtρ"][1].tensornetwork.data_graph.underlying_graph))
-    expect_vals = zeros(length(all_verts), length(dat["sqrtρ"]))
-    for i=1:length(dat["sqrtρ"])
+    expect_vals = zeros(length(all_verts), length(dat["sqrtρ"])-start_i+1)
+    for i=start_i:length(dat["sqrtρ"])
         if use_gpu
             sqrtρ = CUDA.cu(dat["sqrtρ"][i])
 	else
 	    sqrtρ = dat["sqrtρ"][i]
 	end
-	@time expect_vals[:,i] = real.(TN.expect(dat["sqrtρ"][i], [(obs, [v]) for v=all_verts]; alg = "boundarymps", mps_bond_dimension = MPS_message_rank))
-	 save(DATA_DIR * "$(save_tag)L$(dat["L"])_χ$(dat["χ"])_D$(MPS_message_rank)_step$(dat["δβ"])_$(dat["β"][i]).jld2", Dict(obs=>expect_vals[:,i], "verts"=>all_verts, "hx"=>dat["hx"], "β"=>dat["β"][i], χ=>[dat["χ"],maxlinkdim(dat["sqrtρ"][i])], mps_rank=>MPS_message_rank, "δβ"=>dat["δβ"], "L"=>dat["L"]))
+	@time expect_vals[:,i-start_i+1] = real.(TN.expect(sqrtρ, [(obs, [v]) for v=all_verts]; alg = "boundarymps", mps_bond_dimension = MPS_message_rank))
+	 save(DATA_DIR * "$(save_tag)L$(dat["L"])_χ$(dat["χ"])_D$(MPS_message_rank)_step$(dat["δβ"])_$(dat["β"][i]).jld2", Dict(obs=>expect_vals[:,i-start_i+1], "verts"=>all_verts, "hx"=>dat["hx"], "β"=>dat["β"][i], "χ"=>[dat["χ"],maxlinkdim(dat["sqrtρ"][i])], "mps_rank"=>MPS_message_rank, "δβ"=>dat["δβ"], "L"=>dat["L"]))
+	 flush(stdout)
     end
     all_verts, expect_vals
 end
@@ -155,7 +157,7 @@ function evolve_bmps(ρ::TensorNetworkState, n::Int, nsteps::Int; β = 0, hx=-3.
 
         β += δβ
 
-        println("Inverse Temperature is $(2*β)"); flush(stdout)
+        println("Inverse Temperature is $(β)"); flush(stdout)
 
 	intermediate_save(ρ,β; χ=χ,n=n,MPS_message_rank = MPS_message_rank, δβ=δβ, hx=hx, save_tag = save_tag)
     end
@@ -165,24 +167,23 @@ function evolve_bp(n::Int, nsteps::Int; hx=-3.04438, δβ = 0.01, use_gpu::Bool=
     g = named_grid((n,n))
     s = siteinds("Pauli", g)
     ρ = identitytensornetworkstate(ComplexF64, g, s)
-    evolve_bp(ρ, n, nsteps; β=0, hx=hx, δβ=δβ, use_gpu = use_gpu, χ=χ, save_tag = save_tag)
+    ρρ = BeliefPropagationCache(ρ)
+    evolve_bp(ρρ, n, nsteps; β=0, hx=hx, δβ=δβ, use_gpu = use_gpu, χ=χ, save_tag = save_tag)
 end
 
-function evolve_bp(ρ::TensorNetworkState, n::Int, nsteps::Int; β = 0, hx=-3.04438, δβ = 0.01, use_gpu::Bool=true, χ::Int=4, save_tag = "")
-    g = ρ.tensornetwork.data_graph.underlying_graph
-    s = siteinds(ρ)
+function evolve_bp(ρρ::BeliefPropagationCache, n::Int, nsteps::Int; β = 0, hx=-3.04438, δβ = 0.01, use_gpu::Bool=true, χ::Int=4, save_tag = "")
+    g = network(ρρ).tensornetwork.data_graph.underlying_graph
+    s = siteinds(network(ρρ))
     ITensors.disable_warn_order()
 
     J = -1
 
     ec = prep_edges(n, g)
     apply_kwargs = (; maxdim = χ, cutoff = 1e-12)
-
-    ρρ = BeliefPropagationCache(ρ)
     
-    two_qubit_gates = [adapt(datatype(ρ), TN.toitensor(("Rzz", [src(pair), dst(pair)], -0.5*im * J * δβ), s)) for pair=vcat(ec...)]
+    two_qubit_gates = [adapt(datatype(network(ρρ)), TN.toitensor(("Rzz", [src(pair), dst(pair)], -0.5*im * J * δβ), s)) for pair=vcat(ec...)]
 
-    single_qubit_gates = [adapt(datatype(ρ), TN.toitensor(("Rx", [v], -0.25 * im * hx *δβ), s)) for v=vertices(g)]
+    single_qubit_gates = [adapt(datatype(network(ρρ)), TN.toitensor(("Rx", [v], -0.25 * im * hx *δβ), s)) for v=vertices(g)]
 
     layer = vcat(single_qubit_gates, two_qubit_gates, single_qubit_gates)
     for i in 1:nsteps
@@ -191,8 +192,7 @@ function evolve_bp(ρ::TensorNetworkState, n::Int, nsteps::Int; β = 0, hx=-3.04
 
         β += δβ
 
-        println("Inverse Temperature is $(2*β)"); flush(stdout)
-	println("X_center: $(expect(ρρ, ("X", [(n÷2,n÷2)])))")
+        println("Inverse Temperature is $(β)"); flush(stdout)
 	intermediate_save_bp(ρρ,errs,β; χ=χ,n=n, δβ=δβ, hx=hx, save_tag = save_tag)
     end
 end
