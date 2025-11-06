@@ -39,7 +39,7 @@ function main()
     end
     append!(layer, ("Rz", [v], h * δt) for v in vertices(g))
 
-    χinit = maxlinkdim(ψ)
+    χinit = maxvirtualdim(ψ)
     println("Initial bond dimension of the Heisenberg operator is $χinit")
 
     time = 0
@@ -64,7 +64,7 @@ function main()
         println("Trace(O(t)O(0)) is $(tr_ψtψ0)")
 
         # printing
-        println("Took time: $(t.time) [s]. Max bond dimension: $(maxlinkdim(ψ_bpc))")
+        println("Took time: $(t.time) [s]. Max bond dimension: $(maxvirtualdim(ψ_bpc))")
         println("Maximum Gate error for layer was $(maximum(errors))")
     end
     return

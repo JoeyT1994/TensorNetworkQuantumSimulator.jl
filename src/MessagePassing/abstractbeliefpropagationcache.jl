@@ -1,7 +1,7 @@
 using Graphs: Graphs
 using Adapt
 
-abstract type AbstractBeliefPropagationCache{V} <: AbstractGraph{V} end
+abstract type AbstractBeliefPropagationCache{V} <: AbstractNamedGraph{V} end
 
 #Interface
 messages(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
@@ -36,19 +36,24 @@ network(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 
 #Forward onto the network
 for f in [
-        :(Graphs.vertices),
-        :(Graphs.edges),
-        :(Graphs.is_tree),
-        :(NamedGraphs.GraphsExtensions.boundary_edges),
+        :(graph),
         :(bp_factors),
         :(default_bp_maxiter),
-        :(ITensorNetworks.linkinds),
-        :(ITensorNetworks.underlying_graph),
+        :(virtualinds),
         :(ITensors.datatype),
-        :(ITensors.scalartype),
-        :(ITensorNetworks.setindex_preserve_graph!),
-        :(ITensorNetworks.maxlinkdim),
+        :(ITensors.NDTensors.scalartype),
+        :(maxvirtualdim),
         :(default_message),
+        :(siteinds),
+        :(setindex_preserve!),
+        :(NamedGraphs.edgetype),
+        :(NamedGraphs.vertices),
+        :(NamedGraphs.edges),
+        :(NamedGraphs.position_graph),
+        :(NamedGraphs.ordered_vertices),
+        :(NamedGraphs.vertex_positions),
+        :(NamedGraphs.steiner_tree),
+        :(NamedGraphs.is_tree),
     ]
     @eval begin
         function $f(bp_cache::AbstractBeliefPropagationCache, args...; kwargs...)
@@ -77,7 +82,9 @@ end
 
 function messages(bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge})
     isempty(edges) && return ITensor[]
-    return reduce(vcat, [message(bp_cache, e) for e in edges])
+    ms = reduce(vcat, [message(bp_cache, e) for e in edges])
+    ms isa ITensor && return ITensor[ms]
+    return ms
 end
 
 function setmessages!(bp_cache::AbstractBeliefPropagationCache, edges, messages)
@@ -162,13 +169,12 @@ end
 """
 Do a sequential update of the message tensors on `edges`
 """
-function update_iteration(
+function update_iteration!(
         alg::Algorithm"bp",
         bpc::AbstractBeliefPropagationCache,
         edges::Vector;
         (update_diff!) = nothing,
     )
-    bpc = copy(bpc)
     for e in edges
         prev_message = !isnothing(update_diff!) ? message(bpc, e) : nothing
         update_message!(alg.kwargs.message_update_alg, bpc, e)
@@ -180,27 +186,6 @@ function update_iteration(
 end
 
 """
-Do parallel updates between groups of edges of all message tensors
-Currently we send the full message tensor data struct to update for each edge_group. But really we only need the
-mts relevant to that group.
-"""
-function update_iteration(
-        alg::Algorithm"bp",
-        bpc::AbstractBeliefPropagationCache,
-        edge_groups::Vector{<:Vector{<:AbstractEdge}};
-        (update_diff!) = nothing,
-    )
-    new_mts = empty(messages(bpc))
-    for edges in edge_groups
-        bpc_t = update_iteration(alg.kwargs.message_update_alg, bpc, edges; (update_diff!))
-        for e in edges
-            set!(new_mts, e, message(bpc_t, e))
-        end
-    end
-    return set_messages(bpc, new_mts)
-end
-
-"""
 More generic interface for update, with default params
 """
 function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
@@ -208,9 +193,10 @@ function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
     if isnothing(alg.kwargs.maxiter)
         error("You need to specify a number of iterations for BP!")
     end
+    bpc = copy(bpc)
     for i in 1:alg.kwargs.maxiter
         diff = compute_error ? Ref(0.0) : nothing
-        bpc = update_iteration(alg, bpc, alg.kwargs.edge_sequence; (update_diff!) = diff)
+        update_iteration!(alg, bpc, alg.kwargs.edge_sequence; (update_diff!) = diff)
         if compute_error && (diff.x / length(alg.kwargs.edge_sequence)) <= alg.kwargs.tolerance
             if alg.kwargs.verbose
                 println("BP converged to desired precision after $i iterations.")
@@ -236,7 +222,7 @@ end
 function map_factors(f, bp_cache::AbstractBeliefPropagationCache, vs = vertices(bp_cache))
     bp_cache = copy(bp_cache)
     for v in vs
-        setindex_preserve_graph!(bp_cache, f(network(bp_cache)[v]), v)
+        setindex_preserve!(bp_cache, f(network(bp_cache)[v]), v)
     end
     return bp_cache
 end

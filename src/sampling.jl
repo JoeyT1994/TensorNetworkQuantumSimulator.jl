@@ -31,7 +31,7 @@ end
 
 """
     sample(
-        ψ::ITensorNetwork,
+        ψ::TensorNetworkState,
         nsamples::Integer;
         projected_message_rank::Integer,
         norm_message_rank::Integer,
@@ -45,7 +45,7 @@ Take nsamples bitstrings, based on the square of the coefficients of the vector 
 
 Arguments
 ---------
-- `ψ::ITensorNetwork`: The tensornetwork state to sample from.
+- `ψ::TensorNetworkState`: The tensornetwork state to sample from.
 - `nsamples::Integer`: Number of samples to draw.
 
 Keyword Arguments
@@ -71,7 +71,7 @@ end
 
 """
     sample_directly_certified(
-        ψ::ITensorNetwork,
+        ψ::TensorNetworkState,
         nsamples::Integer;
         projected_message_rank::Integer,
         norm_message_rank::Integer,
@@ -86,7 +86,7 @@ The samples are drawn from x~q(x) and for each sample <x|ψ> is calculated "on-t
 
 Arguments
 ---------
-- `ψ::ITensorNetwork`: The tensornetwork state to sample from.
+- `ψ::TensorNetworkState`: The tensornetwork state to sample from.
 - `nsamples::Integer`: Number of samples to draw.
 
 Keyword Arguments
@@ -107,7 +107,7 @@ Each NamedTuple contains:
 - `logq`: Log probability of drawing the bitstring.
 - `bitstring`: The sampled bitstring as a dictionary mapping each vertex to a configuration (0...d).
 """
-function sample_directly_certified(ψ::TensorNetworkState, nsamples::Integer; projected_mps_bond_dimension = 5 * maxlinkdim(ψ), alg = "boundarymps", kwargs...)
+function sample_directly_certified(ψ::TensorNetworkState, nsamples::Integer; projected_mps_bond_dimension = 5 * maxvirtualdim(ψ), alg = "boundarymps", kwargs...)
     algorithm_check(ψ, "sample", alg)
     probs_and_bitstrings, _ = sample(Algorithm(alg), ψ, nsamples; projected_mps_bond_dimension, kwargs...)
     # returns the self-certified p/q, logq and bitstrings
@@ -116,7 +116,7 @@ end
 
 """
     sample_certified(
-        ψ::ITensorNetwork,
+        ψ::TensorNetworkState,
         nsamples::Integer;
         projected_message_rank::Integer,
         norm_message_rank::Integer,
@@ -131,7 +131,7 @@ The samples are drawn from x~q(x) and for each sample an independent contraction
 
 Arguments
 ---------
-- `ψ::ITensorNetwork`: The tensornetwork state to sample from.
+- `ψ::TensorNetworkState`: The tensornetwork state to sample from.
 - `nsamples::Integer`: Number of samples to draw.
 
 Keyword Arguments
@@ -152,7 +152,7 @@ Each NamedTuple contains:
 - `poverq`: Approximate value of p(x)/q(x) for the sampled bitstring x.
 - `bitstring`: The sampled bitstring as a dictionary mapping each vertex to a configuration (0...d).
 """
-function sample_certified(ψ::TensorNetworkState, nsamples::Int; alg = "boundarymps", certification_mps_bond_dimension = 5 * maxlinkdim(ψ), certification_cache_message_update_kwargs = (;), kwargs...)
+function sample_certified(ψ::TensorNetworkState, nsamples::Int; alg = "boundarymps", certification_mps_bond_dimension = 5 * maxvirtualdim(ψ), certification_cache_message_update_kwargs = (;), kwargs...)
     algorithm_check(ψ, "sample", alg)
     probs_and_bitstrings, ψ = sample(Algorithm(alg), ψ, nsamples; kwargs...)
     # send the bitstrings and the logq to the certification function
@@ -241,7 +241,7 @@ function sample_partition!(
         q = ρ_diag[config]
         logq += log(q)
         Pψv = copy(network(norm_bmps_cache)[v]) * inv(sqrt(q)) * P
-        setindex_preserve_graph!(norm_bmps_cache, Pψv, v)
+        setindex_preserve!(norm_bmps_cache, Pψv, v)
         prev_v = v
     end
 
@@ -266,7 +266,7 @@ function certify_sample(
     qv = sqrt(exp(inv(oftype(logq, length(vertices(ψ)))) * logq))
     for v in vertices(ψ)
         P = adapt(datatype(ψproj[v]))(onehot(only(s[v]) => bitstring[v] + 1))
-        setindex_preserve_graph!(ψproj, ψproj[v] * P * inv(qv), v)
+        setindex_preserve!(ψproj, ψproj[v] * P * inv(qv), v)
     end
 
     certification_mps_cache = BoundaryMPSCache(ψproj, certification_mps_bond_dimension)

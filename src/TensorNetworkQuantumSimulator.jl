@@ -4,24 +4,31 @@ module TensorNetworkQuantumSimulator
 include("imports.jl")
 
 include("siteinds.jl")
-include("tensornetworkstate.jl")
-include("bilinearform.jl")
-include("quadraticform.jl")
-include("Backend/abstractbeliefpropagationcache.jl")
-include("Backend/beliefpropagationcache.jl")
-include("Backend/boundarympscache.jl")
-include("Backend/loopcorrection.jl")
+include("TensorNetworks/abstracttensornetwork.jl")
+include("TensorNetworks/tensornetwork.jl")
+include("TensorNetworks/tensornetworkstate.jl")
+include("TensorNetworks/tensornetworkstate_constructors.jl")
+include("contraction_sequences.jl")
+include("Forms/bilinearform.jl")
+include("Forms/quadraticform.jl")
+include("MessagePassing/abstractbeliefpropagationcache.jl")
+include("MessagePassing/beliefpropagationcache.jl")
+include("MessagePassing/boundarympscache.jl")
+include("MessagePassing/loopcorrection.jl")
 include("graph_ops.jl")
 include("utils.jl")
-include("constructors.jl")
-include("gates.jl")
-include("apply.jl")
+
+include("Apply/apply_gates.jl")
+include("Apply/simple_update.jl")
+include("Apply/full_update.jl")
+include("Apply/gate_definitions.jl")
 include("expect.jl")
 include("norm_sqr.jl")
 include("inner.jl")
 include("normalize.jl")
 include("sampling.jl")
 include("symmetric_gauge.jl")
+include("truncate.jl")
 
 
 export
@@ -38,7 +45,7 @@ export
     make_hermitian,
     ket_network,
     truncate,
-    maxlinkdim,
+    maxvirtualdim,
     siteinds,
     edge_color,
     zerostate,
