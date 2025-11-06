@@ -1,14 +1,9 @@
 using TensorNetworkQuantumSimulator
 const TN = TensorNetworkQuantumSimulator
 
-using ITensorNetworks
-const ITN = ITensorNetworks
-using ITensors
-using ITensors: @OpName_str, @SiteType_str, Algorithm, datatype
+using ITensors: @OpName_str, @SiteType_str, Algorithm, datatype, ITensors
 
-using ITensorNetworks: AbstractBeliefPropagationCache, IndsNetwork, setindex_preserve_graph!
-using NamedGraphs
-using NamedGraphs: edges
+using NamedGraphs: NamedGraphs, edges, NamedEdge
 using Graphs
 const NG = NamedGraphs
 const G = Graphs
@@ -62,7 +57,7 @@ end
 # apply layer of single qubit gates
 function apply_single_qubit_layer!(ρ::TensorNetworkState, gates::Dict)
     for v=keys(gates)
-        setindex_preserve_graph!(ρ, normalize(apply(gates[v], ρ[v])), v)
+        setindex_preserve_graph!(ρ, normalize(ITensors.apply(gates[v], ρ[v])), v)
     end
 end
 
@@ -93,8 +88,9 @@ end
 function apply_two_qubit_gate!(ρ::TensorNetworkState,ρρ::TN.BoundaryMPSCache, gate::ITensor, pair::NamedEdge; apply_kwargs...)
     envs = TN.incoming_messages(ρρ, [src(pair), dst(pair)])
     envs = adapt(datatype(ρ)).(envs)
-    ρv1, ρv2  = ITensorNetworks.full_update_bp(gate, TN.tensornetwork(ρ), [src(pair), dst(pair)]; envs, apply_kwargs...)
-    ρ[src(pair)], ρ[dst(pair)] = normalize(ρv1), normalize(ρv2)
+    ρv1, ρv2  = TN.full_update(gate, ρ, [src(pair), dst(pair)]; envs, print_fidelity_loss = true, apply_kwargs...)
+    TN.setindex_preserve!(ρ, normalize(ρv1), src(pair))
+    TN.setindex_preserve!(ρ, normalize(ρv2), dst(pair))
 end
 
 function intermediate_save(sqrtρ, β; δβ::Float64, χ::Int, n::Int, MPS_message_rank, save_tag = "", hx = -3.04438)
