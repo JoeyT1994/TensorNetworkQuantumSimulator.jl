@@ -1,4 +1,4 @@
-struct QuadraticForm{V} <: AbstractITensorNetwork{V}
+struct QuadraticForm{V} <: AbstractTensorNetwork{V}
     ket::TensorNetworkState{V}
     operator::TensorNetworkState{V}
 end
@@ -11,9 +11,7 @@ Base.copy(qf::QuadraticForm) = QuadraticForm(copy(qf.ket), copy(qf.operator))
 
 #Forward onto the ket
 for f in [
-        :(ITensorNetworks.underlying_graph),
-        :(ITensorNetworks.data_graph_type),
-        :(ITensorNetworks.data_graph),
+        :(graph),
         :(ITensors.datatype),
         :(ITensors.NDTensors.scalartype),
         :(NamedGraphs.edgeinduced_subgraphs_no_leaves),
@@ -31,18 +29,18 @@ function QuadraticForm(ket::TensorNetworkState, f::Function = v -> "I")
     verts = collect(vertices(ket))
     dtype = datatype(ket)
     operator_tensors = adapt(dtype).([reduce(prod, ITensor[ITensors.op(f(v), sind) for sind in sinds[v]]) for v in verts])
-    operator = TensorNetworkState(verts, operator_tensors)
+    operator = TensorNetworkState(Dictionary(verts, operator_tensors))
     return QuadraticForm(ket, operator)
 end
 
 function default_message(qf::QuadraticForm, edge::AbstractEdge)
-    linds = ITensorNetworks.linkinds(qf, edge)
+    linds = virtualinds(qf, edge)
     return adapt(datatype(qf))(denseblocks(delta(linds)))
 end
 
-function ITensorNetworks.linkinds(qf::QuadraticForm, edge::NamedEdge)
-    ket_linds = linkinds(ket(qf), edge)
-    return Index[ket_linds; linkinds(operator(qf), edge); dag.(prime.(ket_linds))]
+function virtualinds(qf::QuadraticForm, edge::NamedEdge)
+    ket_linds = virtualinds(ket(qf), edge)
+    return Index[ket_linds; virtualinds(operator(qf), edge); dag.(prime.(ket_linds))]
 end
 
 function bp_factors(qf::QuadraticForm, verts::Vector)

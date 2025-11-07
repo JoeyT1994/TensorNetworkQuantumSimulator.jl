@@ -46,23 +46,10 @@ using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_grap
 using TensorOperations
 
 using ITensors: ITensors
-using ITensors: Index, ITensor, hasqns, combinedind, combiner, replaceinds, sim, onehot, delta, plev, dense, unioninds, uniqueinds, commonind, commoninds, replaceind, datatype, inds, dag, noprime, factorize_svd, prime, hascommoninds, itensor, map_diag!, @Algorithm_str, scalar, @OpName_str, @SiteType_str, denseblocks, tags
+using ITensors: Index, ITensor, hasqns, noncommonind, combinedind, combiner, replaceinds, sim, onehot, delta, plev, dense, unioninds, uniqueinds, commonind, commoninds, replaceind, datatype, inds, dag, noprime, factorize_svd, prime, hascommoninds, itensor, map_diag!, @Algorithm_str, scalar, @OpName_str, @SiteType_str, denseblocks, tags
 using ITensorMPS
 
-using ITensorNetworks: ITensorNetworks
-using ITensorNetworks:
-    AbstractITensorNetwork,
-    ITensorNetwork,
-    neighbor_vertices,
-    contraction_sequence,
-    linkinds,
-    setindex_preserve_graph!,
-    edge_tag,
-    maxlinkdim
-
 using Adapt: adapt
-
-using ITensorNetworks.ITensorsExtensions: map_eigvals
 
 using EinExprs: Greedy
 

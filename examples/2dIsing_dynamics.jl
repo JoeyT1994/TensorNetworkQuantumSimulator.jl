@@ -65,7 +65,7 @@ function main()
         ψ = network(ψ_bpc)
         sz_boundarymps = expect(ψ, obs; alg = "boundarymps", mps_bond_dimension)
 
-        println("    Took time: $(t1.time) [s]. Max bond dimension: $(maxlinkdim(ψ_bpc))")
+        println("    Took time: $(t1.time) [s]. Max bond dimension: $(maxvirtualdim(ψ_bpc))")
         println("    Maximum Gate error for layer was $(maximum(errors))")
 
         println("    BP Measured Sigmaz is $(sz_bp)")

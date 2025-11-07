@@ -9,7 +9,8 @@ end
 """
     inner(ψ::TensorNetworkState, ϕ::TensorNetworkState; alg, kwargs...)
 
-    Compute the inner product between two TensorNetworkStates using the specified algorithm.
+    Compute the inner product between two different TensorNetworkStates using the specified algorithm.
+    If you want the norm_squared of a tensornetwork state ψ, use `norm_sqr(ψ; alg, kwargs...)` instead.
     The two states should have the same graph structure and physical indices on each site.
 
     # Arguments

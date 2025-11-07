@@ -1,5 +1,4 @@
 using NamedGraphs.GraphsExtensions: boundary_edges
-using ITensorNetworks: underlying_graph
 
 function loopcorrected_partitionfunction(
         bp_cache::BeliefPropagationCache,
@@ -10,7 +9,7 @@ function loopcorrected_partitionfunction(
     #TODO: Fix edgeinduced_subgraphs_no_leaves for PartitionedGraphView type
     #Count the cycles using NamedGraphs
     egs =
-        edgeinduced_subgraphs_no_leaves(underlying_graph(bp_cache), max_configuration_size)
+        edgeinduced_subgraphs_no_leaves(graph(bp_cache), max_configuration_size)
     isempty(egs) && return zbp
     ws = weights(bp_cache, egs)
     return zbp * (1 + sum(ws))
@@ -41,7 +40,7 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
                 t_ind = only(t_inds)
                 t_ind_pos = findfirst(x -> x == t_ind, linds)
                 t = replaceind(t, t_ind, linds_sim[t_ind_pos])
-                setindex_preserve_graph!(bpc, t, src(e))
+                setindex_preserve!(bpc, t, src(e))
             end
             push!(updated_es, e)
 

@@ -41,7 +41,7 @@ function main()
     #Edges to measure bond entanglement on:
     e_ent = first(edges(g))
 
-    χinit = maxlinkdim(ψ_bpc)
+    χinit = maxvirtualdim(ψ_bpc)
     println("Initial bond dimension of the state is $χinit")
 
     expect_sigmaz = real.(expect(ψ_bpc, observables))
@@ -64,7 +64,7 @@ function main()
         push!(Zs, only(real(expect(ψ_bpc, observables))))
 
         # printing
-        println("Took time: $(t.time) [s]. Max bond dimension: $(maxlinkdim(ψ_bpc))")
+        println("Took time: $(t.time) [s]. Max bond dimension: $(maxvirtualdim(ψ_bpc))")
         println("Maximum Gate error for layer was $(maximum(errors))")
         println("Sigma z on central site is $(last(Zs))")
     end

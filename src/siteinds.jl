@@ -6,7 +6,7 @@ end
 
 function siteinds(sitetype::String, g::AbstractGraph, sitedimension::Integer = site_dimension(sitetype))
     vs = collect(vertices(g))
-    return Dictionary(vs, [Index[Index(sitedimension, site_tag(sitetype))] for v in vs])
+    return Dictionary{vertextype(g), Vector{<:Index}}(vs, [Index[Index(sitedimension, site_tag(sitetype))] for v in vs])
 end
 
 function site_dimension(sitetype::String)

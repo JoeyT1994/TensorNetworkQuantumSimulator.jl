@@ -65,7 +65,7 @@ function norm_sqr(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_con
     end
 
     tn isa TensorNetworkState && return z
-    tn isa ITensorNetwork && return z * z
+    tn isa TensorNetwork && return z * z
     return state_error()
 end
 

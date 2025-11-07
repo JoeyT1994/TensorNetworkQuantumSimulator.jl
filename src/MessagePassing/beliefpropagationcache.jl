@@ -1,5 +1,4 @@
 using Dictionaries: Dictionary, set!, delete!
-using DataGraphs: AbstractDataGraph
 using Graphs: AbstractGraph, is_tree, connected_components
 using NamedGraphs.GraphsExtensions: default_root_vertex, forest_cover, post_order_dfs_edges
 using ITensors: dim, ITensor, delta, Algorithm
@@ -7,7 +6,7 @@ using ITensors.NDTensors: scalartype
 using LinearAlgebra: normalize
 
 #TODO: Make this show() nicely.
-struct BeliefPropagationCache{V, N <: AbstractDataGraph{V}, M <: Union{ITensor, Vector{ITensor}}} <:
+struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Vector{ITensor}}} <:
     AbstractBeliefPropagationCache{V}
     network::N
     messages::Dictionary{NamedEdge, M}
@@ -15,7 +14,8 @@ end
 
 #TODO: Take `dot` without precontracting the messages to allow scaling to more complex messages
 function message_diff(message_a::ITensor, message_b::ITensor)
-    f = abs2(dot((message_a / norm(message_a)), (message_b / norm(message_b))))
+    n_a, n_b = norm(message_a), norm(message_b)
+    f = abs2(dot(message_a, message_b) / (n_a * n_b))
     return 1 - f
 end
 
@@ -30,9 +30,9 @@ end
 
 default_bp_maxiter(g::AbstractGraph) = is_tree(g) ? 1 : _default_bp_update_maxiter
 
-#TODO: Get subgraph working on an ITensorNetwork to overload this directly
+#TODO: Get subgraph working on an TensorNetwork to overload this directly
 function default_bp_edge_sequence(bp_cache::BeliefPropagationCache)
-    return forest_cover_edge_sequence(ITensorNetworks.underlying_graph(bp_cache))
+    return forest_cover_edge_sequence(graph(bp_cache))
 end
 
 function edge_scalar(bp_cache::BeliefPropagationCache, edge::AbstractEdge)
@@ -94,9 +94,9 @@ function rescale_vertices!(
         vn = vertex_scalar(bpc, v)
         s = isreal(vn) ? sign(vn) : one(vn)
         if tn isa TensorNetworkState
-            setindex_preserve_graph!(tn, tn[v] * s * inv(sqrt(vn)), v)
-        elseif tn isa ITensorNetwork
-            setindex_preserve_graph!(tn, tn[v] * s * inv(vn), v)
+            setindex_preserve!(tn, tn[v] * s * inv(sqrt(vn)), v)
+        elseif tn isa TensorNetwork
+            setindex_preserve!(tn, tn[v] * s * inv(vn), v)
         else
             error("Don't know how to rescale the vertices of this type")
         end
@@ -152,41 +152,46 @@ function loop_correlation(bpc::BeliefPropagationCache, loop::Vector{<:NamedEdge}
     vs = unique(vcat(src.(loop), dst.(loop)))
 
     src_vertex = src(target_e)
-    e_linkinds = inds(message(bpc, target_e))
-    e_linkinds_sim = sim.(e_linkinds)
+    e_virtualinds = inds(message(bpc, target_e))
+    e_virtualinds_sim = sim.(e_virtualinds)
 
     local_tensors = ITensor[]
     ts = bp_factors(bpc, src_vertex)
 
     for t in ts
-        t_inds = filter(i -> i ∈ e_linkinds, inds(t))
+        t_inds = filter(i -> i ∈ e_virtualinds, inds(t))
         if !isempty(t_inds)
             t_ind = only(t_inds)
-            t_ind_pos = findfirst(x -> x == t_ind, e_linkinds)
-            t = replaceind(t, t_ind, e_linkinds_sim[t_ind_pos])
+            t_ind_pos = findfirst(x -> x == t_ind, e_virtualinds)
+            t = replaceind(t, t_ind, e_virtualinds_sim[t_ind_pos])
         end
         push!(local_tensors, t)
     end
 
     tensors = ITensor[local_tensors; reduce(vcat, [bp_factors(bpc, v) for v in setdiff(vs, [src_vertex])]); incoming_messages]
-    seq = ITensorNetworks.contraction_sequence(tensors; alg = "einexpr", optimizer = Greedy())
+    seq = contraction_sequence(tensors; alg = "einexpr", optimizer = Greedy())
     t = contract(tensors; sequence = seq)
 
-    row_combiner, col_combiner = ITensors.combiner(e_linkinds), ITensors.combiner(e_linkinds_sim)
+    row_combiner, col_combiner = ITensors.combiner(e_virtualinds), ITensors.combiner(e_virtualinds_sim)
     t = t * row_combiner * col_combiner
+    t = adapt(Vector{ComplexF64})(t)
     t = ITensors.NDTensors.array(t)
     λs = reverse(sort(LinearAlgebra.eigvals(t); by = abs))
-    err = 1.0 - abs(λs[1]) / sum(abs.(λs))
+    err = 1 - abs(λs[1]) / sum(abs.(λs))
     return err
 end
 
 #Calculate the correlations flowing around each of the primitive loops of the BP cache
 function loop_correlations(bpc::BeliefPropagationCache, smallest_loop_size::Integer; kwargs...)
-    g = underlying_graph(bpc)
+    g = graph(bpc)
     cycles = NamedGraphs.cycle_to_path.(NamedGraphs.unique_simplecycles_limited_length(g, smallest_loop_size))
     corrs = []
     for loop in cycles
         corrs = append!(corrs, loop_correlation(bpc, loop[1:(length(loop) - 1)], reverse(last(loop)); kwargs...))
     end
     return corrs
+end
+
+function loop_correlations(tn::AbstractTensorNetwork, smallest_loop_size::Integer; bp_update_kwargs = default_bp_update_kwargs(tn), kwargs...)
+    return loop_correlations(update(BeliefPropagationCache(tn); bp_update_kwargs...), smallest_loop_size; kwargs...)
 end

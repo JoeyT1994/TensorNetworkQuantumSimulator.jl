@@ -1,6 +1,5 @@
-using ITensorNetworks.ITensorsExtensions: ITensorsExtensions
-
 function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 * eps(real(scalartype(bp_cache))), kwargs...)
+    dtype = datatype(bp_cache)
     tn = network(bp_cache)
     !(tn isa TensorNetworkState) && error("Can only transform TensorNetworkStates to the symmetric gauge")
     for e in edges(tn)
@@ -10,14 +9,14 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         edge_ind = commoninds(ψvsrc, ψvdst)
         edge_ind_sim = sim(edge_ind)
 
-        X_D, X_U = eigen(message(bp_cache, e); ishermitian = true, cutoff = nothing)
-        Y_D, Y_U = eigen(message(bp_cache, reverse(e)); ishermitian = true, cutoff = nothing)
-        X_D, Y_D = ITensorsExtensions.map_diag(x -> x + regularization, X_D),
-            ITensorsExtensions.map_diag(x -> x + regularization, Y_D)
+        X_D, X_U = safe_eigen(message(bp_cache, e); ishermitian = true, cutoff = nothing)
+        Y_D, Y_U = safe_eigen(message(bp_cache, reverse(e)); ishermitian = true, cutoff = nothing)
+        X_D, Y_D = ITensors.map_diag(x -> x + regularization, X_D),
+            ITensors.map_diag(x -> x + regularization, Y_D)
 
-        rootX_D, rootY_D = ITensorsExtensions.sqrt_diag(X_D), ITensorsExtensions.sqrt_diag(Y_D)
-        inv_rootX_D, inv_rootY_D = ITensorsExtensions.invsqrt_diag(X_D),
-            ITensorsExtensions.invsqrt_diag(Y_D)
+        rootX_D, rootY_D = ITensors.map_diag(x -> sqrt(x), X_D), ITensors.map_diag(x -> sqrt(x), Y_D)
+        inv_rootX_D, inv_rootY_D = ITensors.map_diag(x -> inv(sqrt(x)), X_D),
+            ITensors.map_diag(x -> inv(sqrt(x)), Y_D)
         rootX = X_U * rootX_D * prime(dag(X_U))
         rootY = Y_U * rootY_D * prime(dag(Y_U))
         inv_rootX = X_U * inv_rootX_D * prime(dag(X_U))
@@ -43,11 +42,11 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
                 [new_edge_ind..., prime(new_edge_ind)...],
         )
 
-        sqrtS = ITensorsExtensions.map_diag(sqrt, S)
+        sqrtS = ITensors.map_diag(sqrt, S)
         ψvsrc = noprime(ψvsrc * sqrtS)
         ψvdst = noprime(ψvdst * sqrtS)
-        setindex_preserve_graph!(bp_cache, ψvsrc, vsrc)
-        setindex_preserve_graph!(bp_cache, ψvdst, vdst)
+        setindex_preserve!(bp_cache, ψvsrc, vsrc)
+        setindex_preserve!(bp_cache, ψvdst, vdst)
 
         setmessage!(bp_cache, e, S)
         setmessage!(bp_cache, reverse(e), dag(S))
@@ -105,37 +104,4 @@ function entanglement(alg::Algorithm"bp", tns::TensorNetworkState, e::NamedEdge;
     bp_cache = BeliefPropagationCache(tns)
     bp_cache = update(bp_cache)
     return entanglement(bp_cache, e)
-end
-
-function truncate!(bp_cache::BeliefPropagationCache; maxdim = nothing, cutoff = nothing, kwargs...)
-    return symmetric_gauge!(bp_cache; maxdim, cutoff, kwargs...)
-end
-
-function ITensors.truncate(bp_cache::BeliefPropagationCache; maxdim = nothing, cutoff = nothing, kwargs...)
-    bp_cache = copy(bp_cache)
-    return truncate!(bp_cache; maxdim, cutoff, kwargs...)
-end
-
-function ITensors.truncate(alg::Algorithm"bp", tns::TensorNetworkState; maxdim = nothing, cutoff = nothing, cache_update_kwargs = (; maxiter = 40), kwargs...)
-    bp_cache = BeliefPropagationCache(tns)
-    bp_cache = update(bp_cache; cache_update_kwargs...)
-    return network(truncate(bp_cache; maxdim, cutoff, kwargs...))
-end
-
-"""
-    truncate(tns::TensorNetworkState; alg, args...; kwargs...)
-    Truncate the bonds of a `TensorNetworkState` using the specified algorithm.
-    The supported algorithms are:
-    - `"bp"`: Truncate using Belief Propagation.
-    # Arguments
-    - `tns::TensorNetworkState`: The tensor network state to be truncated.
-    - `alg::String`: The truncation algorithm to use. Default is `nothing`, so it must be specified explicitly.
-    - `args...`: Additional positional arguments specific to the chosen algorithm. These include cache update arguments in the form of a `NamedTuple` cache_update_kwargs.
-    - `kwargs...`: Additional keyword arguments specific to the chosen algorithm. These include options like `maxdim` and `cutoff` for bond dimension truncation.
-    # Returns
-    - The truncated `tns::TensorNetworkState`.
-"""
-function ITensors.truncate(tns::TensorNetworkState, args...; alg, kwargs...)
-    algorithm_check(tns, alg)
-    return truncate(Algorithm(alg), tns, args...; kwargs...)
 end

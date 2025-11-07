@@ -3,7 +3,7 @@ using NamedGraphs: add_edges!
 using SplitApplyCombine: group
 
 #TODO: Make this show() nicely.
-struct BoundaryMPSCache{V, N <: AbstractDataGraph{V}, M <: Union{ITensor, Vector{<:ITensor}}} <: AbstractBeliefPropagationCache{V}
+struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Vector{<:ITensor}}} <: AbstractBeliefPropagationCache{V}
     network::N
     messages::Dictionary{NamedEdge, M}
     supergraph::PartitionedGraph
@@ -28,7 +28,7 @@ default_bp_maxiter(bmps_cache::BoundaryMPSCache) = is_tree(partitions_graph(supe
 function default_bmps_message_update_alg(tn)
     if tn isa TensorNetworkState || tn isa BilinearForm || tn isa QuadraticForm
         return "orthogonal"
-    elseif tn isa ITensorNetwork
+    elseif tn isa TensorNetwork
         return "ITensorMPS"
     end
     return error("Unrecognized network type. Don't know what BMPS message update alg to use.")
@@ -123,8 +123,8 @@ function virtual_index_dimension(
         lower_e, upper_e = e1, e2
     end
 
-    inds_above = reduce(vcat, linkinds.((bmps_cache,), edges_above(bmps_cache, lower_e)))
-    inds_below = reduce(vcat, linkinds.((bmps_cache,), edges_below(bmps_cache, upper_e)))
+    inds_above = reduce(vcat, virtualinds.((bmps_cache,), edges_above(bmps_cache, lower_e)))
+    inds_below = reduce(vcat, virtualinds.((bmps_cache,), edges_below(bmps_cache, upper_e)))
 
     x1 = prod(Float64.(dim.(inds_above)))
     x2 = prod(Float64.(dim.(inds_below)))
@@ -136,7 +136,7 @@ function virtual_index_dimension(
 end
 
 function BoundaryMPSCache(
-        tn::Union{TensorNetworkState, ITensorNetwork, BilinearForm, QuadraticForm},
+        tn::Union{TensorNetworkState, TensorNetwork, BilinearForm, QuadraticForm},
         mps_bond_dimension::Integer;
         partition_by = "row",
         gauge_state = true
@@ -148,7 +148,7 @@ function BoundaryMPSCache(
         tn = gauge_and_scale(tn)
     end
     pseudo_edges = pseudo_planar_edges(tn; grouping_function)
-    planar_graph = underlying_graph(tn)
+    planar_graph = graph(tn)
     NamedGraphs.add_edges!(planar_graph, pseudo_edges)
     vertex_groups = group(grouping_function, collect(vertices(planar_graph)))
     vertex_groups = map(x -> sort(x; by = group_sorting_function), vertex_groups)
@@ -387,7 +387,7 @@ function merge_internal_tensors(O::Union{MPS, MPO})
 end
 
 function ITensorMPS.MPO(bmps_cache::BoundaryMPSCache, partition; interpet_as_flat = false)
-    @assert network(bmps_cache) isa ITensorNetwork || interpet_as_flat
+    @assert network(bmps_cache) isa TensorNetwork || interpet_as_flat
     sorted_vs = sort(vertices(supergraph(bmps_cache), partition))
     ts = [copy(network(bmps_cache)[v]) for v in sorted_vs]
     O = ITensorMPS.MPO(ts)
@@ -414,7 +414,7 @@ function set_interpartition_message!(bmps_cache::BoundaryMPSCache, M::Union{MPS,
     return bmps_cache
 end
 
-#TODO: Write a generalized zip up fitter
+#TODO: Write a generalized zip up fitter. Fix for TensorNetworkState
 function generic_apply(O::MPO, M::MPS; normalize = true, kwargs...)
     is_simple_mpo = (length(O) == length(M) && all([length(ITensors.siteinds(O, i)) == 2 for i in 1:length(O)]))
 
@@ -436,25 +436,30 @@ function generic_apply(O::MPO, M::MPS; normalize = true, kwargs...)
             push!(O_tensors, O[i] * M[m_ind])
         end
     end
-    O = ITensorNetwork([i for i in 1:length(O_tensors)], O_tensors)
 
     #Transform away edges that make a loop
-    loop_edges = filter(e -> abs(src(e) - dst(e)) != 1, edges(O))
-    for e in loop_edges
-        edge_to_split = e
-        inbetween_vertices = [i for i in (minimum((src(e), dst(e))) + 1):(maximum((src(e), dst(e))) - 1)]
-        for v in inbetween_vertices
-            edge_to_split_ind = only(linkinds(O, edge_to_split))
-            O = ITensorNetworks.split_index(O, [edge_to_split])
-            d = adapt(datatype(O[v]))(denseblocks(delta(edge_to_split_ind, edge_to_split_ind')))
-            O[v] *= d
-            edge_to_split = NamedEdge(v => maximum((src(e), dst(e))))
+    pairs = reduce(vcat, [[(i, j) for j in (i + 1):length(O_tensors)] for i in 1:length(O_tensors)])
+    loop_edges = filter(p -> !isempty(commoninds(O_tensors[first(p)], O_tensors[last(p)])) && abs(first(p) - last(p)) != 1, pairs)
+    for (i, j) in loop_edges
+        inbetween_vertices = [k for k in (i + 1):(j - 1)]
+        for k in inbetween_vertices
+            cind = only(commoninds(O_tensors[i], O_tensors[j]))
+            d = adapt(datatype(O_tensors[k]))(denseblocks(delta(cind, cind')))
+            O_tensors[j] *= d
+            O_tensors[k] *= d
+            edge_to_split = (k, j)
+        end
+    end
+    for i in 1:(length(O_tensors) - 1)
+        cinds = commoninds(O_tensors[i], O_tensors[i + 1])
+        if length(cinds) > 1
+            combiner = adapt(datatype(O_tensors[i]))(ITensors.combiner(cinds))
+            O_tensors[i] *= combiner
+            O_tensors[i + 1] *= combiner
         end
     end
 
-    O = ITensorNetworks.combine_linkinds(O)
-    @assert is_tree(O)
-    O = ITensorMPS.MPS([O[v] for v in vertices(O)])
+    O = ITensorMPS.MPS(O_tensors)
     O = merge_internal_tensors(O)
 
     if normalize

@@ -10,22 +10,28 @@ function is_line_graph(g::AbstractGraph)
 end
 
 function is_ring_graph(g::AbstractGraph)
+    isempty(edges(g)) && return false
     g_mod = rem_edge(g, first(edges(g)))
     return is_line_graph(g_mod)
 end
 
-function no_inds_per_site(sinds::Dictionary)
-    return only(unique(length.(collect(values(sinds)))))
-end
-
 function pseudo_sqrt_inv_sqrt(M::ITensor; cutoff = 10 * eps(real(scalartype(M))))
     @assert length(inds(M)) == 2
-    Q, D, Qdag = ITensorNetworks.ITensorsExtensions.eigendecomp(M, inds(M)[1], inds(M)[2]; ishermitian = true)
-    D_sqrt = ITensorNetworks.ITensorsExtensions.map_diag(x -> iszero(x) || abs(x) < cutoff ? 0 : sqrt(x), D)
-    D_inv_sqrt = ITensorNetworks.ITensorsExtensions.map_diag(x -> iszero(x) || abs(x) < cutoff ? 0 : inv(sqrt(x)), D)
+    Q, D, Qdag = eigendecomp(M, inds(M)[1], inds(M)[2]; ishermitian = true)
+    D_sqrt = ITensors.map_diag(x -> iszero(x) || abs(x) < cutoff ? 0 : sqrt(x), D)
+    D_inv_sqrt = ITensors.map_diag(x -> iszero(x) || abs(x) < cutoff ? 0 : inv(sqrt(x)), D)
     M_sqrt = Q * D_sqrt * Qdag
     M_inv_sqrt = Q * D_inv_sqrt * Qdag
     return M_sqrt, M_inv_sqrt
+end
+
+#TODO: Make this work for non-hermitian A
+function eigendecomp(A::ITensor, linds, rinds; ishermitian = false, kwargs...)
+    @assert ishermitian
+    D, U = safe_eigen(A, linds, rinds; ishermitian, kwargs...)
+    ul, ur = noncommonind(D, U), commonind(D, U)
+    Ul = replaceinds(U, vcat(rinds, ur), vcat(linds, ul))
+    return Ul, D, dag(U)
 end
 
 #Function for checking the correct algorithm is being used for the given cache type and functionality
@@ -43,7 +49,7 @@ function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetwor
             return error("Expected BeliefPropagationCache or TensorNetworkState for 'loop correctiom' algorithm, got $(typeof(tns))")
         end
 
-        if f ∈ ["normalize", "expect", "entanglement", "sample"]
+        if f ∈ ["normalize", "expect", "entanglement", "sample", "truncate"]
             return error("Loop correction-based contraction not supported for this functionality yet")
         end
     elseif alg == "boundarymps"
@@ -54,7 +60,7 @@ function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetwor
             return error("boundarymps contraction not supported for this functionality yet")
         end
     elseif alg == "exact"
-        if f ∈ ["normalize", "entanglement", "sample"]
+        if f ∈ ["normalize", "entanglement", "sample", "truncate"]
             return error("exact contraction not supported for this functionality yet")
         end
     elseif alg ∉ ["exact", "bp", "loopcorrections", "boundarymps"]
@@ -67,3 +73,23 @@ end
 default_alg(bp_cache::BeliefPropagationCache) = "bp"
 default_alg(bmps_cache::BoundaryMPSCache) = "boundarymps"
 default_alg(any) = error("You must specify a contraction algorithm. Currently supported: exact, bp and boundarymps.")
+
+"""
+    safe_eigen(m::ITensor, args...; kwargs...)
+    A wrapper around ITensors.eigen that ensures eigen computations are done in Float64/ComplexF64 precision on CPU for better numerical stability.
+"""
+function safe_eigen(m::ITensor, args...; kwargs...)
+    dtype = datatype(m)
+    e = eltype(m)
+    if e == ComplexF64 || e == Float64
+        return ITensors.eigen(m, args...; kwargs...)
+    elseif e == Float32
+        m = adapt(Vector{Float64}, m)
+        D, U = ITensors.eigen(m, args...; kwargs...)
+        return adapt(dtype)(D), adapt(dtype)(U)
+    elseif e == ComplexF32
+        m = adapt(Vector{ComplexF64}, m)
+        D, U = ITensors.eigen(m, args...; kwargs...)
+        return adapt(dtype)(D), adapt(dtype)(U)
+    end
+end
