@@ -85,7 +85,7 @@ function apply_two_qubit_layer!(ρ::TensorNetworkState, ec::Array, gates::Dict; 
     end
 end
    
-function apply_two_qubit_gate!(ρ::TensorNetworkState,ρρ::TN.BoundaryMPSCache, gate::ITensor, pair::NamedEdge; apply_kwargs...)
+function apply_two_qubit_gate!(ρ::TensorNetworkState,ρρ::TN.BoundaryMPSCache, gate::ITensors.ITensor, pair::NamedEdge; apply_kwargs...)
     envs = TN.incoming_messages(ρρ, [src(pair), dst(pair)])
     envs = adapt(datatype(ρ)).(envs)
     ρv1, ρv2  = TN.full_update(gate, ρ, [src(pair), dst(pair)]; envs, print_fidelity_loss = true, apply_kwargs...)
