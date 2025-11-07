@@ -42,7 +42,7 @@ function ITensors.op(
     return mat
 end
 
-function prep_edges(n::Int, g::AbstractNamedGraph)
+function prep_edges(n::Int, g::NamedGraphs.AbstractNamedGraph)
     # #Do a custom 4-way edge coloring then Trotterize the Hamiltonian into commuting groups
     ec1 = reduce(vcat, [[NamedEdge((j, i) => (j+1, i)) for j in 1:2:(n-1)] for i in 1:n])
     ec2 = reduce(vcat, [[NamedEdge((j, i) => (j+1, i)) for j in 2:2:(n-1)] for i in 1:n])
