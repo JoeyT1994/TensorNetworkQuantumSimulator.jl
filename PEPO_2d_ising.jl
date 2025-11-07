@@ -57,7 +57,7 @@ end
 # apply layer of single qubit gates
 function apply_single_qubit_layer!(ρ::TensorNetworkState, gates::Dict)
     for v=keys(gates)
-        setindex_preserve_graph!(ρ, normalize(ITensors.apply(gates[v], ρ[v])), v)
+        TN.setindex_preserve!(ρ, normalize(ITensors.apply(gates[v], ρ[v])), v)
     end
 end
 
@@ -100,12 +100,12 @@ end
 
 function intermediate_save_bp(ρ, errs, β; δβ::Float64, χ::Int, n::Int, save_tag = "", hx = -3.04438)
     dat = Dict("L"=>n, "δβ"=>δβ, "β"=>β, "χ"=>χ, "ρ"=>ρ, "errs"=>errs, "hx"=>hx)
-    dat["X"] = 	expect(ρ, [("X", [v]) for v=vertices(network(ρ).tensornetwork.data_graph.underlying_graph)])
+    dat["X"] = 	expect(ρ, [("X", [v]) for v=vertices(network(ρ).tensornetwork.graph)])
     save(DATA_DIR * "$(save_tag)L$(n)_χ$(χ)_step$(round(δβ,digits=3))_$(round(β,digits=3)).jld2", dat)
 end
 
 function expect_bmps(dat::Dict; obs = "X", MPS_message_rank::Int = 10, save_tag = "", use_gpu::Bool = true, start_i::Int = 1)
-    all_verts = collect(vertices(dat["sqrtρ"][1].tensornetwork.data_graph.underlying_graph))
+    all_verts = collect(vertices(dat["sqrtρ"][1].tensornetwork.graph))
     expect_vals = zeros(length(all_verts), length(dat["sqrtρ"])-start_i+1)
     for i=start_i:length(dat["sqrtρ"])
         if use_gpu
@@ -130,7 +130,7 @@ function evolve_bmps(n::Int, nsteps::Int; hx=-3.04438, δβ = 0.01, use_gpu::Boo
 end
 
 function evolve_bmps(ρ::TensorNetworkState, n::Int, nsteps::Int; β = 0, hx=-3.04438, δβ = 0.01, use_gpu::Bool=true, χ::Int=4, MPS_message_rank::Int = 10, save_tag = "")
-    g = ρ.tensornetwork.data_graph.underlying_graph
+    g = ρ.tensornetwork.graph
     s = siteinds(ρ)
     ITensors.disable_warn_order()
 
@@ -168,7 +168,7 @@ function evolve_bp(n::Int, nsteps::Int; hx=-3.04438, δβ = 0.01, use_gpu::Bool=
 end
 
 function evolve_bp(ρρ::BeliefPropagationCache, n::Int, nsteps::Int; β = 0, hx=-3.04438, δβ = 0.01, use_gpu::Bool=true, χ::Int=4, save_tag = "")
-    g = network(ρρ).tensornetwork.data_graph.underlying_graph
+    g = network(ρρ).tensornetwork.graph
     s = siteinds(network(ρρ))
     ITensors.disable_warn_order()
 
