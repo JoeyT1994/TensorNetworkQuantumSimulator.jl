@@ -47,7 +47,8 @@ function main(L, χ, bmps_ranks; nl::Int=20,θh = 0)
     ψ_bpc = BeliefPropagationCache(ψ0)
 
     # an array to keep track of expectations taken via two methods
-    bpc_states = []
+    bpc_states = Array{BeliefPropagationCache}(undef, nl)
+    errs = zeros(nl)
     bmps_expects_z = [zeros(ComplexF64,L,L,nl) for r=bmps_ranks]
     bmps_expects_zz = [zeros(ComplexF64,length(pairs),nl) for r=bmps_ranks]
 
@@ -58,7 +59,7 @@ function main(L, χ, bmps_ranks; nl::Int=20,θh = 0)
         t1 = @timed ψ_bpc, errors =
             apply_gates(layer, ψ_bpc; apply_kwargs, verbose = false)
 
-    	push!(bpc_states, copy(ψ_bpc))
+    	bpc_states[l] = copy(ψ_bpc)
 	
         #Boundary MPS expectation
         ψ = network(ψ_bpc)
@@ -71,7 +72,7 @@ function main(L, χ, bmps_ranks; nl::Int=20,θh = 0)
 
         println("    Took time: $(t1.time) [s]. Max bond dimension: $(maxvirtualdim(ψ_bpc))")
         println("    Maximum Gate error for layer was $(maximum(errors))"); flush(stdout)
-
+	errs[l] = maximum(errors)
     end
-    return bpc_states, bmps_expects_z, bmps_expects_zz
+    return bpc_states, bmps_expects_z, bmps_expects_zz, errs
 end
