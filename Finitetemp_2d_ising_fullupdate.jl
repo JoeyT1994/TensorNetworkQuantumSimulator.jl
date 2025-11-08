@@ -48,7 +48,7 @@ function main()
     ρ = identitytensornetworkstate(ComplexF64, g, s)
     ITensors.disable_warn_order()
 
-    use_gpu = true
+    use_gpu = false
 
     δβ = 0.01 
     hx = -3.1

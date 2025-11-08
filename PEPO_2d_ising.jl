@@ -176,7 +176,10 @@ function evolve_bp(ρρ::BeliefPropagationCache, n::Int, nsteps::Int; β = 0, hx
 
     ec = prep_edges(n, g)
     apply_kwargs = (; maxdim = χ, cutoff = 1e-12)
-    
+
+    if use_gpu
+        ρρ = CUDA.cu(ρρ)
+    end
     two_qubit_gates = [adapt(datatype(network(ρρ)), TN.toitensor(("Rzz", [src(pair), dst(pair)], -0.5*im * J * δβ), s)) for pair=vcat(ec...)]
 
     single_qubit_gates = [adapt(datatype(network(ρρ)), TN.toitensor(("Rx", [v], -0.25 * im * hx *δβ), s)) for v=vertices(g)]
