@@ -5,6 +5,7 @@ using NamedGraphs.NamedGraphGenerators: named_grid
 using Statistics
 using Base.Threads
 using ITensors
+using CUDA
 
 function get_columns(L)
     pairs = []
@@ -14,7 +15,7 @@ function get_columns(L)
     pairs
 end
 
-function main(L, χ, bmps_ranks; nl::Int=20,θh = 0)
+function main(L, χ, bmps_ranks; nl::Int=20,θh = 0, use_gpu = true)
     ITensors.disable_warn_order()
     g = named_grid((L,L); periodic =false)
     nq = length(vertices(g))
@@ -62,11 +63,15 @@ function main(L, χ, bmps_ranks; nl::Int=20,θh = 0)
     	bpc_states[l] = copy(ψ_bpc)
 	
         #Boundary MPS expectation
-        ψ = network(ψ_bpc)
-
-	@threads for r_i=1:length(bmps_ranks)
-	    bmps_expects_zz[r_i][:,l] = expect(ψ, [(["Z","Z"], pair) for pair=pairs]; alg="boundarymps", mps_bond_dimension=bmps_ranks[r_i])
-	    z = expect(ψ, [("Z", [v]) for v=verts]; alg="boundarymps", mps_bond_dimension=bmps_ranks[r_i])
+	if use_gpu
+	    ψ = CUDA.cu(network(ψ_bpc))
+	else
+            ψ = network(ψ_bpc)
+	end
+	
+	for r_i=1:length(bmps_ranks)
+	    @time bmps_expects_zz[r_i][:,l] = expect(ψ, [(["Z","Z"], pair) for pair=pairs]; alg="boundarymps", mps_bond_dimension=bmps_ranks[r_i])
+	    @time z = expect(ψ, [("Z", [v]) for v=verts]; alg="boundarymps", mps_bond_dimension=bmps_ranks[r_i])
 	    bmps_expects_z[r_i][:,:,l] = reshape(z, (L,L))
 	end
 
