@@ -190,19 +190,31 @@ More generic interface for update, with default params
 """
 function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
     compute_error = !isnothing(alg.kwargs.tolerance)
+    if !compute_error
+        println("ALERT, not computing error")
+    end
     if isnothing(alg.kwargs.maxiter)
         error("You need to specify a number of iterations for BP!")
     end
     bpc = copy(bpc)
+    diffs = zeros(alg.kwargs.maxiter)
+    tot_iter = alg.kwargs.maxiter
     for i in 1:alg.kwargs.maxiter
         diff = compute_error ? Ref(0.0) : nothing
         update_iteration!(alg, bpc, alg.kwargs.edge_sequence; (update_diff!) = diff)
-        if compute_error && (diff.x / length(alg.kwargs.edge_sequence)) <= alg.kwargs.tolerance
-            if alg.kwargs.verbose
-                println("BP converged to desired precision after $i iterations.")
-            end
-            break
+	if compute_error
+	    diffs[i] = diff.x
+	    if (diff.x / length(alg.kwargs.edge_sequence)) <= alg.kwargs.tolerance
+                if alg.kwargs.verbose
+                    println("BP converged to desired precision after $i iterations.")
+		end
+		tot_iter = i
+		break
+	    end
         end
+    end
+    if compute_error && alg.kwargs.verbose
+        println("Diffs during message passing: $(diffs[1:tot_iter])")
     end
     return bpc
 end

@@ -176,7 +176,7 @@ function evolve_bp(ρρ::BeliefPropagationCache, n::Int, nsteps::Int; β = 0, hx
 
     ec = prep_edges(n, g)
     apply_kwargs = (; maxdim = χ, cutoff = 1e-12)
-
+    bp_update_kwargs = (; maxiter = 50, tolerance = 1e-8, verbose = true)
     if use_gpu
         ρρ = CUDA.cu(ρρ)
     end
@@ -187,7 +187,7 @@ function evolve_bp(ρρ::BeliefPropagationCache, n::Int, nsteps::Int; β = 0, hx
     layer = vcat(single_qubit_gates, two_qubit_gates, single_qubit_gates)
     for i in 1:nsteps
 
-    	@time ρρ, errs = apply_gates(layer, ρρ; apply_kwargs, verbose = false)
+    	@time ρρ, errs = apply_gates(layer, ρρ; bp_update_kwargs = bp_update_kwargs, apply_kwargs)
 
         β += δβ
 

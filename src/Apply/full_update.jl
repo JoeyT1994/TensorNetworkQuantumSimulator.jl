@@ -148,6 +148,7 @@ function optimise_p_q(
         q_cur, info = linsolve(
             M_p_tilde_partial, b_tilde_vec, q_cur; isposdef = envisposdef, ishermitian = false
         )
+	println(info)
     end
 
     fend = print_fidelity_loss ? fidelity(envs, p_cur, q_cur, p, q, o) : 0
