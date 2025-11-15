@@ -52,7 +52,7 @@ function set_default_kwargs(alg::Algorithm"ITensorMPS", bmps_cache::BoundaryMPSC
     return Algorithm("ITensorMPS"; cutoff, normalize)
 end
 
-function default_bmps_update_kwargs(tns::TensorNetworkState)
+function default_bmps_update_kwargs(tn::AbstractTensorNetwork)
     verbose = false
     tolerance = nothing
     return (; tolerance, verbose)
@@ -139,7 +139,7 @@ function BoundaryMPSCache(
         tn::Union{TensorNetworkState, TensorNetwork, BilinearForm, QuadraticForm},
         mps_bond_dimension::Integer;
         partition_by = "row",
-        gauge_state = true
+        gauge_state = false
     )
     grouping_function = partition_by == "row" ? v -> first(v) : v -> last(v)
     group_sorting_function = partition_by == "row" ? v -> last(v) : v -> first(v)

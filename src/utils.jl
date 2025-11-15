@@ -40,10 +40,6 @@ function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetwor
         if !((tns isa BeliefPropagationCache) || (tns isa TensorNetworkState))
             return error("Expected BeliefPropagationCache or TensorNetworkState for 'bp' algorithm, got $(typeof(tns))")
         end
-
-        if f ∈ ["sample"]
-            error("BP-based contraction not supported for this functionality yet")
-        end
     elseif alg == "loopcorrections"
         if !((tns isa BeliefPropagationCache) || (tns isa TensorNetworkState))
             return error("Expected BeliefPropagationCache or TensorNetworkState for 'loop correctiom' algorithm, got $(typeof(tns))")

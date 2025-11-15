@@ -1,15 +1,12 @@
 using TensorNetworkQuantumSimulator
-const TN = TensorNetworkQuantumSimulator
 
 using Statistics
-
-using NamedGraphs: NamedGraphs, neighbors
 
 using ITensors: ITensor, ITensors
 
 function main()
     #Define the lattice
-    g = TN.heavy_hexagonal_lattice(5, 5)
+    g = heavy_hexagonal_lattice(5, 5)
 
     #Define an edge coloring
     ec = edge_color(g, 3)
@@ -66,7 +63,7 @@ function main()
 
     #Sample from q(x) and get p(x) / q(x) for each sample too
     nsamples = 50
-    bitstrings = TN.sample_directly_certified(ψ, nsamples; norm_mps_bond_dimension = mps_bond_dimension)
+    bitstrings = sample_directly_certified(ψ, nsamples; alg = "boundarymps", norm_mps_bond_dimension = mps_bond_dimension)
 
     st_dev = Statistics.std(first.(bitstrings))
     println("Standard deviation of p(x) / q(x) is $(st_dev)")

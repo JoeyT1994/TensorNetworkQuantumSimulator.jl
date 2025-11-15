@@ -1,7 +1,5 @@
 using TensorNetworkQuantumSimulator
-const TN = TensorNetworkQuantumSimulator
 
-using NamedGraphs.NamedGraphGenerators: named_grid
 using Statistics
 
 function main()

@@ -1,13 +1,6 @@
 using TensorNetworkQuantumSimulator
-const TN = TensorNetworkQuantumSimulator
 
 using ITensors
-
-using NamedGraphs
-using Graphs
-const NG = NamedGraphs
-const G = Graphs
-using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_graph
 
 using EinExprs: Greedy
 
@@ -27,7 +20,7 @@ function main()
     for (g, g_str) in gs
         println("Testing for $g_str lattice with $(nv(g)) vertices")
         ψ = random_tensornetworkstate(ComplexF32, g, "S=1/2"; bond_dimension = χ)
-        v_centre = first(G.center(g))
+        v_centre = first(center(g))
 
         sz_bp = expect(ψ, ("Z", [v_centre]); alg = "bp")
         println("BP value for Z is $sz_bp")

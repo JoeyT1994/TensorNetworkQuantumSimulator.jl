@@ -1,6 +1,51 @@
 using StatsBase
 
 function sample(
+        alg::Algorithm"bp",
+        ψ::TensorNetworkState,
+        nsamples::Integer;
+        bp_update_kwargs = (;),
+        gauge_state = true,
+        kwargs...,
+    )
+    bp_cache = update(BeliefPropagationCache(ψ); bp_update_kwargs...)
+    if gauge_state
+        bp_cache = symmetrize_and_normalize(bp_cache)
+    end
+
+    #Generate the bit_strings moving left to right through the network
+    probs_and_bitstrings = NamedTuple[]
+    for j in 1:nsamples
+        projected_bp_cache = copy(bp_cache)
+        bit_string = Dictionary{keytype(vertices(ψ)), Int}()
+        for v in vertices(ψ)
+            tensors = incoming_messages(projected_bp_cache, v)
+            ψv, ψv_dag = network(projected_bp_cache)[v], dag(prime(network(projected_bp_cache)[v]))
+            tensors = append!(tensors, [ψv, ψv_dag])
+            seq = contraction_sequence(tensors; alg = "optimal")
+            ρ = ITensors.contract(tensors; sequence = seq)
+
+            ρ_tr = tr(ρ)
+            ρ *= inv(ρ_tr)
+            ρ_diag = collect(real.(diag(ITensors.array(ρ))))
+            config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
+            # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
+            set!(bit_string, v, config - 1)
+            s_ind = only(filter(i -> plev(i) == 0, inds(ρ)))
+            P = adapt(datatype(ρ))(onehot(s_ind => config))
+            setindex_preserve!(projected_bp_cache, ψv * P, v)
+
+            if v != last(vertices(ψ))
+                projected_bp_cache = update(projected_bp_cache; bp_update_kwargs...)
+            end
+        end
+        push!(probs_and_bitstrings, (bitstring = bit_string,))
+    end
+
+    return probs_and_bitstrings, ψ
+end
+
+function sample(
         alg::Algorithm"boundarymps",
         ψ::TensorNetworkState,
         nsamples::Integer;
@@ -50,19 +95,21 @@ Arguments
 
 Keyword Arguments
 -----------------
-- alg ::String: The algorithm to use for sampling (default is "boundarymps", which is the only option currently supported).
+- alg ::String: The algorithm to use for sampling ("boundarymps" and "bp" currently supported).
 Supported kwargs for alg = "boundarymps":
     - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state <x|ψ>.
     - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract <ψ|ψ>.
     - `norm_message_update_kwargs`: Keyword arguments for updating the norm boundary MPS messages.
     - `projected_message_update_kwargs`: Keyword arguments for updating the projected boundary MPS messages.
     - `partition_by`: How to partition the graph for boundary MPS (default is `"Row"`).
+Supported kwargs for alg = "bp":
+    - bp_update_kwargs: 
 
 Returns
 -------
 A vector of bitstrings sampled from the probability distribution defined by as a dictionary mapping each vertex to a configuration (0...d).
 """
-function sample(ψ::TensorNetworkState, nsamples::Integer; alg = "boundarymps", kwargs...)
+function sample(ψ::TensorNetworkState, nsamples::Integer; alg = nothing, kwargs...)
     algorithm_check(ψ, "sample", alg)
     probs_and_bitstrings, _ = sample(Algorithm(alg), ψ, nsamples; kwargs...)
     # returns just the bitstrings
@@ -91,7 +138,7 @@ Arguments
 
 Keyword Arguments
 -----------------
-- alg ::String: The algorithm to use for sampling (default is "boundarymps", which is the only option currently supported).
+- alg ::String: The algorithm to use for sampling ("boundarymps" is the only one currently supported).
 Supported kwargs for alg = "boundarymps":
     - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state <x|ψ>.
     - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract <ψ|ψ>.
@@ -107,7 +154,7 @@ Each NamedTuple contains:
 - `logq`: Log probability of drawing the bitstring.
 - `bitstring`: The sampled bitstring as a dictionary mapping each vertex to a configuration (0...d).
 """
-function sample_directly_certified(ψ::TensorNetworkState, nsamples::Integer; projected_mps_bond_dimension = 5 * maxvirtualdim(ψ), alg = "boundarymps", kwargs...)
+function sample_directly_certified(ψ::TensorNetworkState, nsamples::Integer; projected_mps_bond_dimension = 5 * maxvirtualdim(ψ), alg = nothing, kwargs...)
     algorithm_check(ψ, "sample", alg)
     probs_and_bitstrings, _ = sample(Algorithm(alg), ψ, nsamples; projected_mps_bond_dimension, kwargs...)
     # returns the self-certified p/q, logq and bitstrings
@@ -136,7 +183,7 @@ Arguments
 
 Keyword Arguments
 -----------------
-- alg ::String: The algorithm to use for sampling (default is "boundarymps", which is the only option currently supported).
+- alg ::String: The algorithm to use for sampling ("boundarymps" is the only option currently supported).
 Supported kwargs for alg = "boundarymps":
     - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state <x|ψ>.
     - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract <ψ|ψ>.
@@ -152,11 +199,11 @@ Each NamedTuple contains:
 - `poverq`: Approximate value of p(x)/q(x) for the sampled bitstring x.
 - `bitstring`: The sampled bitstring as a dictionary mapping each vertex to a configuration (0...d).
 """
-function sample_certified(ψ::TensorNetworkState, nsamples::Int; alg = "boundarymps", certification_mps_bond_dimension = 5 * maxvirtualdim(ψ), certification_cache_message_update_kwargs = (;), kwargs...)
+function sample_certified(ψ::TensorNetworkState, nsamples::Int; alg = nothing, certification_mps_bond_dimension = 5 * maxvirtualdim(ψ), certification_cache_message_update_kwargs = (;), kwargs...)
     algorithm_check(ψ, "sample", alg)
     probs_and_bitstrings, ψ = sample(Algorithm(alg), ψ, nsamples; kwargs...)
     # send the bitstrings and the logq to the certification function
-    return certify_samples(ψ, probs_and_bitstrings; alg, certification_mps_bond_dimension, certification_cache_message_update_kwargs, symmetrize_and_normalize = false)
+    return certify_samples(ψ, probs_and_bitstrings; alg, certification_mps_bond_dimension, certification_cache_message_update_kwargs, gauge_state = false)
 end
 
 function get_one_sample(
@@ -255,9 +302,9 @@ function certify_sample(
         ψ::TensorNetworkState, bitstring, logq::Number;
         certification_mps_bond_dimension::Integer,
         certification_cache_message_update_kwargs = (;),
-        symmetrize_and_normalize = true,
+        gauge_state = true,
     )
-    if symmetrize_and_normalize
+    if gauge_state
         ψ = gauge_and_scale(ψ)
     end
 

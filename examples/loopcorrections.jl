@@ -1,13 +1,6 @@
 using TensorNetworkQuantumSimulator
-const TN = TensorNetworkQuantumSimulator
 
 using ITensors
-
-using NamedGraphs
-using Graphs
-const NG = NamedGraphs
-const G = Graphs
-using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_graph
 
 using LinearAlgebra: norm
 
@@ -26,8 +19,8 @@ function main()
         (named_grid((nx, ny)), "square", 4),
     ]
     for (g, g_str, smallest_loop_size) in gs
-        println("Testing for $g_str lattice with $(NG.nv(g)) vertices")
-        ψ = TN.random_tensornetworkstate(ComplexF32, g, "S=1/2"; bond_dimension = χ)
+        println("Testing for $g_str lattice with $(nv(g)) vertices")
+        ψ = random_tensornetworkstate(ComplexF32, g, "S=1/2"; bond_dimension = χ)
 
         ψ = normalize(ψ; alg = "bp")
 

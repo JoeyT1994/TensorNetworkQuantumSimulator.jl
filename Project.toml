@@ -3,7 +3,7 @@ uuid = "4de3b72a-362e-43dd-83ff-3f381eda9f9c"
 license = "MIT"
 authors = ["JoeyT1994 <jtindall@flatironinstitute.org>", "MSRudolph <manuel.rudolph@web.de>", "and contributors"]
 description = "A Julia package for quantum simulation with tensor networks of near-arbritrary topology."
-version = "0.2.3"
+version = "0.2.4"
 
 [deps]
 Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"

@@ -111,9 +111,9 @@ function default_tolerance(type)
     return (type == Float64 || type == ComplexF64) && return 1.0e-8
 end
 
-function default_bp_update_kwargs(tns::TensorNetworkState)
-    maxiter = is_tree(tns) ? 1 : _default_bp_update_maxiter
-    tolerance = default_tolerance(ITensors.NDTensors.scalartype(tns))
+function default_bp_update_kwargs(tn::AbstractTensorNetwork)
+    maxiter = is_tree(tn) ? 1 : _default_bp_update_maxiter
+    tolerance = default_tolerance(ITensors.NDTensors.scalartype(tn))
     verbose = false
     return (; maxiter, tolerance, verbose)
 end

@@ -9,6 +9,7 @@ include("TensorNetworks/tensornetwork.jl")
 include("TensorNetworks/tensornetworkstate.jl")
 include("TensorNetworks/tensornetworkstate_constructors.jl")
 include("contraction_sequences.jl")
+include("contract.jl")
 include("Forms/bilinearform.jl")
 include("Forms/quadraticform.jl")
 include("MessagePassing/abstractbeliefpropagationcache.jl")
@@ -34,14 +35,15 @@ include("truncate.jl")
 export
     vertices,
     edges,
+    add_edge,
+    degree,
     apply_gates,
+    rem_vertex!,
     truncate,
     expect,
+    is_tree,
     expect_boundarymps,
     expect_loopcorrect,
-    fidelity,
-    fidelity_boundarymps,
-    fidelity_loopcorrect,
     make_hermitian,
     ket_network,
     truncate,
@@ -65,5 +67,39 @@ export
     gauge_and_scale,
     paulitensornetworkstate,
     identitytensornetworkstate,
-    inner
+    random_tensornetwork,
+    siteinds,
+    inner,
+    named_grid,
+    named_comb_tree,
+    named_hexagonal_lattice_graph,
+    named_path_graph,
+    neighbors,
+    center,
+    NamedGraph,
+    graph,
+    datatype,
+    scalartype,
+    BoundaryMPSCache,
+    TensorNetwork,
+    TensorNetworkState,
+    AbstractTensorNetwork,
+    partitionfunction,
+    contract,
+    norm_sqr,
+    map_virtualinds,
+    map_virtualinds!,
+    map_tensors,
+    map_tensors!,
+    rem_vertex!,
+    rem_vertex,
+    normalize,
+    QuadraticForm,
+    BilinearForm,
+    sample_certified,
+    sample_directly_certified,
+    vertextype,
+    nv,
+    heavy_hexagonal_lattice,
+    rescale
 end
