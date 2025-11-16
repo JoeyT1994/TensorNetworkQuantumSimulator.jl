@@ -1,14 +1,9 @@
 using TensorNetworkQuantumSimulator
 const TN = TensorNetworkQuantumSimulator
 
-using ITensorNetworks
-const ITN = ITensorNetworks
-using ITensors
-using ITensors: @OpName_str, @SiteType_str, Algorithm, datatype
+using ITensors: @OpName_str, @SiteType_str, Algorithm, datatype, ITensors
 
-using ITensorNetworks: AbstractBeliefPropagationCache, IndsNetwork, setindex_preserve_graph!
-using NamedGraphs
-using NamedGraphs: edges
+using NamedGraphs: NamedGraphs, edges, NamedEdge
 using Graphs
 const NG = NamedGraphs
 const G = Graphs
@@ -23,6 +18,8 @@ using MKL
 using LinearAlgebra
 using NPZ
 
+using CUDA
+
 using Adapt
 using Dictionaries
 
@@ -30,7 +27,7 @@ BLAS.set_num_threads(min(6, Sys.CPU_THREADS))
 println("Julia is using "*string(nthreads()))
 println("BLAS is using "*string(BLAS.get_num_threads()))
 
-#Gate : rho -> rho .X
+#Gate : rho -> rho .X. With this defined, expect(sqrt_rho, X; alg) = Tr(sqrt_rho . X sqrt_rho) / Tr(sqrt_rho sqrt_rho) = Tr(rho . X) / Tr(rho)
 function ITensors.op(
     ::OpName"X", ::SiteType"Pauli"
   )
@@ -46,9 +43,12 @@ function main()
 
     n = 6
     g = named_grid((n,n))
+    #Pauli inds run over identity, X, Y, Z
     s = siteinds("Pauli", g)
     ρ = identitytensornetworkstate(ComplexF64, g, s)
     ITensors.disable_warn_order()
+
+    use_gpu = false
 
     δβ = 0.01 
     hx = -3.1
@@ -73,14 +73,19 @@ function main()
         for v in vertices(g)
             gate = TN.toitensor(("Rx", [v], -0.25 * im * hx *δβ), s)
             gate = adapt(datatype(ρ), gate)
-            setindex_preserve_graph!(ρ, normalize(apply(gate, ρ[v])), v)
+            TN.setindex_preserve!(ρ, normalize(ITensors.apply(gate, ρ[v])), v)
         end
 
         #Apply the two site rotations, use a boundary MPS cache to apply them (need to run column or row wise depending on the gates)
         for (k, colored_edges) in enumerate(ec)
 
-            ρρ = TN.BoundaryMPSCache(ρ, MPS_message_rank; partition_by = (k== 1 || k == 2) ? "col" : "row", gauge_state = false)
-            
+            #Only if you want to use GPU to do boundary MPS
+            if use_gpu
+                ρ_gpu =CUDA.cu(ρ)
+                ρρ = TN.BoundaryMPSCache(ρ_gpu, MPS_message_rank; partition_by = (k== 1 || k == 2) ? "col" : "row", gauge_state = false)
+            else
+                ρρ = TN.BoundaryMPSCache(ρ, MPS_message_rank; partition_by = (k== 1 || k == 2) ? "col" : "row", gauge_state = false)
+            end
             ρρ = TN.update(ρρ)
             TN.update_partitions!(ρρ, collect(TN.partitionvertices(TN.supergraph(ρρ))))
 
@@ -89,8 +94,9 @@ function main()
                 gate = adapt(datatype(ρ), gate)
                 envs = TN.incoming_messages(ρρ, [src(pair), dst(pair)])
                 envs = adapt(datatype(ρ)).(envs)
-                ρv1, ρv2  = ITensorNetworks.full_update_bp(gate, TN.tensornetwork(ρ), [src(pair), dst(pair)]; envs, apply_kwargs...)
-                ρ[src(pair)], ρ[dst(pair)] = normalize(ρv1), normalize(ρv2)
+                ρv1, ρv2  = TN.full_update(gate, ρ, [src(pair), dst(pair)]; envs, print_fidelity_loss = true, apply_kwargs...)
+                TN.setindex_preserve!(ρ, normalize(ρv1), src(pair))
+                TN.setindex_preserve!(ρ, normalize(ρv2), dst(pair))
             end
         end
 
@@ -98,15 +104,19 @@ function main()
         for v in vertices(g)
             gate = TN.toitensor(("Rx", [v], -0.25 * im * hx *δβ), s)
             gate = adapt(datatype(ρ), gate)
-            setindex_preserve_graph!(ρ, normalize(apply(gate, ρ[v])), v)
+            TN.setindex_preserve!(ρ, normalize(ITensors.apply(gate, ρ[v])), v)
         end
 
         β += δβ
 
-        sz_doubled = TN.expect(ρ, ("X", [(2,2)]); alg = "boundarymps", mps_bond_dimension = MPS_message_rank)
+        if use_gpu
+            sz_doubled = TN.expect(ρ, ("X", [(2,2)]); alg = "boundarymps", mps_bond_dimension = MPS_message_rank)
+        else
+            sz_doubled = TN.expect(CUDA.cu(ρ), ("X", [(2,2)]); alg = "boundarymps", mps_bond_dimension = MPS_message_rank)
+        end
 
         println("Inverse Temperature is $β")
-        println("Bond dimension of PEPO $(ITensorNetworks.maxlinkdim(ρ))")
+        println("Bond dimension of PEPO $(TN.maxvirtualdim(ρ))")
 
         println("Expectation value at beta  = $(2*β) is $(sz_doubled)")
     end

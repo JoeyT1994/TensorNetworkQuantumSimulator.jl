@@ -13,10 +13,13 @@ struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITens
 end
 
 #TODO: Take `dot` without precontracting the messages to allow scaling to more complex messages
+# we shouldn't let this be negative, it doesn't make sense
 function message_diff(message_a::ITensor, message_b::ITensor)
     n_a, n_b = norm(message_a), norm(message_b)
     f = abs2(dot(message_a, message_b) / (n_a * n_b))
-    return 1 - f
+
+    # or do abs(1-f)?
+    return max(0,1 - f)
 end
 
 messages(bp_cache::BeliefPropagationCache) = bp_cache.messages
