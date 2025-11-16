@@ -199,6 +199,7 @@ function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
     bpc = copy(bpc)
     diffs = zeros(alg.kwargs.maxiter)
     tot_iter = alg.kwargs.maxiter
+    success = false
     for i in 1:alg.kwargs.maxiter
         diff = compute_error ? Ref(0.0) : nothing
         update_iteration!(alg, bpc, alg.kwargs.edge_sequence; (update_diff!) = diff)
@@ -208,12 +209,16 @@ function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
                 if alg.kwargs.verbose
                     println("BP converged to desired precision after $i iterations.")
 		end
+		success = true
 		tot_iter = i
 		break
 	    end
         end
     end
     if compute_error && alg.kwargs.verbose
+        if !success
+	    println("Did not converge.")
+	end
         println("Diffs during message passing: $(diffs[1:tot_iter])")
     end
     return bpc

@@ -109,7 +109,7 @@ function expect_bmps(dat::Dict; obs = "X", MPS_message_rank::Int = 10, save_tag 
     expect_vals = zeros(length(all_verts), length(dat["sqrtρ"])-start_i+1)
     for i=start_i:length(dat["sqrtρ"])
         if use_gpu
-            sqrtρ = CUDA.cu(dat["sqrtρ"][i])
+            sqrtρ = adapt(CUDA.CuArray{ComplexF64})(dat["sqrtρ"][i])
 	else
 	    sqrtρ = dat["sqrtρ"][i]
 	end
@@ -178,10 +178,10 @@ function evolve_bp(ρρ::BeliefPropagationCache, n::Int, nsteps::Int; β = 0, hx
     apply_kwargs = (; maxdim = χ, cutoff = 1e-12)
     bp_update_kwargs = (; maxiter = 50, tolerance = 1e-8, verbose = true)
     if use_gpu
-        ρρ = CUDA.cu(ρρ)
+        ρρ = adapt(CUDA.CuArray{ComplexF64})(ρρ)
     end
     two_qubit_gates = [adapt(datatype(network(ρρ)), TN.toitensor(("Rzz", [src(pair), dst(pair)], -0.5*im * J * δβ), s)) for pair=vcat(ec...)]
-
+    
     single_qubit_gates = [adapt(datatype(network(ρρ)), TN.toitensor(("Rx", [v], -0.25 * im * hx *δβ), s)) for v=vertices(g)]
 
     layer = vcat(single_qubit_gates, two_qubit_gates, single_qubit_gates)
