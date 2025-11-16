@@ -42,13 +42,14 @@ function prep_insertions(obs)
     return (coeffs = hyper_coeff, op_strings = insertion_operator)
 end
 
-# Cluster/cluster cumulant weights
+"""
+Cluster expansion. See clustercorrections.jl
+"""
 function cluster_weights(bpc::BeliefPropagationCache, clusters::Vector, egs::Vector{<:AbstractNamedGraph}, interaction_graph; obs = nothing)
 
     kwargs = prep_insertions(obs)
         
     logZbp = TN.free_energy(bpc; kwargs...)
-    println("MADE IT HERE"); flush(stdout)
     isempty(egs) && return [0], [[logZbp]], [[1]]
     
     circuit_lengths = sort(unique([c.weight for c=clusters]))
@@ -65,7 +66,7 @@ function cluster_weights(bpc::BeliefPropagationCache, clusters::Vector, egs::Vec
 
     coeffs = Array{Array}(undef, length(circuit_lengths) + 1)
     coeffs[1] = [1]
-    println("MADE IT HERE TOO"); flush(stdout)
+
     # now calculate contribution to logZ from each cluster
     for (cl_i, cl)=enumerate(circuit_lengths)
         clusters_cl = filter(c->c.weight==cl, clusters)
@@ -75,7 +76,10 @@ function cluster_weights(bpc::BeliefPropagationCache, clusters::Vector, egs::Vec
 
     return vcat([0],circuit_lengths), logZs, coeffs
 end	    	    
-    
+
+"""
+Cluster cumulant expansion. See cumulant-clustercorrections.jl
+"""
 function cc_weights(bpc::BeliefPropagationCache, regions::Vector, counting_nums::Dict; obs = nothing, rescale::Bool = false)
 
     kwargs = prep_insertions(obs)
@@ -99,7 +103,9 @@ function cc_weights(bpc::BeliefPropagationCache, regions::Vector, counting_nums:
     return log.(wts), [counting_nums[gg] for gg=regions[use_g]]
 end
 
-# onepoint or twopoint connected correlation function, using cluster cumulant expansion
+"""
+onepoint or twopoint connected correlation function, using cluster cumulant expansion
+"""
 function cc_correlation(bpc::BeliefPropagationCache, regions::Vector, counting_nums::Dict, obs)
     logZs, cnums = cc_weights(bpc, regions, counting_nums; obs = obs)
     op_strings, verts, _ = TN.collectobservable(obs)
@@ -110,7 +116,9 @@ function cc_correlation(bpc::BeliefPropagationCache, regions::Vector, counting_n
     end
 end
 
-# onepoint or twopoint connected correlation function, using cluster expansion
+"""
+onepoint or twopoint connected correlation function, using cluster expansion
+"""
 function cluster_correlation(bpc::BeliefPropagationCache, clusters::Vector, egs::Vector, interaction_graph, obs)
     cluster_wts, logZs, ursells = cluster_weights(bpc, clusters, egs, interaction_graph; obs = obs)
     op_strings, verts, _ = TN.collectobservable(obs)
