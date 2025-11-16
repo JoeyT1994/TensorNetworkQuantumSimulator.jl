@@ -2,7 +2,22 @@ using ITensors: Index, ITensor, @Algorithm_str, inds, noncommoninds, dim
 using TensorOperations: TensorOperations, optimaltree
 using EinExprs: EinExprs, EinExpr, einexpr, SizedEinExpr
 
-function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:ITensor})
+function prune_trivial_tensors(tensors::Vector{<:ITensor})
+    pruned_tensors = copy(tensors)
+    for (i, t) in enumerate(pruned_tensors)
+        if all(d -> d == 1, dim.(inds(tensors[i])))
+            pruned_tensors[i] = adapt(datatype(t))(ITensor(1))
+        end
+    end
+    return pruned_tensors
+end
+
+function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:ITensor}; prune_tensors = false)
+    #Needed because tensor operations bugs on trivial tensors
+    if prune_tensors
+        ITensors.disable_warn_order()
+        tensors = prune_trivial_tensors(tensors)
+    end
     network = collect.(inds.(tensors))
     #Converting dims to Float64 to minimize overflow issues
     inds_to_dims = Dict(i => Float64(dim(i)) for i in unique(reduce(vcat, network)))
