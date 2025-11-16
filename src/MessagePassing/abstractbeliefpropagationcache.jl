@@ -18,9 +18,9 @@ function rescale_vertices!(
     return not_implemented()
 end
 
-function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
+function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex; op_strings::Function = v->"I", coeffs::Function = v->1, use_epsilon::Bool = false)
     incoming_ms = incoming_messages(bp_cache, vertex)
-    state = bp_factors(bp_cache, vertex)
+    state = bp_factors(bp_cache, vertex; op_strings = op_strings, coeffs = coeffs, use_epsilon = use_epsilon)
     contract_list = [state; incoming_ms]
     sequence = contraction_sequence(contract_list; alg = "optimal")
     return contract(contract_list; sequence)[]
@@ -115,8 +115,8 @@ function edge_scalars(
     return map(e -> edge_scalar(bp_cache, e; kwargs...), edges)
 end
 
-function scalar_factors_quotient(bp_cache::AbstractBeliefPropagationCache)
-    return vertex_scalars(bp_cache), edge_scalars(bp_cache)
+function scalar_factors_quotient(bp_cache::AbstractBeliefPropagationCache; kwargs...)
+    return vertex_scalars(bp_cache; kwargs...), edge_scalars(bp_cache)
 end
 
 function incoming_messages(
@@ -239,21 +239,39 @@ function Adapt.adapt_structure(to, bpc::AbstractBeliefPropagationCache)
     return bpc
 end
 
-function freenergy(bp_cache::AbstractBeliefPropagationCache)
-    numerator_terms, denominator_terms = scalar_factors_quotient(bp_cache)
-    if any(t -> real(t) < 0, numerator_terms)
-        numerator_terms = complex.(numerator_terms)
+function adapt_complex(t)
+    if typeof(t)<:Hyper
+        return Hyper{ComplexF64}(t.value,t.epsilon1,t.epsilon2,t.epsilon12)
+    else
+        return complex(t)
     end
-    if any(t -> real(t) < 0, denominator_terms)
-        denominator_terms = complex.(denominator_terms)
+end
+
+function get_real_part(t)
+    if typeof(t)<:Hyper
+        return real(t.value)
+    else
+        return real(t)
+    end
+end
+
+function free_energy(bp_cache::AbstractBeliefPropagationCache; op_strings::Function = v->"I", coeffs::Function = v->1)
+    numerator_terms, denominator_terms = scalar_factors_quotient(bp_cache; op_strings = op_strings, coeffs = coeffs, use_epsilon = true)
+
+    # Skip this piece for now
+    if any(t -> get_real_part(t) < 0, numerator_terms)
+        numerator_terms = adapt_complex.(numerator_terms)
+    end
+    if any(t -> get_real_part(t) < 0, denominator_terms)
+        denominator_terms = adapt_complex.(denominator_terms)
     end
 
     any(iszero, denominator_terms) && return -Inf
     return sum(log.(numerator_terms)) - sum(log.((denominator_terms)))
 end
 
-function partitionfunction(bp_cache::AbstractBeliefPropagationCache)
-    return exp(freenergy(bp_cache))
+function partitionfunction(bp_cache::AbstractBeliefPropagationCache; op_strings::Function = v->"I", coeffs::Function = v->1)
+    return exp(free_energy(bp_cache; op_strings = op_strings, coeffs = coeffs))
 end
 
 function rescale_messages!(bp_cache::AbstractBeliefPropagationCache, edge::AbstractEdge)

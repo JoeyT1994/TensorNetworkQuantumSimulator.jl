@@ -86,13 +86,12 @@ end
 
 function rescale_vertices!(
         bpc::BeliefPropagationCache,
-        vertices::Vector
-    )
+        vertices::Vector; kwargs...)
     tn = network(bpc)
 
     for v in vertices
         vn = vertex_scalar(bpc, v)
-        s = isreal(vn) ? sign(vn) : one(vn)
+        s =  isreal(vn) ? sign(vn) : one(vn)
         if tn isa TensorNetworkState
             setindex_preserve!(tn, tn[v] * s * inv(sqrt(vn)), v)
         elseif tn isa TensorNetwork
