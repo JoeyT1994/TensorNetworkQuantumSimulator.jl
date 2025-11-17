@@ -18,7 +18,6 @@ include("MessagePassing/loopcorrection.jl")
 include("MessagePassing/clustercorrections.jl")
 include("MessagePassing/cumulant-clustercorrections.jl")
 include("graph_ops.jl")
-include("graph_enumeration.jl")
 include("utils.jl")
 
 include("Apply/apply_gates.jl")
