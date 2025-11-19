@@ -1,9 +1,5 @@
-
 using NamedGraphs
 using NamedGraphs: AbstractNamedGraph
-using ProgressMeter
-
-include("../graph_enumeration.jl")
 
 struct Cluster
     loop_ids::Vector{Int}
@@ -13,8 +9,8 @@ struct Cluster
 end
 
 struct Loop
-    vertices::Vector{Int}
-    edges::Vector{Tuple{Int,Int}}
+    vertices::Vector
+    edges::Vector
     weight::Int
 end
 
@@ -31,7 +27,6 @@ function build_interaction_graph(loops::Vector{Loop})
     
     println("  Building optimized interaction graph for $n_loops loops...")
     flush(stdout)
-    progress = Progress(n_loops, dt=0.1, desc="Building graph: ", color=:green, barlen=50)
     
     # Optimization 1: Pre-compute vertex sets once
     vertex_sets = [Set(loop.vertices) for loop in loops]
@@ -50,7 +45,6 @@ function build_interaction_graph(loops::Vector{Loop})
     for i in 1:n_loops
         interaction_graph[i] = unique(vcat([vertex_to_loops[v] for v=loops[i].vertices]...))
 	        
-        next!(progress)
     end
     
     return interaction_graph
@@ -68,10 +62,6 @@ function dfs_enumerate_clusters_from_supported(all_loops::Vector{Loop}, supporte
     
     verbose && println("  Starting DFS cluster enumeration...")
     verbose && println("  Supported loops: $(length(supported_loop_ids)), Max weight: $max_weight")
-    
-    # Progress tracking
-    last_report_time = time()
-    last_cluster_count = 0
     
     # DFS to grow clusters starting from each supported loop
     function dfs_grow_cluster(current_cluster::Vector{Int}, current_weight::Int, 
@@ -97,16 +87,7 @@ function dfs_enumerate_clusters_from_supported(all_loops::Vector{Loop}, supporte
             if !(signature in seen_clusters)
                 push!(seen_clusters, signature)
                 push!(clusters, cluster)
-                cluster_count += 1
-                
-                # Progress reporting every 2 seconds
-                current_time = time()
-                if current_time - last_report_time >= 2.0
-                    new_clusters = cluster_count - last_cluster_count
-                    verbose && println("    Found $cluster_count clusters (+$new_clusters in last 2s)")
-                    last_report_time = current_time
-                    last_cluster_count = cluster_count
-                end
+                cluster_count += 1                
             end
         end
         

@@ -1,10 +1,7 @@
 using Graphs: nv, induced_subgraph, is_connected, connected_components
 using NamedGraphs
 using NamedGraphs: AbstractNamedGraph, position_graph
-using ProgressMeter
 using Dictionaries
-
-include("../graph_enumeration.jl")
 
 const RegionKey = NTuple{N,Int} where {N}
 
@@ -47,23 +44,6 @@ function is_loopful(g::SimpleGraph, key::RegionKey)::Bool
 end
 
 """
-    is_proper_subset(a::RegionKey, b::RegionKey)::Bool
-Return true if region `a` is a proper subset of `b`.
-"""
-function is_proper_subset(a::RegionKey, b::RegionKey)::Bool
-    if length(a) >= length(b)
-        return false
-    end
-    sb = Set(b)
-    @inbounds for x in a
-        if x ∉ sb
-            return false
-        end
-    end
-    return true
-end
-
-"""
     induced_components(g::SimpleGraph, vs::AbstractVector{Int})::Vector{RegionKey}
 Return connected components (as RegionKey) of the induced subgraph on `vs`.
 """
@@ -92,7 +72,7 @@ function maximal_regions(regions::Set{RegionKey})::Set{RegionKey}
         is_sub = false
         for j in (i+1):length(keys)
             b = keys[j]
-            if is_proper_subset(a, b)
+            if a != b && issubset(a, b)
                 is_sub = true
                 break
             end
@@ -212,7 +192,7 @@ function counting_numbers(regions::Set{RegionKey},maximals::Set{RegionKey})::Dic
         end
         s = 0
         for a in R
-            if is_proper_subset(r, a)
+            if r!=a && issubset(r, a)
                 s += get(c, a, 0)
             end
         end
