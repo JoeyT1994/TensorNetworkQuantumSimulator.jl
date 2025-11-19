@@ -16,6 +16,8 @@ include("MessagePassing/abstractbeliefpropagationcache.jl")
 include("MessagePassing/beliefpropagationcache.jl")
 include("MessagePassing/boundarympscache.jl")
 include("MessagePassing/loopcorrection.jl")
+include("MessagePassing/clustercorrections.jl")
+include("MessagePassing/cumulant-clustercorrections.jl")
 include("graph_ops.jl")
 include("utils.jl")
 
