@@ -1,5 +1,5 @@
 using NamedGraphs
-using NamedGraphs: AbstractNamedGraph
+using NamedGraphs: AbstractGraph,AbstractNamedGraph
 
 struct Cluster
     loop_ids::Vector{Int}

@@ -4,7 +4,6 @@ using Graphs.Experimental
 using Graphs.SimpleGraphs
 using NamedGraphs # from TensorNetworkQuantumSimulator
 using StatsBase
-using ProgressMeter
 
 # Generate non-isomorphic graphs with geng
 # on square lattice, choose triangle_free = true to speed things up

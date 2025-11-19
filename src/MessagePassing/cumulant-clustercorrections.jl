@@ -57,6 +57,18 @@ function induced_components(g::SimpleGraph, vs::AbstractVector{Int})::Vector{Reg
     return [to_key(vs[c]) for c in comps]
 end
 
+function is_proper_subset(a::RegionKey, b::RegionKey)::Bool
+    if length(a) >= length(b)
+        return false
+    end
+    sb = Set(b)
+    @inbounds for x in a
+        if x ∉ sb
+     	    return false
+        end
+    end
+    return true
+end
 # --- Maximal regions under inclusion ------------------------------------------
 
 """
@@ -72,10 +84,13 @@ function maximal_regions(regions::Set{RegionKey})::Set{RegionKey}
         is_sub = false
         for j in (i+1):length(keys)
             b = keys[j]
-            if a != b && issubset(a, b)
+            if length(Set(a)) < length(Set(b)) && issubset(Set(a), Set(b))
+	        @assert is_proper_subset(a, b)
                 is_sub = true
                 break
-            end
+            else
+	        @assert !is_proper_subset(a,b)
+	    end
         end
         if !is_sub
             push!(maximal, a)
@@ -192,9 +207,13 @@ function counting_numbers(regions::Set{RegionKey},maximals::Set{RegionKey})::Dic
         end
         s = 0
         for a in R
-            if r!=a && issubset(r, a)
+	    # proper subset
+            if length(Set(r)) < length(Set(a)) && issubset(Set(r), Set(a))
+	        @assert is_proper_subset(r,a)
                 s += get(c, a, 0)
-            end
+            else
+	        @assert !is_proper_subset(r,a)
+	    end
         end
         c[r] = 1 - s
     end

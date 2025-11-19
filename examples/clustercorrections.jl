@@ -8,7 +8,6 @@ using Graphs
 const NG = NamedGraphs
 const G = Graphs
 using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_graph
-using ProgressMeter
 
 using LinearAlgebra: norm
 
@@ -56,7 +55,7 @@ function main(nx,ny)
         end
 
 	expects_cc = Dict()
-	@showprogress for w=cc_wts
+	for w=cc_wts
     	    expects_cc[w] = real(cc_correlation(ψIψ,regs[w], cnums[w], ("Z", [v])))
         end
 
@@ -85,7 +84,7 @@ function main(nx,ny)
         end
 
 	expects_cc = Dict()
-	@showprogress for w=cc_wts
+	for w=cc_wts
     	    expects_cc[w] = real(cc_correlation(ψIψ,regs[w], cnums[w], obs))
         end
 	println("Cluster expansion expectation values: $(cluster_wts), $(real.(expects))")
@@ -96,6 +95,3 @@ function main(nx,ny)
     end
     return states
 end
-
-#main(4,4)
-#main(3,3)

@@ -92,6 +92,7 @@ function weight(bpc::BeliefPropagationCache, eg; project_out::Bool = true, op_st
         incoming_ms = ITensor[message(bpc, e) for e in boundary_edges(bpc, vs)]
     else
         incoming_ms = ITensor[message(bpc, e) for e in boundary_edges(bpc, es)]
+    end
     local_tensors = reduce(vcat, bp_factors(bpc, vs; op_strings = op_strings, coeffs = coeffs, use_epsilon = true))
 
     if project_out

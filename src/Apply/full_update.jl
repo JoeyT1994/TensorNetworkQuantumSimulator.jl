@@ -107,6 +107,7 @@ function optimise_p_q(
         nfullupdatesweeps = 10,
         print_fidelity_loss = false,
         envisposdef = true,
+	verbose = false,
         apply_kwargs...,
     )
     p_cur, q_cur = factorize(
@@ -138,17 +139,17 @@ function optimise_p_q(
         b_vec = b(p, q, o, envs, q_cur)
         M_p_partial = partial(M_p, envs, q_cur, qs_ind)
 
-        p_cur, info = linsolve(
+        p_cur, info1 = linsolve(
             M_p_partial, b_vec, p_cur; isposdef = envisposdef, ishermitian = false
         )
 
         b_tilde_vec = b(p, q, o, envs, p_cur)
         M_p_tilde_partial = partial(M_p, envs, p_cur, ps_ind)
 
-        q_cur, info = linsolve(
+        q_cur, info2 = linsolve(
             M_p_tilde_partial, b_tilde_vec, q_cur; isposdef = envisposdef, ishermitian = false
         )
-	println(info)
+	verbose && println("Linsolve info, iteration $(i): $(info1), $(info2)")
     end
 
     fend = print_fidelity_loss ? fidelity(envs, p_cur, q_cur, p, q, o) : 0

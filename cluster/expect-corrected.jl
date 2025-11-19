@@ -1,17 +1,14 @@
 using TensorNetworkQuantumSimulator
 using NamedGraphs
-using NamedGraphs: AbstractGraph, NamedGraph, AbstractNamedGraph
-using NamedGraphs.GraphsExtensions: add_edge
+using NamedGraphs: AbstractNamedGraph
 using Graphs
 
 const G = Graphs
 const NG = NamedGraphs
 const TN = TensorNetworkQuantumSimulator
-using TensorNetworkQuantumSimulator: BoundaryMPSCache
 using HyperDualNumbers
 using Adapt: adapt
 using Dictionaries
-using ITensors: inds, onehot, dag, commonind, op
 
 function prep_insertions(obs)
     if isnothing(obs)
@@ -45,7 +42,7 @@ end
 """
 Cluster expansion. See clustercorrections.jl
 """
-function cluster_weights(bpc::BeliefPropagationCache, clusters::Vector, egs::Vector{<:AbstractNamedGraph}, interaction_graph; obs = nothing)
+function cluster_weights(bpc::BeliefPropagationCache, clusters::Vector, egs::Vector, interaction_graph; obs = nothing)
 
     kwargs = prep_insertions(obs)
         
