@@ -66,11 +66,12 @@ end
 #Get the all edges incident to the region specified by the vector of edges passed
 function NamedGraphs.GraphsExtensions.boundary_edges(
         bpc::BeliefPropagationCache,
-        es::Vector{<:NamedEdge}
+        es::Vector{<:NamedEdge}; vs = []
     )
 
-    vs = unique(vcat(src.(es), dst.(es)))
-
+    if isempty(vs)
+        vs = unique(vcat(src.(es), dst.(es)))
+    end
     bpes = NamedEdge[]
     for v in vs
         incoming_es = boundary_edges(bpc, [v]; dir = :in)
@@ -89,9 +90,13 @@ function weight(bpc::BeliefPropagationCache, eg; project_out::Bool = true, op_st
         bpc, antiprojectors = sim_edgeinduced_subgraph(bpc, eg)
     end
     if isempty(es)
-        incoming_ms = ITensor[message(bpc, e) for e in boundary_edges(bpc, vs)]
+
+        # this is buggy
+        # incoming_ms = ITensor[message(bpc, e) for e in boundary_edges(bpc, vs)]
+	incoming_ms = ITensor[message(bpc, e) for e in boundary_edges(bpc, es; vs=vs)]
     else
         incoming_ms = ITensor[message(bpc, e) for e in boundary_edges(bpc, es)]
+	
     end
     local_tensors = reduce(vcat, bp_factors(bpc, vs; op_strings = op_strings, coeffs = coeffs, use_epsilon = true))
 
