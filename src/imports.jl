@@ -3,7 +3,7 @@ using StatsBase
 
 using Dictionaries: Dictionary, set!
 
-using Graphs: simplecycles_limited_length, has_edge, SimpleGraph, center, steiner_tree, is_tree, vertices
+using Graphs: simplecycles_limited_length, has_edge, SimpleGraph, center, steiner_tree, is_tree, vertices, nv
 
 using SimpleGraphConverter
 using SimpleGraphAlgorithms: edge_color
@@ -39,9 +39,10 @@ using NamedGraphs.GraphsExtensions:
     rem_edge,
     rem_vertex,
     add_edges,
-    rem_vertices
+    rem_vertices,
+    rem_vertex!
 
-using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_graph
+using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_graph, named_comb_tree, named_path_graph
 
 using TensorOperations
 

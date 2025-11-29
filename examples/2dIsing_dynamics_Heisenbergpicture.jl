@@ -1,13 +1,7 @@
 using TensorNetworkQuantumSimulator
-const TN = TensorNetworkQuantumSimulator
 
 using ITensors
-
-using NamedGraphs
-using Graphs
-const NG = NamedGraphs
-const G = Graphs
-using NamedGraphs.NamedGraphGenerators: named_grid
+using Graphs: center
 
 function main()
     nx, ny = 4, 4
@@ -53,12 +47,12 @@ function main()
         t = @timed ψ_bpc, errors =
             apply_gates(layer, ψ_bpc; apply_kwargs, verbose = false)
         #Reset the Frobenius norm to unity
-        ψ_bpc = TN.rescale(ψ_bpc)
-        println("Frobenius norm of O(t) is $(TN.partitionfunction(ψ_bpc))")
+        ψ_bpc = rescale(ψ_bpc)
+        println("Frobenius norm of O(t) is $(partitionfunction(ψ_bpc))")
 
         ψ = network(ψ_bpc)
         #Take traces
-        tr_ψt = inner(ψ, TN.identitytensornetworkstate(g, siteinds(ψ)); alg = "bp")
+        tr_ψt = inner(ψ, identitytensornetworkstate(g, siteinds(ψ)); alg = "bp")
         tr_ψtψ0 = inner(ψ, ψ0; alg = "bp")
         println("Trace(O(t)) is $(tr_ψt)")
         println("Trace(O(t)O(0)) is $(tr_ψtψ0)")

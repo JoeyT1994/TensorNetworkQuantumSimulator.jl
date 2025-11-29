@@ -86,11 +86,18 @@ function entanglement(
         bp_cache::BeliefPropagationCache,
         e::NamedEdge
     )
-    bp_cache = symmetric_gauge(bp_cache)
     ee = 0
-    m = message(bp_cache, e)
-    for d in diag(m)
-        ee -= abs(d) >= eps(real(eltype(m))) ? d * d * log2(d * d) : 0
+    m1, m2 = message(bp_cache, e), message(bp_cache, reverse(e))
+    edge_ind = only(virtualinds(bp_cache, e))
+    root_m1, root_m2 = first(pseudo_sqrt_inv_sqrt(m1)), first(pseudo_sqrt_inv_sqrt(m2))
+
+    S = root_m1 * replaceinds(root_m2, [edge_ind], [sim(edge_ind)])
+
+    _, S, _ = svd(S, edge_ind)
+
+    S = normalize(S)
+    for d in diag(S)
+        ee -= abs(d) >= eps(real(eltype(m1))) ? d * d * log(d * d) : 0
     end
     return abs(ee)
 end

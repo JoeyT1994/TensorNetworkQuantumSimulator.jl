@@ -9,7 +9,7 @@ function expect(
     denom = norm_sqr(alg, ψ; contraction_sequence_kwargs)
     out = []
     for obs in observables
-        op_strings, vs, coeff = collectobservable(obs)
+        op_strings, vs, coeff = collectobservable(obs, graph(ψ))
         if iszero(coeff)
             push!(out, 0)
             continue
@@ -56,38 +56,24 @@ function expect(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMP
 end
 
 function expect(
-        alg::Union{Algorithm"bp", Algorithm"boundarymps"},
-        cache::AbstractBeliefPropagationCache,
-        obs::Tuple;
-        bmps_messages_up_to_date = false,
+        alg::Algorithm"bp",
+        cache::BeliefPropagationCache,
+        obs::Tuple
     )
-    op_strings, obs_vs, coeff = collectobservable(obs)
+    op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
     iszero(coeff) && return 0
 
-    #For boundary MPS, must stay in partition
-    if alg == Algorithm("bp")
-        steiner_vs = length(obs_vs) == 1 ? obs_vs : collect(vertices(steiner_tree(network(cache), obs_vs)))
-    elseif alg == Algorithm("boundarymps")
-        partitions = unique(partitionvertices(cache, obs_vs))
-        length(partitions) > 1 && error("Observable support must be within a single partition (row/ column) of the graph for now.")
-        partition = only(partitions)
-        g = partition_graph(cache, partition)
-        steiner_vs = length(obs_vs) == 1 ? obs_vs : collect(vertices(steiner_tree(g, obs_vs)))
+    steiner_vs = length(obs_vs) == 1 ? obs_vs : collect(vertices(steiner_tree(network(cache), obs_vs)))
 
-        if !bmps_messages_up_to_date
-            cache = update_partition(cache, partition)
-        end
-    end
-
-    op_string_f = v -> v ∈ obs_vs ? op_strings[findfirst(x -> x == v, obs_vs)] : "I"
-
-    #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
     incoming_ms = incoming_messages(cache, steiner_vs)
     ψIψ_tensors = norm_factors(network(cache), steiner_vs)
     append!(ψIψ_tensors, incoming_ms)
     denom_seq = contraction_sequence(ψIψ_tensors; alg = "optimal", prune_tensors = true)
     denom = contract(ψIψ_tensors; sequence = denom_seq)[]
 
+    op_string_f = v -> v ∈ obs_vs ? op_strings[findfirst(x -> x == v, obs_vs)] : "I"
+
+    #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
     ψOψ_tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
     append!(ψOψ_tensors, incoming_ms)
     numer_seq = contraction_sequence(ψOψ_tensors; alg = "optimal", prune_tensors = true)
@@ -99,11 +85,26 @@ end
 function expect(
         alg::Algorithm"boundarymps",
         cache::BoundaryMPSCache,
+        obs::Tuple;
+        bmps_messages_up_to_date = false,
+    )
+    op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
+    iszero(coeff) && return 0
+
+    op_string_f = v -> v ∈ obs_vs ? op_strings[findfirst(x -> x == v, obs_vs)] : "I"
+
+    numer, denom = path_contract(cache, obs_vs, op_string_f; bmps_messages_up_to_date)
+    return coeff * numer[] / denom
+end
+
+function expect(
+        alg::Algorithm"boundarymps",
+        cache::BoundaryMPSCache,
         observables::Vector{<:Tuple};
         bmps_messages_up_to_date = false,
         kwargs...,
     )
-    obs_vs = observables_vertices(observables)
+    obs_vs = observables_vertices(observables, graph(cache))
     if !bmps_messages_up_to_date
         cache = update_partitions(cache, obs_vs)
     end
@@ -139,55 +140,49 @@ function expect(
         ψ::TensorNetworkState,
         observable::Union{Tuple, Vector{<:Tuple}};
         cache_update_kwargs = default_bmps_update_kwargs(ψ),
-        partition_by = boundarymps_partitioning(observable),
+        partition_by = boundarymps_partitioning(observable, graph(ψ)),
         mps_bond_dimension::Integer,
+        gauge_state = true,
         kwargs...,
     )
 
-    ψ_bmps = BoundaryMPSCache(ψ, mps_bond_dimension; partition_by)
+    ψ_bmps = BoundaryMPSCache(ψ, mps_bond_dimension; partition_by, gauge_state)
     cache_update_kwargs = (; cache_update_kwargs..., maxiter = default_bp_maxiter(ψ_bmps))
     ψ_bmps = update(ψ_bmps; cache_update_kwargs...)
 
-    obs_vs = observables_vertices(observable)
+    obs_vs = observables_vertices(observable, graph(ψ))
     ψ_bmps = update_partitions(ψ_bmps, obs_vs)
 
     return expect(alg, ψ_bmps, observable; bmps_messages_up_to_date = true, kwargs...)
 end
 
 #Process an observable into more readable form
-function collectobservable(obs::Tuple)
-    # unpack
-    op = obs[1]
-    verts = _tovec(obs[2])
+function collectobservable(obs::Tuple, g::NamedGraph)
+
     coeff = length(obs) == 2 ? 1 : last(obs)
-
-    length(verts) == 1 && return [op], verts, coeff
-
-    @assert !(op == "" && isempty(verts))
+    verts = observables_vertices(obs, g)
+    op = obs[1]
 
     length(op) != length(verts) && error("Invalid observable: need as many operators as vertices passed.")
     if op isa String
         op_strings = [string(o) for o in op]
     elseif op isa Vector{<:String}
         op_strings = [o for o in op]
+    else
+        error("Invalid observable, did not recognize operator specification. Either a single string (one pauli character per vertex) or a vector of strings (one string per vertex) expected.")
     end
 
     return op_strings, verts, coeff
 end
 
-function observables_vertices(observables::Vector{<:Tuple})
-    return reduce(vcat, [obs[2] for obs in observables])
-end
+observables_vertices(observable::Tuple, g::NamedGraph) = collect_vertices(observable[2], g)
+observables_vertices(observables::Vector{<:Tuple}, g::NamedGraph) = unique(reduce(vcat, [observables_vertices(obs, g) for obs in observables]))
 
-observables_vertices(obs::Tuple) = obs[2]
-_tovec(verts::Union{Tuple, AbstractVector}) = verts isa Tuple ? [verts] : collect(verts)
-_tovec(verts::NamedEdge) = [src(verts), dst(verts)]
-
-function boundarymps_partitioning(observable::Union{Tuple, Vector{<:Tuple}})
+function boundarymps_partitioning(observable::Union{Tuple, Vector{<:Tuple}}, g::NamedGraph)
     observables = observable isa Tuple ? [observable] : observable
     partitioning = nothing
     for o in observables
-        vs = observables_vertices(o)
+        vs = observables_vertices(o, g)
         if allequal(first.(vs)) && (partitioning == "row" || partitioning == nothing)
             partitioning = "row"
         elseif allequal(last.(vs)) && (partitioning == "col" || partitioning == nothing)

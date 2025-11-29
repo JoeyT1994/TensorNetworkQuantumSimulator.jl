@@ -33,10 +33,10 @@ function edge_scalar(
 end
 
 network(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
+graph(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 
 #Forward onto the network
 for f in [
-        :(graph),
         :(bp_factors),
         :(default_bp_maxiter),
         :(virtualinds),
@@ -46,6 +46,16 @@ for f in [
         :(default_message),
         :(siteinds),
         :(setindex_preserve!),
+    ]
+    @eval begin
+        function $f(bp_cache::AbstractBeliefPropagationCache, args...; kwargs...)
+            return $f(network(bp_cache), args...; kwargs...)
+        end
+    end
+end
+
+#Forward onto the graph
+for f in [
         :(NamedGraphs.edgetype),
         :(NamedGraphs.vertices),
         :(NamedGraphs.edges),
@@ -57,7 +67,7 @@ for f in [
     ]
     @eval begin
         function $f(bp_cache::AbstractBeliefPropagationCache, args...; kwargs...)
-            return $f(network(bp_cache), args...; kwargs...)
+            return $f(graph(bp_cache), args...; kwargs...)
         end
     end
 end

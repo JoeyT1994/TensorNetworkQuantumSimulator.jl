@@ -40,16 +40,12 @@ function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetwor
         if !((tns isa BeliefPropagationCache) || (tns isa TensorNetworkState))
             return error("Expected BeliefPropagationCache or TensorNetworkState for 'bp' algorithm, got $(typeof(tns))")
         end
-
-        if f ∈ ["sample"]
-            error("BP-based contraction not supported for this functionality yet")
-        end
     elseif alg == "loopcorrections"
         if !((tns isa BeliefPropagationCache) || (tns isa TensorNetworkState))
-            return error("Expected BeliefPropagationCache or TensorNetworkState for 'loop correctiom' algorithm, got $(typeof(tns))")
+            return error("Expected BeliefPropagationCache or TensorNetworkState for 'loop correction' algorithm, got $(typeof(tns))")
         end
 
-        if f ∈ ["normalize", "expect", "entanglement", "sample", "truncate"]
+        if f ∈ ["normalize", "expect", "entanglement", "sample", "truncate", "rdm"]
             return error("Loop correction-based contraction not supported for this functionality yet")
         end
     elseif alg == "boundarymps"
@@ -92,4 +88,37 @@ function safe_eigen(m::ITensor, args...; kwargs...)
         D, U = ITensors.eigen(m, args...; kwargs...)
         return adapt(dtype)(D), adapt(dtype)(U)
     end
+end
+
+function collect_vertices(e::NamedEdge, g::NamedGraph)
+    return collect_vertices([src(e), dst(e)], g)
+end
+
+function collect_vertices(es::Vector{<:NamedEdge}, g::NamedGraph)
+    return reduce(vcat, [collect_vertices(e, g) for e in es])
+end
+
+function collect_vertices(verts, g::NamedGraph)
+    vt = vertextype(g)
+
+    if vt == Any
+        if verts isa AbstractVector
+            return verts
+        else
+            return [verts]
+        end
+    end
+
+    verts isa vt && return [verts]
+    collected_verts = vt[]
+    for v in verts
+        if v isa vt
+            push!(collected_verts, v)
+        else
+            error("Vertex does not match the vertex type of the tensor network")
+        end
+    end
+
+    length(unique(collected_verts)) != length(collected_verts) && error("Repeated vertex in collection")
+    return collected_verts
 end
