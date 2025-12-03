@@ -12,18 +12,16 @@ struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITens
     messages::Dictionary{NamedEdge, M}
 end
 
-#TODO: Take `dot` without precontracting the messages to allow scaling to more complex messages
-# we shouldn't let this be negative, it doesn't make sense
 function message_diff(message_a::ITensor, message_b::ITensor)
     n_a, n_b = norm(message_a), norm(message_b)
     f = abs2(dot(message_a, message_b) / (n_a * n_b))
 
-    # or do abs(1-f)?
     return max(0,1 - f)
 end
 
 messages(bp_cache::BeliefPropagationCache) = bp_cache.messages
 network(bp_cache::BeliefPropagationCache) = bp_cache.network
+graph(bp_cache::BeliefPropagationCache) = graph(network(bp_cache))
 
 BeliefPropagationCache(network) = BeliefPropagationCache(network, default_messages())
 
@@ -113,9 +111,9 @@ function default_tolerance(type)
     return (type == Float64 || type == ComplexF64) && return 1.0e-8
 end
 
-function default_bp_update_kwargs(tns::TensorNetworkState)
-    maxiter = is_tree(tns) ? 1 : _default_bp_update_maxiter
-    tolerance = default_tolerance(ITensors.NDTensors.scalartype(tns))
+function default_bp_update_kwargs(tn::AbstractTensorNetwork)
+    maxiter = is_tree(tn) ? 1 : _default_bp_update_maxiter
+    tolerance = default_tolerance(ITensors.NDTensors.scalartype(tn))
     verbose = false
     return (; maxiter, tolerance, verbose)
 end

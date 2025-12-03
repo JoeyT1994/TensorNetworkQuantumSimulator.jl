@@ -55,6 +55,9 @@ function simple_update(
         Qᵥ₁ = contract([Qᵥ₁; dag.(inv_sqrt_envs_v1)])
         Qᵥ₂ = contract([Qᵥ₂; dag.(inv_sqrt_envs_v2)])
         updated_tensors = [Qᵥ₁ * Rᵥ₁, Qᵥ₂ * Rᵥ₂]
+        if normalize_tensors
+            s_values = normalize(s_values)
+        end
     end
 
     if normalize_tensors

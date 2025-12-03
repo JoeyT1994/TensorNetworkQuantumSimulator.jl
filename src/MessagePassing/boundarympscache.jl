@@ -1,4 +1,4 @@
-using NamedGraphs.PartitionedGraphs: PartitionedGraph, partitions_graph, partitionvertices, PartitionEdge, partitionedges, partitionedge, PartitionVertex
+using NamedGraphs.PartitionedGraphs: PartitionedGraph, partitions_graph, partitionvertices, PartitionEdge, partitionedges, partitionedge, PartitionVertex, unpartitioned_graph
 using NamedGraphs: add_edges!
 using SplitApplyCombine: group
 
@@ -52,7 +52,7 @@ function set_default_kwargs(alg::Algorithm"ITensorMPS", bmps_cache::BoundaryMPSC
     return Algorithm("ITensorMPS"; cutoff, normalize)
 end
 
-function default_bmps_update_kwargs(tns::TensorNetworkState)
+function default_bmps_update_kwargs(tn::AbstractTensorNetwork)
     verbose = false
     tolerance = nothing
     return (; tolerance, verbose)
@@ -80,6 +80,7 @@ end
 network(bmps_cache::BoundaryMPSCache) = bmps_cache.network
 messages(bmps_cache::BoundaryMPSCache) = bmps_cache.messages
 supergraph(bmps_cache::BoundaryMPSCache) = bmps_cache.supergraph
+graph(bmps_cache::BoundaryMPSCache) = unpartitioned_graph(supergraph(bmps_cache))
 mps_bond_dimension(bmps_cache::BoundaryMPSCache) = bmps_cache.mps_bond_dimension
 sorted_edges(bmps_cache::BoundaryMPSCache) = bmps_cache.sorted_edges
 function sorted_edges(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
@@ -139,7 +140,7 @@ function BoundaryMPSCache(
         tn::Union{TensorNetworkState, TensorNetwork, BilinearForm, QuadraticForm},
         mps_bond_dimension::Integer;
         partition_by = "row",
-        gauge_state = true
+        gauge_state = false
     )
     grouping_function = partition_by == "row" ? v -> first(v) : v -> last(v)
     group_sorting_function = partition_by == "row" ? v -> last(v) : v -> first(v)
@@ -148,8 +149,8 @@ function BoundaryMPSCache(
         tn = gauge_and_scale(tn)
     end
     pseudo_edges = pseudo_planar_edges(tn; grouping_function)
-    planar_graph = graph(tn)
-    NamedGraphs.add_edges!(planar_graph, pseudo_edges)
+    planar_graph = copy(graph(tn))
+    planar_graph = add_edges(planar_graph, pseudo_edges)
     vertex_groups = group(grouping_function, collect(vertices(planar_graph)))
     vertex_groups = map(x -> sort(x; by = group_sorting_function), vertex_groups)
     supergraph = PartitionedGraph(planar_graph, vertex_groups)
@@ -442,8 +443,9 @@ function generic_apply(O::MPO, M::MPS; normalize = true, kwargs...)
     loop_edges = filter(p -> !isempty(commoninds(O_tensors[first(p)], O_tensors[last(p)])) && abs(first(p) - last(p)) != 1, pairs)
     for (i, j) in loop_edges
         inbetween_vertices = [k for k in (i + 1):(j - 1)]
+        edge_to_split = (i, j)
         for k in inbetween_vertices
-            cind = only(commoninds(O_tensors[i], O_tensors[j]))
+            cind = only(commoninds(O_tensors[first(edge_to_split)], O_tensors[last(edge_to_split)]))
             d = adapt(datatype(O_tensors[k]))(denseblocks(delta(cind, cind')))
             O_tensors[j] *= d
             O_tensors[k] *= d
@@ -601,4 +603,57 @@ function sorted_edges(pg::PartitionedGraph, pe::PartitionEdge)
         ],
     )
     return sort(NamedEdge.(es); by = x -> findfirst(isequal(src(x)), src_vs))
+end
+
+function path_contract(
+        cache::BoundaryMPSCache, vs::Vector{<:Any}, op_string_f::Function; bmps_messages_up_to_date = false,
+        calculate_denom = true
+    )
+
+    #For boundary MPS, must stay in partition
+    partitions = unique(partitionvertices(cache, vs))
+    length(partitions) > 1 && error("Observable support must be within a single partition (row/ column) of the graph for now.")
+    partition = only(partitions)
+    g = partition_graph(cache, partition)
+
+    if !bmps_messages_up_to_date
+        cache = update_partition(cache, partition)
+    end
+    denom = calculate_denom ? vertex_scalar(cache, first(vs)) : 0
+
+    if length(vs) > 1
+        lvs = leaf_vertices(g)
+        @assert length(lvs) == 2
+        lv1, lv2 = first(lvs), last(lvs)
+        path = a_star(g, lv1, lv2)
+        lv1_vns = neighbors(g, lv1)
+        prev_edge = length(lv1_vns) == 1 ? nothing : NamedEdge(setdiff(lv1_vns, [lv2]) => lv1)
+        m = length(lv1_vns) == 1 ? nothing : message(cache, prev_edge)
+        for e in path
+            ignore_edges = prev_edge == nothing ? typeof(e)[reverse(e)] : typeof(e)[reverse(e), prev_edge]
+            incoming_ms = incoming_messages(cache, src(e); ignore_edges)
+            contract_list = norm_factors(network(cache), [src(e)]; op_strings = op_string_f)
+            append!(contract_list, incoming_ms)
+            m != nothing && push!(contract_list, m)
+
+            sequence = contraction_sequence(contract_list; alg = "optimal")
+            m = contract(contract_list; sequence)
+            prev_edge = e
+        end
+
+        contract_list = norm_factors(network(cache), [lv2]; op_strings = op_string_f)
+        incoming_ms = incoming_messages(cache, lv2; ignore_edges = typeof(last(path))[last(path)])
+        append!(contract_list, incoming_ms)
+        push!(contract_list, m)
+        sequence = contraction_sequence(contract_list; alg = "optimal")
+        numer = contract(contract_list; sequence)
+    else
+        contract_list = norm_factors(network(cache), vs; op_strings = op_string_f)
+        incoming_ms = incoming_messages(cache, only(vs))
+        append!(contract_list, incoming_ms)
+        sequence = contraction_sequence(contract_list; alg = "optimal")
+        numer = contract(contract_list; sequence)
+    end
+
+    return numer, denom
 end

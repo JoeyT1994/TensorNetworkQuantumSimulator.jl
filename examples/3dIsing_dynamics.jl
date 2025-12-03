@@ -1,13 +1,6 @@
 using TensorNetworkQuantumSimulator
-const TN = TensorNetworkQuantumSimulator
 
 using ITensors
-
-using NamedGraphs
-using Graphs
-const NG = NamedGraphs
-const G = Graphs
-using NamedGraphs.NamedGraphGenerators: named_grid
 
 function main()
     nx, ny, nz = 3, 3, 3

@@ -27,7 +27,7 @@ function apply_gates(
         ψ_bpc::BeliefPropagationCache;
         kwargs...,
     )
-    gate_vertices = [_tovec(gate[2]) for gate in circuit]
+    gate_vertices = [collect_vertices(gate[2], graph(ψ_bpc)) for gate in circuit]
     circuit = toitensor(circuit, siteinds(network(ψ_bpc)))
     return apply_gates(circuit, ψ_bpc; gate_vertices, kwargs...)
 end
@@ -127,3 +127,5 @@ function _cacheupdate_check(affected_indices::Set, gate::ITensor; inds_per_site 
     length(indices) == 4 * inds_per_site && any(ind in affected_indices for ind in indices) && return true
     return false
 end
+
+const apply_circuit = apply_gates
