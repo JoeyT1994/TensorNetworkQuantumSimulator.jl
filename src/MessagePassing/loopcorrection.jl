@@ -1,4 +1,5 @@
 using NamedGraphs.GraphsExtensions: boundary_edges
+using HyperDualNumbers
 
 function loopcorrected_partitionfunction(
         bp_cache::BeliefPropagationCache,
@@ -65,32 +66,51 @@ end
 #Get the all edges incident to the region specified by the vector of edges passed
 function NamedGraphs.GraphsExtensions.boundary_edges(
         bpc::BeliefPropagationCache,
-        es::Vector{<:NamedEdge},
-    )
+        es::Vector{<:NamedEdge})
+
     vs = unique(vcat(src.(es), dst.(es)))
+    
     bpes = NamedEdge[]
     for v in vs
-        incoming_es = NamedGraphs.GraphsExtensions.boundary_edges(bpc, [v]; dir = :in)
+        incoming_es = boundary_edges(bpc, [v]; dir = :in)
         incoming_es = filter(e -> e ∉ es && reverse(e) ∉ es, incoming_es)
         append!(bpes, incoming_es)
     end
     return bpes
 end
 
-#Compute the contraction of the bp configuration specified by the edge induced subgraph eg
-function weight(bpc::BeliefPropagationCache, eg)
+#Compute the contraction of the bp configuration specified by the edge induced subgraph eg. Insert I + epsilon O on up to two sites.
+function weight(bpc::BeliefPropagationCache, eg; project_out::Bool = true, op_strings::Function = v->"I", coeffs::Function = v->1, rescales = Dictionary(1 for v=vertices(eg)))
     vs = collect(vertices(eg))
     es = collect(edges(eg))
-    bpc, antiprojectors = sim_edgeinduced_subgraph(bpc, eg)
-    incoming_ms =
-        ITensor[message(bpc, e) for e in boundary_edges(bpc, es)]
-    local_tensors = reduce(vcat, [bp_factors(bpc, v) for v in vs])
-    ts = [incoming_ms; local_tensors; antiprojectors]
+
+    if project_out
+        bpc, antiprojectors = sim_edgeinduced_subgraph(bpc, eg)
+    end
+    if isempty(es)
+        incoming_ms = ITensor[message(bpc, e) for e in boundary_edges(bpc, vs; dir=:in)]
+    else
+        incoming_ms = ITensor[message(bpc, e) for e in boundary_edges(bpc, es)]
+	
+    end
+    if typeof(network(bpc))<:TensorNetworkState
+        local_tensors = reduce(vcat, bp_factors(bpc, vs; op_strings = op_strings, coeffs = coeffs, use_epsilon = true))
+    else
+        local_tensors = reduce(vcat, [bp_factors(bpc, v) for v=vs])
+    end
+
+    if project_out
+        ts = [incoming_ms; local_tensors; antiprojectors]
+    else
+        ts = [incoming_ms; local_tensors]
+    end
+    
     seq = any(hasqns.(ts)) ? contraction_sequence(ts; alg = "optimal") : contraction_sequence(ts; alg = "einexpr", optimizer = Greedy())
-    return contract(ts; sequence = seq)[]
+    output = contract(ts; sequence = seq)[]
+    return output / prod([rescales[v] for v=vs])
 end
 
 #Vectorized version of weight
-function weights(bpc::BeliefPropagationCache, egs)
-    return [weight(bpc, eg) for eg in egs]
+function weights(bpc::BeliefPropagationCache, egs; kwargs...)
+    return [weight(bpc, eg; kwargs...) for eg in egs]
 end
