@@ -161,13 +161,13 @@ function calculate_b_nos(ms, ps, mobius_nos)
     return [-(length(ps[i])-1)/mobius_nos[i] for i in 1:length(ms)]
 end
 
-function get_psis(bs, T::TensorNetwork)
+function get_psis(bs, T::TensorNetwork; include_factors = true)
     potentials = []
     for b in bs
         pot = ITensor(scalartype(T), 1.0, b)
         for v in vertices(T)
             inds_v = inds(T[v])
-            if issubset(Set(inds_v), Set(b))
+            if issubset(Set(inds_v), Set(b)) && include_factors
                 pot = special_multiply(pot, T[v])
             end
         end
