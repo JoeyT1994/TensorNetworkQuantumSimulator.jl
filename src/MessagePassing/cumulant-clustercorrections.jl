@@ -1,4 +1,4 @@
-using Graphs: nv, induced_subgraph, is_connected, connected_components
+using Graphs: ne, nv, induced_subgraph, is_connected, connected_components
 using NamedGraphs
 using NamedGraphs: AbstractNamedGraph, position_graph
 using Dictionaries
@@ -330,10 +330,10 @@ Generate graphs up to isomorphism and then embed in the larger graph g.
 max_v is max number of vertices
 min_v is min number of vertices (e.g. 4 on square lattice)
 """
-function generate_embedded_leafless_graphs(g::AbstractGraph, max_v::Int; min_v::Int=4, triangle_free::Bool = true, min_deg::Int = 2)
+function generate_embedded_leafless_graphs(g::AbstractGraph, max_v::Int; min_v::Int=4, triangle_free::Bool = true, min_deg::Int = 2, max_e=Inf)
     @assert min_deg >= 2
     k = maximum([degree(g,v) for v=vertices(g)])
-    mygraphs = [generate_graphs(no_vertices, k*no_vertices; triangle_free = triangle_free, min_deg = min_deg, max_deg = k, connected = true) 
+    mygraphs = [generate_graphs(no_vertices, Int(min(max_e,k*no_vertices)); triangle_free = triangle_free, min_deg = min_deg, max_deg = k, connected = true) 
         for no_vertices=min_v:max_v]
 
     # now embed each one
@@ -356,7 +356,7 @@ Return (R, Rmax, c) where:
 """
 function build_region_family(g::SimpleGraph, C::Int; min_deg::Int=2, min_v::Int=4,triangle_free::Bool=true, smart::Bool=true, verbose::Bool=false)
     verbose && println("Finding graphs")
-    @time regs = generate_embedded_leafless_graphs(g, C; min_deg = min_deg, min_v=min_v,triangle_free=triangle_free)
+    @time regs = generate_embedded_leafless_graphs(g, C; max_e = ne(g), min_deg = min_deg, min_v=min_v,triangle_free=triangle_free)
     build_clusters(g, regs; loop_only = true,smart=smart, verbose=verbose)
 end
 

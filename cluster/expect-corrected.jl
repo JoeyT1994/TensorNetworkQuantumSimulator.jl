@@ -53,8 +53,11 @@ function cluster_weights(bpc::BeliefPropagationCache, clusters::Vector, egs::Vec
 
     # Rescale the messages, but deal with the vertices separately
     TN.rescale_messages!(bpc)
-    vns = Dictionary(TN.vertex_scalar(bpc, v; use_epsilon = true, kwargs...) for v=vertices(network(bpc).tensornetwork.graph))
-    
+    if typeof(network(bpc))<:TensorNetworkState
+        vns = Dictionary(TN.vertex_scalar(bpc, v; use_epsilon = true, kwargs...) for v=vertices(graph(bpc)))
+    else
+        vns = Dictionary(TN.vertex_scalar(bpc, v) for v=vertices(graph(bpc)))
+    end
     # calculate weight of each generalized loop first
     wts = TN.weights(bpc, egs; rescales = vns, kwargs...)
     
@@ -82,16 +85,20 @@ function cc_weights(bpc::BeliefPropagationCache, regions::Vector, counting_nums:
     kwargs = prep_insertions(obs)
         
     use_g = findall(gg->counting_nums[gg] != 0, regions)
-    egs = [induced_subgraph(network(bpc).tensornetwork.graph, gg)[1] for gg=regions[use_g]]
+    egs = [induced_subgraph(graph(bpc), gg)[1] for gg=regions[use_g]]
     
-    isempty(egs) && return logZbp, [], []
+    isempty(egs) && return [], []
 
     # Rescale the messages, but deal with the vertices separately
     if rescale
         TN.rescale_messages!(bpc)
-    	vns = Dictionary(TN.vertex_scalar(bpc, v; use_epsilon = true, kwargs...) for v=vertices(network(bpc).tensornetwork.graph))
+	if typeof(network(bpc))<:TensorNetworkState
+    	    vns = Dictionary(TN.vertex_scalar(bpc, v; use_epsilon = true, kwargs...) for v=vertices(graph(bpc)))
+	else
+	    vns = Dictionary(TN.vertex_scalar(bpc, v) for v=vertices(graph(bpc)))
+	end
     else
-        vns = Dictionary(1 for v=vertices(network(bpc).tensornetwork.graph))
+        vns = Dictionary(1 for v=vertices(graph(bpc)))
     end
         
     # calculate weight of each cluster first
@@ -125,4 +132,18 @@ function cluster_correlation(bpc::BeliefPropagationCache, clusters::Vector, egs:
     else
         return cluster_wts, [d.epsilon12 for d=cumul_dat]
     end
+end
+
+function cluster_free(bpc::BeliefPropagationCache, clusters::Vector, egs::Vector, interaction_graph)
+    cluster_wts, logZs, ursells = cluster_weights(bpc, clusters, egs, interaction_graph)
+    cumul_dat = cumsum([sum([logZs[i][j] * ursells[i][j] for j=1:length(logZs[i])]) for i=1:length(logZs)])
+    return cluster_wts, cumul_dat
+end
+
+function cc_free(bpc::BeliefPropagationCache, regions::Vector, counting_nums::Dict; logZbp=nothing)
+    logZs, cnums = cc_weights(bpc, regions, counting_nums; rescale=true)
+    if isnothing(logZbp)
+        logZbp = TN.free_energy(bpc)
+    end
+    return sum(logZs .* cnums) + logZbp
 end

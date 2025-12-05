@@ -18,9 +18,9 @@ function rescale_vertices!(
     return not_implemented()
 end
 
-function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex; op_strings::Function = v->"I", coeffs::Function = v->1, use_epsilon::Bool = false)
+function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex; kwargs...)
     incoming_ms = incoming_messages(bp_cache, vertex)
-    state = bp_factors(bp_cache, vertex; op_strings = op_strings, coeffs = coeffs, use_epsilon = use_epsilon)
+    state = bp_factors(bp_cache, vertex; kwargs...)
     contract_list = [state; incoming_ms]
     sequence = contraction_sequence(contract_list; alg = "optimal")
     return contract(contract_list; sequence)[]
@@ -126,7 +126,11 @@ function edge_scalars(
 end
 
 function scalar_factors_quotient(bp_cache::AbstractBeliefPropagationCache; kwargs...)
-    return vertex_scalars(bp_cache; kwargs...), edge_scalars(bp_cache)
+    if typeof(network(bp_cache))<:TensorNetworkState
+        return vertex_scalars(bp_cache; kwargs...), edge_scalars(bp_cache)
+    else
+        return vertex_scalars(bp_cache), edge_scalars(bp_cache)
+    end
 end
 
 function incoming_messages(
