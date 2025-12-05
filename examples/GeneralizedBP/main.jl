@@ -17,7 +17,7 @@ end
 include("utils.jl")
 include("generalizedbp.jl")
 
-Random.seed!(1654)
+#Random.seed!(1654)
 
 n =3
 g = named_grid((n,n); periodic = false)
@@ -39,6 +39,7 @@ println("Running Generalized Belief Propagation on the norm of a $n x $n random 
 T = TensorNetwork(Dictionary(vertices(g), [ψ[v]*ψdag[v] for v in vertices(g)]))
 TensorNetworkQuantumSimulator.combine_virtualinds!(T)
 
+#=
 bs = construct_gbp_bs(T)
 ms = construct_ms(bs)
 ps = all_parents(ms, bs)
@@ -48,19 +49,20 @@ cs = children(ms, ps, bs)
 b_nos = calculate_b_nos(ms, ps, mobius_nos)
 
 gbp_f = generalized_belief_propagation(T, bs, ms, ps, cs, b_nos, mobius_nos; niters = 100, rate = 0.3)
-bp_f = -log(contract(T; alg = "bp"))
+=#
+bp_f = -log(TN.contract(T; alg = "bp"))
 
-println("GBP free energy: ", gbp_f)
+#println("GBP free energy: ", gbp_f)
 println("BP free energy: ", bp_f)
 
 T_bpc = update(BeliefPropagationCache(T))
 f_lc = -log(loopcorrected_partitionfunction(T_bpc, 4))
 println("Loop corrected free energy (length 4): ", f_lc)
 
-f_exact = -log(contract(T; alg = "exact"))
+f_exact = -log(TN.contract(T; alg = "exact"))
 println("Exact free energy: ", f_exact)
 
 println("-------------------------------------")
 println("Simple BP absolute error on free energy: ", abs(bp_f - f_exact))
-println("Generalized BP absolute error on free energy: ", abs(gbp_f - f_exact))
+#println("Generalized BP absolute error on free energy: ", abs(gbp_f - f_exact))
 println("Loop corrected BP absolute error on free energy: ", abs(f_lc - f_exact))

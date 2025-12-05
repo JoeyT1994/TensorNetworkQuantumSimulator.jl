@@ -51,7 +51,7 @@ function message_diffs(msgs1, msgs2)
     return diff / length(keys(msgs1))
 end
 
-function generalized_belief_propagation(T::TensorNetwork, bs, ms, ps, cs, b_nos, mobius_nos; niters::Int, rate::Number)
+function generalized_belief_propagation(T::TensorNetwork, bs, ms, ps, cs, b_nos, mobius_nos; niters::Int, rate::Number, verbose::Bool = false)
     psi_alphas = get_psis(bs, T)
     psi_betas = get_psis(ms, T; include_factors = true)
     msgs = initialize_messages(ms, bs, ps, T)
@@ -61,7 +61,7 @@ function generalized_belief_propagation(T::TensorNetwork, bs, ms, ps, cs, b_nos,
 
         diff = message_diffs(new_msgs, msgs)
 
-        if i % 10 == 0
+        if i % 10 == 0 && verbose
             println("Iteration $i")
             println("Average difference in messages following most recent GBP update: $diff")
         end

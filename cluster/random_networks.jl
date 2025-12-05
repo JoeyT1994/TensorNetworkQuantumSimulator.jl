@@ -1,6 +1,8 @@
 using ITensors
 using Random
 using ProgressMeter
+include("generalizedbp.jl")
+include("utils.jl")
 include("expect-corrected.jl")
 
 function uniform_random_itensor(rng::AbstractRNG, ::Type{S}, is; a = 0) where {S <: Number}
@@ -41,16 +43,31 @@ function random_free(region_data, χ; state::Bool = false, num_samples::Int=10)
     cc_data = zeros(length(region_data.regions), num_samples)
     loop_data = zeros(num_samples)
     exact_data = zeros(num_samples)
+    gbp_data = zeros(num_samples)
     @showprogress for i=1:num_samples
         if state
-	    psi = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
-   	    exact_data[i] = real(log(TN.norm_sqr(psi; alg="exact")))
+	    ψ = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
+	    # #Take its dagger
+	    ψdag = map_virtualinds(prime, map_tensors(dag, ψ))
+
+	    # Build the norm tensor network ψψ† and combine pairs of virtual inds
+	    T = TensorNetwork(Dictionary(vertices(region_data.graph), [ψ[v]*ψdag[v] for v in vertices(region_data.graph)]))
+	    TensorNetworkQuantumSimulator.combine_virtualinds!(T)
 	else
-            psi = uniform_random_tensornetwork(Float64, region_data.graph; bond_dimension=χ)
-    	    exact_data[i] = log(TN.contract(psi; alg="exact"))
+            T = uniform_random_tensornetwork(Float64, region_data.graph; bond_dimension=χ)
 	end
-    	bpc = BeliefPropagationCache(psi)
+	
+    	bpc = BeliefPropagationCache(T)
 	bpc = update(bpc)
+	bs = construct_gbp_bs(T)
+	ms = construct_ms(bs)
+	ps = all_parents(ms, bs)
+	mobius_nos = mobius_numbers(ms, ps)
+	ms, ps, mobius_nos = prune_ms_ps(ms, ps, mobius_nos)
+	cs = children(ms, ps, bs)
+	b_nos = calculate_b_nos(ms, ps, mobius_nos)
+	
+	gbp_data[i] = -real(generalized_belief_propagation(T, bs, ms, ps, cs, b_nos, mobius_nos; niters = 100, rate = 0.3))
 	loop_data[i] = real(log(TN.loopcorrected_partitionfunction(bpc, 4)))
 	cluster_data[:,i] = real.(cluster_free(bpc, region_data.clusters, region_data.egs, region_data.interaction_graph)[2])
 	for j=1:length(region_data.regions)
@@ -58,5 +75,5 @@ function random_free(region_data, χ; state::Bool = false, num_samples::Int=10)
 	end
     end
 
-    return (cluster_data = cluster_data, cc_data = cc_data, loop_data = loop_data, exact_data = exact_data)
+    return (gbp_data = gbp_data, cluster_data = cluster_data, cc_data = cc_data, loop_data = loop_data, exact_data = exact_data)
 end
