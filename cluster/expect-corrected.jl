@@ -12,7 +12,7 @@ using Dictionaries
 
 function prep_insertions(obs)
     if isnothing(obs)
-        return (coeffs = identity, op_strings = v->"I")
+        return (coeffs = v->1, op_strings = v->"I")
     end
     op_strings, verts, _ = TN.collectobservable(obs)
     @assert length(verts) <= 2

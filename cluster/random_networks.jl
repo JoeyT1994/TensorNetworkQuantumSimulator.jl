@@ -36,22 +36,26 @@ function initialize_region_graphs(L, emax, v_counts; periodic=false)
     return (graph = g, clusters = clusters, egs = egs, interaction_graph = ig, regions = regs, counting_nums = cnums)
 end
 
-function random_free(region_data, χ; num_samples::Int=10)
+function random_free(region_data, χ; state::Bool = false, num_samples::Int=10)
     cluster_data = zeros(length(unique([c.weight for c=region_data.clusters]))+1, num_samples)
     cc_data = zeros(length(region_data.regions), num_samples)
     loop_data = zeros(num_samples)
     exact_data = zeros(num_samples)
-
     @showprogress for i=1:num_samples
-        psi = uniform_random_tensornetwork(Float64, region_data.graph; bond_dimension=χ)
+        if state
+	    psi = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
+   	    exact_data[i] = real(log(TN.norm_sqr(psi; alg="exact")))
+	else
+            psi = uniform_random_tensornetwork(Float64, region_data.graph; bond_dimension=χ)
+    	    exact_data[i] = log(TN.contract(psi; alg="exact"))
+	end
     	bpc = BeliefPropagationCache(psi)
 	bpc = update(bpc)
-	loop_data[i] = log(TN.loopcorrected_partitionfunction(bpc, 4))
-	cluster_data[:,i] = cluster_free(bpc, region_data.clusters, region_data.egs, region_data.interaction_graph)[2]
+	loop_data[i] = real(log(TN.loopcorrected_partitionfunction(bpc, 4)))
+	cluster_data[:,i] = real.(cluster_free(bpc, region_data.clusters, region_data.egs, region_data.interaction_graph)[2])
 	for j=1:length(region_data.regions)
-	    cc_data[j,i] = cc_free(bpc, region_data.regions[j], region_data.counting_nums[j]; logZbp = cluster_data[1,i])
+	    cc_data[j,i] = real.(cc_free(bpc, region_data.regions[j], region_data.counting_nums[j]; logZbp = cluster_data[1,i]))
 	end
-	exact_data[i] = log(TN.contract(psi; alg="exact"))
     end
 
     return (cluster_data = cluster_data, cc_data = cc_data, loop_data = loop_data, exact_data = exact_data)

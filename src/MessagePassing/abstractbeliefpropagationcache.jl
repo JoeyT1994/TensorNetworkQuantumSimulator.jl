@@ -286,7 +286,6 @@ end
 function free_energy(bp_cache::AbstractBeliefPropagationCache; op_strings::Function = v->"I", coeffs::Function = v->1)
     numerator_terms, denominator_terms = scalar_factors_quotient(bp_cache; op_strings = op_strings, coeffs = coeffs, use_epsilon = true)
 
-    # Skip this piece for now
     if any(t -> get_real_part(t) < 0, numerator_terms)
         numerator_terms = adapt_complex.(numerator_terms)
     end
