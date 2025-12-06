@@ -10,11 +10,11 @@ using HyperDualNumbers
 using Adapt: adapt
 using Dictionaries
 
-function prep_insertions(obs)
+function prep_insertions(obs, g)
     if isnothing(obs)
         return (coeffs = v->1, op_strings = v->"I")
     end
-    op_strings, verts, _ = TN.collectobservable(obs)
+    op_strings, verts, _ = TN.collectobservable(obs, g)
     @assert length(verts) <= 2
 
     function hyper_coeff(v)
@@ -44,7 +44,7 @@ Cluster expansion. See clustercorrections.jl
 """
 function cluster_weights(bpc::BeliefPropagationCache, clusters::Vector, egs::Vector, interaction_graph; obs = nothing)
 
-    kwargs = prep_insertions(obs)
+    kwargs = prep_insertions(obs, graph(bpc))
         
     logZbp = TN.free_energy(bpc; kwargs...)
     isempty(egs) && return [0], [[logZbp]], [[1]]
@@ -82,7 +82,7 @@ Cluster cumulant expansion. See cumulant-clustercorrections.jl
 """
 function cc_weights(bpc::BeliefPropagationCache, regions::Vector, counting_nums::Dict; obs = nothing, rescale::Bool = false)
 
-    kwargs = prep_insertions(obs)
+    kwargs = prep_insertions(obs, graph(bpc))
         
     use_g = findall(gg->counting_nums[gg] != 0, regions)
     egs = [induced_subgraph(graph(bpc), gg)[1] for gg=regions[use_g]]
@@ -112,7 +112,7 @@ onepoint or twopoint connected correlation function, using cluster cumulant expa
 """
 function cc_correlation(bpc::BeliefPropagationCache, regions::Vector, counting_nums::Dict, obs)
     logZs, cnums = cc_weights(bpc, regions, counting_nums; obs = obs)
-    op_strings, verts, _ = TN.collectobservable(obs)
+    op_strings, verts, _ = TN.collectobservable(obs, graph(bpc))
     if length(verts)==1
         return sum(logZs .* cnums).epsilon1
     else
@@ -125,7 +125,7 @@ onepoint or twopoint connected correlation function, using cluster expansion
 """
 function cluster_correlation(bpc::BeliefPropagationCache, clusters::Vector, egs::Vector, interaction_graph, obs)
     cluster_wts, logZs, ursells = cluster_weights(bpc, clusters, egs, interaction_graph; obs = obs)
-    op_strings, verts, _ = TN.collectobservable(obs)
+    op_strings, verts, _ = TN.collectobservable(obs, graph(bpc))
     cumul_dat = cumsum([sum([logZs[i][j] * ursells[i][j] for j=1:length(logZs[i])]) for i=1:length(logZs)])
     if length(verts)==1
         return cluster_wts, [d.epsilon1 for d=cumul_dat]

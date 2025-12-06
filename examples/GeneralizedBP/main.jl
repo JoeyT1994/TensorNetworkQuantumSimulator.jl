@@ -17,11 +17,10 @@ end
 include("utils.jl")
 include("generalizedbp.jl")
 
-#Random.seed!(1654)
-
 n =3
 g = named_grid((n,n); periodic = false)
 #g = named_hexagonal_lattice_graph(3,3 )
+loop_size = 4
 #Build physical site indices for spin-1/2 degrees of freedom
 s = siteinds("S=1/2", g)
 
@@ -31,6 +30,7 @@ println("Running Generalized Belief Propagation on the norm of a $n x $n random 
 ψ = random_tensornetworkstate(ComplexF64, g, s; bond_dimension = 2)
 #tensors = [uniform_random_itensor(scalartype(ψ), inds(ψ[v])) for v in vertices(g)]
 #ψ = TensorNetworkState(Dictionary(collect(vertices(g)), tensors))
+#ψ = gauge_and_scale(ψ)
 ψ = normalize(ψ; alg = "bp")
 # #Take its dagger
 ψdag = map_virtualinds(prime, map_tensors(dag, ψ))
@@ -39,8 +39,8 @@ println("Running Generalized Belief Propagation on the norm of a $n x $n random 
 T = TensorNetwork(Dictionary(vertices(g), [ψ[v]*ψdag[v] for v in vertices(g)]))
 TensorNetworkQuantumSimulator.combine_virtualinds!(T)
 
-#=
-bs = construct_gbp_bs(T)
+T_bp_messages = nothing
+bs = construct_gbp_bs(T, loop_size)
 ms = construct_ms(bs)
 ps = all_parents(ms, bs)
 mobius_nos = mobius_numbers(ms, ps)
@@ -48,21 +48,20 @@ ms, ps, mobius_nos = prune_ms_ps(ms, ps, mobius_nos)
 cs = children(ms, ps, bs)
 b_nos = calculate_b_nos(ms, ps, mobius_nos)
 
-gbp_f = generalized_belief_propagation(T, bs, ms, ps, cs, b_nos, mobius_nos; niters = 100, rate = 0.3)
-=#
-bp_f = -log(TN.contract(T; alg = "bp"))
+gbp_f = generalized_belief_propagation(T, bs, ms, ps, cs, b_nos, mobius_nos; niters = 300, rate = 0.3, simple_bp_messages = T_bp_messages)
+bp_f = -log(contract(T; alg = "bp"))
 
-#println("GBP free energy: ", gbp_f)
+println("GBP free energy: ", gbp_f)
 println("BP free energy: ", bp_f)
 
 T_bpc = update(BeliefPropagationCache(T))
-f_lc = -log(loopcorrected_partitionfunction(T_bpc, 4))
-println("Loop corrected free energy (length 4): ", f_lc)
+f_lc = -log(loopcorrected_partitionfunction(T_bpc, loop_size))
+println("Loop corrected free energy (length $(loop_size)): ", f_lc)
 
 f_exact = -log(TN.contract(T; alg = "exact"))
 println("Exact free energy: ", f_exact)
 
 println("-------------------------------------")
 println("Simple BP absolute error on free energy: ", abs(bp_f - f_exact))
-#println("Generalized BP absolute error on free energy: ", abs(gbp_f - f_exact))
+println("Generalized BP absolute error on free energy: ", abs(gbp_f - f_exact))
 println("Loop corrected BP absolute error on free energy: ", abs(f_lc - f_exact))

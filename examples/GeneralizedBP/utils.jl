@@ -39,24 +39,24 @@ end
 
 
 function construct_bp_bs(t::AbstractTensorNetwork)
-    return collect([[i for i in inds(t[v])] for v in vertices(t)])
+    es = edges(t)
+    return [[NamedEdge(v => vn) ∈ es ? NamedEdge(v => vn) : NamedEdge(vn => v)  for vn in neighbors(t, v)] for v in vertices(t)]
 end
 
-function construct_gbp_bs(t::AbstractTensorNetwork)
+function construct_gbp_bs(t::AbstractTensorNetwork, loop_length::Int)
+    t_edges = edges(t)
     bs = construct_bp_bs(t)
-    cycles = unique_simplecycles_limited_length(t, 4)
+    cycles = unique_simplecycles_limited_length(t, loop_length)
     gbp_bs = copy(bs)
     for cycle in cycles
-        is = Index[]
+        es = NamedEdge[]
         for (i, v) in enumerate(cycle)
-            if i != length(cycle)
-                index = only(virtualinds(t, NamedEdge(v => cycle[i+1])))
-            else
-                index = only(virtualinds(t, NamedEdge(v => cycle[1])))
-            end
-            push!(is, index)
+            e = i != length(cycle) ? NamedEdge(v => cycle[i+1]) : NamedEdge(v => cycle[1])
+            e = e ∈ t_edges ? e : reverse(e)
+            @assert e ∈ t_edges
+            push!(es, e)
         end
-        push!(gbp_bs, is)  # Add first vertex to close the loop
+        push!(gbp_bs, es)  # Add first vertex to close the loop
     end
 
     return gbp_bs
@@ -164,10 +164,11 @@ end
 function get_psis(bs, T::TensorNetwork; include_factors = true)
     potentials = []
     for b in bs
-        pot = ITensor(scalartype(T), 1.0, b)
+        e_inds = reduce(vcat, [virtualinds(T, e) for e in b])
+        pot = ITensor(scalartype(T), 1.0, e_inds)
         for v in vertices(T)
             inds_v = inds(T[v])
-            if issubset(Set(inds_v), Set(b)) && include_factors
+            if issubset(Set(inds_v), Set(e_inds)) && include_factors
                 pot = special_multiply(pot, T[v])
             end
         end
@@ -176,11 +177,18 @@ function get_psis(bs, T::TensorNetwork; include_factors = true)
     return potentials
 end
 
-function initialize_messages(ms, bs, ps, T)
+function initialize_messages(ms, bs, ps, T; simple_bp_messages = nothing)
     ms_dict = Dictionary{Tuple{Int, Int}, ITensor}()
     for (i, m) in enumerate(ms)
         for p in ps[i]
-            set!(ms_dict, (p, i), ITensor(scalartype(T), 1.0, m))
+            inds = reduce(vcat, [virtualinds(T, e) for e in m])
+            msg = ITensor(scalartype(T), 1.0, inds)
+            if !isnothing(simple_bp_messages)
+                for e in m
+                    msg = special_multiply(msg, simple_bp_messages[e])
+                end
+            end
+            set!(ms_dict, (p, i), msg)
         end       
     end
     return ms_dict

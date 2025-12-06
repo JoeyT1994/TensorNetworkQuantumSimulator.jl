@@ -25,6 +25,19 @@ function uniform_random_tensornetwork(eltype, g::AbstractGraph; bond_dimension::
     return TensorNetwork(tensors, g)
 end
 
+function initialize_region_graphs_correlation(L, emax, v_counts, verts; periodic=false)
+    g = named_grid((L,L); periodic=periodic)
+    clusters, egs, ig = TN.enumerate_clusters(g, emax; min_v = length(verts), triangle_free=true, must_contain=verts, min_deg = 1)
+    regs = []
+    cnums = []
+    for v=v_counts
+        R,_,c=TN.build_region_family_correlation(g, verts[1], verts[end], v)
+	push!(regs, R)
+	push!(cnums, c)
+    end
+    return (graph = g, clusters = clusters, egs = egs, interaction_graph = ig, regions = regs, counting_nums = cnums)
+end
+
 function initialize_region_graphs(L, emax, v_counts; periodic=false)
     g = named_grid((L,L); periodic=periodic)
     clusters, egs, ig = TN.enumerate_clusters(g, emax; min_v = 4, triangle_free=true)
@@ -59,7 +72,8 @@ function random_free(region_data, χ; state::Bool = false, num_samples::Int=10)
 	
     	bpc = BeliefPropagationCache(T)
 	bpc = update(bpc)
-	bs = construct_gbp_bs(T)
+	bs = construct_gbp_bs(T, 4)
+	T_bp_messages = nothing	
 	ms = construct_ms(bs)
 	ps = all_parents(ms, bs)
 	mobius_nos = mobius_numbers(ms, ps)
@@ -67,13 +81,39 @@ function random_free(region_data, χ; state::Bool = false, num_samples::Int=10)
 	cs = children(ms, ps, bs)
 	b_nos = calculate_b_nos(ms, ps, mobius_nos)
 	
-	gbp_data[i] = -real(generalized_belief_propagation(T, bs, ms, ps, cs, b_nos, mobius_nos; niters = 100, rate = 0.3))
+	gbp_data[i] = -real(generalized_belief_propagation(T, bs, ms, ps, cs, b_nos, mobius_nos; niters = 100, rate = 0.3, simple_bp_messages = T_bp_messages))
 	loop_data[i] = real(log(TN.loopcorrected_partitionfunction(bpc, 4)))
 	cluster_data[:,i] = real.(cluster_free(bpc, region_data.clusters, region_data.egs, region_data.interaction_graph)[2])
 	for j=1:length(region_data.regions)
 	    cc_data[j,i] = real.(cc_free(bpc, region_data.regions[j], region_data.counting_nums[j]; logZbp = cluster_data[1,i]))
 	end
+	exact_data[i] = real(log(TN.contract(T;alg="exact")))
     end
 
     return (gbp_data = gbp_data, cluster_data = cluster_data, cc_data = cc_data, loop_data = loop_data, exact_data = exact_data)
+end
+
+function random_onepoint(region_data, χ, obs; num_samples::Int=10, get_exact::Bool=true, mps_bond_dimensions=[])
+    cluster_data = zeros(length(unique([c.weight for c=region_data.clusters]))+1, num_samples)
+    cc_data = zeros(length(region_data.regions), num_samples)
+    loop_data = zeros(num_samples)
+    exact_data = zeros(num_samples)
+    bmps_data = zeros(length(mps_bond_dimensions), num_samples)
+    @showprogress for i=1:num_samples
+        ψ = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
+    	bpc = BeliefPropagationCache(ψ)
+	bpc = update(bpc)
+	cluster_data[:,i] = real.(cluster_correlation(bpc, region_data.clusters, region_data.egs, region_data.interaction_graph, obs)[2])
+	for j=1:length(region_data.regions)
+	    cc_data[j,i] = real.(cc_correlation(bpc, region_data.regions[j], region_data.counting_nums[j], obs))
+	end
+	if get_exact
+	    exact_data[i] = real(TN.expect(ψ, obs; alg = "exact"))
+	end
+	for (b_i,b)=enumerate(mps_bond_dimensions)
+	    @time bmps_data[b_i,i] = real(TN.expect(ψ, obs; alg = "boundarymps", mps_bond_dimension=b))
+	end
+    end
+
+    return (bmps_data = bmps_data, cluster_data = cluster_data, cc_data = cc_data, exact_data = exact_data)
 end
