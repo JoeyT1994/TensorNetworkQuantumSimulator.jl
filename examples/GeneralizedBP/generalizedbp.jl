@@ -4,7 +4,9 @@ using TensorNetworkQuantumSimulator: message_diff
 
 function update_message(alpha, beta, msgs, psi_alphas, psi_betas, b_nos, ps, cs; rate = 1.0, normalize = true)
     psi_alpha = psi_alphas[alpha]
+    psi_beta = psi_betas[beta]
 
+    #TODO: This can be optimized by correct tensor contraction
     for beta in cs[alpha]
         for parent_alpha in ps[beta]
             if parent_alpha != alpha
@@ -12,17 +14,18 @@ function update_message(alpha, beta, msgs, psi_alphas, psi_betas, b_nos, ps, cs;
             end
         end
     end
+    inds = uniqueinds(psi_alpha, psi_beta)
+    for ind in inds
+        psi_alpha = psi_alpha * ITensor(1.0, ind)
+    end
 
-    psi_beta = psi_betas[beta]
+
     for alpha in ps[beta]
         n = elementwise_operation(x -> x^(b_nos[beta]), msgs[(alpha, beta)])
         psi_beta = special_multiply(psi_beta, n)
     end
 
-    inds = uniqueinds(psi_alpha, psi_beta)
-    for ind in inds
-        psi_alpha = psi_alpha * ITensor(1.0, ind)
-    end
+
 
     ratio = pointwise_division_raise(psi_alpha, psi_beta; power = rate /b_nos[beta])
     m = special_multiply(ratio, msgs[(alpha, beta)])
@@ -47,26 +50,26 @@ end
 
 function generalized_belief_propagation(T::TensorNetwork, bs, ms, ps, cs, b_nos, mobius_nos; verbose::Bool = false, niters::Int, rate::Number, simple_bp_messages = nothing)
     psi_alphas = get_psis(bs, T)
-    psi_betas = get_psis(ms, T; include_factors = true)
+    psi_betas = get_psis(ms, T)
     msgs = initialize_messages(ms, bs, ps, T; simple_bp_messages)
 
     for i in 1:niters
         new_msgs, diff = update_messages(msgs, psi_alphas, psi_betas, b_nos, ps, cs; normalize = true, rate)
 
-        if i % 10 == 0 && verbose
-            println("Iteration $i")
+        if i % niters == 0
             println("Average difference in messages following most recent GBP update: $diff")
         end
 
         msgs = new_msgs
     end
 
-    f = kikuchi_free_energy(bs, ms, ps, cs, b_nos, mobius_nos, msgs, psi_alphas, psi_betas)
+    f = kikuchi_free_energy(ms, bs, msgs, psi_alphas, psi_betas, cs, b_nos, ps, mobius_nos)
+
     return f
 end
 
 
-function classical_kikuchi_free_energy(bs, ms, ps, cs, b_nos, mobius_nos, msgs, psi_alphas, psi_betas)
+function classical_kikuchi_free_energy(ms, bs, msgs, psi_alphas, psi_betas, cs, b_nos, ps, mobius_nos)
     f = 0
     for alpha in 1:length(bs)
         b = b_alpha(alpha, psi_alphas[alpha], msgs, cs, ps)
@@ -88,7 +91,7 @@ function classical_kikuchi_free_energy(bs, ms, ps, cs, b_nos, mobius_nos, msgs, 
 end
 
 #This is the quantum version (allows for complex numbers in messages, agrees with the standard textbook Kicuchi for real positive messages)
-function kikuchi_free_energy(bs, ms, ps, cs, b_nos, mobius_nos, msgs, psi_alphas, psi_betas)
+function kikuchi_free_energy(ms, bs, msgs, psi_alphas, psi_betas, cs, b_nos, ps, mobius_nos)
     f = 0
     for alpha in 1:length(bs)
         b = b_alpha(alpha, psi_alphas[alpha], msgs, cs, ps; normalize = false)

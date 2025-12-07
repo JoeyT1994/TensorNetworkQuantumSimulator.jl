@@ -9,7 +9,7 @@ using Random
 function uniform_random_itensor(eltype, inds)
     t = ITensor(eltype, 1.0, inds)
     for iv in eachindval(t)
-        t[iv...] = rand() - 0.2
+        t[iv...] = rand()
     end
     return t
 end
@@ -17,51 +17,61 @@ end
 include("utils.jl")
 include("generalizedbp.jl")
 
-n =3
-g = named_grid((n,n); periodic = false)
-#g = named_hexagonal_lattice_graph(3,3 )
-loop_size = 4
-#Build physical site indices for spin-1/2 degrees of freedom
-s = siteinds("S=1/2", g)
+function main()
 
-println("Running Generalized Belief Propagation on the norm of a $n x $n random Tensor Network State")
+    Random.seed!(1854)
 
-#Build a random TensorNetworkState on the graph with bond dimension 2
-ψ = random_tensornetworkstate(ComplexF64, g, s; bond_dimension = 2)
-#tensors = [uniform_random_itensor(scalartype(ψ), inds(ψ[v])) for v in vertices(g)]
-#ψ = TensorNetworkState(Dictionary(collect(vertices(g)), tensors))
-#ψ = gauge_and_scale(ψ)
-ψ = normalize(ψ; alg = "bp")
-# #Take its dagger
-ψdag = map_virtualinds(prime, map_tensors(dag, ψ))
+    n = 3
+    g = named_grid((n,n); periodic = false)
+    loop_size = 4
+    #Build physical site indices for spin-1/2 degrees of freedom
+    s = siteinds("S=1/2", g)
 
-# #Build the norm tensor network ψψ† and combine pairs of virtual inds
-T = TensorNetwork(Dictionary(vertices(g), [ψ[v]*ψdag[v] for v in vertices(g)]))
-TensorNetworkQuantumSimulator.combine_virtualinds!(T)
+    println("Running Generalized Belief Propagation on the norm of a $n x $n random Tensor Network State")
 
-T_bp_messages = nothing
-bs = construct_gbp_bs(T, loop_size)
-ms = construct_ms(bs)
-ps = all_parents(ms, bs)
-mobius_nos = mobius_numbers(ms, ps)
-ms, ps, mobius_nos = prune_ms_ps(ms, ps, mobius_nos)
-cs = children(ms, ps, bs)
-b_nos = calculate_b_nos(ms, ps, mobius_nos)
+    nsamples = 1
+    err_bp, err_gbp, err_lc = 0.0, 0.0, 0.0
+    for i in 1:nsamples
+        println("-------------------------------------")
+        ψ = random_tensornetworkstate(Float64, g, s; bond_dimension = 2)
 
-gbp_f = generalized_belief_propagation(T, bs, ms, ps, cs, b_nos, mobius_nos; niters = 300, rate = 0.3, simple_bp_messages = T_bp_messages)
-bp_f = -log(contract(T; alg = "bp"))
+        tensors = Dictionary(vertices(g), [uniform_random_itensor(Float64, inds(ψ[v])) for v in vertices(g)])
+        ψ = TensorNetworkState(TensorNetwork(tensors, graph(ψ)), siteinds(ψ))
 
-println("GBP free energy: ", gbp_f)
-println("BP free energy: ", bp_f)
+        ψ = normalize(ψ; alg = "bp")
+        ψdag = map_virtualinds(prime, map_tensors(dag, ψ))
 
-T_bpc = update(BeliefPropagationCache(T))
-f_lc = -log(loopcorrected_partitionfunction(T_bpc, loop_size))
-println("Loop corrected free energy (length $(loop_size)): ", f_lc)
+        # #Build the norm tensor network ψψ† and combine pairs of virtual inds
+        T = TensorNetwork(Dictionary(vertices(g), [ψ[v]*ψdag[v] for v in vertices(g)]))
+        TensorNetworkQuantumSimulator.combine_virtualinds!(T)
 
-f_exact = -log(TN.contract(T; alg = "exact"))
-println("Exact free energy: ", f_exact)
+        T_bp_messages = nothing
+        bs = construct_gbp_bs(T, loop_size)
+        ms = construct_ms(bs)
+        ps = all_parents(ms, bs)
+        mobius_nos = mobius_numbers(ms, ps)
+        ms, ps, mobius_nos = prune_ms_ps(ms, ps, mobius_nos)
+        cs = children(ms, ps, bs)
+        b_nos = calculate_b_nos(ms, ps, mobius_nos)
 
-println("-------------------------------------")
-println("Simple BP absolute error on free energy: ", abs(bp_f - f_exact))
-println("Generalized BP absolute error on free energy: ", abs(gbp_f - f_exact))
-println("Loop corrected BP absolute error on free energy: ", abs(f_lc - f_exact))
+        gbp_f = generalized_belief_propagation(T, bs, ms, ps, cs, b_nos, mobius_nos; niters = 300, rate = 0.3, simple_bp_messages = T_bp_messages)
+        bp_f = -log(contract(T; alg = "bp"))
+        T_bpc = update(BeliefPropagationCache(T))
+        f_lc = -log(loopcorrected_partitionfunction(T_bpc, loop_size))
+
+        f_exact = -log(contract(T; alg = "exact"))
+
+        err_bp += abs(bp_f - f_exact)
+        err_gbp += abs(gbp_f - f_exact)
+        err_lc += abs(f_lc - f_exact)
+        println("Simple BP absolute error on free energy: ", abs(bp_f - f_exact))
+        println("Generalized BP absolute error on free energy: ", abs(gbp_f - f_exact))
+        println("Loop corrected BP absolute error on free energy: ", abs(f_lc - f_exact))
+    end
+
+    println("Average simple BP absolute error on free energy over $nsamples samples: ", err_bp / nsamples)
+    println("Average generalized BP absolute error on free energy over $nsamples samples: ", err_gbp / nsamples)
+    println("Average loop corrected BP absolute error on free energy over $nsamples samples: ", err_lc / nsamples)
+end
+
+main()
