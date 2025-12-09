@@ -39,14 +39,10 @@ function main()
         ψ = TensorNetworkState(TensorNetwork(tensors, graph(ψ)), siteinds(ψ))
 
         ψ = normalize(ψ; alg = "bp")
-        ψdag = map_virtualinds(prime, map_tensors(dag, ψ))
 
-        # #Build the norm tensor network ψψ† and combine pairs of virtual inds
-        T = TensorNetwork(Dictionary(vertices(g), [ψ[v]*ψdag[v] for v in vertices(g)]))
-        TensorNetworkQuantumSimulator.combine_virtualinds!(T)
+        ψ_bpc = BeliefPropagationCache(ψ)
 
-        T_bp_messages = nothing
-        bs = construct_gbp_bs(T, loop_size)
+        bs = construct_gbp_bs(ψ_bpc, loop_size)
         ms = construct_ms(bs)
         ps = all_parents(ms, bs)
         mobius_nos = mobius_numbers(ms, ps)
@@ -54,12 +50,13 @@ function main()
         cs = children(ms, ps, bs)
         b_nos = calculate_b_nos(ms, ps, mobius_nos)
 
-        gbp_f = generalized_belief_propagation(T, bs, ms, ps, cs, b_nos, mobius_nos; niters = 300, rate = 0.3, simple_bp_messages = T_bp_messages)
-        bp_f = -log(contract(T; alg = "bp"))
-        T_bpc = update(BeliefPropagationCache(T))
-        f_lc = -log(loopcorrected_partitionfunction(T_bpc, loop_size))
+        gbp_f = generalized_belief_propagation(ψ_bpc, bs, ms, ps, cs, b_nos, mobius_nos; niters = 300, rate = 0.3)
+        bp_f = -log(norm_sqr(ψ; alg = "bp"))
 
-        f_exact = -log(contract(T; alg = "exact"))
+        ψ_bpc = update(ψ_bpc)
+        f_lc = -log(loopcorrected_partitionfunction(ψ_bpc, loop_size))
+
+        f_exact = -log(norm_sqr(ψ; alg = "exact"))
 
         err_bp += abs(bp_f - f_exact)
         err_gbp += abs(gbp_f - f_exact)

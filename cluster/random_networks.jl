@@ -25,7 +25,7 @@ function uniform_random_tensornetwork(eltype, g::AbstractGraph; bond_dimension::
     return TensorNetwork(tensors, g)
 end
 
-function initialize_region_graphs_correlation(L, emax, v_counts, verts; periodic=false)
+function initialize_region_graphs_correlation(L, emax, v_counts, verts; periodic=false, loop_size::Int=4)
     g = named_grid((L,L); periodic=periodic)
     clusters, egs, ig = TN.enumerate_clusters(g, emax; min_v = length(verts), triangle_free=true, must_contain=verts, min_deg = 1)
     regs = []
@@ -35,10 +35,10 @@ function initialize_region_graphs_correlation(L, emax, v_counts, verts; periodic
 	push!(regs, R)
 	push!(cnums, c)
     end
-    return (graph = g, clusters = clusters, egs = egs, interaction_graph = ig, regions = regs, counting_nums = cnums)
+    return (graph = g, clusters = clusters, egs = egs, interaction_graph = ig, regions = regs, counting_nums = cnums, gbp_regs = prep_gbp(g, loop_size))
 end
 
-function initialize_region_graphs(L, emax, v_counts; periodic=false)
+function initialize_region_graphs(L, emax, v_counts; periodic=false, loop_size::Int=4)
     g = named_grid((L,L); periodic=periodic)
     clusters, egs, ig = TN.enumerate_clusters(g, emax; min_v = 4, triangle_free=true)
     regs = []
@@ -48,57 +48,49 @@ function initialize_region_graphs(L, emax, v_counts; periodic=false)
 	push!(regs, R)
 	push!(cnums, c)
     end
-    return (graph = g, clusters = clusters, egs = egs, interaction_graph = ig, regions = regs, counting_nums = cnums)
+    return (graph = g, clusters = clusters, egs = egs, interaction_graph = ig, regions = regs, counting_nums = cnums, gbp_regs = prep_gbp(g,loop_size))
 end
 
-function random_free(region_data, χ; state::Bool = false, num_samples::Int=10)
+function random_free(region_data, χ; state::Bool = false, num_samples::Int=10, niters = 300, tol=1e-10, rate = 0.3)
     cluster_data = zeros(length(unique([c.weight for c=region_data.clusters]))+1, num_samples)
     cc_data = zeros(length(region_data.regions), num_samples)
     loop_data = zeros(num_samples)
     exact_data = zeros(num_samples)
     gbp_data = zeros(num_samples)
+    gbp_regs = region_data.gbp_regs
+    diff_data = Array{Array}(undef, num_samples)
     @showprogress for i=1:num_samples
         if state
-	    ψ = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
-	    # #Take its dagger
-	    ψdag = map_virtualinds(prime, map_tensors(dag, ψ))
-
-	    # Build the norm tensor network ψψ† and combine pairs of virtual inds
-	    T = TensorNetwork(Dictionary(vertices(region_data.graph), [ψ[v]*ψdag[v] for v in vertices(region_data.graph)]))
-	    TensorNetworkQuantumSimulator.combine_virtualinds!(T)
+	    T = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
+	    exact_data[i] = real(log(TN.norm_sqr(T;alg="exact")))
 	else
             T = uniform_random_tensornetwork(Float64, region_data.graph; bond_dimension=χ)
+    	    exact_data[i] = real(log(TN.contract(T;alg="exact")))
 	end
 	
     	bpc = BeliefPropagationCache(T)
 	bpc = update(bpc)
-	bs = construct_gbp_bs(T, 4)
-	T_bp_messages = nothing	
-	ms = construct_ms(bs)
-	ps = all_parents(ms, bs)
-	mobius_nos = mobius_numbers(ms, ps)
-	ms, ps, mobius_nos = prune_ms_ps(ms, ps, mobius_nos)
-	cs = children(ms, ps, bs)
-	b_nos = calculate_b_nos(ms, ps, mobius_nos)
-	
-	gbp_data[i] = -real(generalized_belief_propagation(T, bs, ms, ps, cs, b_nos, mobius_nos; niters = 100, rate = 0.3, simple_bp_messages = T_bp_messages))
+	gbp_msgs, diff_data[i] = generalized_belief_propagation(bpc, gbp_regs.bs, gbp_regs.ms, gbp_regs.ps, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.mobius_nos; niters=niters, tol=tol, rate=rate)
+	gbp_data[i] = -real(kikuchi_free_energy(bpc, gbp_regs.ms, gbp_regs.bs, gbp_msgs, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.ps, gbp_regs.mobius_nos))
 	loop_data[i] = real(log(TN.loopcorrected_partitionfunction(bpc, 4)))
 	cluster_data[:,i] = real.(cluster_free(bpc, region_data.clusters, region_data.egs, region_data.interaction_graph)[2])
 	for j=1:length(region_data.regions)
 	    cc_data[j,i] = real.(cc_free(bpc, region_data.regions[j], region_data.counting_nums[j]; logZbp = cluster_data[1,i]))
 	end
-	exact_data[i] = real(log(TN.contract(T;alg="exact")))
+	
     end
 
     return (gbp_data = gbp_data, cluster_data = cluster_data, cc_data = cc_data, loop_data = loop_data, exact_data = exact_data)
 end
 
-function random_onepoint(region_data, χ, obs; num_samples::Int=10, get_exact::Bool=true, mps_bond_dimensions=[])
+function random_onepoint(region_data, χ, obs; num_samples::Int=10, get_exact::Bool=true, mps_bond_dimensions=[], niters=300,tol=1e-10, rate=0.3)
     cluster_data = zeros(length(unique([c.weight for c=region_data.clusters]))+1, num_samples)
     cc_data = zeros(length(region_data.regions), num_samples)
-    loop_data = zeros(num_samples)
+    gbp_data = zeros(num_samples)
     exact_data = zeros(num_samples)
     bmps_data = zeros(length(mps_bond_dimensions), num_samples)
+    gbp_regs = region_data.gbp_regs
+    diff_data = Array{Array}(undef, num_samples)
     @showprogress for i=1:num_samples
         ψ = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
     	bpc = BeliefPropagationCache(ψ)
@@ -113,7 +105,10 @@ function random_onepoint(region_data, χ, obs; num_samples::Int=10, get_exact::B
 	for (b_i,b)=enumerate(mps_bond_dimensions)
 	    @time bmps_data[b_i,i] = real(TN.expect(ψ, obs; alg = "boundarymps", mps_bond_dimension=b))
 	end
+	@time gbp_msgs, diff_data[i] = generalized_belief_propagation(bpc, gbp_regs.bs, gbp_regs.ms, gbp_regs.ps, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.mobius_nos; niters=niters, rate=rate, tol=tol)
+	gbp_data[i] = real(expect_gbp(bpc, gbp_regs.bs, gbp_msgs, gbp_regs.cs, gbp_regs.ps, obs))
+
     end
 
-    return (bmps_data = bmps_data, cluster_data = cluster_data, cc_data = cc_data, exact_data = exact_data)
+    return (bmps_data = bmps_data, cluster_data = cluster_data, cc_data = cc_data, exact_data = exact_data, gbp_data = gbp_data, diff_data=diff_data)
 end

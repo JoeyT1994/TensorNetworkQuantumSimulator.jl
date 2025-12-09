@@ -1,10 +1,26 @@
 using ITensors: ITensors, inds, uniqueinds, eachindval, norm
 using Dictionaries: set!, AbstractDictionary
-using TensorNetworkQuantumSimulator: message_diff
+using TensorNetworkQuantumSimulator: message_diff, bp_factors, contraction_sequence
 
-function update_message(alpha, beta, msgs, psi_alphas, psi_betas, b_nos, ps, cs; rate = 1.0, normalize = true)
-    psi_alpha = psi_alphas[alpha]
-    psi_beta = psi_betas[beta]
+function get_psi(T::BeliefPropagationCache, r)
+    vs = filter(x -> !(x isa NamedEdge), r)
+    es = filter(x -> x isa NamedEdge, r)
+    e_inds = reduce(vcat, [virtualinds(T, e) for e in es])
+    if network(T) isa TensorNetworkState
+        e_inds = vcat(e_inds, prime.(e_inds))
+    end
+    isempty(vs) && return ITensor(scalartype(T), 1.0, e_inds)
+
+    psi = bp_factors(T, collect(vs))
+    seq = contraction_sequence(psi; alg = "optimal")
+    psi = contract(psi; sequence = seq)
+    return psi
+end
+
+#TODO: Get rid of psis, and pass the cache
+function update_message(T::BeliefPropagationCache, alpha, beta, msgs, b_nos, ps, cs, ms, bs; rate = 1.0, normalize = true)
+    psi_alpha = get_psi(T, bs[alpha])
+    psi_beta = get_psi(T, ms[beta])
 
     #TODO: This can be optimized by correct tensor contraction
     for beta in cs[alpha]
@@ -14,18 +30,15 @@ function update_message(alpha, beta, msgs, psi_alphas, psi_betas, b_nos, ps, cs;
             end
         end
     end
-    inds = uniqueinds(psi_alpha, psi_beta)
-    for ind in inds
+    inds_to_sum_over = uniqueinds(psi_alpha, psi_beta)
+    for ind in inds_to_sum_over
         psi_alpha = psi_alpha * ITensor(1.0, ind)
     end
-
 
     for alpha in ps[beta]
         n = elementwise_operation(x -> x^(b_nos[beta]), msgs[(alpha, beta)])
         psi_beta = special_multiply(psi_beta, n)
     end
-
-
 
     ratio = pointwise_division_raise(psi_alpha, psi_beta; power = rate /b_nos[beta])
     m = special_multiply(ratio, msgs[(alpha, beta)])
@@ -36,25 +49,22 @@ function update_message(alpha, beta, msgs, psi_alphas, psi_betas, b_nos, ps, cs;
     return m
 end
 
-function update_messages(msgs, psi_alphas, psi_betas, b_nos, ps, cs; kwargs...)
+function update_messages(T::BeliefPropagationCache, msgs, b_nos, ps, cs, ms, bs; kwargs...)
     new_msgs = copy(msgs)
     diff = 0
     for (alpha, beta) in keys(msgs)
         #Parallel or sequential?
-        new_msg = update_message(alpha, beta, msgs, psi_alphas, psi_betas, b_nos, ps, cs; kwargs...)
+        new_msg = update_message(T, alpha, beta, msgs, b_nos, ps, cs, ms, bs; kwargs...)
         diff += message_diff(new_msg, msgs[(alpha, beta)])
         set!(new_msgs, (alpha, beta), new_msg)
     end
     return new_msgs, diff / length(keys(msgs))
 end
 
-function generalized_belief_propagation(T::TensorNetwork, bs, ms, ps, cs, b_nos, mobius_nos; verbose::Bool = false, niters::Int, rate::Number, simple_bp_messages = nothing)
-    psi_alphas = get_psis(bs, T)
-    psi_betas = get_psis(ms, T)
-    msgs = initialize_messages(ms, bs, ps, T; simple_bp_messages)
-
+function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, cs, b_nos, mobius_nos; niters::Int, rate::Number)
+    msgs = initialize_messages(ms, bs, ps, T)
     for i in 1:niters
-        new_msgs, diff = update_messages(msgs, psi_alphas, psi_betas, b_nos, ps, cs; normalize = true, rate)
+        new_msgs, diff = update_messages(T, msgs, b_nos, ps, cs, ms, bs; normalize = true, rate)
 
         if i % niters == 0
             println("Average difference in messages following most recent GBP update: $diff")
@@ -63,8 +73,7 @@ function generalized_belief_propagation(T::TensorNetwork, bs, ms, ps, cs, b_nos,
         msgs = new_msgs
     end
 
-    f = kikuchi_free_energy(ms, bs, msgs, psi_alphas, psi_betas, cs, b_nos, ps, mobius_nos)
-
+    f = kikuchi_free_energy(T, ms, bs, msgs, cs, b_nos, ps, mobius_nos)
     return f
 end
 
@@ -91,15 +100,17 @@ function classical_kikuchi_free_energy(ms, bs, msgs, psi_alphas, psi_betas, cs, 
 end
 
 #This is the quantum version (allows for complex numbers in messages, agrees with the standard textbook Kicuchi for real positive messages)
-function kikuchi_free_energy(ms, bs, msgs, psi_alphas, psi_betas, cs, b_nos, ps, mobius_nos)
+function kikuchi_free_energy(T::BeliefPropagationCache, ms, bs, msgs, cs, b_nos, ps, mobius_nos)
     f = 0
     for alpha in 1:length(bs)
-        b = b_alpha(alpha, psi_alphas[alpha], msgs, cs, ps; normalize = false)
+        psi_alpha = get_psi(T, bs[alpha])
+        b = b_alpha(alpha, psi_alpha, msgs, cs, ps; normalize = false)
         f += log(sum(b))
     end
 
     for beta in 1:length(ms)
-        b = b_beta(beta, psi_betas[beta], msgs, ps, b_nos; normalize = false)
+        psi_beta = get_psi(T, ms[beta])
+        b = b_beta(beta, psi_beta, msgs, ps, b_nos; normalize = false)
         f += mobius_nos[beta] * log(sum(b))
     end
 

@@ -1,6 +1,6 @@
 using TensorNetworkQuantumSimulator
 using NamedGraphs: unique_simplecycles_limited_length
-using ITensors: Index
+using ITensors: Index, sim
 
 using Graphs: topological_sort
 using Graphs.SimpleGraphs: SimpleDiGraph
@@ -9,9 +9,10 @@ function special_multiply(t1::ITensor, t2::ITensor)
     cinds = commoninds(t1, t2)
     ds = []
     for cind in cinds
-        t1 = replaceind(t1, cind, cind')
-        t2 = replaceind(t2, cind, cind'')
-        push!(ds, delta([cind, cind', cind'']))
+        sim_cind1, sim_cind2 = sim(cind), sim(cind)
+        t1 = replaceind(t1, cind, sim_cind1)
+        t2 = replaceind(t2, cind, sim_cind2)
+        push!(ds, delta([cind, sim_cind1, sim_cind2]))
     end
 
     t = reduce(*, [[t1, t2 ]; ds])
@@ -19,7 +20,7 @@ function special_multiply(t1::ITensor, t2::ITensor)
 end
 
 #Element wise multiplication of all tensors and sum over specified indices. For efficient message updating.
-function hyper_multiply(ts:Vector{<:ITensor}, inds_to_sum_over =[])
+function hyper_multiply(ts::Vector{<:ITensor}, inds_to_sum_over =[])
     all_inds = reduce(vcat, [inds(t) for t in ts])
     unique_inds = unique(all_inds)
     index_counts = [count(i -> i == ui, all_inds) for ui in unique_inds]
@@ -75,13 +76,14 @@ function pointwise_division_raise(a::ITensor, b::ITensor; power = 1)
 end
 
 #All factors and their 4 variables (edges) form the parent regions for simple BP
-function construct_bp_bs(t::AbstractTensorNetwork)
-    es = edges(t)
+function construct_bp_bs(T::BeliefPropagationCache)
+    g = graph(T)
+    es = edges(g)
 
     regions = Set[]
-    for v in vertices(t)
+    for v in vertices(g)
         region = Set{Any}([v])
-        for vn in neighbors(t, v)
+        for vn in neighbors(g, v)
             e = NamedEdge(v => vn) ∈ es ? NamedEdge(v => vn) : NamedEdge(vn => v)
             @assert e ∈ es
             push!(region, NamedEdge(e))
@@ -92,17 +94,18 @@ function construct_bp_bs(t::AbstractTensorNetwork)
 end
 
 #Here we take all factors and their 4 variables (edges), plus all loops of variables only to form the parent regions for GBP
-function construct_gbp_bs(t::AbstractTensorNetwork, loop_length::Int)
-    t_edges = edges(t)
-    bs = construct_bp_bs(t)
-    cycles = unique_simplecycles_limited_length(t, loop_length)
+function construct_gbp_bs(T::BeliefPropagationCache, loop_length::Int)
+    g = graph(T)
+    g_edges = edges(g)
+    bs = construct_bp_bs(T)
+    cycles = unique_simplecycles_limited_length(g, loop_length)
     gbp_bs = copy(bs)
     for cycle in cycles
         region = Set()
         for (i, v) in enumerate(cycle)
             e = i != length(cycle) ? NamedEdge(v => cycle[i+1]) : NamedEdge(v => cycle[1])
-            e = e ∈ t_edges ? e : reverse(e)
-            @assert e ∈ t_edges
+            e = e ∈ g_edges ? e : reverse(e)
+            @assert e ∈ g_edges
             push!(region, e)
         end
         push!(gbp_bs, region)  # Add first vertex to close the loop
@@ -210,41 +213,17 @@ function calculate_b_nos(ms, ps, mobius_nos)
     return [-(length(ps[i])-1)/mobius_nos[i] for i in 1:length(ms)]
 end
 
-function get_psis(bs, T::TensorNetwork)
-    potentials = []
-    for b in bs
-        e_inds = reduce(vcat, [virtualinds(T, e) for e in filter(x -> x isa NamedEdge, b)])
-        pot = ITensor(scalartype(T), 1.0, e_inds)
-        for v in filter(x -> !(x isa NamedEdge), b)
-            pot = special_multiply(pot, T[v])
-        end
-        push!(potentials, pot)
-    end
-    return potentials
-end
-
-function initialize_messages(ms, bs, ps, T; simple_bp_messages = nothing)
+function initialize_messages(ms, bs, ps, T)
     ms_dict = Dictionary{Tuple{Int, Int}, ITensor}()
     for (i, m) in enumerate(ms)
         for p in ps[i]
             inds = reduce(vcat, [virtualinds(T, e) for e in filter(x -> x isa NamedEdge, m)])
-            msg = ITensor(scalartype(T), 1.0, inds)
-            if !isnothing(simple_bp_messages)
-                for e in m
-                    msg = special_multiply(msg, simple_bp_messages[e])
-                end
+            if network(T) isa TensorNetworkState
+                inds = vcat(inds, prime.(inds))
             end
+            msg = ITensor(scalartype(T), 1.0, inds)
             set!(ms_dict, (p, i), msg)
         end       
     end
     return ms_dict
-end
-
-function initialize_beliefs(psis)
-    beliefs = []
-    for psi in psis
-        z = real(sum(psi))
-        push!(beliefs, psi / z)
-    end
-    return beliefs
 end
