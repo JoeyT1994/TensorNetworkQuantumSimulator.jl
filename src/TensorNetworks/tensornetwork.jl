@@ -67,6 +67,10 @@ function bp_factors(tn::TensorNetwork, vertex)
     return ITensor[tn[vertex]]
 end
 
+function bp_factors(tn::TensorNetwork, verts::Vector)
+    return [ITensor[tn[v]] for v=verts]
+end
+
 function random_tensornetwork(eltype, g::AbstractGraph; bond_dimension::Integer = 1)
     vs = collect(vertices(g))
     l = Dict(e => Index(bond_dimension) for e in edges(g))

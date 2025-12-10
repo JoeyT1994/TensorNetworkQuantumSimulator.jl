@@ -19,7 +19,7 @@ include("generalizedbp.jl")
 
 function main()
 
-    Random.seed!(1854)
+    Random.seed!(1116)
 
     n = 3
     g = named_grid((n,n); periodic = false)
@@ -33,10 +33,12 @@ function main()
     err_bp, err_gbp, err_lc = 0.0, 0.0, 0.0
     for i in 1:nsamples
         println("-------------------------------------")
-        ψ = random_tensornetworkstate(Float64, g, s; bond_dimension = 2)
+        ψ = random_tensornetworkstate(ComplexF64, g, s; bond_dimension = 2)
 
+	#=
         tensors = Dictionary(vertices(g), [uniform_random_itensor(Float64, inds(ψ[v])) for v in vertices(g)])
         ψ = TensorNetworkState(TensorNetwork(tensors, graph(ψ)), siteinds(ψ))
+	=#
 
         ψ = normalize(ψ; alg = "bp")
 
@@ -50,7 +52,7 @@ function main()
         cs = children(ms, ps, bs)
         b_nos = calculate_b_nos(ms, ps, mobius_nos)
 
-        gbp_f = generalized_belief_propagation(ψ_bpc, bs, ms, ps, cs, b_nos, mobius_nos; niters = 300, rate = 0.3)
+        @time gbp_f = generalized_belief_propagation(ψ_bpc, bs, ms, ps, cs, b_nos, mobius_nos; niters = 300, rate = 0.3)
         bp_f = -log(norm_sqr(ψ; alg = "bp"))
 
         ψ_bpc = update(ψ_bpc)
@@ -63,6 +65,7 @@ function main()
         err_lc += abs(f_lc - f_exact)
         println("Simple BP absolute error on free energy: ", abs(bp_f - f_exact))
         println("Generalized BP absolute error on free energy: ", abs(gbp_f - f_exact))
+	println("Generalized BP free energy: ", gbp_f)
         println("Loop corrected BP absolute error on free energy: ", abs(f_lc - f_exact))
     end
 

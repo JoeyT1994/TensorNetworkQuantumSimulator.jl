@@ -2,7 +2,7 @@ using ITensors
 using Random
 using ProgressMeter
 include("generalizedbp.jl")
-include("utils.jl")
+include("utils-square.jl")
 include("expect-corrected.jl")
 
 function uniform_random_itensor(rng::AbstractRNG, ::Type{S}, is; a = 0) where {S <: Number}
@@ -25,7 +25,7 @@ function uniform_random_tensornetwork(eltype, g::AbstractGraph; bond_dimension::
     return TensorNetwork(tensors, g)
 end
 
-function initialize_region_graphs_correlation(L, emax, v_counts, verts; periodic=false, loop_size::Int=4)
+function initialize_region_graphs_correlation(L, emax, v_counts, verts; periodic=false, loop_size::Int=4, prune::Bool=true)
     g = named_grid((L,L); periodic=periodic)
     clusters, egs, ig = TN.enumerate_clusters(g, emax; min_v = length(verts), triangle_free=true, must_contain=verts, min_deg = 1)
     regs = []
@@ -35,10 +35,10 @@ function initialize_region_graphs_correlation(L, emax, v_counts, verts; periodic
 	push!(regs, R)
 	push!(cnums, c)
     end
-    return (graph = g, clusters = clusters, egs = egs, interaction_graph = ig, regions = regs, counting_nums = cnums, gbp_regs = prep_gbp(g, loop_size))
+    return (graph = g, clusters = clusters, egs = egs, interaction_graph = ig, regions = regs, counting_nums = cnums, yedidia_regs = prep_yedidia(g, loop_size; prune=prune), gbp_regs = prep_gbp(g, loop_size))
 end
 
-function initialize_region_graphs(L, emax, v_counts; periodic=false, loop_size::Int=4)
+function initialize_region_graphs(L, emax, v_counts; periodic=false, loop_size::Int=4, prune::Bool=true)
     g = named_grid((L,L); periodic=periodic)
     clusters, egs, ig = TN.enumerate_clusters(g, emax; min_v = 4, triangle_free=true)
     regs = []
@@ -48,67 +48,127 @@ function initialize_region_graphs(L, emax, v_counts; periodic=false, loop_size::
 	push!(regs, R)
 	push!(cnums, c)
     end
-    return (graph = g, clusters = clusters, egs = egs, interaction_graph = ig, regions = regs, counting_nums = cnums, gbp_regs = prep_gbp(g,loop_size))
+    return (graph = g, clusters = clusters, egs = egs, interaction_graph = ig, regions = regs, counting_nums = cnums, yedidia_regs = prep_yedidia(g, loop_size; prune = prune), gbp_regs = prep_gbp(g,loop_size))
 end
 
+
 function random_free(region_data, χ; state::Bool = false, num_samples::Int=10, niters = 300, tol=1e-10, rate = 0.3)
-    cluster_data = zeros(length(unique([c.weight for c=region_data.clusters]))+1, num_samples)
-    cc_data = zeros(length(region_data.regions), num_samples)
-    loop_data = zeros(num_samples)
-    exact_data = zeros(num_samples)
-    gbp_data = zeros(num_samples)
+    cluster_data = zeros(ComplexF64,length(unique([c.weight for c=region_data.clusters]))+1, num_samples)
+    cc_data = zeros(ComplexF64,length(region_data.regions), num_samples)
+    loop_data = zeros(ComplexF64,num_samples)
+    exact_data = zeros(ComplexF64,num_samples)
+    gbp_data = zeros(ComplexF64,num_samples)
+    yedidia_data = zeros(ComplexF64,num_samples)
+    yedidia_regs = region_data.yedidia_regs
     gbp_regs = region_data.gbp_regs
-    diff_data = Array{Array}(undef, num_samples)
+    gbp_diffs = Array{Array}(undef, num_samples)
+    yedidia_diffs = Array{Array}(undef, num_samples)
     @showprogress for i=1:num_samples
         if state
 	    T = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
-	    exact_data[i] = real(log(TN.norm_sqr(T;alg="exact")))
+	    exact_data[i] = (log(TN.norm_sqr(T;alg="exact")))
 	else
             T = uniform_random_tensornetwork(Float64, region_data.graph; bond_dimension=χ)
-    	    exact_data[i] = real(log(TN.contract(T;alg="exact")))
+    	    exact_data[i] = (log(TN.contract(T;alg="exact")))
 	end
 	
     	bpc = BeliefPropagationCache(T)
 	bpc = update(bpc)
-	gbp_msgs, diff_data[i] = generalized_belief_propagation(bpc, gbp_regs.bs, gbp_regs.ms, gbp_regs.ps, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.mobius_nos; niters=niters, tol=tol, rate=rate)
-	gbp_data[i] = -real(kikuchi_free_energy(bpc, gbp_regs.ms, gbp_regs.bs, gbp_msgs, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.ps, gbp_regs.mobius_nos))
-	loop_data[i] = real(log(TN.loopcorrected_partitionfunction(bpc, 4)))
-	cluster_data[:,i] = real.(cluster_free(bpc, region_data.clusters, region_data.egs, region_data.interaction_graph)[2])
+	@time yedidia_msgs, yedidia_diffs[i] = yedidia_gbp(bpc, yedidia_regs.ms, yedidia_regs.ps, yedidia_regs.cs; niters=niters, tol=tol,rate=rate)
+	yedidia_data[i] = yedidia_free_energy(bpc, yedidia_regs.ms, yedidia_msgs[end], yedidia_regs.ps, yedidia_regs.cs, yedidia_regs.mobius_nos)
+	gbp_msgs, gbp_diffs[i] = generalized_belief_propagation(bpc, gbp_regs.bs, gbp_regs.ms, gbp_regs.ps, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.mobius_nos; niters=niters, tol=tol, rate=rate)
+	gbp_data[i] = -(kikuchi_free_energy(bpc, gbp_regs.ms, gbp_regs.bs, gbp_msgs, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.ps, gbp_regs.mobius_nos))
+	loop_data[i] = (log(TN.loopcorrected_partitionfunction(bpc, 4)))
+	cluster_data[:,i] = (cluster_free(bpc, region_data.clusters, region_data.egs, region_data.interaction_graph)[2])
 	for j=1:length(region_data.regions)
-	    cc_data[j,i] = real.(cc_free(bpc, region_data.regions[j], region_data.counting_nums[j]; logZbp = cluster_data[1,i]))
+	    cc_data[j,i] = (cc_free(bpc, region_data.regions[j], region_data.counting_nums[j]; logZbp = cluster_data[1,i]))
 	end
 	
     end
 
-    return (gbp_data = gbp_data, cluster_data = cluster_data, cc_data = cc_data, loop_data = loop_data, exact_data = exact_data)
+    return (yedidia_diffs = yedidia_diffs, yedidia_data = yedidia_data, gbp_diffs = gbp_diffs, gbp_data = gbp_data, cluster_data = cluster_data, cc_data = cc_data, loop_data = loop_data, exact_data = exact_data)
 end
 
 function random_onepoint(region_data, χ, obs; num_samples::Int=10, get_exact::Bool=true, mps_bond_dimensions=[], niters=300,tol=1e-10, rate=0.3)
-    cluster_data = zeros(length(unique([c.weight for c=region_data.clusters]))+1, num_samples)
-    cc_data = zeros(length(region_data.regions), num_samples)
-    gbp_data = zeros(num_samples)
-    exact_data = zeros(num_samples)
-    bmps_data = zeros(length(mps_bond_dimensions), num_samples)
+    cluster_data = zeros(ComplexF64,length(unique([c.weight for c=region_data.clusters]))+1, num_samples)
+    cc_data = zeros(ComplexF64,length(region_data.regions), num_samples)
+    exact_data = zeros(ComplexF64,num_samples)
+    bmps_data = zeros(ComplexF64,length(mps_bond_dimensions), num_samples)
     gbp_regs = region_data.gbp_regs
-    diff_data = Array{Array}(undef, num_samples)
+    gbp_data = zeros(ComplexF64,num_samples)
+    yedidia_data = zeros(ComplexF64,num_samples)
+    yedidia_regs = region_data.yedidia_regs
+    gbp_regs = region_data.gbp_regs
+    gbp_diffs = Array{Array}(undef, num_samples)
+    yedidia_diffs = Array{Array}(undef, num_samples)
+
     @showprogress for i=1:num_samples
         ψ = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
     	bpc = BeliefPropagationCache(ψ)
 	bpc = update(bpc)
-	cluster_data[:,i] = real.(cluster_correlation(bpc, region_data.clusters, region_data.egs, region_data.interaction_graph, obs)[2])
+	cluster_data[:,i] = (cluster_correlation(bpc, region_data.clusters, region_data.egs, region_data.interaction_graph, obs)[2])
 	for j=1:length(region_data.regions)
-	    cc_data[j,i] = real.(cc_correlation(bpc, region_data.regions[j], region_data.counting_nums[j], obs))
+	    cc_data[j,i] = (cc_correlation(bpc, region_data.regions[j], region_data.counting_nums[j], obs))
 	end
 	if get_exact
-	    exact_data[i] = real(TN.expect(ψ, obs; alg = "exact"))
+	    exact_data[i] = (TN.expect(ψ, obs; alg = "exact"))
 	end
 	for (b_i,b)=enumerate(mps_bond_dimensions)
-	    @time bmps_data[b_i,i] = real(TN.expect(ψ, obs; alg = "boundarymps", mps_bond_dimension=b))
+	    @time bmps_data[b_i,i] = (TN.expect(ψ, obs; alg = "boundarymps", mps_bond_dimension=b))
 	end
 	@time gbp_msgs, diff_data[i] = generalized_belief_propagation(bpc, gbp_regs.bs, gbp_regs.ms, gbp_regs.ps, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.mobius_nos; niters=niters, rate=rate, tol=tol)
-	gbp_data[i] = real(expect_gbp(bpc, gbp_regs.bs, gbp_msgs, gbp_regs.cs, gbp_regs.ps, obs))
+	gbp_data[i] = (expect_gbp(bpc, gbp_regs.bs, gbp_msgs, gbp_regs.cs, gbp_regs.ps, obs))
+	@time yedidia_msgs, yedidia_diffs[i] = yedidia_gbp(bpc, yedidia_regs.ms, yedidia_regs.ps, yedidia_regs.cs; niters=niters, tol=tol,rate=rate)
+	yedidia_data[i] = yedidia_expect(bpc, yedidia_regs.ms, yedidia_msgs[end], yedidia_regs.ps, yedidia_regs.cs, obs)
 
     end
 
-    return (bmps_data = bmps_data, cluster_data = cluster_data, cc_data = cc_data, exact_data = exact_data, gbp_data = gbp_data, diff_data=diff_data)
+    return (bmps_data = bmps_data, cluster_data = cluster_data, cc_data = cc_data, exact_data = exact_data, gbp_data = gbp_data, gbp_diffs = gbp_diffs,yedidia_data = yedidia_data, yedidia_diffs = yedidia_diffs)
+end
+
+function random_all(region_data, region_data_corr, χ; num_samples::Int=10, niters = 300, tol=1e-10, rate = 0.3)
+    cluster_data = zeros(ComplexF64,length(unique([c.weight for c=region_data.clusters]))+1, num_samples)
+    cluster_data_corr = zeros(ComplexF64,length(unique([c.weight for c=region_data_corr.clusters]))+1, num_samples)
+    cc_data = zeros(ComplexF64,length(region_data.regions), num_samples)
+    cc_data_corr = zeros(ComplexF64,length(region_data_corr.regions), num_samples)
+    loop_data = zeros(ComplexF64,num_samples)
+    exact_data = zeros(ComplexF64,2,num_samples)
+    gbp_data = zeros(ComplexF64,2,num_samples)
+    yedidia_data = zeros(ComplexF64,2,num_samples)
+    yedidia_regs = region_data.yedidia_regs
+    gbp_regs = region_data.gbp_regs
+    gbp_diffs = Array{Array}(undef, num_samples)
+    yedidia_diffs = Array{Array}(undef, num_samples)
+    @showprogress for i=1:num_samples
+	T = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
+
+	# exact
+	exact_data[1,i] = log(TN.norm_sqr(T;alg="exact"))
+	exact_data[2,i] = TN.expect(T, obs; alg="exact")
+    	bpc = BeliefPropagationCache(T)
+	bpc = update(bpc)
+
+	# generalized BP
+	@time yedidia_msgs, yedidia_diffs[i] = yedidia_gbp(bpc, yedidia_regs.ms, yedidia_regs.ps, yedidia_regs.cs; niters=niters, tol=tol,rate=rate)
+	yedidia_data[1,i] = yedidia_free_energy(bpc, yedidia_regs.ms, yedidia_msgs[end], yedidia_regs.ps, yedidia_regs.cs, yedidia_regs.mobius_nos)
+	yedidia_data[2,i] = yedidia_expect(bpc, yedidia_regs.ms, yedidia_msgs[end], yedidia_regs.ps, yedidia_regs.cs, obs)
+	gbp_msgs, gbp_diffs[i] = generalized_belief_propagation(bpc, gbp_regs.bs, gbp_regs.ms, gbp_regs.ps, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.mobius_nos; niters=niters, tol=tol, rate=rate)
+	gbp_data[2,i] = expect_gbp(bpc, gbp_regs.bs, gbp_msgs, gbp_regs.cs, gbp_regs.ps, obs)
+	gbp_data[1,i] = -(kikuchi_free_energy(bpc, gbp_regs.ms, gbp_regs.bs, gbp_msgs, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.ps, gbp_regs.mobius_nos))
+
+	# cluster expansions
+	loop_data[i] = (log(TN.loopcorrected_partitionfunction(bpc, 4)))
+	cluster_data[:,i] = (cluster_free(bpc, region_data.clusters, region_data.egs, region_data.interaction_graph)[2])
+	cluster_data_corr[:,i] = (cluster_correlation(bpc, region_data_corr.clusters, region_data_corr.egs, region_data_corr.interaction_graph, obs)[2])
+	for j=1:length(region_data.regions)
+	    cc_data[j,i] = cc_free(bpc, region_data.regions[j], region_data.counting_nums[j]; logZbp = cluster_data[1,i])
+	end
+	for j=1:length(region_data_corr.regions)
+	    cc_data_corr[j,i] = cc_correlation(bpc, region_data.regions[j], region_data.counting_nums[j], obs)
+	end
+
+	
+    end
+
+    return (yedidia_diffs = yedidia_diffs, yedidia_data = yedidia_data, gbp_diffs = gbp_diffs, gbp_data = gbp_data, cluster_data = [cluster_data,cluster_data_corr], cc_data = [cc_data,cc_data_corr], loop_data = loop_data, exact_data = exact_data)
 end
