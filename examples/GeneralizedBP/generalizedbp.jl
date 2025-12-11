@@ -42,21 +42,25 @@ function update_message(T::BeliefPropagationCache, alpha, beta, msgs, b_nos, ps,
             end
         end
     end
+
     inds_to_sum_over = uniqueinds(psi_alpha, psi_beta)
     for ind in inds_to_sum_over
         psi_alpha = psi_alpha * ITensor(1.0, ind)
     end
 
+    #psi_alpha = psi_alpha / sum(psi_alpha)
+
     for alpha in ps[beta]
         n = elementwise_operation(x -> x^(b_nos[beta]), msgs[(alpha, beta)])
-        psi_beta = special_multiply(psi_beta, n)
+        psi_beta = elementwise_multiplication(psi_beta, n)
     end
 
+    #psi_beta = psi_beta / sum(psi_beta)
+
     ratio = pointwise_division_raise(psi_alpha, psi_beta; power = rate /b_nos[beta])
-    m = special_multiply(ratio, msgs[(alpha, beta)])
+    m = elementwise_multiplication(ratio, msgs[(alpha, beta)])
 
     if normalize
-        #m = m / sum(m)
         m = ITensors.normalize(m)
         m = _make_hermitian(m)
     end
@@ -76,6 +80,15 @@ function update_messages(T::BeliefPropagationCache, msgs, b_nos, ps, cs, ms, bs;
     return new_msgs, diff / length(keys(msgs))
 end
 
+#Needed when computing the free energy
+function normalize_messages(msgs)
+    new_msgs = copy(msgs)
+    for key in keys(msgs)
+        set!(new_msgs, key, normalize(msgs[key]))
+    end
+    return new_msgs
+end
+
 function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, cs, b_nos, mobius_nos; niters::Int, rate::Number, tolerance::Number = 1e-12)
     msgs = initialize_messages(ms, bs, ps, T)
 
@@ -90,55 +103,30 @@ function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, c
         end
     end
 
+    msgs = normalize_messages(msgs)
     f = kikuchi_free_energy(T, ms, bs, msgs, cs, b_nos, ps, mobius_nos)
-    #f = classical_kikuchi_free_energy(T, ms, bs, msgs, cs, b_nos, ps, mobius_nos)
 
     return f, msgs, converged
 end
-
-
-function classical_kikuchi_free_energy(T, ms, bs, msgs, cs, b_nos, ps, mobius_nos)
-    f = 0
-    for alpha in 1:length(bs)
-        psi_alpha = get_psi(T, bs[alpha])
-        b = b_alpha(alpha, psi_alpha, msgs, cs, ps; normalize = true)
-        R = pointwise_division_raise(b, psi_alpha)
-        R = elementwise_operation(x -> real(x) > 1e-14 ? log(real(x)) : 0, R)
-        R = special_multiply(R, b)
-        f += sum(R)
-    end
-
-    for beta in 1:length(ms)
-        psi_beta = get_psi(T, ms[beta])
-        b = b_beta(beta, psi_beta, msgs, ps, b_nos; normalize = true)
-        R = pointwise_division_raise(b, psi_beta)
-        R = elementwise_operation(x -> real(x) > 1e-14 ? log(real(x)) : 0, R)
-        R = special_multiply(R, b)
-        f += mobius_nos[beta] * sum(R)
-    end
-
-    return f
-end
-
 #This is the quantum version (allows for complex numbers in messages, agrees with the standard textbook Kicuchi for real positive messages)
 function kikuchi_free_energy(T::BeliefPropagationCache, ms, bs, msgs, cs, b_nos, ps, mobius_nos)
     f = 0
     for alpha in 1:length(bs)
         psi_alpha = get_psi(T, bs[alpha])
-        b = b_alpha(alpha, psi_alpha, msgs, cs, ps; normalize = false)
+        b = b_alpha(alpha, psi_alpha, msgs, cs, ps)
         f += log(sum(b))
     end
 
     for beta in 1:length(ms)
         psi_beta = get_psi(T, ms[beta])
-        b = b_beta(beta, psi_beta, msgs, ps, b_nos; normalize = false)
+        b = b_beta(beta, psi_beta, msgs, ps, b_nos)
         f += mobius_nos[beta] * log(sum(b))
     end
 
     return -f
 end
 
-function b_alpha(alpha, psi_alpha, msgs, cs, ps; normalize = true)
+function b_alpha(alpha, psi_alpha, msgs, cs, ps)
     b = copy(psi_alpha)
     for beta in cs[alpha]
         for parent_alpha in ps[beta]
@@ -147,21 +135,14 @@ function b_alpha(alpha, psi_alpha, msgs, cs, ps; normalize = true)
             end
         end
     end
-
-    if normalize
-        b = b / sum(b)
-    end
     return b
 end
 
-function b_beta(beta, psi_beta, msgs, ps, b_nos; normalize = true)
+function b_beta(beta, psi_beta, msgs, ps, b_nos)
     b = copy(psi_beta)
     for alpha in ps[beta]
         n = elementwise_operation(x -> x^(b_nos[beta]), msgs[(alpha, beta)])
-        b = special_multiply(b, n)
-    end
-    if normalize
-        b = b / sum(b)
+        b = elementwise_multiplication(b, n)
     end
     return b
 end

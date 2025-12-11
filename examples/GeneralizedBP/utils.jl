@@ -19,6 +19,15 @@ function special_multiply(t1::ITensor, t2::ITensor)
     return t    
 end
 
+function elementwise_multiplication(t1::ITensor, t2::ITensor)
+    @assert Set(inds(t1)) == Set(inds(t2))
+    t_out = copy(t1)
+    for iv in eachindval(t_out)
+        t_out[iv...] = t1[iv...] * t2[iv...]
+    end
+    return t_out
+end
+
 #Element wise multiplication of all tensors and sum over specified indices. For efficient message updating.
 function hyper_multiply(ts::Vector{<:ITensor}, inds_to_sum_over =[])
     all_inds = reduce(vcat, [inds(t) for t in ts])
@@ -66,10 +75,18 @@ end
 
 function pointwise_division_raise(a::ITensor, b::ITensor; power = 1)
     @assert Set(inds(a)) == Set(inds(b))
-    out = ITensor(eltype(a), 1.0, inds(a))
+    etype = eltype(a)
+    out = ITensor(etype, 1.0, inds(a))
     indexes = inds(a)
     for iv in eachindval(out)
-        out[iv...] = (a[iv...] / b[iv...])^(power)
+        z =  (a[iv...] / b[iv...])
+        mag_z = abs(z)^(power)
+        if isreal(z) && real(z) > 0
+            out[iv...] = mag_z
+        else
+            angle_z = angle(z)*power
+            out[iv...] = mag_z * exp(im * angle_z)
+        end
     end
 
     return out
