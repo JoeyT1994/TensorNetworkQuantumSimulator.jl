@@ -63,6 +63,7 @@ function random_free(region_data, χ; state::Bool = false, num_samples::Int=10, 
     gbp_regs = region_data.gbp_regs
     gbp_diffs = Array{Array}(undef, num_samples)
     yedidia_diffs = Array{Array}(undef, num_samples)
+    
     @showprogress for i=1:num_samples
         if state
 	    T = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
@@ -126,7 +127,7 @@ function random_onepoint(region_data, χ, obs; num_samples::Int=10, get_exact::B
     return (bmps_data = bmps_data, cluster_data = cluster_data, cc_data = cc_data, exact_data = exact_data, gbp_data = gbp_data, gbp_diffs = gbp_diffs,yedidia_data = yedidia_data, yedidia_diffs = yedidia_diffs)
 end
 
-function random_all(region_data, region_data_corr, χ; num_samples::Int=10, niters = 300, tol=1e-10, rate = 0.3)
+function random_all(region_data, region_data_corr, χ, obs; num_samples::Int=10, niters = 300, tol=1e-10, rate = 0.3, old_states = nothing)
     cluster_data = zeros(ComplexF64,length(unique([c.weight for c=region_data.clusters]))+1, num_samples)
     cluster_data_corr = zeros(ComplexF64,length(unique([c.weight for c=region_data_corr.clusters]))+1, num_samples)
     cc_data = zeros(ComplexF64,length(region_data.regions), num_samples)
@@ -139,23 +140,35 @@ function random_all(region_data, region_data_corr, χ; num_samples::Int=10, nite
     gbp_regs = region_data.gbp_regs
     gbp_diffs = Array{Array}(undef, num_samples)
     yedidia_diffs = Array{Array}(undef, num_samples)
+    states = Array{BeliefPropagationCache}(undef, num_samples)
+    gbp_msgss = Array{Dictionary}(undef, num_samples)
+    yedidia_msgss = Array{Array}(undef, num_samples)
     @showprogress for i=1:num_samples
-	T = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
+        if !isnothing(old_states)
+	    T = network(old_states[i])
+	    bpc = old_states[i]
+	    states[i] = copy(bpc)
+	else
+	    T = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
+    	    bpc = BeliefPropagationCache(T)
+	    bpc = update(bpc)
+	    states[i] = copy(bpc)
+	end
 
 	# exact
 	exact_data[1,i] = log(TN.norm_sqr(T;alg="exact"))
 	exact_data[2,i] = TN.expect(T, obs; alg="exact")
-    	bpc = BeliefPropagationCache(T)
-	bpc = update(bpc)
 
 	# generalized BP
 	@time yedidia_msgs, yedidia_diffs[i] = yedidia_gbp(bpc, yedidia_regs.ms, yedidia_regs.ps, yedidia_regs.cs; niters=niters, tol=tol,rate=rate)
 	yedidia_data[1,i] = yedidia_free_energy(bpc, yedidia_regs.ms, yedidia_msgs[end], yedidia_regs.ps, yedidia_regs.cs, yedidia_regs.mobius_nos)
 	yedidia_data[2,i] = yedidia_expect(bpc, yedidia_regs.ms, yedidia_msgs[end], yedidia_regs.ps, yedidia_regs.cs, obs)
+	yedidia_msgss[i] = yedidia_msgs[end]
 	gbp_msgs, gbp_diffs[i] = generalized_belief_propagation(bpc, gbp_regs.bs, gbp_regs.ms, gbp_regs.ps, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.mobius_nos; niters=niters, tol=tol, rate=rate)
 	gbp_data[2,i] = expect_gbp(bpc, gbp_regs.bs, gbp_msgs, gbp_regs.cs, gbp_regs.ps, obs)
 	gbp_data[1,i] = -(kikuchi_free_energy(bpc, gbp_regs.ms, gbp_regs.bs, gbp_msgs, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.ps, gbp_regs.mobius_nos))
-
+	gbp_msgss[i] = gbp_msgs
+	
 	# cluster expansions
 	loop_data[i] = (log(TN.loopcorrected_partitionfunction(bpc, 4)))
 	cluster_data[:,i] = (cluster_free(bpc, region_data.clusters, region_data.egs, region_data.interaction_graph)[2])
@@ -164,11 +177,11 @@ function random_all(region_data, region_data_corr, χ; num_samples::Int=10, nite
 	    cc_data[j,i] = cc_free(bpc, region_data.regions[j], region_data.counting_nums[j]; logZbp = cluster_data[1,i])
 	end
 	for j=1:length(region_data_corr.regions)
-	    cc_data_corr[j,i] = cc_correlation(bpc, region_data.regions[j], region_data.counting_nums[j], obs)
+	    cc_data_corr[j,i] = cc_correlation(bpc, region_data_corr.regions[j], region_data_corr.counting_nums[j], obs)
 	end
 
 	
     end
 
-    return (yedidia_diffs = yedidia_diffs, yedidia_data = yedidia_data, gbp_diffs = gbp_diffs, gbp_data = gbp_data, cluster_data = [cluster_data,cluster_data_corr], cc_data = [cc_data,cc_data_corr], loop_data = loop_data, exact_data = exact_data)
+    return Dict("yedidia"=>Dict("diffs"=>yedidia_diffs, "free"=>yedidia_data[1,:], "expect"=>yedidia_data[2,:], "messages"=>yedidia_msgss), "gbp"=>Dict("diffs"=>gbp_diffs, "free"=>gbp_data[1,:], "expect"=>gbp_data[2,:], "messages"=>gbp_msgss), "cluster"=>Dict("free"=>cluster_data, "expect"=>cluster_data_corr), "loop"=>Dict("free"=>loop_data), "cc"=>Dict("free"=>cc_data, "expect"=>cc_data_corr), "exact"=>Dict("free"=>exact_data[1,:], "expect"=>exact_data[2,:]), "states"=>states)
 end

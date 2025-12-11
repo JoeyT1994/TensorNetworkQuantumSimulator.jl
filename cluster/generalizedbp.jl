@@ -44,6 +44,7 @@ function update_message(psi_alpha, psi_beta, alpha, beta, msgs, b_nos, ps, cs, m
     m = special_multiply(ratio, msgs[(alpha, beta)])
     if normalize
         m = ITensors.normalize(m)
+        m = _make_hermitian(m)
     end
 
     return m
@@ -162,12 +163,14 @@ function expect_gbp(T, bs, msgs, cs, ps, obs)
     return num/denom
 end
 
-function prep_gbp(g::NamedGraph, loop_size::Int)
-    bs = construct_gbp_bs(g, loop_size)
+function prep_gbp(g::NamedGraph, loop_size::Int; include_factors::Bool = true, prune::Bool = true)
+    bs = construct_gbp_bs(g, loop_size; include_factors=include_factors)
     ms = construct_ms(bs)
     ps = all_parents(ms, bs)
     mobius_nos = mobius_numbers(ms, ps)
-    ms, ps, mobius_nos = prune_ms_ps(ms, ps, mobius_nos)
+    if prune
+        ms, ps, mobius_nos = prune_ms_ps(ms, ps, mobius_nos)
+    end
     cs = children(ms, ps, bs)
     b_nos = calculate_b_nos(ms, ps, mobius_nos)
     return (bs=bs, ms=ms, ps=ps, mobius_nos=mobius_nos, cs=cs, b_nos=b_nos)
