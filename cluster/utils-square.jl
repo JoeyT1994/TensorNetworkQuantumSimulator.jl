@@ -227,8 +227,8 @@ function yedidia_expect(T, ms, msgs, ps, cs, obs)
     return num/denom
 end
 
-function prep_yedidia(g::NamedGraph, loop_size::Int; prune::Bool = true)
-    bs = construct_gbp_bs(g, loop_size; include_factors = false)
+function prep_yedidia(g::NamedGraph, loop_size::Int; prune::Bool = true, include_factors::Bool = false)
+    bs = construct_gbp_bs(g, loop_size; include_factors = include_factors)
     ms = construct_ms(bs)
     if loop_size==4
         all_ms = [filter(m->length(m)==1, ms), filter(m->length(m)==2, ms), bs]
