@@ -25,6 +25,26 @@ function uniform_random_tensornetwork(eltype, g::AbstractGraph; bond_dimension::
     return TensorNetwork(tensors, g)
 end
 
+function complex_gaussian_itensor(inds; mu=0, std=1)
+    t = ITensor(ComplexF64, 1.0, inds)
+    for iv in eachindval(t)
+        t[iv...] = randn() * std + mu + im * (randn() * std + mu)
+    end
+    t
+end
+
+function complex_gaussian_tensornetwork_state(g::AbstractGraph, siteinds::Dictionary; bond_dimension::Integer = 1, mu=0, std=1)
+    vs = collect(vertices(g))
+    l = Dict(e => Index(bond_dimension) for e in edges(g))
+    l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
+    tensors = Dictionary{vertextype(g), ITensor}()
+    for v in vs
+        is = vcat(siteinds[v], [l[NamedEdge(v => vn)] for vn in neighbors(g, v)])
+        set!(tensors, v, complex_gaussian_itensor(is; mu=mu, std=std))
+    end
+    return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
+end
+
 function initialize_region_graphs_correlation(L, emax, v_counts, verts; periodic=false, loop_size::Int=4, prune::Bool=true, include_factors::Bool=true)
     g = named_grid((L,L); periodic=periodic)
     clusters, egs, ig = TN.enumerate_clusters(g, emax; min_v = length(verts), triangle_free=true, must_contain=verts, min_deg = 1)
@@ -35,7 +55,7 @@ function initialize_region_graphs_correlation(L, emax, v_counts, verts; periodic
 	push!(regs, R)
 	push!(cnums, c)
     end
-    return (graph = g, clusters = clusters, egs = egs, interaction_graph = ig, regions = regs, counting_nums = cnums, yedidia_regs = prep_yedidia(g, loop_size; prune=prune, include_factors = !include_factors), gbp_regs = prep_gbp(g, loop_size; include_factors = include_factors))
+    return (graph = g, clusters = clusters, egs = egs, interaction_graph = ig, regions = regs, counting_nums = cnums, yedidia_regs = prep_yedidia(g, loop_size; prune=prune, include_factors = include_factors), gbp_regs = prep_gbp(g, loop_size; include_factors = include_factors))
 end
 
 function initialize_region_graphs(L, emax, v_counts; periodic=false, loop_size::Int=4, prune::Bool=true, include_factors::Bool = true)
@@ -48,7 +68,7 @@ function initialize_region_graphs(L, emax, v_counts; periodic=false, loop_size::
 	push!(regs, R)
 	push!(cnums, c)
     end
-    return (graph = g, clusters = clusters, egs = egs, interaction_graph = ig, regions = regs, counting_nums = cnums, yedidia_regs = prep_yedidia(g, loop_size; prune = prune, include_factors = !include_factors), gbp_regs = prep_gbp(g,loop_size; include_factors = include_factors))
+    return (graph = g, clusters = clusters, egs = egs, interaction_graph = ig, regions = regs, counting_nums = cnums, yedidia_regs = prep_yedidia(g, loop_size; prune = prune, include_factors = include_factors), gbp_regs = prep_gbp(g,loop_size; include_factors = include_factors))
 end
 
 function random_free(region_data, χ; state::Bool = false, num_samples::Int=10, niters = 300, tol=1e-10, rate = 0.3)
