@@ -128,9 +128,9 @@ end
 """
     close_under_intersections(g::SimpleGraph, seed::Set{RegionKey}; loop_only::Bool=true)::Set{RegionKey}
 Given `seed` regions, iteratively add intersections. Only keep connected components.
-optionally keeping only loopful components; stop when no new regions appear. Optionally, only keep if component contains `must_contain` vertices.
+optionally keeping only loopful components or leafless components; stop when no new regions appear. Optionally, only keep if component contains `must_contain` vertices.
 """
-function close_under_intersections_connected(g::SimpleGraph, seed::Set{RegionKey}; loop_only::Bool=true, must_contain = [])
+function close_under_intersections_connected(g::SimpleGraph, seed::Set{RegionKey}; loop_only::Bool=true, must_contain = [], prune::Bool = true)
     R = Set(seed)
     changed = true
     while changed
@@ -141,9 +141,9 @@ function close_under_intersections_connected(g::SimpleGraph, seed::Set{RegionKey
             for j in (i+1):length(keys)
                 b = keys[j]
                 X = key_intersection(a, b)
-
+		subg, vertex_map = induced_subgraph(g,X)
 		# must be connected and nonempty
-                if isempty(X) || !is_connected(induced_subgraph(g, X)[1])
+                if isempty(X) || !is_connected(subg)
 		    continue
 		end
 
@@ -152,12 +152,17 @@ function close_under_intersections_connected(g::SimpleGraph, seed::Set{RegionKey
                     continue
                 end
 
-		comp = to_key(X)
-		# must be loopy, if loop_only
-                if loop_only && !is_loopful(g, comp)
-                    continue
+		# prune branches
+		if prune
+		    pruned_X = prune_branches(subg, must_contain; vertex_map = w->vertex_map[w])
+		    comp = to_key(pruned_X)
+		else
+		    comp = to_key(X)
+		    # must be loopy, if loop_only
+                    if loop_only && !is_loopful(g, comp)
+                        continue
+                    end
                 end
-
 		if comp ∉ R
                     push!(R, comp)
                     changed = true
@@ -247,12 +252,12 @@ end
 """
 Build clusters on graph g out of the regions regs
 """
-function build_clusters(g::SimpleGraph, regs::Set; loop_only::Bool=true, must_contain = [], smart::Bool=true, verbose::Bool=false)
+function build_clusters(g::SimpleGraph, regs::Set; loop_only::Bool=true, must_contain = [], smart::Bool=true, verbose::Bool=false, prune::Bool = true)
     verbose && println("Finding maximal"); flush(stdout)
     @time Rmax = maximal_regions(regs)
     verbose && println("Finding intersections of $(length(Rmax)) regions"); flush(stdout)
     if smart
-        R = close_under_intersections_connected(g, Rmax;loop_only=loop_only, must_contain = unique(must_contain))
+        R = close_under_intersections_connected(g, Rmax;loop_only=loop_only, must_contain = unique(must_contain), prune = prune)
     else
         R = close_under_intersections(g, Rmax;loop_only=loop_only, must_contain = unique(must_contain))
     end
@@ -297,10 +302,10 @@ Return (R, Rmax, c) where:
   Rmax :: Set{RegionKey}  — maximal regions used as seeds
   c    :: Dict{RegionKey,Int} — counting numbers for all r ∈ R
 """
-function build_region_family_correlation(g::SimpleGraph, u::Int, v::Int, C::Int; buffer::Int=C, smart::Bool=true, verbose::Bool=false)
+function build_region_family_correlation(g::SimpleGraph, u::Int, v::Int, C::Int; buffer::Int=C, smart::Bool=true, verbose::Bool=false, prune::Bool = true)
     verbose && println("Finding graphs"); flush(stdout)
     @time regs = vertex_walks_up_to_C_regions(g,u,v,C; buffer = buffer)
-    R,Rmax,c = build_clusters(g, regs; loop_only = false, must_contain = [u,v], smart=smart, verbose = verbose)
+    R,Rmax,c = build_clusters(g, regs; loop_only = false, must_contain = [u,v], smart=smart, verbose = verbose, prune = prune)
 end
 
 """
@@ -312,12 +317,12 @@ end
       Rmax :: Vector{Vector{T}}  — maximal regions (largest generalizd loops) used as seeds and not subsets of any other regions
       c    :: Dict{Vector{T},Int} — counting numbers for all r ∈ R
 """
-function build_region_family_correlation(ng::NamedGraph, u, v, Cluster_size::Int; buffer::Int = Cluster_size, smart::Bool=true, prune::Bool=true,verbose::Bool=false)
+function build_region_family_correlation(ng::NamedGraph, u, v, Cluster_size::Int; buffer::Int = Cluster_size, smart::Bool=true, prune_after::Bool=false,verbose::Bool=false, prune::Bool = true)
     g, vs_dict = position_graph(ng), Dictionary([i for i in 1:nv(ng)], collect(vertices(ng)))
     mapped_u, mapped_v = ng.vertices.index_positions[u], ng.vertices.index_positions[v]
-    R, Rmax, c = build_region_family_correlation(g, mapped_u, mapped_v, Cluster_size; buffer = buffer, smart=smart,verbose=verbose)
+    R, Rmax, c = build_region_family_correlation(g, mapped_u, mapped_v, Cluster_size; buffer = buffer, smart=smart,prune=prune,verbose=verbose)
     R, Rmax, c = map_regions_named(R, Rmax, c, vs_dict)
-    if prune
+    if prune_after
         c = prune_cc(ng,R,c; keep_vertices=[u,v])
 	return collect(keys(c)), Rmax, c
     else
@@ -354,10 +359,10 @@ Return (R, Rmax, c) where:
   Rmax :: Set{RegionKey}  — maximal regions used as seeds
   c    :: Dict{RegionKey,Int} — counting numbers for all r ∈ R
 """
-function build_region_family(g::SimpleGraph, C::Int; min_deg::Int=2, min_v::Int=4,triangle_free::Bool=true, smart::Bool=true, verbose::Bool=false)
+function build_region_family(g::SimpleGraph, C::Int; min_deg::Int=2, min_v::Int=4,triangle_free::Bool=true, smart::Bool=true, verbose::Bool=false, prune::Bool = true)
     verbose && println("Finding graphs")
     @time regs = generate_embedded_leafless_graphs(g, C; max_e = ne(g), min_deg = min_deg, min_v=min_v,triangle_free=triangle_free)
-    build_clusters(g, regs; loop_only = true,smart=smart, verbose=verbose)
+    build_clusters(g, regs; loop_only = true,smart=smart, verbose=verbose, prune = prune)
 end
 
 """
@@ -368,8 +373,8 @@ end
       Rmax :: Vector{Vector{T}}  — maximal regions (largest generalizd loops) used as seeds and not subsets of any other regions
       c    :: Dict{Vector{T},Int} — counting numbers for all r ∈ R
 """
-function build_region_family(ng::NamedGraph, Cluster_size::Int; min_deg::Int=2, min_v::Int=4,triangle_free::Bool=true, smart::Bool=true, verbose::Bool=false)
+function build_region_family(ng::NamedGraph, Cluster_size::Int; min_deg::Int=2, min_v::Int=4,triangle_free::Bool=true, smart::Bool=true, verbose::Bool=false, prune::Bool = true)
     g, vs_dict = position_graph(ng), Dictionary([i for i in 1:nv(ng)], collect(vertices(ng)))
-    R, Rmax, c = build_region_family(g, Cluster_size; min_deg = min_deg, min_v=min_v,triangle_free=triangle_free, smart=smart, verbose=verbose)
+    R, Rmax, c = build_region_family(g, Cluster_size; min_deg = min_deg, min_v=min_v,triangle_free=triangle_free, smart=smart, verbose=verbose, prune = prune)
     map_regions_named(R, Rmax, c, vs_dict)
 end

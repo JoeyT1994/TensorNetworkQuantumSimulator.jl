@@ -81,17 +81,18 @@ Return a new graph obtained from `g` by pruning away leaf branches
 
 Returns the vertices in the pruned graph
 """
-function prune_branches(g::AbstractGraph, keep_vertices)
+function prune_branches(g::AbstractGraph, keep_vertices; vertex_map = identity)
     keep_set = Set(keep_vertices)
-    alive = Dict(v=>true for v=vertices(g))
+    alive = Dict(vertex_map(v)=>true for v=vertices(g))
 
     changed = true
     while changed
         changed = false
         # compute degree within the induced alive-subgraph (count alive neighbors)
-        for v=vertices(g)
+        for w=vertices(g)
+	    v = vertex_map(w)
             if alive[v]
-                cnt = sum([alive[u] for u=neighbors(g,v)])
+                cnt = sum([alive[vertex_map(u)] for u=neighbors(g,w)])
 
                 # remove if it's a leaf (degree 1) or isolated (degree 0),
                 # and not in keep_set.
@@ -103,5 +104,5 @@ function prune_branches(g::AbstractGraph, keep_vertices)
         end
     end
 
-    return [v for v=vertices(g) if alive[v]]
+    return [vertex_map(v) for v=vertices(g) if alive[vertex_map(v)]]
 end
