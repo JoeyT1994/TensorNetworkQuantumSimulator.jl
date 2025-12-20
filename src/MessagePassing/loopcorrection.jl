@@ -80,7 +80,7 @@ function NamedGraphs.GraphsExtensions.boundary_edges(
 end
 
 #Compute the contraction of the bp configuration specified by the edge induced subgraph eg. Insert I + epsilon O on up to two sites.
-function weight(bpc::BeliefPropagationCache, eg; project_out::Bool = true, op_strings::Function = v->"I", coeffs::Function = v->1, rescales = Dictionary(1 for v=vertices(eg)))
+function weight(bpc::BeliefPropagationCache, eg; project_out::Bool = true, op_strings::Function = v->"I", coeffs::Function = v->1, rescales = Dictionary(1 for v=vertices(eg)), use_epsilon::Bool = false)
     vs = collect(vertices(eg))
     es = collect(edges(eg))
 
@@ -94,7 +94,7 @@ function weight(bpc::BeliefPropagationCache, eg; project_out::Bool = true, op_st
 	
     end
     if typeof(network(bpc))<:TensorNetworkState
-        local_tensors = reduce(vcat, bp_factors(bpc, vs; op_strings = op_strings, coeffs = coeffs, use_epsilon = true))
+        local_tensors = reduce(vcat, bp_factors(bpc, vs; op_strings = op_strings, coeffs = coeffs, use_epsilon = use_epsilon))
     else
         local_tensors = reduce(vcat, [bp_factors(bpc, v) for v=vs])
     end
