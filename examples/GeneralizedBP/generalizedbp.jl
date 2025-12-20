@@ -1,4 +1,4 @@
-using ITensors: ITensors, inds, uniqueinds, eachindval, norm
+using ITensors: ITensors, inds, uniqueinds, eachindval, norm, plev
 using Dictionaries: set!, AbstractDictionary
 using TensorNetworkQuantumSimulator
 const TN = TensorNetworkQuantumSimulator
@@ -19,8 +19,22 @@ function get_psi(T::BeliefPropagationCache, r; kwargs...)
     return psi
 end
 
-#TODO: Get rid of psis, and pass the cache
-function update_message(psi_alpha, psi_beta, alpha, beta, msgs, b_nos, ps, cs, ms, bs; rate = 1.0, normalize = true)
+function _make_hermitian(A::ITensor)
+    A_inds = ITensors.inds(A)
+    if length(A_inds) == 2
+        return (A + ITensors.swapind(dag(A), first(A_inds), last(A_inds))) / 2
+    elseif length(A_inds) == 4
+        A_inds_plevnull = filter(i -> plev(i) == 0, A_inds)
+        ind1, ind2 = first(A_inds_plevnull), last(A_inds_plevnull)
+        return (A + ITensors.swapinds(dag(A), [ind1, ind2], prime.([ind1, ind2]))) / 2
+    else
+        error("make_hermitian only supports ITensors with 2 or 4 indices")
+    end
+end
+
+function update_message(T::BeliefPropagationCache, alpha, beta, msgs, b_nos, ps, cs, ms, bs; rate = 1.0, normalize = true)
+    psi_alpha = get_psi(T, bs[alpha])
+    psi_beta = get_psi(T, ms[beta])
 
     #TODO: This can be optimized by correct tensor contraction
     for beta in cs[alpha]
@@ -30,18 +44,24 @@ function update_message(psi_alpha, psi_beta, alpha, beta, msgs, b_nos, ps, cs, m
             end
         end
     end
+
     inds_to_sum_over = uniqueinds(psi_alpha, psi_beta)
     for ind in inds_to_sum_over
         psi_alpha = psi_alpha * ITensor(1.0, ind)
     end
 
+    #psi_alpha = psi_alpha / sum(psi_alpha)
+
     for alpha in ps[beta]
         n = elementwise_operation(x -> x^(b_nos[beta]), msgs[(alpha, beta)])
-        psi_beta = special_multiply(psi_beta, n)
+        psi_beta = elementwise_multiplication(psi_beta, n)
     end
 
+    #psi_beta = psi_beta / sum(psi_beta)
+
     ratio = pointwise_division_raise(psi_alpha, psi_beta; power = rate /b_nos[beta])
-    m = special_multiply(ratio, msgs[(alpha, beta)])
+    m = elementwise_multiplication(ratio, msgs[(alpha, beta)])
+
     if normalize
         m = ITensors.normalize(m)
         m = _make_hermitian(m)
@@ -62,7 +82,7 @@ function update_messages(psi_alphas, psi_betas, msgs, b_nos, ps, cs, ms, bs; kwa
     return new_msgs, diff / length(keys(msgs))
 end
 
-function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, cs, b_nos, mobius_nos; niters::Int, rate::Number, tol=1e-10)
+function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, cs, b_nos, mobius_nos; niters::Int, rate::Number, tol=1e-12)
     msgs = initialize_messages(ms, bs, ps, T)
     psi_alphas = [get_psi(T, b) for b=bs]
     psi_betas = [get_psi(T, m) for m=ms]
@@ -75,34 +95,23 @@ function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, c
             println("Average difference in messages following most recent GBP update: $(diffs[i])")
         end
         msgs = new_msgs
-	if diffs[i] < tol
+	if abs(diffs[i]) < tol
 	    tot_iters = i
 	    break
 	end
     end
 
-    return msgs, diffs[1:tot_iters]
+    return normalize_messages(msgs), diffs[1:tot_iters], diffs[end] < tol
 end
 
-function classical_kikuchi_free_energy(ms, bs, msgs, psi_alphas, psi_betas, cs, b_nos, ps, mobius_nos)
-    f = 0
-    for alpha in 1:length(bs)
-        b = b_alpha(alpha, psi_alphas[alpha], msgs, cs, ps)
-        R = pointwise_division_raise(b, psi_alphas[alpha])
-        R = elementwise_operation(x -> real(x) > 1e-14 ? log(real(x)) : 0, R)
-        R = special_multiply(R, b)
-        f += sum(R)
-    end
 
-    for beta in 1:length(ms)
-        b = b_beta(beta, psi_betas[beta], msgs, ps, b_nos)
-        R = pointwise_division_raise(b, psi_betas[beta])
-        R = elementwise_operation(x -> real(x) > 1e-14 ? log(real(x)) : 0, R)
-        R = special_multiply(R, b)
-        f += mobius_nos[beta] * sum(R)
+#Needed when computing the free energy
+function normalize_messages(msgs)
+    new_msgs = copy(msgs)
+    for key in keys(msgs)
+        set!(new_msgs, key, normalize(msgs[key]))
     end
-
-    return f
+    return new_msgs
 end
 
 #This is the quantum version (allows for complex numbers in messages, agrees with the standard textbook Kicuchi for real positive messages)
@@ -110,20 +119,20 @@ function kikuchi_free_energy(T::BeliefPropagationCache, ms, bs, msgs, cs, b_nos,
     f = 0
     for alpha in 1:length(bs)
         psi_alpha = get_psi(T, bs[alpha])
-        b = b_alpha(alpha, psi_alpha, msgs, cs, ps; normalize = false)
+        b = b_alpha(alpha, psi_alpha, msgs, cs, ps)
         f += log(sum(b))
     end
 
     for beta in 1:length(ms)
         psi_beta = get_psi(T, ms[beta])
-        b = b_beta(beta, psi_beta, msgs, ps, b_nos; normalize = false)
+        b = b_beta(beta, psi_beta, msgs, ps, b_nos)
         f += mobius_nos[beta] * log(sum(b))
     end
 
     return -f
 end
 
-function b_alpha(alpha, psi_alpha, msgs, cs, ps; normalize = true)
+function b_alpha(alpha, psi_alpha, msgs, cs, ps)
     b = copy(psi_alpha)
     for beta in cs[alpha]
         for parent_alpha in ps[beta]
@@ -132,21 +141,14 @@ function b_alpha(alpha, psi_alpha, msgs, cs, ps; normalize = true)
             end
         end
     end
-
-    if normalize
-        b = b / sum(b)
-    end
     return b
 end
 
-function b_beta(beta, psi_beta, msgs, ps, b_nos; normalize = true)
+function b_beta(beta, psi_beta, msgs, ps, b_nos)
     b = copy(psi_beta)
     for alpha in ps[beta]
         n = elementwise_operation(x -> x^(b_nos[beta]), msgs[(alpha, beta)])
-        b = special_multiply(b, n)
-    end
-    if normalize
-        b = b / sum(b)
+        b = elementwise_multiplication(b, n)
     end
     return b
 end

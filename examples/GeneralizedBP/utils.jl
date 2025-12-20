@@ -1,7 +1,7 @@
-using TensorNetworkQuantumSimulator: virtualinds
-using NamedGraphs: unique_simplecycles_limited_length
-using ITensors: Index, sim
-
+using TensorNetworkQuantumSimulator
+using NamedGraphs: unique_simplecycles_limited_length, src, dst, NamedEdge
+using ITensors: Index, sim, replaceinds
+using TensorNetworkQuantumSimulator: norm_factors
 using Graphs: topological_sort
 using Graphs.SimpleGraphs: SimpleDiGraph
 
@@ -30,6 +30,15 @@ function special_multiply(t1::ITensor, t2::ITensor)
 
     t = reduce(*, [[t1, t2 ]; ds])
     return t    
+end
+
+function elementwise_multiplication(t1::ITensor, t2::ITensor)
+    @assert Set(inds(t1)) == Set(inds(t2))
+    t_out = copy(t1)
+    for iv in eachindval(t_out)
+        t_out[iv...] = t1[iv...] * t2[iv...]
+    end
+    return t_out
 end
 
 #Element wise multiplication of all tensors and sum over specified indices. For efficient message updating.
@@ -79,10 +88,18 @@ end
 
 function pointwise_division_raise(a::ITensor, b::ITensor; power = 1)
     @assert Set(inds(a)) == Set(inds(b))
-    out = ITensor(eltype(a), 1.0, inds(a))
+    etype = eltype(a)
+    out = ITensor(etype, 1.0, inds(a))
     indexes = inds(a)
     for iv in eachindval(out)
-        out[iv...] = (a[iv...] / b[iv...])^(power)
+        z =  (a[iv...] / b[iv...])
+        mag_z = abs(z)^(power)
+        if isreal(z) && real(z) > 0
+            out[iv...] = mag_z
+        else
+            angle_z = angle(z)*power
+            out[iv...] = mag_z * exp(im * angle_z)
+        end
     end
 
     return out
@@ -251,4 +268,44 @@ function initialize_messages(ms, bs, ps, T)
         end       
     end
     return ms_dict
+end
+
+function marginal(T::TensorNetworkState, e::NamedEdge)
+    return marginal(T, [e])
+end
+
+function marginal(T::TensorNetworkState, es::Vector{<:NamedEdge})
+    Ts = ITensor[]
+    linds = [only(virtualinds(T, e)) for e in es]
+    linds_sim = sim.(linds)
+    linds_sim_sim = sim.(linds_sim)
+    src_sinds = [only(siteinds(T, src(e))) for e in es]
+    for v in vertices(graph(T))
+        T_inds= inds(T[v])
+        if v ∉ src.(es)
+            append!(Ts, norm_factors(T, v))
+        else
+            indexes = findall(l -> l ∈ T_inds, linds)
+            Tv = replaceinds(T[v], linds[indexes], linds_sim[indexes])
+            Tvdag = prime(dag(Tv))
+            Tvdag = replaceinds(Tvdag, prime.(src_sinds), src_sinds)
+            append!(Ts, [Tv, Tvdag])
+        end
+    end
+
+    seq = contraction_sequence(Ts; alg = "optimal")
+    marginal = contract(Ts; sequence = seq)
+    combiners = [delta([lind, lind_sim, lind_sim_sim]) for (lind, lind_sim, lind_sim_sim) in zip(linds, linds_sim, linds_sim_sim)]
+    for combiner in combiners
+        marginal = marginal * combiner * prime(combiner)
+    end
+    marginal = replaceinds(marginal, [linds_sim_sim; prime.(linds_sim_sim)], [linds; prime.(linds)])
+
+    return marginal
+end
+
+function marginal(T::TensorNetworkState, v)
+    ts = reduce(vcat, [norm_factors(T, vp) for vp in setdiff(collect(vertices(graph(T))), [v])])
+    seq = contraction_sequence(ts; alg = "optimal")
+    return contract(ts; sequence = seq)
 end
