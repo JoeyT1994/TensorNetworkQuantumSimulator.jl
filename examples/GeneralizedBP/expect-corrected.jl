@@ -262,7 +262,8 @@ function cc_weights_nohyper(bpc::BeliefPropagationCache, regions::Vector, counti
 end
 
 """
-onepoint function, using cluster cumulant expansion, geometric mean
+onepoint function, using cluster cumulant expansion, geometric mean.
+This can give wacky results sometimes
 """
 function cc_one_point_geometric(bpc::BeliefPropagationCache, regions::Vector, counting_nums::Dict, obs)
     denoms, cnums = cc_weights_nohyper(bpc, regions, counting_nums; obs = nothing)
@@ -277,6 +278,6 @@ function cc_two_point_geometric(bpc::BeliefPropagationCache, regions::Vector, co
     denoms, cnums = cc_weights_nohyper(bpc, regions, counting_nums; obs = nothing)
     op_strings, verts, _ = TN.collectobservable(obs, graph(bpc))
     nums_sep = [cc_weights_nohyper(bpc, regions, counting_nums; obs = (op_strings[i], [verts[i]]))[1] for i=1:2]
-    nums_both, _ = cc_weights2(bpc, regions, counting_nums; obs = obs)
+    nums_both, _ = cc_weights_nohyper(bpc, regions, counting_nums; obs = obs)
     return prod((nums_both ./ denoms) .^ cnums) - prod((nums_sep[1] .* nums_sep[2] ./ denoms .^2) .^ cnums)
 end
