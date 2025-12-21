@@ -43,16 +43,20 @@ end
 
 #Element wise multiplication of all tensors and sum over specified indices. For efficient message updating.
 function hyper_multiply(ts::Vector{<:ITensor}, inds_to_sum_over =[])
-    all_inds = reduce(vcat, [inds(t) for t in ts])
+    all_inds = reduce(vcat, [[id for id=inds(t)] for t=ts])
     unique_inds = unique(all_inds)
     index_counts = [count(i -> i == ui, all_inds) for ui in unique_inds]
 
-    #Any index that appears more than wise. Sim it amongst all tensors. 
+    #Any index that appears more than once. Sim it amongst all tensors. 
     #If not being summed over, add in a copy with an index, if it is add in a hyper tensor without one.
 
     for (i, ui) in enumerate(unique_inds)
+        if index_counts[i] == 2 && ui ∈ inds_to_sum_over # don't have to replace
+	    continue
+	end
         if index_counts[i] > 1
-            sim_inds = [sim(ui, j) for j in 1:index_counts[i]]
+	    # tags makes sure nothing gets repeated
+            sim_inds = [sim(ui; tags = "$(j)") for j in 1:index_counts[i]]
             cnt = 1
             for (j, t) in enumerate(ts)
                 if ui ∈ inds(t)
@@ -62,15 +66,11 @@ function hyper_multiply(ts::Vector{<:ITensor}, inds_to_sum_over =[])
                 end
             end
 
-            hyper_tensor = ITensor(1.0)
-            for si in sim_inds
-                hyper_tensor = hyper_tensor * delta(si)
-            end
-            if ui ∈ inds_to_sum_over
-                hyper_tensor *= delta(ui)
-            end
-            push!(ts, hyper_tensor)
-            
+	    if ui ∈ inds_to_sum_over
+	        push!(ts, delta(sim_inds...))
+	    else
+	        push!(ts, delta(sim_inds...,ui))
+	    end            
         end
     end
 

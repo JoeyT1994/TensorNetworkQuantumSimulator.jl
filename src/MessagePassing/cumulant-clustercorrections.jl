@@ -94,7 +94,9 @@ function close_under_intersections_connected(g::SimpleGraph, seed::Set{RegionKey
 		# prune branches
 	    	pruned_X = prune_branches(subg, must_contain; vertex_map = w->vertex_map[w])
 		comp = to_key(pruned_X)
-		
+		if isempty(comp)
+		    continue
+		end
 		if comp ∉ R
                     push!(R, comp)
                     changed = true
@@ -241,7 +243,7 @@ max_v is max number of vertices
 min_v is min number of vertices (e.g. 4 on square lattice)
 """
 function generate_embedded_leafless_graphs(g::AbstractGraph, max_v::Int; min_v::Int=4, triangle_free::Bool = true, min_deg::Int = 2, max_e=Inf)
-    if min_deg <= 2
+    if min_deg < 2
         error("Leafless graph must have min_deg > 1. You chose $(min_deg)")
     end
     k = maximum([degree(g,v) for v=vertices(g)])

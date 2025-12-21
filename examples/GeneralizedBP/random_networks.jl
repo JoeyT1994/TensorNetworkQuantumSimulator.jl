@@ -1,6 +1,5 @@
 using ITensors
 using Random
-using ProgressMeter
 include("generalizedbp.jl")
 include("utils-square.jl")
 include("expect-corrected.jl")
@@ -83,7 +82,7 @@ function random_free(region_data, χ; state::Bool = false, num_samples::Int=10, 
     gbp_diffs = Array{Array}(undef, num_samples)
     yedidia_diffs = Array{Array}(undef, num_samples)
     
-    @showprogress for i=1:num_samples
+    for i=1:num_samples
         if state
 	    T = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
 	    exact_data[i] = (log(TN.norm_sqr(T;alg="exact")))
@@ -94,9 +93,9 @@ function random_free(region_data, χ; state::Bool = false, num_samples::Int=10, 
 	
     	bpc = BeliefPropagationCache(T)
 	bpc = update(bpc)
-	@time yedidia_msgs, yedidia_diffs[i] = yedidia_gbp(bpc, yedidia_regs.ms, yedidia_regs.ps, yedidia_regs.cs; niters=niters, tol=tol,rate=rate)
+	@time yedidia_msgs, yedidia_diffs[i] = yedidia_gbp(bpc, yedidia_regs.ms, yedidia_regs.ps, yedidia_regs.cs; niters=niters, tol=tol,rate=rate, make_hermitian = state)
 	yedidia_data[i] = yedidia_free_energy(bpc, yedidia_regs.ms, yedidia_msgs[end], yedidia_regs.ps, yedidia_regs.cs, yedidia_regs.mobius_nos)
-	gbp_msgs, gbp_diffs[i] = generalized_belief_propagation(bpc, gbp_regs.bs, gbp_regs.ms, gbp_regs.ps, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.mobius_nos; niters=niters, tol=tol, rate=rate)
+	@time gbp_msgs, gbp_diffs[i] = generalized_belief_propagation(bpc, gbp_regs.bs, gbp_regs.ms, gbp_regs.ps, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.mobius_nos; niters=niters, tol=tol, rate=rate, make_hermitian=state)
 	gbp_data[i] = -(kikuchi_free_energy(bpc, gbp_regs.ms, gbp_regs.bs, gbp_msgs, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.ps, gbp_regs.mobius_nos))
 	loop_data[i] = (log(TN.loopcorrected_partitionfunction(bpc, 4)))
 	cluster_data[:,i] = (cluster_free(bpc, region_data.clusters, region_data.egs, region_data.interaction_graph)[2])
@@ -122,7 +121,7 @@ function random_onepoint(region_data, χ, obs; num_samples::Int=10, get_exact::B
     gbp_diffs = Array{Array}(undef, num_samples)
     yedidia_diffs = Array{Array}(undef, num_samples)
 
-    @showprogress for i=1:num_samples
+    for i=1:num_samples
         ψ = random_tensornetworkstate(ComplexF64, region_data.graph, siteinds("S=1/2", region_data.graph); bond_dimension = χ)
     	bpc = BeliefPropagationCache(ψ)
 	bpc = update(bpc)
@@ -162,7 +161,7 @@ function random_all(region_data, region_data_corr, χ, obs; num_samples::Int=10,
     states = Array{BeliefPropagationCache}(undef, num_samples)
     gbp_msgss = Array{Dictionary}(undef, num_samples)
     yedidia_msgss = Array{Array}(undef, num_samples)
-    @showprogress for i=1:num_samples
+    for i=1:num_samples
         if !isnothing(old_states)
 	    T = network(old_states[i])
 	    bpc = old_states[i]

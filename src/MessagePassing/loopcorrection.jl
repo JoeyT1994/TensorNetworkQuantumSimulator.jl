@@ -80,7 +80,7 @@ function NamedGraphs.GraphsExtensions.boundary_edges(
 end
 
 #Compute the contraction of the bp configuration specified by the edge induced subgraph eg. Insert I + epsilon O on up to two sites.
-function weight(bpc::BeliefPropagationCache, eg; project_out::Bool = true, op_strings::Function = v->"I", coeffs::Function = v->1, rescales = Dictionary(1 for v=vertices(eg)), use_epsilon::Bool = false)
+function weight(bpc::BeliefPropagationCache, eg; project_out::Bool = true, op_strings::Function = v->"I", coeffs::Function = v->1, rescales = Dictionary(1 for v=vertices(eg)), use_epsilon::Bool = true)
     vs = collect(vertices(eg))
     es = collect(edges(eg))
 

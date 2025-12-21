@@ -78,7 +78,7 @@ function initialize_direct_messages(ms, ps, T; normalize::Bool=true)
     return ms_dicts
 end
 
-function update_direct_message(level, alpha, beta, psi_alpha, msgs, new_msgs, ps, cs; rate = 1.0, normalize = true)
+function update_direct_message(level, alpha, beta, psi_alpha, msgs, new_msgs, ps, cs; rate = 1.0, normalize = true, make_hermitian::Bool=true)
     
     m = deepcopy(psi_alpha)
     for c=setdiff(cs[level][alpha][1], [beta]) # children of alpha excluding beta
@@ -138,6 +138,69 @@ function update_direct_message(level, alpha, beta, psi_alpha, msgs, new_msgs, ps
 
     if normalize
         m = ITensors.normalize(m)
+	if make_hermitian
+	    m = _make_hermitian(m)
+	end
+    end
+
+    return m
+end	         	        
+
+function update_direct_message_hyper(level, alpha, beta, psi_alpha, msgs, new_msgs, ps, cs; rate = 1.0, normalize = true, make_hermitian::Bool=true)
+    
+    m_tens = [copy(psi_alpha)]
+    for c=setdiff(cs[level][alpha][1], [beta]) # children of alpha excluding beta
+        for b=setdiff(ps[level][c][1], [alpha]) # parents of c excluding alpha
+	    push!(m_tens, msgs[level][(b, c)])
+	end
+    end
+
+    if level==1
+        if length(ps)==2 # m is from edge e to vertex v 
+            for b=ps[2][alpha][1] # plaquettes that contain the edge e
+	        push!(m_tens, msgs[2][(b, alpha)])
+	    end
+	end
+    else
+        @assert level==2 # additional levels not implemented yet
+	# vertices in alpha but not beta
+	for c=setdiff(cs[2][alpha][2], cs[1][beta][1])
+	    for b=setdiff(ps[1][c][1], cs[2][alpha][1]) # edges not in alpha
+	        push!(m_tens,msgs[1][(b,c)])
+	    end
+	end
+    end
+
+    inds_to_sum_over = setdiff(unique(union(inds.(m_tens)...)), inds(msgs[level][(alpha,beta)]))
+    
+    m = hyper_multiply(m_tens, inds_to_sum_over)
+    if level==2
+        # denominator: use new messages, edges in alpha to vertices in beta
+	# for this there will be no summing over, so might as well just use special_multiply
+	denom = ITensor(scalartype(psi_alpha), 1.0, inds(m))
+	for c = cs[1][beta][1] # vertices in beta
+	    @assert c in cs[2][alpha][2]
+	    for b = intersect(ps[1][c][1], cs[2][alpha][1]) # parent edge in alpha
+	    	if b==beta # parent edge not descended from beta
+		    continue
+		end
+	        denom = special_multiply(denom, new_msgs[1][(b,c)])
+	    end
+	end
+	m = pointwise_division_raise(m, denom; power = 1)
+    end
+
+    if normalize
+        m = ITensors.normalize(m)
+    end
+
+    m = rate * m + (1-rate) * msgs[level][(alpha,beta)]
+
+    if normalize
+        m = ITensors.normalize(m)
+	if make_hermitian
+	    m = _make_hermitian(m)
+	end
     end
 
     return m
@@ -184,7 +247,7 @@ function yedidia_belief(level, alpha, psi_alpha, msgs, ps, cs)
     b
 end
 
-function yedidia_gbp(T::BeliefPropagationCache, ms, ps, cs; niters::Int, rate::Number, tol=1e-10)
+function yedidia_gbp(T::BeliefPropagationCache, ms, ps, cs; niters::Int, rate::Number, tol=1e-12, make_hermitian::Bool=true)
     msgs = initialize_direct_messages(ms, ps, T; normalize=true)
 
     all_msgs = Array{Array}(undef, niters+1)
@@ -193,7 +256,7 @@ function yedidia_gbp(T::BeliefPropagationCache, ms, ps, cs; niters::Int, rate::N
     tot_iters = niters
     psis = [[get_psi(T, m) for m=ms[j]] for j=1:length(ms)]
     for i=1:niters
-        all_msgs[i+1], diffs[i] = update_direct_messages(psis, all_msgs[i], ms, ps, cs; normalize=true, rate)
+        all_msgs[i+1], diffs[i] = update_direct_messages(psis, all_msgs[i], ms, ps, cs; normalize=true, make_hermitian=make_hermitian,rate)
 	if diffs[i] < tol
 	    tot_iters = i
 	    break

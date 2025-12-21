@@ -32,15 +32,13 @@ function _make_hermitian(A::ITensor)
     end
 end
 
-function update_message(T::BeliefPropagationCache, alpha, beta, msgs, b_nos, ps, cs, ms, bs; rate = 1.0, normalize = true)
-    psi_alpha = get_psi(T, bs[alpha])
-    psi_beta = get_psi(T, ms[beta])
+function update_message(psi_alpha, psi_beta, alpha, beta, msgs, b_nos, ps, cs, ms, bs; rate = 1.0, make_hermitian::Bool = true, normalize::Bool = true)
 
     #TODO: This can be optimized by correct tensor contraction
     for beta in cs[alpha]
         for parent_alpha in ps[beta]
             if parent_alpha != alpha
-                psi_alpha = special_multiply(psi_alpha, msgs[(parent_alpha, beta)])
+                psi_alpha = special_multiply(psi_alpha, msgs[(parent_alpha, beta)])		
             end
         end
     end
@@ -49,8 +47,6 @@ function update_message(T::BeliefPropagationCache, alpha, beta, msgs, b_nos, ps,
     for ind in inds_to_sum_over
         psi_alpha = psi_alpha * ITensor(1.0, ind)
     end
-
-    #psi_alpha = psi_alpha / sum(psi_alpha)
 
     for alpha in ps[beta]
         n = elementwise_operation(x -> x^(b_nos[beta]), msgs[(alpha, beta)])
@@ -64,7 +60,45 @@ function update_message(T::BeliefPropagationCache, alpha, beta, msgs, b_nos, ps,
 
     if normalize
         m = ITensors.normalize(m)
-        m = _make_hermitian(m)
+	if make_hermitian # don't do for flat TNs
+            m = _make_hermitian(m)
+	end
+    end
+
+    return m
+end
+
+# Actually seems slower??
+function update_message_hyper(psi_alpha, psi_beta, alpha, beta, msgs, b_nos, ps, cs, ms, bs; rate = 1.0, make_hermitian::Bool = true, normalize::Bool = true)
+
+    alpha_tens = [psi_alpha]
+    for beta in cs[alpha]
+        for parent_alpha in ps[beta]
+            if parent_alpha != alpha
+                push!(alpha_tens, msgs[(parent_alpha, beta)])
+            end
+        end
+    end
+
+    inds_to_sum_over = setdiff(unique(union(inds.(alpha_tens)...)), inds(psi_beta))
+
+    psi_alpha = hyper_multiply(alpha_tens, inds_to_sum_over)
+
+    for alpha in ps[beta]
+        n = elementwise_operation(x -> x^(b_nos[beta]), msgs[(alpha, beta)])
+        psi_beta = elementwise_multiplication(psi_beta, n)
+    end
+
+    #psi_beta = psi_beta / sum(psi_beta)
+
+    ratio = pointwise_division_raise(psi_alpha, psi_beta; power = rate /b_nos[beta])
+    m = elementwise_multiplication(ratio, msgs[(alpha, beta)])
+
+    if normalize
+        m = ITensors.normalize(m)
+	if make_hermitian # don't do for flat TNs
+            m = _make_hermitian(m)
+	end
     end
 
     return m
@@ -82,14 +116,14 @@ function update_messages(psi_alphas, psi_betas, msgs, b_nos, ps, cs, ms, bs; kwa
     return new_msgs, diff / length(keys(msgs))
 end
 
-function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, cs, b_nos, mobius_nos; niters::Int, rate::Number, tol=1e-12)
+function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, cs, b_nos, mobius_nos; niters::Int, rate::Number, tol=1e-12, make_hermitian::Bool=true)
     msgs = initialize_messages(ms, bs, ps, T)
     psi_alphas = [get_psi(T, b) for b=bs]
     psi_betas = [get_psi(T, m) for m=ms]
     diffs = zeros(niters)
     tot_iters = niters
     for i in 1:niters
-        new_msgs, diffs[i] = update_messages(psi_alphas, psi_betas, msgs, b_nos, ps, cs, ms, bs; normalize = true, rate)
+        new_msgs, diffs[i] = update_messages(psi_alphas, psi_betas, msgs, b_nos, ps, cs, ms, bs; make_hermitian=make_hermitian, normalize = true, rate)
 
         if i % niters == 0
             println("Average difference in messages following most recent GBP update: $(diffs[i])")
@@ -160,8 +194,8 @@ function expect_gbp(T, bs, msgs, cs, ps, obs)
     @assert length(verts)==1
     alpha = findfirst(b->intersect(b,verts)==Set(verts), bs)
     psi_alpha_num = get_psi(T, bs[alpha]; op_strings = v->op_strings[1])
-    num = sum(b_alpha(alpha, psi_alpha_num, msgs, cs, ps; normalize=false))
-    denom = sum(b_alpha(alpha, get_psi(T, bs[alpha]), msgs, cs, ps; normalize=false))
+    num = sum(b_alpha(alpha, psi_alpha_num, msgs, cs, ps))
+    denom = sum(b_alpha(alpha, get_psi(T, bs[alpha]), msgs, cs, ps))
     return num/denom
 end
 
