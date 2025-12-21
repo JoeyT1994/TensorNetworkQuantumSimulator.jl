@@ -45,7 +45,9 @@ function virtualinds(blf::BilinearForm, edge::NamedEdge)
     return Index[virtualinds(ket(blf), edge); virtualinds(operator(blf), edge); virtualinds(bra(blf), edge)]
 end
 
-function bp_factors(blf::BilinearForm, verts::Vector)
+function bp_factors(blf::BilinearForm, verts::Vector; op_strings::Function = v->"I", coeffs::Function = v->1, use_epsilon::Bool = false)
+
+    # note we currently are not using the keyword arguments, included here for future compatibility
     factors = ITensor[]
     for v in verts
         append!(factors, ITensor[ket(blf)[v], operator(blf)[v], bra(blf)[v]])
@@ -53,4 +55,4 @@ function bp_factors(blf::BilinearForm, verts::Vector)
     return factors
 end
 
-bp_factors(blf::BilinearForm, v) = bp_factors(blf, [v])
+bp_factors(blf::BilinearForm, v; kwargs...) = bp_factors(blf, [v]; kwargs...)
