@@ -126,11 +126,7 @@ function edge_scalars(
 end
 
 function scalar_factors_quotient(bp_cache::AbstractBeliefPropagationCache; kwargs...)
-    if typeof(network(bp_cache))<:TensorNetworkState
-        return vertex_scalars(bp_cache; kwargs...), edge_scalars(bp_cache)
-    else
-        return vertex_scalars(bp_cache), edge_scalars(bp_cache)
-    end
+    return vertex_scalars(bp_cache; kwargs...), edge_scalars(bp_cache)
 end
 
 function incoming_messages(

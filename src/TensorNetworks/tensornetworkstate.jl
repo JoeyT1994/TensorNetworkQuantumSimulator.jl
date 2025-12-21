@@ -52,7 +52,7 @@ function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Functi
         elseif op_strings(v) == "ρ"
             append!(factors, ITensor[tnv, tnv_dag])
         else
-	    op = use_epsilon ? Hyper(1,0,0,0) * ITensors.op("I", only(sinds)) + coeffs(v) * ITensors.op(op_strings(v), only(sinds)) : coeffs(v) * ITensors.op(op_strings(v), only(sinds))
+	    op = use_epsilon ? Hyper(1,0,0,0) * ITensors.op("I", only(sinds)) + coeffs(v) * ITensors.op(op_strings(v), only(sinds)) : adapt(datatype(tnv))(coeffs(v) * ITensors.op(op_strings(v), only(sinds)))
             append!(factors, ITensor[tnv, tnv_dag, op])
         end
     end

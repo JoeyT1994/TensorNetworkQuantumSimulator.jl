@@ -63,11 +63,11 @@ function default_message(tn::TensorNetwork, edge::NamedEdge)
     return adapt(datatype(tn))(denseblocks(delta(virtualinds(tn, edge))))
 end
 
-function bp_factors(tn::TensorNetwork, vertex)
+function bp_factors(tn::TensorNetwork, vertex; op_strings = v->"I", use_epsilon::Bool=false, coeffs = v->"I")
     return ITensor[tn[vertex]]
 end
 
-function bp_factors(tn::TensorNetwork, verts::Vector)
+function bp_factors(tn::TensorNetwork, verts::Vector; op_strings = v->"I", use_epsilon::Bool=false, coeffs = v->"I")
     return [ITensor[tn[v]] for v=verts]
 end
 

@@ -78,9 +78,8 @@ function initialize_direct_messages(ms, ps, T; normalize::Bool=true)
     return ms_dicts
 end
 
-function update_direct_message(level, alpha, beta, psi_alpha, msgs, new_msgs, ps, cs; rate = 1.0, normalize = true, make_hermitian::Bool=true)
-    
-    m = deepcopy(psi_alpha)
+function get_numerator_special(T::BeliefPropagationCache, level, alpha, beta, msgs, ms, ps, cs)
+    m = get_psi(T, ms[level+1][alpha])
     for c=setdiff(cs[level][alpha][1], [beta]) # children of alpha excluding beta
         for b=setdiff(ps[level][c][1], [alpha]) # parents of c excluding alpha
 	    m = special_multiply(m, msgs[level][(b, c)])
@@ -108,37 +107,24 @@ function update_direct_message(level, alpha, beta, psi_alpha, msgs, new_msgs, ps
     for ind in inds_to_sum_over
         m = m * ITensor(1.0, ind)
     end
+    return m
+end
 
+function update_direct_message(T::BeliefPropagationCache, level, alpha, beta, msgs, new_msgs, ms, ps, cs; rate = 1.0, normalize = true)
+    m = get_numerator_special(T, level, alpha, beta, msgs, ms, ps, cs)    
     if level==2
-        # denominator: use new messages, edges in alpha to vertices in beta
-	denom = ITensor(scalartype(psi_alpha), 1.0, inds(m))
-	for c = cs[1][beta][1] # vertices in beta
-	    @assert c in cs[2][alpha][2]
-	    for b = intersect(ps[1][c][1], cs[2][alpha][1]) # parent edge in alpha
-	    	if b==beta # parent edge not descended from beta
-		    continue
-		end
-	        if isnothing(denom)
-		    denom = deepcopy(new_msgs[1][(b,c)])
-		else
-	            denom = special_multiply(denom, new_msgs[1][(b,c)])
-		end
-	    end
-	end
-	if !isnothing(denom)
-	    m = pointwise_division_raise(m, denom; power = 1)
-	end
+        m = divide_denominator(m, alpha, beta, new_msgs, ms, ps, cs)
     end
 
     if normalize
         m = ITensors.normalize(m)
     end
 
-    m = rate * m + (1-rate) * deepcopy(msgs[level][(alpha,beta)])
+    m = rate * m + (1-rate) * msgs[level][(alpha,beta)]
 
     if normalize
         m = ITensors.normalize(m)
-	if make_hermitian
+	if typeof(network(T))<:TensorNetworkState
 	    m = _make_hermitian(m)
 	end
     end
@@ -146,9 +132,8 @@ function update_direct_message(level, alpha, beta, psi_alpha, msgs, new_msgs, ps
     return m
 end	         	        
 
-function update_direct_message_hyper(level, alpha, beta, psi_alpha, msgs, new_msgs, ps, cs; rate = 1.0, normalize = true, make_hermitian::Bool=true)
-    
-    m_tens = [copy(psi_alpha)]
+function get_numerator_hyper(T::BeliefPropagationCache, level, alpha, beta, msgs, ms, ps, cs)
+    m_tens = [get_psi(T, ms[level+1][alpha])]
     for c=setdiff(cs[level][alpha][1], [beta]) # children of alpha excluding beta
         for b=setdiff(ps[level][c][1], [alpha]) # parents of c excluding alpha
 	    push!(m_tens, msgs[level][(b, c)])
@@ -170,26 +155,37 @@ function update_direct_message_hyper(level, alpha, beta, psi_alpha, msgs, new_ms
 	    end
 	end
     end
-
     inds_to_sum_over = setdiff(unique(union(inds.(m_tens)...)), inds(msgs[level][(alpha,beta)]))
     
     m = hyper_multiply(m_tens, inds_to_sum_over)
-    if level==2
-        # denominator: use new messages, edges in alpha to vertices in beta
-	# for this there will be no summing over, so might as well just use special_multiply
-	denom = ITensor(scalartype(psi_alpha), 1.0, inds(m))
-	for c = cs[1][beta][1] # vertices in beta
-	    @assert c in cs[2][alpha][2]
-	    for b = intersect(ps[1][c][1], cs[2][alpha][1]) # parent edge in alpha
-	    	if b==beta # parent edge not descended from beta
-		    continue
-		end
-	        denom = special_multiply(denom, new_msgs[1][(b,c)])
-	    end
-	end
-	m = pointwise_division_raise(m, denom; power = 1)
-    end
+end
 
+"""
+Only for level 2
+"""
+function divide_denominator(m, alpha, beta, new_msgs, ms, ps, cs)
+    # denominator: use new messages, edges in alpha to vertices in beta
+    # for this there will be no summing over, so might as well just use special_multiply
+    denom = ITensor(scalartype(m), 1.0, inds(m))
+    for c = cs[1][beta][1] # vertices in beta
+        @assert c in cs[2][alpha][2]
+	for b = intersect(ps[1][c][1], cs[2][alpha][1]) # parent edge in alpha
+	    if b==beta # parent edge not descended from beta
+	        continue
+	    end
+	    denom = special_multiply(denom, new_msgs[1][(b,c)])
+	end
+    end
+    m = pointwise_division_raise(m, denom; power = 1)
+end
+
+function update_direct_message_hyper(T::BeliefPropagationCache, level, alpha, beta, msgs, new_msgs, ms, ps, cs; rate = 1.0, normalize = true)
+    
+    m = get_numerator_hyper(T, level, alpha, beta, msgs, ms, ps, cs)
+
+    if level==2
+        m = divide_denominator(m, alpha, beta, new_msgs, ms, ps, cs)
+    end
     if normalize
         m = ITensors.normalize(m)
     end
@@ -198,7 +194,7 @@ function update_direct_message_hyper(level, alpha, beta, psi_alpha, msgs, new_ms
 
     if normalize
         m = ITensors.normalize(m)
-	if make_hermitian
+	if typeof(network(T))<:TensorNetworkState
 	    m = _make_hermitian(m)
 	end
     end
@@ -206,12 +202,12 @@ function update_direct_message_hyper(level, alpha, beta, psi_alpha, msgs, new_ms
     return m
 end	         	        
 
-function update_direct_messages(psis, msgs, ms, ps, cs; kwargs...)
+function update_direct_messages(T::BeliefPropagationCache, msgs, ms, ps, cs; kwargs...)
     new_msgs = deepcopy(msgs)
     diff = 0
     for j=1:length(ps)
         for (alpha, beta) in keys(msgs[j])
-            new_msg = update_direct_message(j, alpha,  beta, psis[j+1][alpha], msgs, new_msgs, ps, cs; kwargs...)
+            new_msg = update_direct_message(T, j, alpha,  beta, msgs, new_msgs, ms, ps, cs; kwargs...)
 	    diff += message_diff(new_msg, msgs[j][(alpha,beta)])
 	    set!(new_msgs[j], (alpha,beta), new_msg)
 	end
@@ -247,7 +243,7 @@ function yedidia_belief(level, alpha, psi_alpha, msgs, ps, cs)
     b
 end
 
-function yedidia_gbp(T::BeliefPropagationCache, ms, ps, cs; niters::Int, rate::Number, tol=1e-12, make_hermitian::Bool=true)
+function yedidia_gbp(T::BeliefPropagationCache, ms, ps, cs; niters::Int, rate::Number, tol=1e-12)
     msgs = initialize_direct_messages(ms, ps, T; normalize=true)
 
     all_msgs = Array{Array}(undef, niters+1)
@@ -256,7 +252,7 @@ function yedidia_gbp(T::BeliefPropagationCache, ms, ps, cs; niters::Int, rate::N
     tot_iters = niters
     psis = [[get_psi(T, m) for m=ms[j]] for j=1:length(ms)]
     for i=1:niters
-        all_msgs[i+1], diffs[i] = update_direct_messages(psis, all_msgs[i], ms, ps, cs; normalize=true, make_hermitian=make_hermitian,rate)
+        all_msgs[i+1], diffs[i] = update_direct_messages(T, all_msgs[i], ms, ps, cs; normalize=true, rate)
 	if diffs[i] < tol
 	    tot_iters = i
 	    break

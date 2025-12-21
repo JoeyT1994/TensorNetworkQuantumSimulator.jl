@@ -32,9 +32,11 @@ function _make_hermitian(A::ITensor)
     end
 end
 
-function update_message(psi_alpha, psi_beta, alpha, beta, msgs, b_nos, ps, cs, ms, bs; rate = 1.0, make_hermitian::Bool = true, normalize::Bool = true)
+function update_message(T::BeliefPropagationCache, alpha, beta, msgs, b_nos, ps, cs, ms, bs; rate = 1.0, normalize::Bool = true)
 
-    #TODO: This can be optimized by correct tensor contraction
+    psi_alpha = get_psi(T, bs[alpha])
+    psi_beta = get_psi(T, ms[beta])
+    
     for beta in cs[alpha]
         for parent_alpha in ps[beta]
             if parent_alpha != alpha
@@ -60,7 +62,7 @@ function update_message(psi_alpha, psi_beta, alpha, beta, msgs, b_nos, ps, cs, m
 
     if normalize
         m = ITensors.normalize(m)
-	if make_hermitian # don't do for flat TNs
+	if typeof(network(T))<:TensorNetworkState
             m = _make_hermitian(m)
 	end
     end
@@ -69,8 +71,9 @@ function update_message(psi_alpha, psi_beta, alpha, beta, msgs, b_nos, ps, cs, m
 end
 
 # Actually seems slower??
-function update_message_hyper(psi_alpha, psi_beta, alpha, beta, msgs, b_nos, ps, cs, ms, bs; rate = 1.0, make_hermitian::Bool = true, normalize::Bool = true)
-
+function update_message_hyper(T::BeliefPropagationCache, alpha, beta, msgs, b_nos, ps, cs, ms, bs; rate = 1.0, normalize::Bool = true)
+    psi_alpha = get_psi(T, bs[alpha])
+    psi_beta = get_psi(T, ms[beta])
     alpha_tens = [psi_alpha]
     for beta in cs[alpha]
         for parent_alpha in ps[beta]
@@ -96,7 +99,7 @@ function update_message_hyper(psi_alpha, psi_beta, alpha, beta, msgs, b_nos, ps,
 
     if normalize
         m = ITensors.normalize(m)
-	if make_hermitian # don't do for flat TNs
+	if typeof(network(T))<:TensorNetworkState	
             m = _make_hermitian(m)
 	end
     end
@@ -104,26 +107,24 @@ function update_message_hyper(psi_alpha, psi_beta, alpha, beta, msgs, b_nos, ps,
     return m
 end
 
-function update_messages(psi_alphas, psi_betas, msgs, b_nos, ps, cs, ms, bs; kwargs...)
+function update_messages(T::BeliefPropagationCache, msgs, b_nos, ps, cs, ms, bs; kwargs...)
     new_msgs = copy(msgs)
     diff = 0
     for (alpha, beta) in keys(msgs)
         #Parallel or sequential?
-        new_msg = update_message(psi_alphas[alpha], psi_betas[beta], alpha, beta, msgs, b_nos, ps, cs, ms, bs; kwargs...)
+        new_msg = update_message(T, alpha, beta, msgs, b_nos, ps, cs, ms, bs; kwargs...)
         diff += message_diff(new_msg, msgs[(alpha, beta)])
         set!(new_msgs, (alpha, beta), new_msg)
     end
     return new_msgs, diff / length(keys(msgs))
 end
 
-function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, cs, b_nos, mobius_nos; niters::Int, rate::Number, tol=1e-12, make_hermitian::Bool=true)
+function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, cs, b_nos, mobius_nos; niters::Int, rate::Number, tol=1e-12)
     msgs = initialize_messages(ms, bs, ps, T)
-    psi_alphas = [get_psi(T, b) for b=bs]
-    psi_betas = [get_psi(T, m) for m=ms]
     diffs = zeros(niters)
     tot_iters = niters
     for i in 1:niters
-        new_msgs, diffs[i] = update_messages(psi_alphas, psi_betas, msgs, b_nos, ps, cs, ms, bs; make_hermitian=make_hermitian, normalize = true, rate)
+        new_msgs, diffs[i] = update_messages(T, msgs, b_nos, ps, cs, ms, bs;normalize = true, rate)
 
         if i % niters == 0
             println("Average difference in messages following most recent GBP update: $(diffs[i])")

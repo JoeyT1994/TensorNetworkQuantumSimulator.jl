@@ -93,9 +93,9 @@ function random_free(region_data, χ; state::Bool = false, num_samples::Int=10, 
 	
     	bpc = BeliefPropagationCache(T)
 	bpc = update(bpc)
-	@time yedidia_msgs, yedidia_diffs[i] = yedidia_gbp(bpc, yedidia_regs.ms, yedidia_regs.ps, yedidia_regs.cs; niters=niters, tol=tol,rate=rate, make_hermitian = state)
+	@time yedidia_msgs, yedidia_diffs[i] = yedidia_gbp(bpc, yedidia_regs.ms, yedidia_regs.ps, yedidia_regs.cs; niters=niters, tol=tol,rate=rate)
 	yedidia_data[i] = yedidia_free_energy(bpc, yedidia_regs.ms, yedidia_msgs[end], yedidia_regs.ps, yedidia_regs.cs, yedidia_regs.mobius_nos)
-	@time gbp_msgs, gbp_diffs[i] = generalized_belief_propagation(bpc, gbp_regs.bs, gbp_regs.ms, gbp_regs.ps, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.mobius_nos; niters=niters, tol=tol, rate=rate, make_hermitian=state)
+	@time gbp_msgs, gbp_diffs[i] = generalized_belief_propagation(bpc, gbp_regs.bs, gbp_regs.ms, gbp_regs.ps, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.mobius_nos; niters=niters, tol=tol, rate=rate)
 	gbp_data[i] = -(kikuchi_free_energy(bpc, gbp_regs.ms, gbp_regs.bs, gbp_msgs, gbp_regs.cs, gbp_regs.b_nos, gbp_regs.ps, gbp_regs.mobius_nos))
 	loop_data[i] = (log(TN.loopcorrected_partitionfunction(bpc, 4)))
 	cluster_data[:,i] = (cluster_free(bpc, region_data.clusters, region_data.egs, region_data.interaction_graph)[2])
