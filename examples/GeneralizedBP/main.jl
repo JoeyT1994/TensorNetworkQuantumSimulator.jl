@@ -38,7 +38,7 @@ function main()
     err_bp_vertex_marginals, err_gbp_vertex_marginals = 0, 0
     for i in 1:nsamples
         println("-------------------------------------")
-        ψ = random_tensornetworkstate(ComplexF64, g, s; bond_dimension = 2)
+
         ts = Dictionary(collect(vertices(g)), [uniform_random_itensor(ComplexF64, inds(ψ[v])) for v in vertices(g)])
         ψ = TensorNetworkState(TensorNetwork(ts, g), s)
         ψ = normalize(ψ; alg = "bp")
@@ -54,12 +54,15 @@ function main()
         cs = children(ms, ps, bs)
         b_nos = calculate_b_nos(ms, ps, mobius_nos)
 
-        gbp_f, msgs, gbp_converged = generalized_belief_propagation(ψ_bpc, bs, ms, ps, cs, b_nos, mobius_nos; niters = 500, rate = 0.35)
+        msgs, diffs, gbp_converged = generalized_belief_propagation(ψ_bpc, bs, ms, ps, cs, b_nos, mobius_nos; niters = 500, rate = 0.35)
 
         if !gbp_converged
             println("GBP did not converge in sample $i")
             continue
-        end
+	end
+
+	msgs = normalize_msgs(msgs)
+	gbp_f = kikuchi_free_energy(ψ_bpc, ms, bs, msgs, cs, b_nos, ps, mobius_nos)
         bp_f = -log(partitionfunction(ψ_bpc))
 
         f_lc = -log(loopcorrected_partitionfunction(ψ_bpc, loop_size))
@@ -71,6 +74,7 @@ function main()
         err_lc += abs(f_lc - f_exact)
         println("Simple BP absolute error on free energy: ", abs(bp_f - f_exact))
         println("Generalized BP absolute error on free energy: ", abs(gbp_f - f_exact))
+	println("Generalized BP free energy: ", gbp_f)
         println("Loop corrected BP absolute error on free energy: ", abs(f_lc - f_exact))
 
 

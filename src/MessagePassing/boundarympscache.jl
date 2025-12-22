@@ -494,12 +494,12 @@ function update_message!(
     return set_interpartition_message!(bmps_cache, M_out, pe)
 end
 
-function vertex_scalar(bmps_cache::BoundaryMPSCache, partition::PartitionVertex)
+function vertex_scalar(bmps_cache::BoundaryMPSCache, partition::PartitionVertex; kwargs...)
     g = partition_graph(bmps_cache, partition)
     v = first(center(g))
     update_seq = post_order_dfs_edges(g, v)
     bmps_cache = update_partition(bmps_cache, update_seq)
-    return vertex_scalar(bmps_cache, v)
+    return vertex_scalar(bmps_cache, v; kwargs...)
 end
 
 function edge_scalar(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)

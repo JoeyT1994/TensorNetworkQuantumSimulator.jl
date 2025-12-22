@@ -15,7 +15,8 @@ end
 function message_diff(message_a::ITensor, message_b::ITensor)
     n_a, n_b = norm(message_a), norm(message_b)
     f = abs2(dot(message_a, message_b) / (n_a * n_b))
-    return 1 - f
+
+    return max(0,1 - f)
 end
 
 messages(bp_cache::BeliefPropagationCache) = bp_cache.messages
@@ -86,13 +87,12 @@ end
 
 function rescale_vertices!(
         bpc::BeliefPropagationCache,
-        vertices::Vector
-    )
+        vertices::Vector; kwargs...)
     tn = network(bpc)
 
     for v in vertices
         vn = vertex_scalar(bpc, v)
-        s = isreal(vn) ? sign(vn) : one(vn)
+        s =  isreal(vn) ? sign(vn) : one(vn)
         if tn isa TensorNetworkState
             setindex_preserve!(tn, tn[v] * s * inv(sqrt(vn)), v)
         elseif tn isa TensorNetwork

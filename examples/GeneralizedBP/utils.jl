@@ -5,6 +5,19 @@ using TensorNetworkQuantumSimulator: norm_factors
 using Graphs: topological_sort
 using Graphs.SimpleGraphs: SimpleDiGraph
 
+function _make_hermitian(A::ITensor)
+    A_inds = ITensors.inds(A)
+    if length(A_inds) == 2
+        return (A + ITensors.swapind(dag(A), first(A_inds), last(A_inds))) / 2
+    elseif length(A_inds) == 4
+        A_inds_plevnull = filter(i -> plev(i) == 0, A_inds)
+        ind1, ind2 = first(A_inds_plevnull), last(A_inds_plevnull)
+        return (A + ITensors.swapinds(dag(A), [ind1, ind2], prime.([ind1, ind2]))) / 2
+    else
+        error("make_hermitian only supports ITensors with 2 or 4 indices")
+    end
+end
+
 function special_multiply(t1::ITensor, t2::ITensor)
     cinds = commoninds(t1, t2)
     ds = []
@@ -30,16 +43,20 @@ end
 
 #Element wise multiplication of all tensors and sum over specified indices. For efficient message updating.
 function hyper_multiply(ts::Vector{<:ITensor}, inds_to_sum_over =[])
-    all_inds = reduce(vcat, [inds(t) for t in ts])
+    all_inds = reduce(vcat, [[id for id=inds(t)] for t=ts])
     unique_inds = unique(all_inds)
     index_counts = [count(i -> i == ui, all_inds) for ui in unique_inds]
 
-    #Any index that appears more than wise. Sim it amongst all tensors. 
+    #Any index that appears more than once. Sim it amongst all tensors. 
     #If not being summed over, add in a copy with an index, if it is add in a hyper tensor without one.
 
     for (i, ui) in enumerate(unique_inds)
+        if index_counts[i] == 2 && ui ∈ inds_to_sum_over # don't have to replace
+	    continue
+	end
         if index_counts[i] > 1
-            sim_inds = [sim(ui, j) for j in 1:index_counts[i]]
+	    # tags makes sure nothing gets repeated
+            sim_inds = [sim(ui; tags = "$(j)") for j in 1:index_counts[i]]
             cnt = 1
             for (j, t) in enumerate(ts)
                 if ui ∈ inds(t)
@@ -49,15 +66,11 @@ function hyper_multiply(ts::Vector{<:ITensor}, inds_to_sum_over =[])
                 end
             end
 
-            hyper_tensor = ITensor(1.0)
-            for si in sim_inds
-                hyper_tensor = hyper_tensor * delta(si)
-            end
-            if ui ∈ inds_to_sum_over
-                hyper_tensor *= delta(ui)
-            end
-            push!(ts, hyper_tensor)
-            
+	    if ui ∈ inds_to_sum_over
+	        push!(ts, delta(sim_inds...))
+	    else
+	        push!(ts, delta(sim_inds...,ui))
+	    end            
         end
     end
 
@@ -93,8 +106,7 @@ function pointwise_division_raise(a::ITensor, b::ITensor; power = 1)
 end
 
 #All factors and their 4 variables (edges) form the parent regions for simple BP
-function construct_bp_bs(T::BeliefPropagationCache)
-    g = graph(T)
+function construct_bp_bs(g::NamedGraph)
     es = edges(g)
 
     regions = Set[]
@@ -111,12 +123,12 @@ function construct_bp_bs(T::BeliefPropagationCache)
 end
 
 #Here we take all factors and their 4 variables (edges), plus all loops of variables only to form the parent regions for GBP
-function construct_gbp_bs(T::BeliefPropagationCache, loop_length::Int)
-    g = graph(T)
+function construct_gbp_bs(g::NamedGraph, loop_length::Int; include_factors::Bool = true)
     g_edges = edges(g)
-    bs = construct_bp_bs(T)
+    bs = construct_bp_bs(g)
     cycles = unique_simplecycles_limited_length(g, loop_length)
     gbp_bs = copy(bs)
+    to_remove = Set()
     for cycle in cycles
         region = Set()
         for (i, v) in enumerate(cycle)
@@ -125,9 +137,21 @@ function construct_gbp_bs(T::BeliefPropagationCache, loop_length::Int)
             @assert e ∈ g_edges
             push!(region, e)
         end
+	if include_factors
+	    for b=bs
+	        v = filter(el->!(typeof(el)<:AbstractEdge), b)
+	    	if issubset(setdiff(b, v), region)
+	            push!(region, v...)
+		    push!(to_remove, b)
+	        end
+	    end
+	end
         push!(gbp_bs, region)  # Add first vertex to close the loop
     end
 
+    if include_factors # remove subsets
+        gbp_bs = setdiff(gbp_bs, to_remove)
+    end
     return gbp_bs
 end
 
@@ -157,6 +181,7 @@ function construct_ms(bs)
 
     return collect.(all_ms)
 end
+
 
 function parents(m, bs)
     parents = []

@@ -1,8 +1,10 @@
 using ITensors: ITensors, inds, uniqueinds, eachindval, norm, plev
 using Dictionaries: set!, AbstractDictionary
-using TensorNetworkQuantumSimulator: message_diff, bp_factors, contraction_sequence
+using TensorNetworkQuantumSimulator
+const TN = TensorNetworkQuantumSimulator
+using TensorNetworkQuantumSimulator: message_diff, bp_factors, contraction_sequence, contract
 
-function get_psi(T::BeliefPropagationCache, r)
+function get_psi(T::BeliefPropagationCache, r; kwargs...)
     vs = filter(x -> !(x isa NamedEdge), r)
     es = filter(x -> x isa NamedEdge, r)
     e_inds = reduce(vcat, [virtualinds(T, e) for e in es])
@@ -11,7 +13,7 @@ function get_psi(T::BeliefPropagationCache, r)
     end
     isempty(vs) && return ITensor(scalartype(T), 1.0, e_inds)
 
-    psi = bp_factors(T, collect(vs))
+    psi = vcat(bp_factors(T, collect(vs); kwargs...)...)
     seq = contraction_sequence(psi; alg = "optimal")
     psi = contract(psi; sequence = seq)
     return psi
@@ -30,15 +32,15 @@ function _make_hermitian(A::ITensor)
     end
 end
 
-function update_message(T::BeliefPropagationCache, alpha, beta, msgs, b_nos, ps, cs, ms, bs; rate = 1.0, normalize = true)
+function update_message(T::BeliefPropagationCache, alpha, beta, msgs, b_nos, ps, cs, ms, bs; rate = 1.0, normalize::Bool = true)
+
     psi_alpha = get_psi(T, bs[alpha])
     psi_beta = get_psi(T, ms[beta])
-
-    #TODO: This can be optimized by correct tensor contraction
+    
     for beta in cs[alpha]
         for parent_alpha in ps[beta]
             if parent_alpha != alpha
-                psi_alpha = special_multiply(psi_alpha, msgs[(parent_alpha, beta)])
+                psi_alpha = special_multiply(psi_alpha, msgs[(parent_alpha, beta)])		
             end
         end
     end
@@ -47,8 +49,6 @@ function update_message(T::BeliefPropagationCache, alpha, beta, msgs, b_nos, ps,
     for ind in inds_to_sum_over
         psi_alpha = psi_alpha * ITensor(1.0, ind)
     end
-
-    #psi_alpha = psi_alpha / sum(psi_alpha)
 
     for alpha in ps[beta]
         n = elementwise_operation(x -> x^(b_nos[beta]), msgs[(alpha, beta)])
@@ -62,7 +62,46 @@ function update_message(T::BeliefPropagationCache, alpha, beta, msgs, b_nos, ps,
 
     if normalize
         m = ITensors.normalize(m)
-        m = _make_hermitian(m)
+	if typeof(network(T))<:TensorNetworkState
+            m = _make_hermitian(m)
+	end
+    end
+
+    return m
+end
+
+# Actually seems slower??
+function update_message_hyper(T::BeliefPropagationCache, alpha, beta, msgs, b_nos, ps, cs, ms, bs; rate = 1.0, normalize::Bool = true)
+    psi_alpha = get_psi(T, bs[alpha])
+    psi_beta = get_psi(T, ms[beta])
+    alpha_tens = [psi_alpha]
+    for beta in cs[alpha]
+        for parent_alpha in ps[beta]
+            if parent_alpha != alpha
+                push!(alpha_tens, msgs[(parent_alpha, beta)])
+            end
+        end
+    end
+
+    inds_to_sum_over = setdiff(unique(union(inds.(alpha_tens)...)), inds(psi_beta))
+
+    psi_alpha = hyper_multiply(alpha_tens, inds_to_sum_over)
+
+    for alpha in ps[beta]
+        n = elementwise_operation(x -> x^(b_nos[beta]), msgs[(alpha, beta)])
+        psi_beta = elementwise_multiplication(psi_beta, n)
+    end
+
+    #psi_beta = psi_beta / sum(psi_beta)
+
+    ratio = pointwise_division_raise(psi_alpha, psi_beta; power = rate /b_nos[beta])
+    m = elementwise_multiplication(ratio, msgs[(alpha, beta)])
+
+    if normalize
+        m = ITensors.normalize(m)
+	if typeof(network(T))<:TensorNetworkState	
+            m = _make_hermitian(m)
+	end
     end
 
     return m
@@ -80,6 +119,27 @@ function update_messages(T::BeliefPropagationCache, msgs, b_nos, ps, cs, ms, bs;
     return new_msgs, diff / length(keys(msgs))
 end
 
+function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, cs, b_nos, mobius_nos; niters::Int, rate::Number, tol=1e-12)
+    msgs = initialize_messages(ms, bs, ps, T)
+    diffs = zeros(niters)
+    tot_iters = niters
+    for i in 1:niters
+        new_msgs, diffs[i] = update_messages(T, msgs, b_nos, ps, cs, ms, bs;normalize = true, rate)
+
+        if i % niters == 0
+            println("Average difference in messages following most recent GBP update: $(diffs[i])")
+        end
+        msgs = new_msgs
+	if abs(diffs[i]) < tol
+	    tot_iters = i
+	    break
+	end
+    end
+
+    return normalize_messages(msgs), diffs[1:tot_iters], diffs[end] < tol
+end
+
+
 #Needed when computing the free energy
 function normalize_messages(msgs)
     new_msgs = copy(msgs)
@@ -89,25 +149,6 @@ function normalize_messages(msgs)
     return new_msgs
 end
 
-function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, cs, b_nos, mobius_nos; niters::Int, rate::Number, tolerance::Number = 1e-12)
-    msgs = initialize_messages(ms, bs, ps, T)
-
-    converged = false
-    for i in 1:niters
-        new_msgs, diff = update_messages(T, msgs, b_nos, ps, cs, ms, bs; normalize = true, rate)
-        msgs = new_msgs
-        if abs(diff) < tolerance
-            println("Converged after $i iterations with $diff average message difference")
-            converged = true
-            break
-        end
-    end
-
-    msgs = normalize_messages(msgs)
-    f = kikuchi_free_energy(T, ms, bs, msgs, cs, b_nos, ps, mobius_nos)
-
-    return f, msgs, converged
-end
 #This is the quantum version (allows for complex numbers in messages, agrees with the standard textbook Kicuchi for real positive messages)
 function kikuchi_free_energy(T::BeliefPropagationCache, ms, bs, msgs, cs, b_nos, ps, mobius_nos)
     f = 0
@@ -145,4 +186,29 @@ function b_beta(beta, psi_beta, msgs, ps, b_nos)
         b = elementwise_multiplication(b, n)
     end
     return b
+end
+
+function expect_gbp(T, bs, msgs, cs, ps, obs)
+    op_strings, verts, _ = TN.collectobservable(obs, graph(T))
+
+    # for now
+    @assert length(verts)==1
+    alpha = findfirst(b->intersect(b,verts)==Set(verts), bs)
+    psi_alpha_num = get_psi(T, bs[alpha]; op_strings = v->op_strings[1])
+    num = sum(b_alpha(alpha, psi_alpha_num, msgs, cs, ps))
+    denom = sum(b_alpha(alpha, get_psi(T, bs[alpha]), msgs, cs, ps))
+    return num/denom
+end
+
+function prep_gbp(g::NamedGraph, loop_size::Int; include_factors::Bool = true, prune::Bool = true)
+    bs = construct_gbp_bs(g, loop_size; include_factors=include_factors)
+    ms = construct_ms(bs)
+    ps = all_parents(ms, bs)
+    mobius_nos = mobius_numbers(ms, ps)
+    if prune
+        ms, ps, mobius_nos = prune_ms_ps(ms, ps, mobius_nos)
+    end
+    cs = children(ms, ps, bs)
+    b_nos = calculate_b_nos(ms, ps, mobius_nos)
+    return (bs=bs, ms=ms, ps=ps, mobius_nos=mobius_nos, cs=cs, b_nos=b_nos)
 end

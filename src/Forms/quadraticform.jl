@@ -43,7 +43,8 @@ function virtualinds(qf::QuadraticForm, edge::NamedEdge)
     return Index[ket_linds; virtualinds(operator(qf), edge); dag.(prime.(ket_linds))]
 end
 
-function bp_factors(qf::QuadraticForm, verts::Vector)
+function bp_factors(qf::QuadraticForm, verts::Vector;op_strings::Function = v->"I", coeffs::Function = v->1, use_epsilon::Bool = false)
+   # note we currently are not using the keyword arguments, included here for future use
     factors = ITensor[]
     for v in verts
         qf_v = ket(qf)[v]
@@ -52,4 +53,4 @@ function bp_factors(qf::QuadraticForm, verts::Vector)
     return factors
 end
 
-bp_factors(qf::QuadraticForm, v) = bp_factors(qf, [v])
+bp_factors(qf::QuadraticForm, v; kwargs...) = bp_factors(qf, [v]; kwargs...)
