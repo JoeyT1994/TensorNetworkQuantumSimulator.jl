@@ -11,7 +11,7 @@ function get_psi(T::BeliefPropagationCache, r)
     end
     isempty(vs) && return ITensor(scalartype(T), 1.0, e_inds)
 
-    psi = bp_factors(T, collect(vs))
+    psi = reduce(vcat, [bp_factors(T, v) for v in collect(vs)])
     seq = contraction_sequence(psi; alg = "optimal")
     psi = contract(psi; sequence = seq)
     return psi
@@ -62,7 +62,7 @@ function update_message(T::BeliefPropagationCache, alpha, beta, msgs, b_nos, ps,
 
     if normalize
         m = ITensors.normalize(m)
-        m = _make_hermitian(m)
+        m = network(T) isa TensorNetworkState ? _make_hermitian(m) : m
     end
 
     return m
@@ -94,7 +94,9 @@ function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, c
 
     converged = false
     for i in 1:niters
+        @show i
         new_msgs, diff = update_messages(T, msgs, b_nos, ps, cs, ms, bs; normalize = true, rate)
+        @show diff
         msgs = new_msgs
         if abs(diff) < tolerance
             println("Converged after $i iterations with $diff average message difference")

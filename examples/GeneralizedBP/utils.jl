@@ -1,9 +1,10 @@
 using TensorNetworkQuantumSimulator
 using NamedGraphs: unique_simplecycles_limited_length, src, dst, NamedEdge
-using ITensors: Index, sim, replaceinds
-using TensorNetworkQuantumSimulator: norm_factors
+using ITensors: Index, sim, replaceinds, noprime
+using TensorNetworkQuantumSimulator: norm_factors, setindex_preserve!
 using Graphs: topological_sort
 using Graphs.SimpleGraphs: SimpleDiGraph
+using LinearAlgebra: LinearAlgebra
 
 function special_multiply(t1::ITensor, t2::ITensor)
     cinds = commoninds(t1, t2)
@@ -79,6 +80,10 @@ function pointwise_division_raise(a::ITensor, b::ITensor; power = 1)
     out = ITensor(etype, 1.0, inds(a))
     indexes = inds(a)
     for iv in eachindval(out)
+        if iszero(a[iv...])
+            out[iv...] = 0
+            continue
+        end
         z =  (a[iv...] / b[iv...])
         mag_z = abs(z)^(power)
         if isreal(z) && real(z) > 0
@@ -283,4 +288,91 @@ function marginal(T::TensorNetworkState, v)
     ts = reduce(vcat, [norm_factors(T, vp) for vp in setdiff(collect(vertices(graph(T))), [v])])
     seq = contraction_sequence(ts; alg = "optimal")
     return contract(ts; sequence = seq)
+end
+
+function rbs_state(n::Integer)
+    g = named_grid((n, n); periodic = true)
+    vs = collect(vertices(g))
+    tensors = Dictionary{vertextype(g), ITensor}()
+    s = siteinds("S=1/2", g)
+    es=  edges(g)
+    e_dict = Dictionary(es, [Index(3) for e in edges(g)])
+
+    for v in vertices(g)
+        incoming_es = filter(e -> v == src(e) || v == dst(e), es)
+        incoming_inds = [e_dict[e] for e in incoming_es]
+        sv = only(s[v])
+
+        state = ITensor(ComplexF64, 0.0, [incoming_inds... , sv])
+        for (e, ei) in zip(incoming_es, incoming_inds)
+            other_inds = filter(i -> i != ei, incoming_inds)
+            state += ITensors.onehot(ei => 1) * prod([ITensors.onehot(j => 3) for j in other_inds])*ITensors.onehot(sv => 1)
+        end
+
+        for (e, ei) in zip(incoming_es, incoming_inds)
+            other_inds = filter(i -> i != ei, incoming_inds)
+            state += (ITensors.onehot(ei => 2) * prod([ITensors.onehot(j => 3) for j in other_inds])*ITensors.onehot(sv => 2))
+        end
+        set!(tensors, v, state)
+    end
+
+    return TensorNetworkState(TensorNetwork(tensors, g), s)
+end
+
+function toric_code_ground_state(n::Integer)
+    g = named_grid((n, n); periodic = true)
+    vs = collect(vertices(g))
+    tensors = Dictionary{vertextype(g), ITensor}()
+    s = siteinds("S=1/2", g)
+    es=  edges(g)
+    e_dict = Dictionary(es, [Index(2) for e in edges(g)])
+    e_dict = merge(e_dict, Dictionary(reverse.(es), collect(values(e_dict))))
+
+    for v in vertices(g)
+        incoming_es = filter(e -> v == src(e) || v == dst(e), es)
+        incoming_inds = [e_dict[e] for e in incoming_es]
+        sv = only(s[v])
+
+        state = ITensor(ComplexF64, 0.0, [incoming_inds... , sv])
+
+        north_index = e_dict[NamedEdge((mod1(v[1]+1, n), v[2]) => v)]
+        east_index = e_dict[NamedEdge((v[1], mod1(v[2]+1, n)) => v)]
+        south_index = e_dict[NamedEdge(v => (mod1(v[1]-1, n), v[2]))]
+        west_index = e_dict[NamedEdge(v => (v[1], mod1(v[2]-1, n)))]
+
+        if iseven(sum(v))
+            state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(east_index => 1) + ITensors.onehot(north_index => 2) * ITensors.onehot(east_index => 2)) * (ITensors.onehot(south_index => 1) * ITensors.onehot(west_index => 1) + ITensors.onehot(south_index => 2) * ITensors.onehot(west_index => 2)) * ITensors.onehot(sv => 1)
+
+            state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(east_index => 1) - ITensors.onehot(north_index => 2) * ITensors.onehot(east_index => 2)) * (ITensors.onehot(south_index => 1) * ITensors.onehot(west_index => 1) - ITensors.onehot(south_index => 2) * ITensors.onehot(west_index => 2)) * ITensors.onehot(sv => 2)
+        else
+            state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(west_index => 1) + ITensors.onehot(north_index => 2) * ITensors.onehot(west_index => 2)) * (ITensors.onehot(south_index => 1) * ITensors.onehot(east_index => 1) + ITensors.onehot(south_index => 2) * ITensors.onehot(east_index => 2)) * ITensors.onehot(sv => 1)
+
+            state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(west_index => 1) - ITensors.onehot(north_index => 2) * ITensors.onehot(west_index => 2)) * (ITensors.onehot(south_index => 1) * ITensors.onehot(east_index => 1) - ITensors.onehot(south_index => 2) * ITensors.onehot(east_index => 2)) * ITensors.onehot(sv => 2)
+        end
+        set!(tensors, v, state)
+    end
+
+    return TensorNetworkState(TensorNetwork(tensors, g), s)
+end
+
+function random_real_unitary(ind::Index)
+    d = ITensors.dim(ind)
+    Q, R = LinearAlgebra.qr(randn(d, d))
+    D = LinearAlgebra.Diagonal(sign.(LinearAlgebra.diag(R)))
+    U = Q * D
+    return ITensor(U, ind, ind')
+end
+
+function gauge(t::TensorNetworkState)
+    t = copy(t)
+    for e in edges(t)
+        eind = only(virtualinds(t, e))
+        #DO a Hadamard Walsh here 
+        U = random_real_unitary(eind)
+        Uinv = dag(U)
+        v_src, v_dst = src(e), dst(e)
+        setindex_preserve!(t, noprime(t[v_dst] * Uinv), v_dst)
+        setindex_preserve!(t, noprime(U * t[v_src]), v_src)
+    end
+    return t
 end
