@@ -1,4 +1,5 @@
 using ITensors: random_itensor
+using HyperDualNumbers
 
 #TODO: Make this show() nicely.
 struct TensorNetworkState{V} <: AbstractTensorNetwork{V}
@@ -39,7 +40,7 @@ function Base.setindex!(tns::TensorNetworkState, value::ITensor, v)
     return tns
 end
 
-function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I")
+function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I", coeffs::Function = v->1, use_epsilon::Bool = false)
     factors = ITensor[]
     for v in verts
         sinds = siteinds(tns, v)
@@ -47,19 +48,20 @@ function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Functi
         tnv_dag = dag(prime(tnv))
         if op_strings(v) == "I"
             tnv_dag = replaceinds(tnv_dag, prime.(sinds), sinds)
-            append!(factors, ITensor[tnv, tnv_dag])
+            append!(factors, ITensor[coeffs(v) * tnv, tnv_dag])
         elseif op_strings(v) == "ρ"
             append!(factors, ITensor[tnv, tnv_dag])
         else
-            op = adapt(datatype(tnv))(ITensors.op(op_strings(v), only(sinds)))
+	    op = use_epsilon ? Hyper(1,0,0,0) * ITensors.op("I", only(sinds)) + coeffs(v) * ITensors.op(op_strings(v), only(sinds)) : adapt(datatype(tnv))(coeffs(v) * ITensors.op(op_strings(v), only(sinds)))
             append!(factors, ITensor[tnv, tnv_dag, op])
         end
     end
     return factors
 end
 
-norm_factors(tns::TensorNetworkState, v) = norm_factors(tns, [v])
-bp_factors(tns::TensorNetworkState, v) = norm_factors(tns, v)
+norm_factors(tns::TensorNetworkState, v; kwargs...) = norm_factors(tns, [v]; kwargs...)
+bp_factors(tns::TensorNetworkState, v; kwargs...) = norm_factors(tns, v; kwargs...)
+bp_factors(tns::TensorNetworkState, verts::Vector; kwargs...) = norm_factors(tns, verts; kwargs...)
 
 function default_message(tns::TensorNetworkState, edge::AbstractEdge)
     linds = virtualinds(tns, edge)

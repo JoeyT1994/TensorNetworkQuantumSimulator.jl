@@ -39,13 +39,14 @@ function main()
     for i in 1:nsamples
         println("-------------------------------------")
         ψ = random_tensornetworkstate(ComplexF64, g, s; bond_dimension = 2)
+
         ts = Dictionary(collect(vertices(g)), [uniform_random_itensor(ComplexF64, inds(ψ[v])) for v in vertices(g)])
         ψ = TensorNetworkState(TensorNetwork(ts, g), s)
         ψ = normalize(ψ; alg = "bp")
         ψ_bpc = BeliefPropagationCache(ψ)
         ψ_bpc = update(ψ_bpc)
 
-        bs = construct_gbp_bs(ψ_bpc, loop_size)
+        bs = construct_gbp_bs(ψ_bpc, loop_size; include_factors = false)
         #bs = construct_bp_bs(ψ_bpc)
         ms = construct_ms(bs)
         ps = all_parents(ms, bs)
@@ -54,12 +55,15 @@ function main()
         cs = children(ms, ps, bs)
         b_nos = calculate_b_nos(ms, ps, mobius_nos)
 
-        gbp_f, msgs, gbp_converged = generalized_belief_propagation(ψ_bpc, bs, ms, ps, cs, b_nos, mobius_nos; niters = 500, rate = 0.35)
+        msgs, diffs, gbp_converged = generalized_belief_propagation(ψ_bpc, bs, ms, ps, cs, b_nos, mobius_nos; niters = 500, rate = 0.35)
 
         if !gbp_converged
             println("GBP did not converge in sample $i")
             continue
-        end
+	end
+
+	msgs = normalize_messages(msgs)
+	gbp_f = kikuchi_free_energy(ψ_bpc, ms, bs, msgs, cs, b_nos, ps, mobius_nos)
         bp_f = -log(partitionfunction(ψ_bpc))
 
         f_lc = -log(loopcorrected_partitionfunction(ψ_bpc, loop_size))
@@ -106,8 +110,8 @@ function main()
         println("Average BP error on all single variable marginals is $(_err_bp / length(es))")
         println("Average GBP error on all single variable marginals is $(_err_gbp / length(es))")
 
-        println("Average GBP error on all vertex marginals is $(_err_gbp_vertex_marginals / length(collect(vertices(g))))")
         println("Average BP error on all vertex marginals is $(_err_bp_vertex_marginals / length(collect(vertices(g))))")
+        println("Average GBP error on all vertex marginals is $(_err_gbp_vertex_marginals / length(collect(vertices(g))))")
         nconverged_samples += 1
     end
 
