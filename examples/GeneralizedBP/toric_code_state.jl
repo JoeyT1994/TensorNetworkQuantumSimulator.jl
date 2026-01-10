@@ -5,6 +5,7 @@ using TensorNetworkQuantumSimulator: dag, virtualinds, normalize, loopcorrected_
 using ITensors: prime, ITensor, combiner, replaceind, commoninds, inds, delta, random_itensor
 using Dictionaries: Dictionary
 using Random
+using Adapt
 
 function uniform_random_itensor(eltype, inds)
     t = ITensor(eltype, 1.0, inds)
@@ -16,6 +17,7 @@ end
 
 include("utils.jl")
 include("generalizedbp.jl")
+include("toric_code_utils.jl")
 
 ITensors.disable_warn_order()
 function main()
@@ -27,42 +29,42 @@ function main()
     for n in ns
         println("-------------------------------------")
         println("Building Toric code state on a $n x $n Torus")
-        ψ = toric_code_ground_state(n)
-        #ψ = rbs_state(n)
-        g = graph(ψ)
-        ψ_bpc = BeliefPropagationCache(ψ)
-        ψ_bpc = update(ψ_bpc)
-
         loop_size = 4
-        bs = construct_gbp_bs(ψ_bpc, loop_size)
+	#ψ = rbs_state(n)
+        for (ψ, z_exact, title) = zip([toric_code_ground_state(n), Adapt.adapt(Float64,toric_code_flat(n))], [2^((3*n^2 + 2)/2), 2.0^(n^2+1)], ["Verstraete, norm network", "Pollmann, flat network"])
+	    g = graph(ψ)
+            ψ_bpc = BeliefPropagationCache(ψ)
+            ψ_bpc = update(ψ_bpc)
+	    bs = construct_gbp_bs(ψ_bpc, loop_size)
 
-        #ψψ_tensors = Dictionary(collect(vertices(g)), [reduce(*, norm_factors(ψ, v)) for v in vertices(g)])
-        #ψψ = TensorNetwork(ψψ_tensors, g)
-        z_exact = 2^((3*n*n + 2)/2)
-        f_exact = -log(z_exact)
-        #bs = dimer_covering_bs(ψ_bpc)
-        ms = construct_ms(bs)
-        ps = all_parents(ms, bs)
-        mobius_nos = mobius_numbers(ms, ps)
-        ms, ps, mobius_nos = prune_ms_ps(ms, ps, mobius_nos)
-        cs = children(ms, ps, bs)
-        b_nos = calculate_b_nos(ms, ps, mobius_nos)
+            #ψψ_tensors = Dictionary(collect(vertices(g)), [reduce(*, norm_factors(ψ, v)) for v in vertices(g)])
+            #ψψ = TensorNetwork(ψψ_tensors, g)
 
-        msgs, diffs, gbp_converged = generalized_belief_propagation(ψ_bpc, bs, ms, ps, cs, b_nos, mobius_nos; niters = 150, rate = 0.25, verbose = false)
-        msgs = normalize_messages(msgs)
-        gbp_f = kikuchi_free_energy(ψ_bpc, ms, bs, msgs, cs, b_nos, ps, mobius_nos)
+            f_exact = -log(z_exact)
+            #bs = dimer_covering_bs(ψ_bpc)
+            ms = construct_ms(bs)
+            ps = all_parents(ms, bs)
+            mobius_nos = mobius_numbers(ms, ps)
+            ms, ps, mobius_nos = prune_ms_ps(ms, ps, mobius_nos)
+            cs = children(ms, ps, bs)
+            b_nos = calculate_b_nos(ms, ps, mobius_nos)
 
-        bp_f = -log(partitionfunction(ψ_bpc))
+            msgs, diffs, gbp_converged = generalized_belief_propagation(ψ_bpc, bs, ms, ps, cs, b_nos, mobius_nos; niters = 150, rate = 0.25, verbose = false)
+            msgs = normalize_messages(msgs)
+            gbp_f = kikuchi_free_energy(ψ_bpc, ms, bs, msgs, cs, b_nos, ps, mobius_nos)
 
-        f_lc = -log(loopcorrected_partitionfunction(ψ_bpc, loop_size))
+            bp_f = -log(partitionfunction(ψ_bpc))
 
-        #f_exact = -log(norm_sqr(ψ; alg = "exact"))
+            f_lc = -log(loopcorrected_partitionfunction(ψ_bpc, loop_size))
 
-        println("Exact free energy density: $(f_exact/(n*n))")
-
-        println("BP abs error on free energy density: $(abs((f_exact/(n*n)) - bp_f/(n*n)))")
-        println("Loop Corrected BP abs error on free energy density: $(abs((f_exact/(n*n)) - f_lc/(n*n)))")
-        println("GBP abs error on free energy density: $(abs((f_exact/(n*n)) - gbp_f/(n*n)))")
+            #f_exact = -log(norm_sqr(ψ; alg = "exact"))
+	    println("Version: $(title)")
+            println("Exact free energy density: $(f_exact/(n*n))")
+	    println("BP free energy density: $((bp_f)/n^2)")
+            println("BP abs error on free energy density: $(abs((f_exact/(n*n)) - bp_f/(n*n)))")
+            println("Loop Corrected BP abs error on free energy density: $(abs((f_exact/(n*n)) - f_lc/(n*n)))")
+            println("GBP abs error on free energy density: $(abs((f_exact/(n*n)) - gbp_f/(n*n)))")
+	end
     end
 
     #println("Simple BP absolute error on free energy: ", abs(bp_f - f_exact))
