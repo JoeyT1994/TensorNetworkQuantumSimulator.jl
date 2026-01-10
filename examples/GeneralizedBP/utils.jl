@@ -1,5 +1,5 @@
 using TensorNetworkQuantumSimulator
-using NamedGraphs: unique_simplecycles_limited_length, src, dst, NamedEdge, AbstractEdge
+using NamedGraphs: unique_simplecycles_limited_length, src, dst, NamedEdge, AbstractEdge, incident_edges
 using NamedGraphs.GraphsExtensions: boundary_edges
 using ITensors: Index, sim, replaceinds, noprime
 using TensorNetworkQuantumSimulator: norm_factors, setindex_preserve!
@@ -419,4 +419,125 @@ function gauge(t::TensorNetworkState)
         setindex_preserve!(t, noprime(U * t[v_src]), v_src)
     end
     return t
+end
+
+function ising_tensornetwork(g::NamedGraph, β::Real; Js::Dictionary = Dictionary(edges(g), [1.0 for e in edges(g)]))
+    links = Dictionary(edges(g), [Index(2, "e$(src(e))_$(dst(e))") for e in edges(g)])
+    links = merge(links, Dictionary(reverse.(edges(g)), [links[e] for e in edges(g)]))
+
+    # symmetric sqrt of Boltzmann matrix W = exp(β σσ')
+    sqrt_Ws = Dictionary()
+    for e in edges(g)
+        W = [exp(β*Js[e])  exp(-β*Js[e]);
+              exp(-β*Js[e]) exp(β*Js[e])]
+
+        F = LinearAlgebra.svd(W)
+        U, S, V = F.U, F.S, F.Vt
+        @assert U*LinearAlgebra.diagm(S)*V ≈ W
+        id = [1.0 0.0; 0.0 1.0]
+        set!(sqrt_Ws, e, id)
+        set!(sqrt_Ws, reverse(e), V*LinearAlgebra.diagm(S)*U)
+
+        # λ1, λ2 = cosh(β*Js[e]), sinh(β*Js[e])
+        # α = 0.5 * (sqrt(λ1) + sqrt(λ2))
+        # ϕ = 0.5 * (sqrt(λ1) - sqrt(λ2))
+        # sqrt_W = sqrt(2)*[α ϕ; ϕ α]
+        # set!(sqrt_Ws, e, sqrt_W)
+        # set!(sqrt_Ws, reverse(e), sqrt_W)
+        # @assert sqrt_W * sqrt_W ≈ W
+    end
+
+    ts = Dictionary{vertextype(g), ITensor}()
+    for v in vertices(g)
+        es = incident_edges(g, v; dir = :in)
+        t = ITensors.delta([links[e] for e in es])
+        for e in es
+            @assert dst(e) == v
+            t = noprime(ITensor(ComplexF64, sqrt_Ws[e], links[e], prime(links[e]))*t)
+        end
+        set!(ts, v, t)
+    end
+    return TensorNetwork(ts, g)
+end
+
+#<psi|psi> is Z
+function ising_tensornetwork_state(g::NamedGraph, β::Real; Js::Dictionary = Dictionary(edges(g), [1.0 for e in edges(g)]))
+    links = Dictionary(edges(g), [Index(2, "e$(src(e))_$(dst(e))") for e in edges(g)])
+    links = merge(links, Dictionary(reverse.(edges(g)), [links[e] for e in edges(g)]))
+
+    physical_inds =siteinds("S=1/2", g)
+
+    # symmetric sqrt of Boltzmann matrix W = exp(β σσ')
+    sqrt_Ws = Dictionary()
+    for e in edges(g)
+        W = [exp(0.5*β*Js[e])  exp(-0.5*β*Js[e]);
+              exp(-0.5*β*Js[e]) exp(0.5*β*Js[e])]
+
+        F = LinearAlgebra.svd(W)
+        U, S, V = F.U, F.S, F.Vt
+        @assert U*LinearAlgebra.diagm(S)*V ≈ W
+        id = [1.0 0.0; 0.0 1.0]
+        set!(sqrt_Ws, e, id)
+        set!(sqrt_Ws, reverse(e), V*LinearAlgebra.diagm(S)*U)
+
+        # λ1, λ2 = cosh(β*Js[e]), sinh(β*Js[e])
+        # α = 0.5 * (sqrt(λ1) + sqrt(λ2))
+        # ϕ = 0.5 * (sqrt(λ1) - sqrt(λ2))
+        # sqrt_W = sqrt(2)*[α ϕ; ϕ α]
+        # set!(sqrt_Ws, e, sqrt_W)
+        # set!(sqrt_Ws, reverse(e), sqrt_W)
+        # @assert sqrt_W * sqrt_W ≈ W
+    end
+
+    ts = Dictionary{vertextype(g), ITensor}()
+    for v in vertices(g)
+        es = incident_edges(g, v)
+        #t = ITensor(1.0, physical_inds[v]...) * delta([links[e] for e in es])
+        t = ITensors.delta([[links[e] for e in es]; physical_inds[v]])
+        for e in es
+            t = noprime(ITensor(sqrt_Ws[e], links[e], prime(links[e]))*t)
+        end
+        set!(ts, v, t)
+    end
+    return TensorNetworkState(TensorNetwork(ts, g), physical_inds)
+end
+#Tr(rho) is Z
+function ising_tensornetwork_rdm(g::NamedGraph, β::Real; Js::Dictionary = Dictionary(edges(g), [1.0 for e in edges(g)]))
+    links = Dictionary(edges(g), [Index(2, "e$(src(e))_$(dst(e))") for e in edges(g)])
+    links = merge(links, Dictionary(reverse.(edges(g)), [links[e] for e in edges(g)]))
+
+    physical_inds =Dictionary{vertextype(g), Vector{<:Index}}(vertices(g), [[Index(2, "S=1/2"), Index(2, "S=1/2")] for v in vertices(g)])
+
+    # symmetric sqrt of Boltzmann matrix W = exp(β σσ')
+    sqrt_Ws = Dictionary()
+    for e in edges(g)
+        W = [exp(0.5*β*Js[e])  exp(-0.5*β*Js[e]);
+              exp(-0.5*β*Js[e]) exp(0.5*β*Js[e])]
+
+        F = LinearAlgebra.svd(W)
+        U, S, V = F.U, F.S, F.Vt
+        @assert U*LinearAlgebra.diagm(S)*V ≈ W
+        id = [1.0 0.0; 0.0 1.0]
+        set!(sqrt_Ws, e, id)
+        set!(sqrt_Ws, reverse(e), V*LinearAlgebra.diagm(S)*U)
+
+        # λ1, λ2 = cosh(β*Js[e]), sinh(β*Js[e])
+        # α = 0.5 * (sqrt(λ1) + sqrt(λ2))
+        # ϕ = 0.5 * (sqrt(λ1) - sqrt(λ2))
+        # sqrt_W = sqrt(2)*[α ϕ; ϕ α]
+        # set!(sqrt_Ws, e, sqrt_W)
+        # set!(sqrt_Ws, reverse(e), sqrt_W)
+        # @assert sqrt_W * sqrt_W ≈ W
+    end
+
+    ts = Dictionary{vertextype(g), ITensor}()
+    for v in vertices(g)
+        es = incident_edges(g, v)
+        t = ITensors.delta([[links[e] for e in es]; physical_inds[v]])
+        for e in es
+            t = noprime(ITensor(sqrt_Ws[e], links[e], prime(links[e]))*t)
+        end
+        set!(ts, v, t)
+    end
+    return TensorNetworkState(TensorNetwork(ts, g), physical_inds)
 end
