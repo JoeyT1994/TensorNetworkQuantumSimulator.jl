@@ -23,24 +23,33 @@ function main()
     Random.seed!(584)
 
 
-    ns = [6, 10, 14]
+    ns = [6]
+    β = 2.0
     for n in ns
         println("-------------------------------------")
-        println("Building Toric code state on a $n x $n Torus")
-        ψ = toric_code_ground_state(n)
-        #ψ = rbs_state(n)
-        g = graph(ψ)
+        println("Building Ising state on an $n x $n grid")
+        g = named_grid((n,n); periodic = false)
+        Js = Dictionary(collect(edges(g)), [first(src(e)) == first(dst(e)) && isodd(first(src(e))) ? -1.0 : 1.0 for e in edges(g)])
+
+        #Either 
+        # ψ = ising_tensornetwork(g, β; Js)
+        # z_exact = contract(ψ; alg = "exact")
+        # f_exact = -log(z_exact)
+        # @show f_exact
+
+        #Or
+        ψ = ising_tensornetwork_rdm(g, β; Js)
+        ψψ_tensors = Dictionary(collect(vertices(g)), [reduce(*, norm_factors(ψ, v)) for v in vertices(g)])
+        ψψ = TensorNetwork(ψψ_tensors, g)
+        z_exact = contract(ψψ; alg = "exact")
+        f_exact = -log(z_exact)
+        @show f_exact
+
         ψ_bpc = BeliefPropagationCache(ψ)
         ψ_bpc = update(ψ_bpc)
 
         loop_size = 4
         bs = construct_gbp_bs(ψ_bpc, loop_size)
-
-        #ψψ_tensors = Dictionary(collect(vertices(g)), [reduce(*, norm_factors(ψ, v)) for v in vertices(g)])
-        #ψψ = TensorNetwork(ψψ_tensors, g)
-        z_exact = 2^((3*n*n + 2)/2)
-        f_exact = -log(z_exact)
-        #bs = dimer_covering_bs(ψ_bpc)
         ms = construct_ms(bs)
         ps = all_parents(ms, bs)
         mobius_nos = mobius_numbers(ms, ps)
@@ -48,7 +57,7 @@ function main()
         cs = children(ms, ps, bs)
         b_nos = calculate_b_nos(ms, ps, mobius_nos)
 
-        msgs, diffs, gbp_converged = generalized_belief_propagation(ψ_bpc, bs, ms, ps, cs, b_nos, mobius_nos; niters = 150, rate = 0.25, verbose = false)
+        msgs, diffs, gbp_converged = generalized_belief_propagation(ψ_bpc, bs, ms, ps, cs, b_nos, mobius_nos; niters = 1000, rate = 0.35, verbose = true)
         msgs = normalize_messages(msgs)
         gbp_f = kikuchi_free_energy(ψ_bpc, ms, bs, msgs, cs, b_nos, ps, mobius_nos)
 
