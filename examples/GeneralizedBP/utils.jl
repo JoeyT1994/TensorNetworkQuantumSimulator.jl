@@ -428,15 +428,15 @@ function ising_tensornetwork(g::NamedGraph, β::Real; Js::Dictionary = Dictionar
     # symmetric sqrt of Boltzmann matrix W = exp(β σσ')
     sqrt_Ws = Dictionary()
     for e in edges(g)
-        W = [exp(β*Js[e])  exp(-β*Js[e]);
-              exp(-β*Js[e]) exp(β*Js[e])]
+        W = [exp(-β*Js[e])  exp(β*Js[e]);
+              exp(β*Js[e]) exp(-β*Js[e])]
 
         F = LinearAlgebra.svd(W)
         U, S, V = F.U, F.S, F.Vt
         @assert U*LinearAlgebra.diagm(S)*V ≈ W
         id = [1.0 0.0; 0.0 1.0]
         set!(sqrt_Ws, e, id)
-        set!(sqrt_Ws, reverse(e), V*LinearAlgebra.diagm(S)*U)
+        set!(sqrt_Ws, reverse(e), U*LinearAlgebra.diagm(S)*V)
 
         # λ1, λ2 = cosh(β*Js[e]), sinh(β*Js[e])
         # α = 0.5 * (sqrt(λ1) + sqrt(λ2))
@@ -478,7 +478,7 @@ function ising_tensornetwork_state(g::NamedGraph, β::Real; Js::Dictionary = Dic
         @assert U*LinearAlgebra.diagm(S)*V ≈ W
         id = [1.0 0.0; 0.0 1.0]
         set!(sqrt_Ws, e, id)
-        set!(sqrt_Ws, reverse(e), V*LinearAlgebra.diagm(S)*U)
+        set!(sqrt_Ws, reverse(e), U*LinearAlgebra.diagm(S)*V)
 
         # λ1, λ2 = cosh(β*Js[e]), sinh(β*Js[e])
         # α = 0.5 * (sqrt(λ1) + sqrt(λ2))
@@ -491,7 +491,7 @@ function ising_tensornetwork_state(g::NamedGraph, β::Real; Js::Dictionary = Dic
 
     ts = Dictionary{vertextype(g), ITensor}()
     for v in vertices(g)
-        es = incident_edges(g, v)
+        es = incident_edges(g, v; dir = :in)
         #t = ITensor(1.0, physical_inds[v]...) * delta([links[e] for e in es])
         t = ITensors.delta([[links[e] for e in es]; physical_inds[v]])
         for e in es
@@ -519,7 +519,7 @@ function ising_tensornetwork_rdm(g::NamedGraph, β::Real; Js::Dictionary = Dicti
         @assert U*LinearAlgebra.diagm(S)*V ≈ W
         id = [1.0 0.0; 0.0 1.0]
         set!(sqrt_Ws, e, id)
-        set!(sqrt_Ws, reverse(e), V*LinearAlgebra.diagm(S)*U)
+        set!(sqrt_Ws, reverse(e), U*LinearAlgebra.diagm(S)*V)
 
         # λ1, λ2 = cosh(β*Js[e]), sinh(β*Js[e])
         # α = 0.5 * (sqrt(λ1) + sqrt(λ2))
@@ -532,7 +532,7 @@ function ising_tensornetwork_rdm(g::NamedGraph, β::Real; Js::Dictionary = Dicti
 
     ts = Dictionary{vertextype(g), ITensor}()
     for v in vertices(g)
-        es = incident_edges(g, v)
+        es = incident_edges(g, v; dir = :in)
         t = ITensors.delta([[links[e] for e in es]; physical_inds[v]])
         for e in es
             t = noprime(ITensor(sqrt_Ws[e], links[e], prime(links[e]))*t)

@@ -117,8 +117,8 @@ function update_messages(T::BeliefPropagationCache, msgs, b_nos, ps, cs, ms, bs;
     return new_msgs, diff / length(keys(msgs))
 end
 
-function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, cs, b_nos, mobius_nos; niters::Int, rate::Number, tol=1e-12, verbose = false)
-    msgs = initialize_messages(ms, bs, ps, T)
+function generalized_belief_propagation(T::BeliefPropagationCache, bs, ms, ps, cs, b_nos, mobius_nos; niters::Int, rate::Number, tol=1e-12, verbose = false, prev_msgs = nothing)
+    msgs = prev_msgs == nothing ? initialize_messages(ms, bs, ps, T) : prev_msgs
     diffs = zeros(niters)
     tot_iters = niters
     for i in 1:niters
