@@ -18,7 +18,7 @@ function toric_code_ground_state(n::Integer)
         incoming_inds = [e_dict[e] for e in incoming_es]
         sv = only(s[v])
 
-        state = ITensor(ComplexF64, 0.0, [incoming_inds... , sv])
+        state = ITensor(Float64, 0.0, [incoming_inds... , sv])
 
         north_index = e_dict[NamedEdge((mod1(v[1]+1, n), v[2]) => v)]
         east_index = e_dict[NamedEdge((v[1], mod1(v[2]+1, n)) => v)]
@@ -33,6 +33,40 @@ function toric_code_ground_state(n::Integer)
             state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(west_index => 1) + ITensors.onehot(north_index => 2) * ITensors.onehot(west_index => 2)) * (ITensors.onehot(south_index => 1) * ITensors.onehot(east_index => 1) + ITensors.onehot(south_index => 2) * ITensors.onehot(east_index => 2)) * ITensors.onehot(sv => 1)
 
             state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(west_index => 1) - ITensors.onehot(north_index => 2) * ITensors.onehot(west_index => 2)) * (ITensors.onehot(south_index => 1) * ITensors.onehot(east_index => 1) - ITensors.onehot(south_index => 2) * ITensors.onehot(east_index => 2)) * ITensors.onehot(sv => 2)
+        end
+        set!(tensors, v, state)
+    end
+
+    return TensorNetworkState(TensorNetwork(tensors, g), s)
+end
+
+function toric_code_ground_state_schuch(n::Integer)
+    g = named_grid((n, n); periodic = true)
+    vs = collect(vertices(g))
+    tensors = Dictionary{vertextype(g), ITensor}()
+    s = siteinds("S=1/2", g)
+    es=  edges(g)
+    e_dict = Dictionary(es, [Index(2) for e in edges(g)])
+    e_dict = merge(e_dict, Dictionary(reverse.(es), collect(values(e_dict))))
+
+    for v in vertices(g)
+        incoming_es = filter(e -> v == src(e) || v == dst(e), es)
+        incoming_inds = [e_dict[e] for e in incoming_es]
+        sv = only(s[v])
+
+        state = ITensor(Float64, 0.0, [incoming_inds... , sv])
+
+        north_index = e_dict[NamedEdge((mod1(v[1]+1, n), v[2]) => v)]
+        east_index = e_dict[NamedEdge((v[1], mod1(v[2]+1, n)) => v)]
+        south_index = e_dict[NamedEdge(v => (mod1(v[1]-1, n), v[2]))]
+        west_index = e_dict[NamedEdge(v => (v[1], mod1(v[2]-1, n)))]
+
+        state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(east_index => 1) * ITensors.onehot(south_index => 1) * ITensors.onehot(west_index => 1) + ITensors.onehot(north_index => 2) * ITensors.onehot(east_index => 2) * ITensors.onehot(south_index => 2) * ITensors.onehot(west_index => 2)) * ITensors.onehot(sv => 1)
+        if iseven(sum(v))
+            state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(east_index => 1) * ITensors.onehot(south_index => 2) * ITensors.onehot(west_index => 2) + ITensors.onehot(north_index => 2) * ITensors.onehot(east_index => 2) * ITensors.onehot(south_index => 1) * ITensors.onehot(west_index => 1)) * ITensors.onehot(sv => 2)
+        else
+            state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(west_index => 1) * ITensors.onehot(south_index => 2) * ITensors.onehot(east_index => 2) + ITensors.onehot(north_index => 2) * ITensors.onehot(west_index => 2) * ITensors.onehot(south_index => 1) * ITensors.onehot(east_index => 1)) * ITensors.onehot(sv => 2)
+
         end
         set!(tensors, v, state)
     end
@@ -75,6 +109,20 @@ function toric_code_flat(n::Integer)
     for v in vs
         is = [l[NamedEdge(v => vn)] for vn in neighbors(g, v)]
         set!(tensors, v, replaceinds(x_spider, inds(x_spider), is))
+    end
+    return TensorNetwork(tensors, g)
+end
+
+function toric_code_flat_z(n::Integer)
+    g = named_grid((n,n); periodic = true)
+    vs = collect(vertices(g))
+    
+    l = Dict(e => Index(2) for e in edges(g))
+    l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
+    tensors = Dictionary{vertextype(g), ITensor}()
+    for v in vs
+        is = [l[NamedEdge(v => vn)] for vn in neighbors(g, v)]
+        set!(tensors, v, delta(is))
     end
     return TensorNetwork(tensors, g)
 end
