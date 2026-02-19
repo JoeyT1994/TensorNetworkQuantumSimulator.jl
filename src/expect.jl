@@ -18,7 +18,7 @@ function expect(
         ψOψ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
         numer_seq = contraction_sequence(ψOψ_tensors; contraction_sequence_kwargs...)
         numer = contract(ψOψ_tensors; sequence = numer_seq)[]
-        push!(out, numer / denom)
+        push!(out, coeff * (numer / denom))
     end
     return out
 end
