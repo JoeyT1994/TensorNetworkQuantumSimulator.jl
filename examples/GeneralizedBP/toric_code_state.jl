@@ -25,7 +25,7 @@ function main()
     Random.seed!(584)
 
 
-    ns = [6, 8, 10]
+    ns = [6, 10, 14]
     for n in ns
         println("-------------------------------------")
         println("Building Toric code state on a $n x $n Torus")
