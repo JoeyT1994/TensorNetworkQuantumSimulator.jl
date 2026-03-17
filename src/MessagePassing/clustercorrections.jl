@@ -55,7 +55,7 @@ Enumerate connected clusters using DFS starting from loops supported on target s
 Connectivity is guaranteed by growing through the interaction graph.
 Courtesy of Frank Zhang and Siddhant Midha
 """
-function dfs_enumerate_clusters_from_supported(all_loops::Vector{Loop}, supported_loop_ids::Vector{Int}, max_weight::Int, interaction_graph::Dict{Int, Vector{Int}}; verbose::Bool = false)
+function dfs_enumerate_clusters_from_supported(all_loops::Vector{Loop}, supported_loop_ids::Vector{Int}, vertex_markers::Vector, max_weight::Int, interaction_graph::Dict{Int, Vector{Int}}; verbose::Bool = false)
     clusters = Cluster[]
     seen_clusters = Set{Tuple}()
     cluster_count = 0
@@ -65,10 +65,10 @@ function dfs_enumerate_clusters_from_supported(all_loops::Vector{Loop}, supporte
     
     # DFS to grow clusters starting from each supported loop
     function dfs_grow_cluster(current_cluster::Vector{Int}, current_weight::Int, 
-                             has_supported::Bool)
+                             has_supported::Bool, has_all_vertices::Bool, supported_vertices)
         
         # If we've found a valid cluster (has supported loop), record it
-        if has_supported && current_weight >= 1
+        if has_supported && has_all_vertices && current_weight >= 1
             # Create cluster with multiplicities
             multiplicities = Dict{Int, Int}()
             for loop_id in current_cluster
@@ -131,15 +131,21 @@ function dfs_enumerate_clusters_from_supported(all_loops::Vector{Loop}, supporte
                 new_cluster = copy(current_cluster)
                 push!(new_cluster, loop_id)
                 new_has_supported = has_supported || (loop_id in supported_loop_ids)
+		if has_all_vertices
+		    new_supported_vertices = copy(supported_vertices)
+		else
+		    new_supported_vertices = supported_vertices .|| vertex_markers[loop_id]
+		end
+		new_has_all_vertices = has_all_vertices || all(new_supported_vertices)
                 
                 # Continue DFS (connectivity guaranteed by interaction graph)
-                dfs_grow_cluster(new_cluster, new_weight, new_has_supported)
+                dfs_grow_cluster(new_cluster, new_weight, new_has_supported, new_has_all_vertices, new_supported_vertices)
             end
         end
     end
     
     # Start DFS with empty cluster
-    dfs_grow_cluster(Int[], 0, false)
+    dfs_grow_cluster(Int[], 0, false, false, zeros(Bool, length(vertex_markers[1])))
     
     verbose && println("  DFS enumeration completed: $cluster_count total clusters found")
     return clusters
@@ -169,12 +175,21 @@ function enumerate_clusters(ng::NamedGraph, max_weight::Int; min_v::Int = 4, tri
     verbose && println("Step 3: DFS cluster enumeration...")
     if isempty(must_contain)
         supported_loops = [1:length(loops);]
+	vertex_markers = [[] for i=1:length(loops)]
     else
-        supported_loops = findall(el->all(l->ng.vertices.index_positions[l] in el.vertices, must_contain), loops)
+	# indicator function for whether a given loop contains each of the must_contain vertices
+	vertex_markers = [[ng.vertices.index_positions[l] in el.vertices for l=must_contain] for el=loops]
+
+	# only grow out clusters from generalized loops that intersect at least one of the required vertices
+	# the overall cluster will have to contain ALL of the required vertices
+        supported_loops = findall(el->any(el), vertex_markers)
 	verbose && println("$(length(supported_loops)) supported...")
     end
+    if isempty(supported_loops)
+        return [], [generalized_loop_named(l, ordered_indices) for l=loops], interaction_graph
+    end
+    all_clusters = dfs_enumerate_clusters_from_supported(loops, supported_loops, vertex_markers, max_weight, interaction_graph, verbose = verbose)
     
-    all_clusters = dfs_enumerate_clusters_from_supported(loops, supported_loops, max_weight, interaction_graph, verbose = verbose)
     verbose && println("Found $(length(all_clusters)) connected clusters")
     
     # converting loops into NamedGraphs, for use in tensor_weights
