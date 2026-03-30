@@ -9,6 +9,7 @@ struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Ve
     supergraph::PartitionedGraph
     sorted_edges::Dictionary{PartitionEdge, Vector{NamedEdge}}
     mps_bond_dimension::Integer
+    contraction_sequences::Dict{Pair, Vector}
 end
 
 default_update_alg(bmps_cache::BoundaryMPSCache) = "bp"
@@ -99,6 +100,8 @@ for f in [
     end
 end
 
+contraction_sequences(bmps_cache::BoundaryMPSCache) = bmps_cache.contraction_sequences
+
 function Base.copy(bmps_cache::BoundaryMPSCache)
     return BoundaryMPSCache(
         copy(network(bmps_cache)),
@@ -106,6 +109,7 @@ function Base.copy(bmps_cache::BoundaryMPSCache)
         copy(supergraph(bmps_cache)),
         copy(sorted_edges(bmps_cache)),
         mps_bond_dimension(bmps_cache),
+        copy(contraction_sequences(bmps_cache)),
     )
 end
 
@@ -159,7 +163,7 @@ function BoundaryMPSCache(
     sorted_es = Dictionary{PartitionEdge, Vector{NamedEdge}}(pes, Vector{NamedEdge}[sorted_edges(supergraph, pe) for pe in pes])
 
     messages = default_messages()
-    bmps_cache = BoundaryMPSCache(tn, messages, supergraph, sorted_es, mps_bond_dimension)
+    bmps_cache = BoundaryMPSCache(tn, messages, supergraph, sorted_es, mps_bond_dimension, Dict{Pair, Vector}())
     @assert is_correct_format(bmps_cache)
     set_messages && set_interpartition_messages!(bmps_cache, pes)
 

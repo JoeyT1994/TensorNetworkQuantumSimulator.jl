@@ -45,13 +45,31 @@ for f in [
         :(maxvirtualdim),
         :(default_message),
         :(siteinds),
-        :(setindex_preserve!),
     ]
     @eval begin
         function $f(bp_cache::AbstractBeliefPropagationCache, args...; kwargs...)
             return $f(network(bp_cache), args...; kwargs...)
         end
     end
+end
+
+function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex)
+    tn = network(bp_cache)
+    seq_cache = contraction_sequences(bp_cache)
+    if !isnothing(seq_cache) && !isempty(seq_cache)
+        old_tensor = tn[vertex]
+        old_dims = Set(dim.(inds(old_tensor)))
+        new_dims = Set(dim.(inds(value)))
+        if old_dims != new_dims
+            for key in collect(keys(seq_cache))
+                if first(key) == vertex
+                    delete!(seq_cache, key)
+                end
+            end
+        end
+    end
+    setindex_preserve!(tn, value, vertex)
+    return bp_cache
 end
 
 #Forward onto the graph
@@ -148,6 +166,8 @@ function incoming_messages(bp_cache::AbstractBeliefPropagationCache, vertex; kwa
     return incoming_messages(bp_cache, [vertex]; kwargs...)
 end
 
+contraction_sequences(::AbstractBeliefPropagationCache) = nothing
+
 function updated_message(
         alg::Algorithm"contract", bp_cache::AbstractBeliefPropagationCache, edge::NamedEdge
     )
@@ -157,7 +177,17 @@ function updated_message(
     )
     state = bp_factors(bp_cache, vertex)
     contract_list = ITensor[incoming_ms; state]
-    sequence = contraction_sequence(contract_list; alg = alg.kwargs.sequence_alg)
+    cache_key = vertex => edge
+    seq_cache = contraction_sequences(bp_cache)
+    sequence = if !isnothing(seq_cache) && haskey(seq_cache, cache_key)
+        seq_cache[cache_key]
+    else
+        seq = contraction_sequence(contract_list; alg = alg.kwargs.sequence_alg)
+        if !isnothing(seq_cache)
+            seq_cache[cache_key] = seq
+        end
+        seq
+    end
     updated_message = contract(contract_list; sequence)
 
     if alg.kwargs.enforce_hermiticity

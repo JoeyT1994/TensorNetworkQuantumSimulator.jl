@@ -225,7 +225,7 @@ function sample_partition!(
     leaves = leaf_vertices(g)
     seq = a_star(g, last(leaves), first(leaves))
     !isempty(seq) && update_partition!(norm_bmps_cache, seq)
-    prev_v, traces = nothing, Number[]
+    prev_v, traces = nothing, []
     logq = 0
     vs = vcat(src.(reverse.(reverse(seq))), [last(leaves)])
     for v in vs

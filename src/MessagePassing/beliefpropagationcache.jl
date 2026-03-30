@@ -10,6 +10,7 @@ struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITens
     AbstractBeliefPropagationCache{V}
     network::N
     messages::Dictionary{NamedEdge, M}
+    contraction_sequences::Dict{Pair, Vector}
 end
 
 function message_diff(message_a::ITensor, message_b::ITensor)
@@ -22,10 +23,13 @@ messages(bp_cache::BeliefPropagationCache) = bp_cache.messages
 network(bp_cache::BeliefPropagationCache) = bp_cache.network
 graph(bp_cache::BeliefPropagationCache) = graph(network(bp_cache))
 
+BeliefPropagationCache(network, messages) = BeliefPropagationCache(network, messages, Dict{Pair, Vector}())
 BeliefPropagationCache(network) = BeliefPropagationCache(network, default_messages())
 
+contraction_sequences(bp_cache::BeliefPropagationCache) = bp_cache.contraction_sequences
+
 function Base.copy(bp_cache::BeliefPropagationCache)
-    return BeliefPropagationCache(copy(network(bp_cache)), copy(messages(bp_cache)))
+    return BeliefPropagationCache(copy(network(bp_cache)), copy(messages(bp_cache)), copy(contraction_sequences(bp_cache)))
 end
 
 default_bp_maxiter(g::AbstractGraph) = is_tree(g) ? 1 : _default_bp_update_maxiter
