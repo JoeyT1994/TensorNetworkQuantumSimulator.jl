@@ -1,18 +1,22 @@
-""" simple_update(o, ψ, v⃗; envs, normalize_tensors = true, apply_kwargs...)
-    Simple Update of one or two tensors v⃗ in the presence of factorized environments envs under the action of a one- or two-site gate o.
-    This is a computationally cheaper but less accurate alternative to full_update. It is exact if no truncation is performed.
-    # Arguments
-    - `o::ITensor`: The gate to be applied.
-    - `ψ::TensorNetworkState`: The tensor network state on which the gate is applied.
-    - `v⃗::Vector{Int}`: The vertices of  `ψ` where the gate is applied.
-    - `envs::Vector{ITensor}`: The factorized environment tensors associated with the tensors in `v⃗`.
-    - `normalize_tensors::Bool`: Whether to normalize the updated tensors. Default is `true`.
-    - `apply_kwargs...`: Additional keyword arguments passed to the SVD factorization.
+"""
+    simple_update(o, ψ, v⃗; envs, normalize_tensors = true, apply_kwargs...)
 
-    # Returns
-    - `updated_tensors::Vector{ITensor}`: The updated tensors after applying the gate.
-    - `s_values::Union{Nothing, ITensor}`: The singular values from the SVD (if applicable).
-    - `err::Number`: The truncation error from the SVD (if applicable).
+Simple update of one or two tensors in the presence of factorized environments under the action of a one- or two-site gate. This is a computationally cheaper but less accurate alternative to `full_update`. It is exact if no truncation is performed.
+
+# Arguments
+- `o::ITensor`: The gate to be applied.
+- `ψ::TensorNetworkState`: The tensor network state on which the gate is applied.
+- `v⃗::Vector`: The vertices of `ψ` where the gate is applied.
+- `envs::Vector{ITensor}`: The factorized environment tensors associated with the tensors in `v⃗`.
+
+# Keyword Arguments
+- `normalize_tensors::Bool`: Whether to normalize the updated tensors. Default is `true`.
+- `apply_kwargs...`: Additional keyword arguments passed to the SVD factorization.
+
+# Returns
+- `updated_tensors::Vector{ITensor}`: The updated tensors after applying the gate.
+- `s_values::Union{Nothing, ITensor}`: The singular values from the SVD (if applicable).
+- `err::Number`: The truncation error from the SVD (if applicable).
 """
 function simple_update(
         o::ITensor, ψ, v⃗; envs, normalize_tensors = true, apply_kwargs...

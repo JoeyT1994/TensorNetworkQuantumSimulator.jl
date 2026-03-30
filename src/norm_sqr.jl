@@ -8,35 +8,40 @@ end
 
 """
     norm_sqr(ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}; alg, kwargs...)
-    Compute the squared norm of a `TensorNetworkState` or the state wrapped in an updated  `Cache` using the specified algorithm.
-    # Arguments
-    - `ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}`: The tensor network state or updated cache wrapping the state.
-    - `alg`: The algorithm to use for the norm calculation. Options include:
-        - `"exact"`: Exact contraction of the tensor network.
-        - `"bp"`: Belief propagation approximation.
-        - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
-        - `"loopcorrections"`: Loop corrections to belief propagation (requires `max_configuration_size`).
-    # Keyword Arguments
-    - For `alg = "boundarymps"`:
-        - `mps_bond_dimension::Integer`: The bond dimension for the boundary MPS approximation.
-        - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
-        - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
-    - For `alg = "bp"` or `"loopcorrections"`:
-        - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
-        - `max_configuration_size`: Maximum configuration size for loop corrections (only for `"loopcorrections"`).
-    # Returns
-    - The computed squared norm as a scalar value.
-    # Example
-    ```julia
-    s = siteinds("S=1/2", g)
-    ψ = random_tensornetworkstate(ComplexF32, g, s; bond_dimension = 4)
-    # Exact norm
-    norm_exact = LinearAlgebra.norm(ψ; alg = "exact")    
-    # Belief propagation norm   
-    norm_bp = LinearAlgebra.norm(ψ; alg = "bp")
-    # Boundary MPS norm with bond dimension 10
-    norm_bmps = LinearAlgebra.norm(ψ; alg = "boundarymps", mps_bond_dimension = 10)
-    ```
+
+Compute the squared norm of a `TensorNetworkState` or the state wrapped in an updated cache using the specified algorithm.
+
+# Arguments
+- `ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}`: The tensor network state or updated cache wrapping the state.
+
+# Keyword Arguments
+- `alg`: The algorithm to use. Options include:
+    - `"exact"`: Exact contraction of the tensor network.
+    - `"bp"`: Belief propagation approximation.
+    - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
+    - `"loopcorrections"`: Loop corrections to belief propagation (requires `max_configuration_size`).
+- For `alg = "boundarymps"`:
+    - `mps_bond_dimension::Integer`: The bond dimension for the boundary MPS approximation.
+    - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
+    - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
+- For `alg = "bp"` or `"loopcorrections"`:
+    - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
+    - `max_configuration_size`: Maximum configuration size for loop corrections (only for `"loopcorrections"`).
+
+# Returns
+- The computed squared norm as a scalar value.
+
+# Example
+```julia
+s = siteinds("S=1/2", g)
+ψ = random_tensornetworkstate(ComplexF32, g, s; bond_dimension = 4)
+# Exact squared norm
+nsq_exact = norm_sqr(ψ; alg = "exact")
+# Belief propagation squared norm
+nsq_bp = norm_sqr(ψ; alg = "bp")
+# Boundary MPS squared norm with bond dimension 10
+nsq_bmps = norm_sqr(ψ; alg = "boundarymps", mps_bond_dimension = 10)
+```
 """
 
 function norm_sqr(tns::Union{TensorNetworkState, BeliefPropagationCache}; alg, kwargs...)

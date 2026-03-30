@@ -7,16 +7,17 @@ end
 
 """
     normalize(tns::TensorNetworkState; alg, kwargs...)
-    Normalize a `TensorNetworkState` using the specified algorithm.
-    
-    # Arguments
-    - `tns::TensorNetworkState`: The tensor network state to be normalized.
 
-    # Keyword Arguments
-    - `alg`: The algorithm to use for normalization. Currently, only `"bp"` is supported.
+Normalize a `TensorNetworkState` using the specified algorithm.
 
-    # Returns
-    - The normalized `tns::TensorNetworkState` such that `norm_sqr(tns; alg) = 1`.
+# Arguments
+- `tns::TensorNetworkState`: The tensor network state to be normalized.
+
+# Keyword Arguments
+- `alg`: The algorithm to use for normalization. Currently, only `"bp"` is supported.
+
+# Returns
+- The normalized `TensorNetworkState` such that `norm_sqr(tns; alg) ≈ 1`.
 """
 function LinearAlgebra.normalize(tns::TensorNetworkState; alg, kwargs...)
     algorithm_check(tns, "normalize", alg)

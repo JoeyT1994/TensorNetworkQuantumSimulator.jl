@@ -8,18 +8,21 @@ function normalize_rdm(ρ::ITensor)
 end
 
 """
-    reduced_density_matrix(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, verts; alg::Union{String, Nothing} = nothing, kwargs...)
-    Compute the reduced density matrix on the vertices `verts` of the tensor network state `ψ`.
+    reduced_density_matrix(ψ, verts; alg = nothing, kwargs...)
 
-    # Arguments
-    - `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}`: The tensor network state or its associated cache.
-    - `verts`: The vertices over which to compute the reduced density matrix. Can be a single vertex, or a collection of vertices.
-    - `alg::Union{String, Nothing}`: (Optional) The contraction algorithm to use. If not provided, defaults based on the type of `ψ`. Supported algorithms are "exact", "bp", and "boundarymps".
-    # Keyword Arguments
-    - `kwargs...`: Additional keyword arguments specific to the chosen algorithm.
-    - `normalize::Bool = true`: Whether to normalize the reduced density matrix so that its trace is 1.
-    # Returns
-    - An `ITensor` representing the reduced density matrix on the specified vertices.
+Compute the reduced density matrix on the vertices `verts` of the tensor network state `ψ`.
+
+# Arguments
+- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}`: The tensor network state or its associated cache.
+- `verts`: The vertices over which to compute the reduced density matrix. Can be a single vertex or a collection of vertices.
+
+# Keyword Arguments
+- `alg::Union{String, Nothing}`: The contraction algorithm to use. If not provided, defaults based on the type of `ψ`. Supported algorithms are `"exact"`, `"bp"`, and `"boundarymps"`.
+- `normalize::Bool = true`: Whether to normalize the reduced density matrix so that its trace is 1.
+- `kwargs...`: Additional keyword arguments specific to the chosen algorithm.
+
+# Returns
+- An `ITensor` representing the reduced density matrix on the specified vertices.
 """
 function reduced_density_matrix(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, verts; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "rdm", alg)

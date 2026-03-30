@@ -68,16 +68,19 @@ end
 
 """
     random_tensornetworkstate(eltype, g::AbstractGraph, siteinds::Dictionary; bond_dimension::Integer = 1)
-    Generate a random TensorNetworkState on graph `g` with local state indices given by the dictionary `siteinds`.
 
-    Arguments:
-    - `eltype`: (Optional) The number type of the tensor elements (e.g. Float64, ComplexF32). Default is Float64.
-    - `g::AbstractGraph`: The underlying graph of the tensor network.
-    - `siteinds::Dictionary`: A dictionary mapping vertices to ITensor indices representing the local states. Defaults to spin 1/2.
-    - `bond_dimension::Integer`: The bond dimension of the virtual indices connecting neighboring tensors (default is 1).
+Generate a random `TensorNetworkState` on graph `g` with local state indices given by `siteinds`.
 
-    Returns:
-    - A `TensorNetworkState` object representing the random tensor network state.
+# Arguments
+- `eltype`: The number type of the tensor elements (e.g. `Float64`, `ComplexF32`). Default is `Float64`.
+- `g::AbstractGraph`: The underlying graph of the tensor network.
+- `siteinds::Dictionary`: A dictionary mapping vertices to ITensor indices representing the local states. Defaults to spin-1/2.
+
+# Keyword Arguments
+- `bond_dimension::Integer`: The bond dimension of the virtual indices connecting neighbouring tensors (default is `1`).
+
+# Returns
+- A `TensorNetworkState` representing the random tensor network state.
 """
 function random_tensornetworkstate(eltype, g::AbstractGraph, siteinds::Dictionary = default_siteinds(g); bond_dimension::Integer = 1)
     vs = collect(vertices(g))

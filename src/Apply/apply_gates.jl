@@ -1,14 +1,18 @@
 """
     apply_gates(circuit::Vector, ψ::Union{TensorNetworkState, BeliefPropagationCache}; bp_update_kwargs = default_bp_update_kwargs(ψ), kwargs...)
-    Apply a sequence of gates, via simple update, to a `TensorNetworkState` or a `BeliefPropagationCache`` wrapping a `TensorNetworkState`` using Belief Propagation to update the environment.
-    # Arguments
-    - `circuit::Vector`: A vector of tuples where each tuple contains a gate (as an `ITensor`) and the vertices it acts on.
-    - `ψ::TensorNetworkState`: The tensor network state to which the gates will be applied.
-    - `bp_update_kwargs`: Keyword arguments for updating the Belief Propagation cache between gates (reasonable defaults are set).
-    - `apply_kwargs`: Keyword arguments for the gate application. These include options like `maxdim` and `cutoff` for bond dimension truncation during gate application.
-    # Returns
-    - A tuple containing the updated `TensorNetworkState` or `BeliefPropagationCache` and a vector of truncation errors for each gate application.
-end
+
+Apply a sequence of gates, via simple update, to a `TensorNetworkState` or a `BeliefPropagationCache` wrapping a `TensorNetworkState`, using belief propagation to update the environment.
+
+# Arguments
+- `circuit::Vector`: A vector of tuples where each tuple contains a gate (as an `ITensor`) and the vertices it acts on.
+- `ψ::TensorNetworkState`: The tensor network state to which the gates will be applied.
+
+# Keyword Arguments
+- `bp_update_kwargs`: Keyword arguments for updating the belief propagation cache between gates (reasonable defaults are set).
+- `apply_kwargs`: Keyword arguments for the gate application, such as `maxdim` and `cutoff` for bond dimension truncation.
+
+# Returns
+- A tuple containing the updated `TensorNetworkState` or `BeliefPropagationCache` and a vector of truncation errors for each gate application.
 """
 function apply_gates(
         circuit::Vector,
@@ -53,7 +57,7 @@ function apply_gates(
     # we keep track of the vertices that have been acted on by 2-qubit gates
     # only they increase the counter
     # this is the set that keeps track.
-    affected_vertices = Set()
+    affected_vertices = Set{eltype(vertices(network(ψ_bpc)))}()
     truncation_errors = zeros((length(circuit)))
 
     # If the circuit is applied in the Heisenberg picture, the circuit needs to already be reversed
@@ -71,7 +75,7 @@ function apply_gates(
 
             t = @timed ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
 
-            affected_vertices = Set()
+            affected_vertices = Set{eltype(vertices(network(ψ_bpc)))}()
             if verbose
                 println("Done in $(t.time) secs")
             end
@@ -81,7 +85,9 @@ function apply_gates(
         # actually apply the gate
         gate = adapt_gate(gate, ψ_bpc)
         t = @timed ψ_bpc, truncation_errors[ii] = apply_gate!(gate, ψ_bpc; v⃗ = gate_vertices[ii], apply_kwargs)
-        affected_vertices = union(affected_vertices, Set(gate_vertices[ii]))
+        for v in gate_vertices[ii]
+            push!(affected_vertices, v)
+        end
     end
 
     if update_cache
