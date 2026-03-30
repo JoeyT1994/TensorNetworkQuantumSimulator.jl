@@ -29,9 +29,6 @@ function lieb_lattice(nx::Int64, ny::Int64; periodic = false)
         if iseven(first(v)) && iseven(last(v))
             g = rem_vertex(g, v)
         end
-        if iseven(first(v)) && iseven(last(v))
-            g = rem_vertex(g, v)
-        end
     end
     return g
 

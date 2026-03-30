@@ -7,7 +7,7 @@ end
 
 #Determine if a string represents a pauli string
 function _ispaulistring(string::String)
-    return all(s ∈ ['X', 'Y', 'X', 'x', 'y', 'z'] for s in string)
+    return all(s ∈ ['X', 'Y', 'Z', 'x', 'y', 'z'] for s in string)
 end
 
 #Gates which take a single theta argument (rotation argument)
@@ -30,7 +30,7 @@ function param_rescaling(string::String, param::Number)
     return param
 end
 
-#Convert a gate to the corrresponding ITensor
+#Convert a gate to the corresponding ITensor
 function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     gate_symbol = gate[1]
     gate_verts = collect_vertices(gate[2], g)

@@ -96,7 +96,7 @@ function apply_gate!(
         gate::ITensor,
         ψ_bpc::BeliefPropagationCache;
         v⃗ = vertices(gate, network(ψ_bpc)),
-        apply_kwargs = _default_apply_kwargs
+        apply_kwargs
     )
     envs = length(v⃗) == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
 

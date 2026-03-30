@@ -2,7 +2,7 @@ using KrylovKit: linsolve
 
 """
     Full Update of two tensors v1 and v2 in the presence of environments envs under the action of a two site gate o.
-    More general than a simple_upddate (allows for more accurate non-BP environments), but that comes at a higher computational cost depending
+    More general than a simple_update (allows for more accurate non-BP environments), but that comes at a higher computational cost depending
     on the dimensions of the environment tensors involved.
 """
 function full_update(

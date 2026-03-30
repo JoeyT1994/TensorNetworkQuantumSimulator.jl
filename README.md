@@ -76,7 +76,7 @@ Gates can take the form of ITensors or Tuples of length two or three, i.e.
 
 Pre-Defined One qubit gates (brackets indicates the optional rotation parameter which must be specified). These are consistent with the qiskit definitions.
 ```
-- "X", "Y", "Z', "Rx"(θ), "Ry"(θ), "Rz"(θ), "CRx"(θ), "CRy"(θ), "CRz"(θ), "P", "H"
+- "X", "Y", "Z", "Rx"(θ), "Ry"(θ), "Rz"(θ), "CRx"(θ), "CRy"(θ), "CRz"(θ), "P", "H"
 ```
 
 Pre-Defined Two qubit gates (brackets indicates the optional rotation angle parameter which must be specified). These are consistent with the qiskit definitions.

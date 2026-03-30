@@ -388,8 +388,8 @@ function merge_internal_tensors(O::Union{MPS, MPO})
     return O
 end
 
-function ITensorMPS.MPO(bmps_cache::BoundaryMPSCache, partition; interpet_as_flat = false)
-    @assert network(bmps_cache) isa TensorNetwork || interpet_as_flat
+function ITensorMPS.MPO(bmps_cache::BoundaryMPSCache, partition; interpret_as_flat = false)
+    @assert network(bmps_cache) isa TensorNetwork || interpret_as_flat
     sorted_vs = sort(vertices(supergraph(bmps_cache), partition))
     ts = [copy(network(bmps_cache)[v]) for v in sorted_vs]
     O = ITensorMPS.MPO(ts)

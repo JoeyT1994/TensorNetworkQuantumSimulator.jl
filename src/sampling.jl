@@ -230,7 +230,7 @@ function get_one_sample(
             next_partition = partitions[i + 1]
             pe = PartitionEdge(parent(partition), parent(next_partition))
 
-            mpo = ITensorMPS.MPO(norm_bmps_cache, src(pe); interpet_as_flat = true)
+            mpo = ITensorMPS.MPO(norm_bmps_cache, src(pe); interpret_as_flat = true)
             if incoming_mps == nothing
                 mpo = ITensorMPS.MPS(ITensor[mpo[i] for i in 1:length(mpo)])
                 outgoing_mps = ITensorMPS.truncate(mpo; cutoff, maxdim = projected_mps_bond_dimension)
