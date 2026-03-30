@@ -230,7 +230,7 @@ end
 
 function update_partition!(bmps_cache::BoundaryMPSCache, seq::Vector)
     isempty(seq) && return bmps_cache
-    alg = set_default_kwargs(Algorithm("contract", normalize = false, enforce_hermiticity = false), bmps_cache)
+    alg = set_default_kwargs(Algorithm("contract", normalize = false), bmps_cache)
     for e in seq
         m = updated_message(alg, bmps_cache, e)
         setmessage!(bmps_cache, e, m)
@@ -308,7 +308,7 @@ function extracter(
         bmps_cache::BoundaryMPSCache,
         update_e::NamedEdge
     )
-    message_update_alg = set_default_kwargs(Algorithm("contract"; normalize = false, enforce_hermiticity = false), bmps_cache)
+    message_update_alg = set_default_kwargs(Algorithm("contract"; normalize = false), bmps_cache)
     m = updated_message(message_update_alg, bmps_cache, update_e)
     return m
 end

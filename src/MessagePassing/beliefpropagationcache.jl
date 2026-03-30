@@ -48,12 +48,10 @@ default_update_alg(bp_cache::BeliefPropagationCache) = "bp"
 default_message_update_alg(bp_cache::BeliefPropagationCache) = "contract"
 default_normalize(::Algorithm"contract") = true
 default_sequence_alg(::Algorithm"contract") = "optimal"
-default_enforce_hermicity(::Algorithm"contract", bp_cache::AbstractBeliefPropagationCache) = false
 function set_default_kwargs(alg::Algorithm"contract", bp_cache::AbstractBeliefPropagationCache)
     normalize = get(alg.kwargs, :normalize, default_normalize(alg))
     sequence_alg = get(alg.kwargs, :sequence_alg, default_sequence_alg(alg))
-    enforce_hermiticity = get(alg.kwargs, :enforce_hermiticity, default_enforce_hermicity(alg, bp_cache))
-    return Algorithm("contract"; normalize, sequence_alg, enforce_hermiticity)
+    return Algorithm("contract"; normalize, sequence_alg)
 end
 default_verbose(::Algorithm"bp") = false
 default_tolerance(::Algorithm"bp") = nothing

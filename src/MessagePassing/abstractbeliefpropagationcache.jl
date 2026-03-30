@@ -5,6 +5,7 @@ abstract type AbstractBeliefPropagationCache{V} <: AbstractNamedGraph{V} end
 
 #Interface
 messages(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
+contraction_sequences(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 default_messages() = Dictionary{NamedEdge, Union{ITensor, Vector{ITensor}}}()
 
 function rescale_messages!(
@@ -172,8 +173,6 @@ function incoming_messages(bp_cache::AbstractBeliefPropagationCache, vertex; kwa
     return incoming_messages(bp_cache, [vertex]; kwargs...)
 end
 
-contraction_sequences(::AbstractBeliefPropagationCache) = nothing
-
 function updated_message(
         alg::Algorithm"contract", bp_cache::AbstractBeliefPropagationCache, edge::NamedEdge
     )
@@ -192,10 +191,6 @@ function updated_message(
         set!(seq_cache, cache_key, sequence)
     end
     updated_message = contract(contract_list; sequence)
-
-    if alg.kwargs.enforce_hermiticity
-        updated_message = make_hermitian(updated_message)
-    end
 
     if alg.kwargs.normalize
         message_norm = sum(updated_message)
