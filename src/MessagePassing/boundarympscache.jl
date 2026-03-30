@@ -15,14 +15,14 @@ end
 default_update_alg(bmps_cache::BoundaryMPSCache) = "bp"
 function set_default_kwargs(alg::Algorithm"bp", bmps_cache::BoundaryMPSCache)
     maxiter = get(alg.kwargs, :maxiter, default_bp_maxiter(bmps_cache))
-    edge_sequence = get(alg.kwargs, :edge_sequence, default_bp_edge_sequence(bmps_cache))
+    edge_sequence = get(alg.kwargs, :edge_sequence, bp_edge_sequence(bmps_cache))
     message_update_alg = set_default_kwargs(
         get(alg.kwargs, :message_update_alg, Algorithm(default_message_update_alg(bmps_cache))), bmps_cache
     )
     return Algorithm("bp"; maxiter, edge_sequence, message_update_alg, tolerance = nothing)
 end
 
-function default_bp_edge_sequence(bmps_cache::BoundaryMPSCache)
+function bp_edge_sequence(bmps_cache::BoundaryMPSCache)
     return PartitionEdge.(forest_cover_edge_sequence(partitions_graph(supergraph(bmps_cache))))
 end
 default_bp_maxiter(bmps_cache::BoundaryMPSCache) = is_tree(partitions_graph(supergraph(bmps_cache))) ? 1 : 5

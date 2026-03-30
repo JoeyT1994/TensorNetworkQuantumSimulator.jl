@@ -11,6 +11,7 @@ struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITens
     network::N
     messages::Dictionary{NamedEdge, M}
     contraction_sequences::Dictionary{Pair, Vector}
+    edge_sequence::Vector
 end
 
 function message_diff(message_a::ITensor, message_b::ITensor)
@@ -23,20 +24,24 @@ messages(bp_cache::BeliefPropagationCache) = bp_cache.messages
 network(bp_cache::BeliefPropagationCache) = bp_cache.network
 graph(bp_cache::BeliefPropagationCache) = graph(network(bp_cache))
 
+function BeliefPropagationCache(network, messages, contraction_sequences)
+    return BeliefPropagationCache(network, messages, contraction_sequences, forest_cover_edge_sequence(graph(network)))
+end
 BeliefPropagationCache(network, messages) = BeliefPropagationCache(network, messages, Dictionary{Pair, Vector}())
 BeliefPropagationCache(network) = BeliefPropagationCache(network, default_messages())
 
 contraction_sequences(bp_cache::BeliefPropagationCache) = bp_cache.contraction_sequences
 
 function Base.copy(bp_cache::BeliefPropagationCache)
-    return BeliefPropagationCache(copy(network(bp_cache)), copy(messages(bp_cache)), copy(contraction_sequences(bp_cache)))
+    return BeliefPropagationCache(copy(network(bp_cache)), copy(messages(bp_cache)), copy(contraction_sequences(bp_cache)), copy(edge_sequence(bp_cache)))
 end
 
 default_bp_maxiter(g::AbstractGraph) = is_tree(g) ? 1 : _default_bp_update_maxiter
 
-#TODO: Get subgraph working on an TensorNetwork to overload this directly
-function default_bp_edge_sequence(bp_cache::BeliefPropagationCache)
-    return forest_cover_edge_sequence(graph(bp_cache))
+edge_sequence(bp_cache::BeliefPropagationCache) = bp_cache.edge_sequence
+
+function set_edge_sequence(bp_cache::BeliefPropagationCache, edge_sequence::Vector)
+    return BeliefPropagationCache(network(bp_cache), messages(bp_cache), contraction_sequences(bp_cache), edge_sequence)
 end
 
 function edge_scalar(bp_cache::BeliefPropagationCache, edge::AbstractEdge)
@@ -58,12 +63,12 @@ default_tolerance(::Algorithm"bp") = nothing
 function set_default_kwargs(alg::Algorithm"bp", bp_cache::BeliefPropagationCache)
     verbose = get(alg.kwargs, :verbose, default_verbose(alg))
     maxiter = get(alg.kwargs, :maxiter, default_bp_maxiter(bp_cache))
-    edge_sequence = get(alg.kwargs, :edge_sequence, default_bp_edge_sequence(bp_cache))
+    _edge_sequence = get(alg.kwargs, :edge_sequence, edge_sequence(bp_cache))
     tolerance = get(alg.kwargs, :tolerance, default_tolerance(alg))
     message_update_alg = set_default_kwargs(
         get(alg.kwargs, :message_update_alg, Algorithm(default_message_update_alg(bp_cache))), bp_cache
     )
-    return Algorithm("bp"; verbose, maxiter, edge_sequence, tolerance, message_update_alg)
+    return Algorithm("bp"; verbose, maxiter, edge_sequence = _edge_sequence, tolerance, message_update_alg)
 end
 
 function update_message!(
