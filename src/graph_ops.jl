@@ -20,15 +20,12 @@ end
 """
     lieb_lattice(nx::Int64, ny::Int64; periodic = false)
 
-Create Lieb lattice geometry with nx columns of decorated squared and ny rows
+Create a Lieb lattice geometry with `nx` columns of decorated squares and `ny` rows.
 """
 function lieb_lattice(nx::Int64, ny::Int64; periodic = false)
     @assert (!periodic && isodd(nx) && isodd(ny)) || (periodic && iseven(nx) && iseven(ny))
     g = named_grid((nx, ny); periodic)
     for v in vertices(g)
-        if iseven(first(v)) && iseven(last(v))
-            g = rem_vertex(g, v)
-        end
         if iseven(first(v)) && iseven(last(v))
             g = rem_vertex(g, v)
         end

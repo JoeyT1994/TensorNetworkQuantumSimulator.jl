@@ -124,8 +124,8 @@ function virtual_index_dimension(
         lower_e, upper_e = e1, e2
     end
 
-    inds_above = reduce(vcat, virtualinds.((bmps_cache,), edges_above(bmps_cache, lower_e)))
-    inds_below = reduce(vcat, virtualinds.((bmps_cache,), edges_below(bmps_cache, upper_e)))
+    inds_above = collect(Iterators.flatten(virtualinds.((bmps_cache,), edges_above(bmps_cache, lower_e))))
+    inds_below = collect(Iterators.flatten(virtualinds.((bmps_cache,), edges_below(bmps_cache, upper_e))))
 
     x1 = prod(Float64.(dim.(inds_above)))
     x2 = prod(Float64.(dim.(inds_below)))
@@ -370,11 +370,11 @@ function prev_partitionedge(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
 end
 
 function merge_internal_tensors(O::Union{MPS, MPO})
-    internal_inds = filter(i -> isempty(ITensorMPS.siteinds(O, i)), [i for i in 1:length(O)])
+    internal_inds = filter(i -> isempty(ITensorMPS.siteinds(O, i)), 1:length(O))
 
     while !isempty(internal_inds)
         site = first(internal_inds)
-        tensors = [O[i] for i in setdiff([i for i in 1:length(O)], [site])]
+        tensors = [O[i] for i in setdiff(1:length(O), (site,))]
         if site != length(O)
             tensors[site] = tensors[site] * O[site]
         else
@@ -383,13 +383,13 @@ function merge_internal_tensors(O::Union{MPS, MPO})
 
         O = typeof(O)(tensors)
 
-        internal_inds = filter(i -> isempty(ITensorMPS.siteinds(O, i)), [i for i in 1:length(O)])
+        internal_inds = filter(i -> isempty(ITensorMPS.siteinds(O, i)), 1:length(O))
     end
     return O
 end
 
-function ITensorMPS.MPO(bmps_cache::BoundaryMPSCache, partition; interpet_as_flat = false)
-    @assert network(bmps_cache) isa TensorNetwork || interpet_as_flat
+function ITensorMPS.MPO(bmps_cache::BoundaryMPSCache, partition; interpret_as_flat = false)
+    @assert network(bmps_cache) isa TensorNetwork || interpret_as_flat
     sorted_vs = sort(vertices(supergraph(bmps_cache), partition))
     ts = [copy(network(bmps_cache)[v]) for v in sorted_vs]
     O = ITensorMPS.MPO(ts)
@@ -440,10 +440,10 @@ function generic_apply(O::MPO, M::MPS; normalize = true, kwargs...)
     end
 
     #Transform away edges that make a loop
-    pairs = reduce(vcat, [[(i, j) for j in (i + 1):length(O_tensors)] for i in 1:length(O_tensors)])
-    loop_edges = filter(p -> !isempty(commoninds(O_tensors[first(p)], O_tensors[last(p)])) && abs(first(p) - last(p)) != 1, pairs)
+    loop_edges = [(i, j) for i in 1:length(O_tensors) for j in (i + 1):length(O_tensors)
+                   if !isempty(commoninds(O_tensors[i], O_tensors[j])) && abs(i - j) != 1]
     for (i, j) in loop_edges
-        inbetween_vertices = [k for k in (i + 1):(j - 1)]
+        inbetween_vertices = (i + 1):(j - 1)
         edge_to_split = (i, j)
         for k in inbetween_vertices
             cind = only(commoninds(O_tensors[first(edge_to_split)], O_tensors[last(edge_to_split)]))
@@ -555,10 +555,11 @@ function pseudo_planar_edges(
         g::AbstractGraph;
         grouping_function = v -> first(v),
     )
-    partitions = unique(grouping_function.(collect(vertices(g))))
+    all_vs = collect(vertices(g))
+    partitions = unique(grouping_function.(all_vs))
     pseudo_edges = NamedEdge[]
     for p in partitions
-        vs = sort(filter(v -> grouping_function(v) == p, collect(vertices(g))))
+        vs = sort(filter(v -> grouping_function(v) == p, all_vs))
         for i in 1:(length(vs) - 1)
             if vs[i] ∉ neighbors(g, vs[i + 1])
                 push!(pseudo_edges, NamedEdge(vs[i] => vs[i + 1]))

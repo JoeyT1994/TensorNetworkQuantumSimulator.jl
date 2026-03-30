@@ -20,7 +20,7 @@ function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:ITensor}; 
     end
     network = collect.(inds.(tensors))
     #Converting dims to Float64 to minimize overflow issues
-    inds_to_dims = Dict(i => Float64(dim(i)) for i in unique(reduce(vcat, network)))
+    inds_to_dims = Dict(i => Float64(dim(i)) for i in unique(Iterators.flatten(network)))
     seq, _ = optimaltree(network, inds_to_dims)
     return seq
 end

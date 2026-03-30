@@ -12,9 +12,9 @@ end
 zerostate(g::NamedGraph, s::Dictionary = siteinds("S=1/2", g)) = zerostate(Float64, g, s)
 
 """
-    topaulitensornetwork(op, g::NamedGraph)
+    paulitensornetworkstate(eltype, f::Function, g::NamedGraph, s::Dictionary = siteinds("Pauli", g))
 
-Tensor network (in Heisenberg picture). Function should map vertices of the graph to pauli strings.
+Construct a tensor network state in the Heisenberg picture (Pauli basis). The function `f` should map each vertex of the graph to a Pauli string (one of `"I"`, `"X"`, `"Y"`, `"Z"`).
 """
 function paulitensornetworkstate(eltype, f::Function, g::NamedGraph, s::Dictionary = siteinds("Pauli", g))
     h = v -> stringtostatemap[f(v)]

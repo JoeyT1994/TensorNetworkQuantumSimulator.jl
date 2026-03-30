@@ -97,19 +97,21 @@ end
 
 """
     truncate(tns::TensorNetworkState; alg = default_truncate_alg(tns), kwargs...)
-    Truncate the virtual indexes of tensors in the given `TensorNetworkState` `tns` using the specified algorithm `alg`.
 
-    Arguments
-    - `tns::TensorNetworkState`: The tensor network state to be truncated.
-    Keyword Arguments
-    - `alg`: The contraction algorithm to use for truncation. 
-        Supported contraction algorithms include:
-        - `"bp"`: Belief propagation-based truncation (works on any network, cheap but can be less accurate when loop correlations are present).
-        - `"boundarymps"`: Boundary MPS-based truncation. Requires `mps_bond_dimension` Kwarg. Works only on a planar network and is more expensive, but more accurate if a large mps bond dim is used).
-    - `maxdim::Integer`: The maximum bond dimension to retain after truncation.
-    - `cutoff::Number`: The singular value cutoff for truncation (optional).
-    Returns
-    - The truncated `TensorNetworkState`.
+Truncate the virtual indices of tensors in the given `TensorNetworkState` using the specified algorithm.
+
+# Arguments
+- `tns::TensorNetworkState`: The tensor network state to be truncated.
+
+# Keyword Arguments
+- `alg`: The algorithm to use for truncation. Supported algorithms:
+    - `"bp"`: Belief propagation-based truncation (works on any network, cheap but can be less accurate when loop correlations are present).
+    - `"boundarymps"`: Boundary MPS-based truncation (requires `mps_bond_dimension`; works only on planar networks, more expensive but more accurate with large MPS bond dimension).
+- `maxdim::Integer`: The maximum bond dimension to retain after truncation.
+- `cutoff::Number`: The singular value cutoff for truncation (optional).
+
+# Returns
+- The truncated `TensorNetworkState`.
 """
 function ITensors.truncate(tns::TensorNetworkState; alg = default_truncate_alg(tns), kwargs...)
     algorithm_check(tns, "truncate", alg)

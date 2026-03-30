@@ -21,7 +21,7 @@ function sample(
         for v in vertices(ψ)
             tensors = incoming_messages(projected_bp_cache, v)
             ψv, ψv_dag = network(projected_bp_cache)[v], dag(prime(network(projected_bp_cache)[v]))
-            tensors = append!(tensors, [ψv, ψv_dag])
+            push!(tensors, ψv, ψv_dag)
             seq = contraction_sequence(tensors; alg = "optimal")
             ρ = ITensors.contract(tensors; sequence = seq)
 
@@ -75,39 +75,27 @@ function sample(
 end
 
 """
-    sample(
-        ψ::TensorNetworkState,
-        nsamples::Integer;
-        projected_message_rank::Integer,
-        norm_message_rank::Integer,
-        norm_message_update_kwargs=(; niters = _default_boundarymps_update_niters, tolerance = _default_boundarymps_update_tolerance),
-        projected_message_update_kwargs = (;cutoff = _default_boundarymps_update_cutoff, maxdim = projected_message_rank),
-        partition_by = "Row",
-        kwargs...,
-    )
+    sample(ψ::TensorNetworkState, nsamples::Integer; alg, kwargs...)
 
-Take nsamples bitstrings, based on the square of the coefficients of the vector defined by a 2D open boundary tensornetwork.
+Draw `nsamples` bitstrings from the probability distribution defined by the squared amplitudes of the tensor network state.
 
-Arguments
----------
-- `ψ::TensorNetworkState`: The tensornetwork state to sample from.
+# Arguments
+- `ψ::TensorNetworkState`: The tensor network state to sample from.
 - `nsamples::Integer`: Number of samples to draw.
 
-Keyword Arguments
------------------
-- alg ::String: The algorithm to use for sampling ("boundarymps" and "bp" currently supported).
-Supported kwargs for alg = "boundarymps":
-    - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state <x|ψ>.
-    - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract <ψ|ψ>.
+# Keyword Arguments
+- `alg::String`: The algorithm to use for sampling (`"boundarymps"` and `"bp"` currently supported).
+- For `alg = "boundarymps"`:
+    - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state ⟨x|ψ⟩.
+    - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract ⟨ψ|ψ⟩.
     - `norm_message_update_kwargs`: Keyword arguments for updating the norm boundary MPS messages.
     - `projected_message_update_kwargs`: Keyword arguments for updating the projected boundary MPS messages.
-    - `partition_by`: How to partition the graph for boundary MPS (default is `"Row"`).
-Supported kwargs for alg = "bp":
-    - bp_update_kwargs: 
+    - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
+- For `alg = "bp"`:
+    - `bp_update_kwargs`: Keyword arguments for updating the belief propagation cache.
 
-Returns
--------
-A vector of bitstrings sampled from the probability distribution defined by as a dictionary mapping each vertex to a configuration (0...d).
+# Returns
+- A vector of bitstrings, each a dictionary mapping vertices to configurations (0...d-1).
 """
 function sample(ψ::TensorNetworkState, nsamples::Integer; alg = nothing, kwargs...)
     algorithm_check(ψ, "sample", alg)
@@ -117,42 +105,28 @@ function sample(ψ::TensorNetworkState, nsamples::Integer; alg = nothing, kwargs
 end
 
 """
-    sample_directly_certified(
-        ψ::TensorNetworkState,
-        nsamples::Integer;
-        projected_message_rank::Integer,
-        norm_message_rank::Integer,
-        norm_message_update_kwargs=(; niters = _default_boundarymps_update_niters, tolerance = _default_boundarymps_update_tolerance),
-        projected_message_update_kwargs = (;cutoff = _default_boundarymps_update_cutoff, maxdim = projected_message_rank),
-        partition_by = "Row",
-        kwargs...,
-    )
+    sample_directly_certified(ψ::TensorNetworkState, nsamples::Integer; alg, kwargs...)
 
-Take nsamples bitstrings from a 2D open boundary tensornetwork.
-The samples are drawn from x~q(x) and for each sample <x|ψ> is calculated "on-the-fly" to get a measure of p(x)/q(x).
+Draw `nsamples` bitstrings from a 2D open-boundary tensor network state. Samples are drawn from x ~ q(x) and for each sample ⟨x|ψ⟩ is calculated on-the-fly to estimate p(x)/q(x).
 
-Arguments
----------
-- `ψ::TensorNetworkState`: The tensornetwork state to sample from.
+# Arguments
+- `ψ::TensorNetworkState`: The tensor network state to sample from.
 - `nsamples::Integer`: Number of samples to draw.
 
-Keyword Arguments
------------------
-- alg ::String: The algorithm to use for sampling ("boundarymps" is the only one currently supported).
-Supported kwargs for alg = "boundarymps":
-    - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state <x|ψ>.
-    - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract <ψ|ψ>.
+# Keyword Arguments
+- `alg::String`: The algorithm to use for sampling (`"boundarymps"` currently supported).
+- For `alg = "boundarymps"`:
+    - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state ⟨x|ψ⟩.
+    - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract ⟨ψ|ψ⟩.
     - `norm_message_update_kwargs`: Keyword arguments for updating the norm boundary MPS messages.
     - `projected_message_update_kwargs`: Keyword arguments for updating the projected boundary MPS messages.
-    - `partition_by`: How to partition the graph for boundary MPS (default is `"Row"`).
+    - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
 
-Returns
--------
-Vector of NamedTuples.
-Each NamedTuple contains:
-- `poverq`: Approximate value of p(x)/q(x) for the sampled bitstring x.
-- `logq`: Log probability of drawing the bitstring.
-- `bitstring`: The sampled bitstring as a dictionary mapping each vertex to a configuration (0...d).
+# Returns
+- A vector of `NamedTuple`s, each containing:
+    - `poverq`: Approximate value of p(x)/q(x) for the sampled bitstring x.
+    - `logq`: Log probability of drawing the bitstring.
+    - `bitstring`: The sampled bitstring as a dictionary mapping each vertex to a configuration (0...d-1).
 """
 function sample_directly_certified(ψ::TensorNetworkState, nsamples::Integer; projected_mps_bond_dimension = 5 * maxvirtualdim(ψ), alg = nothing, kwargs...)
     algorithm_check(ψ, "sample", alg)
@@ -162,42 +136,28 @@ function sample_directly_certified(ψ::TensorNetworkState, nsamples::Integer; pr
 end
 
 """
-    sample_certified(
-        ψ::TensorNetworkState,
-        nsamples::Integer;
-        projected_message_rank::Integer,
-        norm_message_rank::Integer,
-        norm_message_update_kwargs=(; niters = _default_boundarymps_update_niters, tolerance = _default_boundarymps_update_tolerance),
-        projected_message_update_kwargs = (;cutoff = _default_boundarymps_update_cutoff, maxdim = projected_message_rank),
-        partition_by = "Row",
-        kwargs...,
-    )
+    sample_certified(ψ::TensorNetworkState, nsamples::Integer; alg, kwargs...)
 
-Take nsamples bitstrings from a 2D open boundary tensornetwork.
-The samples are drawn from x~q(x) and for each sample an independent contraction of <x|ψ> is performed to get a measure of p(x)/q(x).
+Draw `nsamples` bitstrings from a 2D open-boundary tensor network state. Samples are drawn from x ~ q(x) and for each sample an independent contraction of ⟨x|ψ⟩ is performed to estimate p(x)/q(x).
 
-Arguments
----------
-- `ψ::TensorNetworkState`: The tensornetwork state to sample from.
+# Arguments
+- `ψ::TensorNetworkState`: The tensor network state to sample from.
 - `nsamples::Integer`: Number of samples to draw.
 
-Keyword Arguments
------------------
-- alg ::String: The algorithm to use for sampling ("boundarymps" is the only option currently supported).
-Supported kwargs for alg = "boundarymps":
-    - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state <x|ψ>.
-    - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract <ψ|ψ>.
-    - `certification_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract <x|ψ> for certification.
+# Keyword Arguments
+- `alg::String`: The algorithm to use for sampling (`"boundarymps"` currently supported).
+- For `alg = "boundarymps"`:
+    - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state ⟨x|ψ⟩.
+    - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract ⟨ψ|ψ⟩.
+    - `certification_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract ⟨x|ψ⟩ for certification.
     - `norm_message_update_kwargs`: Keyword arguments for updating the norm boundary MPS messages.
     - `projected_message_update_kwargs`: Keyword arguments for updating the projected boundary MPS messages.
-    - `partition_by`: How to partition the graph for boundary MPS (default is `"Row"`).
+    - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
 
-Returns
--------
-Vector of NamedTuples.
-Each NamedTuple contains:
-- `poverq`: Approximate value of p(x)/q(x) for the sampled bitstring x.
-- `bitstring`: The sampled bitstring as a dictionary mapping each vertex to a configuration (0...d).
+# Returns
+- A vector of `NamedTuple`s, each containing:
+    - `poverq`: Approximate value of p(x)/q(x) for the sampled bitstring x.
+    - `bitstring`: The sampled bitstring as a dictionary mapping each vertex to a configuration (0...d-1).
 """
 function sample_certified(ψ::TensorNetworkState, nsamples::Int; alg = nothing, certification_mps_bond_dimension = 5 * maxvirtualdim(ψ), certification_cache_message_update_kwargs = (;), kwargs...)
     algorithm_check(ψ, "sample", alg)
@@ -230,7 +190,7 @@ function get_one_sample(
             next_partition = partitions[i + 1]
             pe = PartitionEdge(parent(partition), parent(next_partition))
 
-            mpo = ITensorMPS.MPO(norm_bmps_cache, src(pe); interpet_as_flat = true)
+            mpo = ITensorMPS.MPO(norm_bmps_cache, src(pe); interpret_as_flat = true)
             if incoming_mps == nothing
                 mpo = ITensorMPS.MPS(ITensor[mpo[i] for i in 1:length(mpo)])
                 outgoing_mps = ITensorMPS.truncate(mpo; cutoff, maxdim = projected_mps_bond_dimension)
@@ -265,7 +225,7 @@ function sample_partition!(
     leaves = leaf_vertices(g)
     seq = a_star(g, last(leaves), first(leaves))
     !isempty(seq) && update_partition!(norm_bmps_cache, seq)
-    prev_v, traces = nothing, []
+    prev_v, traces = nothing, Number[]
     logq = 0
     vs = vcat(src.(reverse.(reverse(seq))), [last(leaves)])
     for v in vs

@@ -7,14 +7,15 @@ function expect(
     ITensors.disable_warn_order()
 
     denom = norm_sqr(alg, ψ; contraction_sequence_kwargs)
-    out = []
+    out = Number[]
     for obs in observables
         op_strings, vs, coeff = collectobservable(obs, graph(ψ))
         if iszero(coeff)
-            push!(out, 0)
+            push!(out, zero(coeff))
             continue
         end
-        op_string_f = v -> v ∈ vs ? op_strings[findfirst(x -> x == v, vs)] : "I"
+        op_dict = Dict(zip(vs, op_strings))
+        op_string_f = v -> get(op_dict, v, "I")
         ψOψ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
         numer_seq = contraction_sequence(ψOψ_tensors; contraction_sequence_kwargs...)
         numer = contract(ψOψ_tensors; sequence = numer_seq)[]
@@ -35,20 +36,21 @@ end
 """
     expect(ψ, observable; alg="exact", kwargs...) -> Number or Vector{Number}
 
-Arguments:
-- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}`: The TensorNetworkState (TNS) or cache wrapping the TNS to measure the observable(s) on.
+Compute the expectation value of one or more observables on a tensor network state.
+
+# Arguments
+- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}`: The tensor network state or cache wrapping the state to measure the observable(s) on.
 - `observable::Union{Tuple, Vector{<:Tuple}}`: The observable(s) to measure. Should be a tuple or vector of tuples of the form `(ops, vertices, coeff=1)`.
-- `alg::Union{String, Nothing}`: The algorithm to use for the measurement. 
 
-Keyword Arguments:
-- `cache_update_kwargs...`: Keyword arguments passed to the `update` function when using `bp` or `boundarymps` algorithms.
-Returns:
+# Keyword Arguments
+- `alg::Union{String, Nothing}`: The algorithm to use. Supported algorithms:
+    - `"exact"`: Exact contraction of the tensor network.
+    - `"bp"`: Belief propagation approximation.
+    - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
+- `cache_update_kwargs...`: Keyword arguments passed to the `update` function when using `"bp"` or `"boundarymps"` algorithms.
+
+# Returns
 - A single number if measuring one observable, or a vector of numbers if measuring multiple observables.
-
-Supported algorithms:
-- `"exact"`: Exact contraction of the tensor network.
-- `"bp"`: Belief propagation approximation.
-- `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension` kwarg).
 """
 function expect(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, observable; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "expect", alg)
@@ -61,7 +63,7 @@ function expect(
         obs::Tuple
     )
     op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
-    iszero(coeff) && return 0
+    iszero(coeff) && return zero(coeff)
 
     steiner_vs = length(obs_vs) == 1 ? obs_vs : collect(vertices(steiner_tree(network(cache), obs_vs)))
 
@@ -71,7 +73,8 @@ function expect(
     denom_seq = contraction_sequence(ψIψ_tensors; alg = "optimal", prune_tensors = true)
     denom = contract(ψIψ_tensors; sequence = denom_seq)[]
 
-    op_string_f = v -> v ∈ obs_vs ? op_strings[findfirst(x -> x == v, obs_vs)] : "I"
+    op_dict = Dict(zip(obs_vs, op_strings))
+    op_string_f = v -> get(op_dict, v, "I")
 
     #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
     ψOψ_tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
@@ -89,9 +92,10 @@ function expect(
         bmps_messages_up_to_date = false,
     )
     op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
-    iszero(coeff) && return 0
+    iszero(coeff) && return zero(coeff)
 
-    op_string_f = v -> v ∈ obs_vs ? op_strings[findfirst(x -> x == v, obs_vs)] : "I"
+    op_dict = Dict(zip(obs_vs, op_strings))
+    op_string_f = v -> get(op_dict, v, "I")
 
     numer, denom = path_contract(cache, obs_vs, op_string_f; bmps_messages_up_to_date)
     return coeff * numer[] / denom
@@ -176,7 +180,7 @@ function collectobservable(obs::Tuple, g::NamedGraph)
 end
 
 observables_vertices(observable::Tuple, g::NamedGraph) = collect_vertices(observable[2], g)
-observables_vertices(observables::Vector{<:Tuple}, g::NamedGraph) = unique(reduce(vcat, [observables_vertices(obs, g) for obs in observables]))
+observables_vertices(observables::Vector{<:Tuple}, g::NamedGraph) = unique(collect(Iterators.flatten(observables_vertices(obs, g) for obs in observables)))
 
 function boundarymps_partitioning(observable::Union{Tuple, Vector{<:Tuple}}, g::NamedGraph)
     observables = observable isa Tuple ? [observable] : observable

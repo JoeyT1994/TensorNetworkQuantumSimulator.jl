@@ -1,126 +1,278 @@
 # TensorNetworkQuantumSimulator
 
-A package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks (TNs) of near-arbitrary geometry. This package is built on top of [ITensors](https://github.com/ITensor/ITensors.jl) and [NamedGraphs](https://github.com/ITensor/NamedGraphs.jl).
+A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks (TNs) of near-arbitrary geometry. Built on top of [ITensors](https://github.com/ITensor/ITensors.jl) and [NamedGraphs](https://github.com/ITensor/NamedGraphs.jl).
 
-The main workhorses of the simulation are _belief propagation_ (BP) and the _Singular Value Decomposition_ for applying gates, and _BP_ or _boundary MPS_ for estimating expectation values and sampling. 
+The main workhorses of the simulation are _belief propagation_ (BP) and the _singular value decomposition_ for applying gates, and _BP_ or _boundary MPS_ for estimating expectation values and sampling.
 
-# How to use the package
-
-The starting point of most calculations is that you will define a `NamedGraph` object `g` that encodes the geometry of your problem and how you want your tensor network structured. This is just a list of vertices and edges between pairs of vertices. Convenient constructors for a number of lattices, such as regular 1/2/3D grids, hexagonal lattices etc are provided, for instance:
+## Installation
 
 ```julia
-julia> using TensorNetworkQuantumSimulator
-
-julia> g = named_grid((5,5))
+julia> using Pkg; Pkg.add("TensorNetworkQuantumSimulator")
 ```
 
-will construct you a 5 x 5 square lattice.
-
-
-The vertices of this graph will then correspond to the qubits (or qutrits or bosonic lattice sites) in your setup and the edges the pairs of qubits that directly interact in your system (e.g. those that can have two-site gates applied to them). 
-
-You can then initialise an `TensorNetworkState ψ` object (TNS) as your chosen starting state,  with user-friendly constructors for various different product states and physical bases. For instance, you could construct a random, spin 1/2, TNS via
+## Quick Start
 
 ```julia
-julia> s = siteinds("S=1/2", g)
-julia> ψ = random_tensornetworkstate(g, s; bond_dimension = 2)
+using TensorNetworkQuantumSimulator
+
+# 1. Define a graph (5x5 square lattice)
+g = named_grid((5, 5))
+
+# 2. Create an initial state (all spins up, ComplexF32 precision)
+ψ = tensornetworkstate(ComplexF32, v -> "↑", g, "S=1/2")
+
+# 3. Build a circuit layer (1st-order Trotter step of the transverse-field Ising model)
+J, hx, dt = 1.0, 2.5, 0.01
+layer = []
+append!(layer, ("Rx", [v], 2 * hx * dt) for v in vertices(g))
+ec = edge_color(g, 4)
+for colored_edges in ec
+    append!(layer, ("Rzz", pair, 2 * J * dt) for pair in colored_edges)
+end
+
+# 4. Apply 50 layers of the circuit
+apply_kwargs = (; maxdim = 10, cutoff = 1e-10, normalize_tensors = true)
+circuit = reduce(vcat, [layer for _ in 1:50])
+ψ, errors = apply_gates(circuit, ψ; apply_kwargs)
+
+# 5. Measure an expectation value
+sz_bp = expect(ψ, ("Z", (3, 3)); alg = "bp")
+sz_bmps = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 10)
 ```
 
-or the bond dimension 1 all down state
+## Usage Guide
+
+### Defining the Geometry
+
+The starting point of most calculations is a `NamedGraph` that encodes the geometry of your tensor network. Vertices correspond to qubits (or qutrits, bosonic sites, etc.) and edges correspond to pairs of sites that directly interact. Built-in constructors are provided for common lattices:
 
 ```julia
-julia> ψ = tensornetworkstate(v -> "↑", g, s)
+g = named_grid((5, 5))                         # 2D square lattice
+g = named_grid((3, 3, 3); periodic = true)      # 3D periodic cubic lattice
+g = named_hexagonal_lattice_graph(4, 4)         # hexagonal lattice
+g = heavy_hexagonal_lattice(5, 5)               # heavy-hexagonal lattice
+g = lieb_lattice(5, 5)                          # Lieb lattice
 ```
 
-This `TensorNetworkState` is a tensor network representation of your wavefunction, with the structure specified by the graph `g` of the state of your system. Most likely your TNS will represent the many-body wavefunction, but you can also work directly in the Heisenberg picture and have it represent the many-body operator instead by using a `"Pauli"` basis.
+### Constructing a Tensor Network State
 
-Now you define the _circuit_ which you will apply to your tensor network. A circuit, or layer of a circuit, simply takes the form `Vector{<:Tuple}` or `Vector{<:ITensor}` of a list of one or two-site gates to be applied in sequential order to the TNS. These gates can either be specified as a Tuple `(Gate_string::String, vertices_gate_acts_on::Vector, optional_gate_parameter::Number)` using the pre-defined gates listed below or as specific ITensors for more custom gate options. Your circuit may encode the Trotterised real- or imaginary-time dynamics of a Hamiltonian, a generic quantum circuit or something more exotic - you can build absolutely any list of one and two-site gates. For instance
+A `TensorNetworkState` (TNS) is a tensor network representation of your wavefunction, with the structure specified by the graph `g`. Product states can be constructed using string labels or numerical vectors:
 
 ```julia
-julia> J, hx, hz, dt = 1.0, 2.5, 0.2, 0.01
-julia> layer = []
-julia> append!(layer, ("Rx", [v], 2 * hx * dt) for v in vertices(g))
-julia> append!(layer, ("Rz", [v], 2 * hz * dt) for v in vertices(g))
+# All spins up (bond dimension 1)
+ψ = tensornetworkstate(v -> "↑", g, "S=1/2")
 
-julia> #For two site gates do an edge coloring to Trotterise the circuit
-julia> ec = edge_color(g, 4)
-julia> for colored_edges in ec
-        append!(layer, ("Rzz", pair, 2 * J * dt) for pair in colored_edges)
-       end
+# Random state with bond dimension 4 and ComplexF32 elements
+ψ = random_tensornetworkstate(ComplexF32, g, "S=1/2"; bond_dimension = 4)
 ```
 
-Will build you the circuit corresponding to a 1st order Trotterization of the Ising model propagator with both longitudinal and transverse fields. The `edge_color` provides a nice way to identify groups of non-overlapping gates - which will help maintain efficiency during the simulation as non-overlapping gates are applied in parallel. This kind of grouping can be done on any bipartite lattice, where the second argument should be the co-ordination number (maximum degree of any of the vertices) of the graph.
+The optional first argument sets the element type (`Float64` by default). Use `ComplexF32` or `ComplexF64` for complex-valued states.
 
-You will now apply the desired gates to your TNS with the `apply_gates` function. Keyword arguments, i.e. the `apply_kwargs` should be passed to indicate the desired level of truncation of the virtual bonds to use when applying the circuits. At any point during the simulation, expectation values, samples or other information (e.g. overlaps) can be extracted from the `TensorNetworkState` with different options for the algorithm to use and the various hyperparameters that control their complexity. The docstrings and relevant literature describes these in more detail. Here we apply 50 layers of our Ising circuit:
+### Heisenberg Picture
+
+You can also work directly in the Heisenberg picture, representing a many-body operator as a TNS in the `"Pauli"` basis. Each site encodes the coefficients of I, X, Y, Z:
 
 ```julia
-
-julia> apply_kwargs = (; maxdim = 10, cutoff = 1e-10, normalize_tensors = true)
-julia> circuit = reduce(vcat, [layer for i in 1:50])
-julia> ψ, errors = apply_gates(circuit, ψ; apply_kwargs, verbose = false)
+# Start with the Z operator on a single site, identity elsewhere
+ψ = paulitensornetworkstate(ComplexF32, v -> v == v0 ? "Z" : "I", g)
 ```
-Now we can measure something on a vertex, with various backends supported
+
+Gates are then applied as conjugation by unitaries, and observables are extracted via traces (see `examples/2dIsing_dynamics_Heisenbergpicture.jl`).
+
+### Building Circuits
+
+A circuit is a `Vector` of gates to be applied sequentially. Each gate is specified as a tuple `(gate_string, vertices, parameter)` or as a raw `ITensor`:
 
 ```julia
+layer = []
+# Single-site rotations
+append!(layer, ("Rx", [v], 2 * hx * dt) for v in vertices(g))
+append!(layer, ("Rz", [v], 2 * hz * dt) for v in vertices(g))
 
-julia> sz_bp = expect(ψ, ("Z", (2,2)); alg = "bp")
-#Boundary MPS only allowed on a planar graph
-julia> sz_bmps = expect(ψ, ("Z", (2,2)); alg = "boundarymps", mps_bond_dimension = 10)
+# Two-site gates, grouped by edge coloring for efficiency
+ec = edge_color(g, 4)  # 4 = coordination number of the square lattice
+for colored_edges in ec
+    append!(layer, ("Rzz", pair, 2 * J * dt) for pair in colored_edges)
+end
 ```
 
-This code is a very powerful quantum simulation tool, but should not be treated as a black box. We therefore strongly encourage users to read the literature listed below and look through the tests [here](test/), examples [here](examples/) and even source code [here](src/) to learn how the code works in more detail so they can effectively deploy their own simulations and achieve results like those in the literature provided below.
+The `edge_color` function identifies groups of non-overlapping edges. Non-overlapping gates within a group are applied in parallel during the simulation. The second argument should be the coordination number (maximum vertex degree) of the graph.
+
+### Applying Gates
+
+Apply gates to the TNS using `apply_gates`. The `apply_kwargs` control bond dimension truncation during the SVD:
+
+```julia
+apply_kwargs = (; maxdim = 10, cutoff = 1e-10, normalize_tensors = true)
+ψ, errors = apply_gates(circuit, ψ; apply_kwargs)
+```
+
+You can also pass a `BeliefPropagationCache` directly to reuse BP messages between gate applications:
+
+```julia
+ψ_bpc = BeliefPropagationCache(ψ)
+ψ_bpc, errors = apply_gates(circuit, ψ_bpc; apply_kwargs)
+```
+
+### Expectation Values
+
+Compute expectation values with `expect`, choosing from several contraction algorithms:
+
+```julia
+# Belief propagation (works on any graph, fast, approximate)
+sz = expect(ψ, ("Z", (3, 3)); alg = "bp")
+
+# Boundary MPS (planar graphs only, more accurate, adjustable precision)
+sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 16)
+
+# Exact contraction (only feasible for small systems)
+sz = expect(ψ, ("Z", (3, 3)); alg = "exact")
+
+# Multi-site observables
+szz = expect(ψ, ("ZZ", [(3, 3), (3, 4)]); alg = "bp")
+
+# Multiple observables at once
+observables = [("Z", [v]) for v in vertices(g)]
+sz_all = expect(ψ, observables; alg = "bp")
+```
+
+If you already have an updated `BeliefPropagationCache` or `BoundaryMPSCache`, pass it directly to avoid redundant cache construction.
+
+### Norms, Inner Products and Reduced Density Matrices
+
+```julia
+# Squared norm
+nsq = norm_sqr(ψ; alg = "bp")
+
+# Norm (via LinearAlgebra)
+using LinearAlgebra
+n = norm(ψ; alg = "bp")
+
+# Normalize the state
+ψ = normalize(ψ; alg = "bp")
+
+# Inner product between two states
+ip = ITensors.inner(ψ, ϕ; alg = "bp")
+
+# Reduced density matrix on a set of vertices
+ρ = reduced_density_matrix(ψ, [(3, 3)]; alg = "bp")
+```
+
+All of these support the same algorithm options as `expect`: `"exact"`, `"bp"`, `"boundarymps"`, and (for norms) `"loopcorrections"`.
+
+### Sampling
+
+Draw bitstring samples from the probability distribution defined by the squared amplitudes of the state:
+
+```julia
+# Basic sampling (returns bitstrings only)
+bitstrings = sample(ψ, 100; alg = "boundarymps", norm_mps_bond_dimension = 10)
+
+# Directly certified sampling (returns bitstrings with p(x)/q(x) estimates)
+results = sample_directly_certified(ψ, 100; alg = "boundarymps", norm_mps_bond_dimension = 10)
+
+# Certified sampling (independent contraction for certification)
+results = sample_certified(ψ, 100; alg = "boundarymps", norm_mps_bond_dimension = 10)
+```
+
+BP-based sampling is also available via `alg = "bp"`.
+
+### Truncation
+
+Reduce the bond dimension of an existing TNS:
+
+```julia
+ψ_truncated = truncate(ψ; alg = "bp", maxdim = 4, cutoff = 1e-10)
+```
 
 ## Supported Gates
-Gates can take the form of ITensors or Tuples of length two or three, i.e.
-`(gate_string::String, qubits_to_act_on::Union{Vector, NamedEdge})` or `(gate_string::String, qubits_to_act_on::Union{Vector, NamedEdge}, optional_parameter::Number)` depending on whether the gate type supports an optional parameter. The qubits_to_act on can be a vector of one or two vertices of the network where the gate acts. In the case of a two-qubit gate an edge of the network can also be passed. 
 
-Pre-Defined One qubit gates (brackets indicates the optional rotation parameter which must be specified). These are consistent with the qiskit definitions.
-```
-- "X", "Y", "Z', "Rx"(θ), "Ry"(θ), "Rz"(θ), "CRx"(θ), "CRy"(θ), "CRz"(θ), "P", "H"
-```
+Gates are specified as tuples of the form `(gate_string, vertices)` or `(gate_string, vertices, parameter)`. The vertices can be a vector of one or two graph vertices, or a `NamedEdge` for two-qubit gates. All parameterised gates follow the Qiskit convention.
 
-Pre-Defined Two qubit gates (brackets indicates the optional rotation angle parameter which must be specified). These are consistent with the qiskit definitions.
-```
-- "CNOT", "CX", "CY", "SWAP", "iSWAP", "√SWAP", "√iSWAP", "Rxx" (θ), "Ryy"(θ), "Rzz"(θ), "Rxxyy"(θ), "Rxxyyzz"(θ), "CPHASE"(θ)
-```
+**One-qubit gates** (parameter in parentheses where required):
 
-If the user wants to instead define a custom gate, they can do so by creating the corresponding `ITensor` which acts on the physical indices for the qubit or pair of qubits they wish it to apply to.
+| Gate | Parameter | Description |
+|------|-----------|-------------|
+| `"X"`, `"Y"`, `"Z"` | -- | Pauli gates |
+| `"H"` | -- | Hadamard |
+| `"P"` | phase | Phase gate |
+| `"Rx"`, `"Ry"`, `"Rz"` | angle | Pauli rotation |
+| `"CRx"`, `"CRy"`, `"CRz"` | angle | Controlled Pauli rotation (single-qubit part) |
+
+**Two-qubit gates:**
+
+| Gate | Parameter | Description |
+|------|-----------|-------------|
+| `"CNOT"`, `"CX"`, `"CY"` | -- | Controlled gates |
+| `"SWAP"`, `"iSWAP"`, `"√SWAP"`, `"√iSWAP"` | -- | Swap variants |
+| `"Rxx"`, `"Ryy"`, `"Rzz"` | angle | Pauli-pair rotations |
+| `"Rxxyy"`, `"Rxxyyzz"` | angle | Multi-Pauli rotations |
+| `"CPHASE"` | phase | Controlled phase |
+
+Custom gates can be defined by constructing the corresponding `ITensor` acting on the physical indices of the target qubits.
 
 ## GPU Support
-GPU support is enabled for all operations. Simply load in the relevant GPU Julia module (Metal.jl or CUDA.jl for example) and transform the tensor network state, beliefpropagationcache or boundarympscache with `ψ = CUDA.cu(ψ)`. Now when you perform the desired operation e.g. `sample_directly_certified(ψ. 10; norm_message_rank = 10)` it will run on GPU. Dramatic speedups are seen on NVidia GPUs for moderate to large bond dimension states. 
-For instance, try something like the following and see for yourself (FYI you need an NVidia GPU to use CUDA)
-```julia
-julia> using TensorNetworkQuantumSimulator
-julia> using CUDA
 
-julia> g = named_grid((8,8))
-julia> ψ_cpu = random_tensornetworkstate(ComplexF32, g; bond_dimension = 8)
-julia> ψ_gpu = CUDA.cu(ψ_cpu)
-julia> @time sz_bmps = expect(ψ_cpu, ("Z", (1,1)); alg = "boundarymps", mps_bond_dimension = 16)
-julia> @time sz_bmps = expect(ψ_gpu, ("Z", (1,1)); alg = "boundarymps", mps_bond_dimension = 16)
+GPU support is enabled for all operations. Load the relevant Julia GPU package (e.g. CUDA.jl or Metal.jl) and transfer the state or cache:
+
+```julia
+using TensorNetworkQuantumSimulator
+using CUDA
+
+g = named_grid((8, 8))
+ψ_cpu = random_tensornetworkstate(ComplexF32, g; bond_dimension = 8)
+ψ_gpu = CUDA.cu(ψ_cpu)
+
+@time expect(ψ_cpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
+@time expect(ψ_gpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
 ```
 
-## Relevant Literature
-Helpful reading for understanding the machinery inside the library and the kind of simulations its been used for. 
-- [Gauging tensor networks with belief propagation](https://www.scipost.org/SciPostPhys.15.6.222?acad_field_slug=chemistry)
-- [Efficient Tensor Network Simulation of IBM’s Eagle Kicked Ising Experiment](https://journals.aps.org/prxquantum/abstract/10.1103/PRXQuantum.5.010308)
-- [Loop Series Expansions for Tensor Networks](https://arxiv.org/abs/2409.03108)
-- [Dynamics of disordered quantum systems with two- and three-dimensional tensor networks](https://arxiv.org/abs/2503.05693)
-- [Simulating and sampling quantum circuits with 2D tensor networks](https://arxiv.org/abs/2507.11424)
+Caches can also be transferred: `CUDA.cu(BeliefPropagationCache(ψ))`. Significant speedups are seen on NVIDIA GPUs at moderate to large bond dimensions.
 
-If you use this library in your research paper please cite, at minimum, either
-- [Simulating and sampling quantum circuits with 2D tensor networks](https://arxiv.org/abs/2507.11424)
-or 
-- [Gauging tensor networks with belief propagation](https://www.scipost.org/SciPostPhys.15.6.222?acad_field_slug=chemistry)
+## Algorithm Guide
+
+| Algorithm | Keyword | Graph requirement | Cost | Accuracy |
+|-----------|---------|-------------------|------|----------|
+| Belief propagation | `alg = "bp"` | Any | Low | Exact on trees, approximate on loopy graphs |
+| Boundary MPS | `alg = "boundarymps"` | Planar | Moderate (tuneable via `mps_bond_dimension`) | Converges to exact with increasing bond dimension |
+| Loop corrections | `alg = "loopcorrections"` | Any | Moderate | Systematic corrections to BP |
+| Exact contraction | `alg = "exact"` | Any (small systems) | Exponential | Exact |
+
+## Examples
+
+See the [examples/](examples/) directory for complete worked examples:
+- **2D Ising dynamics** (`2dIsing_dynamics.jl`) -- time evolution on a square lattice with BP and boundary MPS measurements
+- **3D Ising dynamics** (`3dIsing_dynamics.jl`) -- time evolution on a periodic 3D cubic lattice
+- **Heavy-hex Ising dynamics** (`heavyhexIsing_dynamics.jl`) -- evolution, measurement and sampling on a heavy-hexagonal lattice
+- **Heisenberg picture** (`2dIsing_dynamics_Heisenbergpicture.jl`) -- operator evolution in the Pauli basis
+- **Boundary MPS** (`boundarymps.jl`) -- comparing BP, boundary MPS and exact expectation values
+- **Loop corrections** (`loopcorrections.jl`) -- improving BP norm estimates with loop corrections
+
+We encourage users to read the literature listed below and explore the [tests](test/) and [source code](src/) to learn how the package works in detail.
+
+## Relevant Literature
+
+Helpful reading for understanding the algorithms and the kind of simulations the library has been used for:
+- J. Tindall and M. Fishman, "Gauging tensor networks with belief propagation," SciPost Physics **15**, 222 (2023). [Link](https://www.scipost.org/SciPostPhys.15.6.222)
+- J. Tindall, M. Fishman, E. M. Stoudenmire, and D. Sels, "Efficient Tensor Network Simulation of IBM's Eagle Kicked Ising Experiment," PRX Quantum **5**, 010308 (2024). [Link](https://journals.aps.org/prxquantum/abstract/10.1103/PRXQuantum.5.010308)
+- G. Evenbly, N. Pancotti, A. Milsted, J. Gray, and G. K.-L. Chan, "Loop Series Expansions for Tensor Networks," Physical Review Research **8**, 013245 (2026). [Link](https://arxiv.org/abs/2409.03108)
+- J. Tindall, A. Mello, M. Fishman, M. Stoudenmire, and D. Sels, "Dynamics of disordered quantum systems with two- and three-dimensional tensor networks," arXiv:2503.05693 (2025). [Link](https://arxiv.org/abs/2503.05693)
+- M. S. Rudolph and J. Tindall, "Simulating and Sampling from Quantum Circuits with 2D Tensor Networks," arXiv:2507.11424 (2025). [Link](https://arxiv.org/abs/2507.11424)
+
+If you use this library in your research, please cite at minimum either:
+- M. S. Rudolph and J. Tindall, "Simulating and Sampling from Quantum Circuits with 2D Tensor Networks," arXiv:2507.11424 (2025). [Link](https://arxiv.org/abs/2507.11424)
+
+or
+- J. Tindall and M. Fishman, "Gauging tensor networks with belief propagation," SciPost Physics **15**, 222 (2023). [Link](https://www.scipost.org/SciPostPhys.15.6.222)
 
 ## Upcoming Features
+
 - Applying gates to distant nodes of the TN via SWAP gates.
+- Infinite tensor network states 
+- Finite temperature and ground state examples
 
-## Authors and acknowledgements
-The package was developed by Joseph Tindall ([JoeyT1994](https://github.com/JoeyT1994)), an Associate Research Scientist at the Center for Computational Quantum Physics, Flatiron Institute NYC and Manuel S. Rudolph ([MSRudolph](https://github.com/MSRudolph)), a PhD Candidate at EPFL, Switzerland, during a research stay at the Center for Computational Quantum Physics, Flatiron Institute NYC.
+## Authors and Acknowledgements
 
-The package was strongly influenced by [ITensorNetworks](https://github.com/ITensor/ITensorNetworks.jl), a general tensor network package developed by Matt Fishman ([mtfishman](https://github.com/mtfishman)), Joseph Tindall ([JoeyT1994](https://github.com/JoeyT1994)) and others. The next generation of ITensorNetworks is currently being developed [here](https://github.com/ITensor/ITensorNetworksNext.jl). A quantum simulation package such as this will hopefully then be able to utilize many of its general features for working with tensor networks. 
+The package was developed by Joseph Tindall ([JoeyT1994](https://github.com/JoeyT1994)), an Associate Research Scientist at the Center for Computational Quantum Physics, Flatiron Institute NYC, and Manuel S. Rudolph ([MSRudolph](https://github.com/MSRudolph)), a PhD Candidate at EPFL, Switzerland, during a research stay at the Center for Computational Quantum Physics, Flatiron Institute NYC.
 
-
-
-
+The package was strongly influenced by [ITensorNetworks](https://github.com/ITensor/ITensorNetworks.jl), a general tensor network package developed by Matt Fishman ([mtfishman](https://github.com/mtfishman)), Joseph Tindall ([JoeyT1994](https://github.com/JoeyT1994)) and others. The next generation of ITensorNetworks is currently being developed [here](https://github.com/ITensor/ITensorNetworksNext.jl). A quantum simulation package such as this will hopefully then be able to utilize many of its general features for working with tensor networks.
