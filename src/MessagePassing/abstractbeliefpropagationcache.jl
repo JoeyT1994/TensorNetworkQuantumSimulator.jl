@@ -53,22 +53,28 @@ for f in [
     end
 end
 
-function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex)
-    tn = network(bp_cache)
+function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCache, vertex)
     seq_cache = contraction_sequences(bp_cache)
-    if !isnothing(seq_cache) && !isempty(seq_cache)
-        old_tensor = tn[vertex]
-        old_dims = Set(dim.(inds(old_tensor)))
-        new_dims = Set(dim.(inds(value)))
-        if old_dims != new_dims
-            for key in collect(keys(seq_cache))
-                if first(key) == vertex
-                    delete!(seq_cache, key)
-                end
-            end
+    isnothing(seq_cache) && return bp_cache
+    for key in collect(keys(seq_cache))
+        if first(key) == vertex
+            delete!(seq_cache, key)
         end
     end
-    setindex_preserve!(tn, value, vertex)
+    return bp_cache
+end
+
+function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCache)
+    seq_cache = contraction_sequences(bp_cache)
+    !isnothing(seq_cache) && empty!(seq_cache)
+    return bp_cache
+end
+
+function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex; invalidate_sequences = true)
+    if invalidate_sequences
+        invalidate_contraction_sequences!(bp_cache, vertex)
+    end
+    setindex_preserve!(network(bp_cache), value, vertex)
     return bp_cache
 end
 
@@ -179,14 +185,11 @@ function updated_message(
     contract_list = ITensor[incoming_ms; state]
     cache_key = vertex => edge
     seq_cache = contraction_sequences(bp_cache)
-    sequence = if !isnothing(seq_cache) && haskey(seq_cache, cache_key)
-        seq_cache[cache_key]
+    if haskey(seq_cache, cache_key)
+        sequence = seq_cache[cache_key]
     else
-        seq = contraction_sequence(contract_list; alg = alg.kwargs.sequence_alg)
-        if !isnothing(seq_cache)
-            seq_cache[cache_key] = seq
-        end
-        seq
+        sequence = contraction_sequence(contract_list; alg = alg.kwargs.sequence_alg)
+        set!(seq_cache, cache_key, sequence)
     end
     updated_message = contract(contract_list; sequence)
 

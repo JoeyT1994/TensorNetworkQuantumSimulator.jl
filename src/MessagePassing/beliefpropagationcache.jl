@@ -10,7 +10,7 @@ struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITens
     AbstractBeliefPropagationCache{V}
     network::N
     messages::Dictionary{NamedEdge, M}
-    contraction_sequences::Dict{Pair, Vector}
+    contraction_sequences::Dictionary{Pair, Vector}
 end
 
 function message_diff(message_a::ITensor, message_b::ITensor)
@@ -23,7 +23,7 @@ messages(bp_cache::BeliefPropagationCache) = bp_cache.messages
 network(bp_cache::BeliefPropagationCache) = bp_cache.network
 graph(bp_cache::BeliefPropagationCache) = graph(network(bp_cache))
 
-BeliefPropagationCache(network, messages) = BeliefPropagationCache(network, messages, Dict{Pair, Vector}())
+BeliefPropagationCache(network, messages) = BeliefPropagationCache(network, messages, Dictionary{Pair, Vector}())
 BeliefPropagationCache(network) = BeliefPropagationCache(network, default_messages())
 
 contraction_sequences(bp_cache::BeliefPropagationCache) = bp_cache.contraction_sequences
