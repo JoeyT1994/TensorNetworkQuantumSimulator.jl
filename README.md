@@ -110,7 +110,7 @@ apply_kwargs = (; maxdim = 10, cutoff = 1e-10, normalize_tensors = true)
 You can also pass a `BeliefPropagationCache` directly to reuse BP messages between gate applications:
 
 ```julia
-ψ_bpc = BeliefPropagationCache(ψ)
+ψ_bpc = update(BeliefPropagationCache(ψ))
 ψ_bpc, errors = apply_gates(circuit, ψ_bpc; apply_kwargs)
 ```
 

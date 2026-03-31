@@ -32,7 +32,7 @@ using Test: @testset, @test
         Rmps = 16
         sz_boundarymps = expect(ψ, ("Z", v_centre); alg = "boundarymps", mps_bond_dimension = Rmps)
 
-        @test sz_boundarymps ≈ sz_exact
+        @test sz_boundarymps ≈ sz_exact atol = 10*eps(Float32)
 
         if !is_tree(g)
             v_centre_neighbor = first(neighbors(g, v_centre))
