@@ -5,6 +5,7 @@ abstract type AbstractBeliefPropagationCache{V} <: AbstractNamedGraph{V} end
 
 #Interface
 messages(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
+contraction_sequences(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 default_messages() = Dictionary{NamedEdge, Union{ITensor, Vector{ITensor}}}()
 
 function rescale_messages!(
@@ -45,13 +46,37 @@ for f in [
         :(maxvirtualdim),
         :(default_message),
         :(siteinds),
-        :(setindex_preserve!),
     ]
     @eval begin
         function $f(bp_cache::AbstractBeliefPropagationCache, args...; kwargs...)
             return $f(network(bp_cache), args...; kwargs...)
         end
     end
+end
+
+function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCache, vertex)
+    seq_cache = contraction_sequences(bp_cache)
+    isnothing(seq_cache) && return bp_cache
+    for key in collect(keys(seq_cache))
+        if first(key) == vertex
+            delete!(seq_cache, key)
+        end
+    end
+    return bp_cache
+end
+
+function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCache)
+    seq_cache = contraction_sequences(bp_cache)
+    !isnothing(seq_cache) && empty!(seq_cache)
+    return bp_cache
+end
+
+function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex; invalidate_sequences = true)
+    if invalidate_sequences
+        invalidate_contraction_sequences!(bp_cache, vertex)
+    end
+    setindex_preserve!(network(bp_cache), value, vertex)
+    return bp_cache
 end
 
 #Forward onto the graph
@@ -157,12 +182,15 @@ function updated_message(
     )
     state = bp_factors(bp_cache, vertex)
     contract_list = ITensor[incoming_ms; state]
-    sequence = contraction_sequence(contract_list; alg = alg.kwargs.sequence_alg)
-    updated_message = contract(contract_list; sequence)
-
-    if alg.kwargs.enforce_hermiticity
-        updated_message = make_hermitian(updated_message)
+    cache_key = vertex => edge
+    seq_cache = contraction_sequences(bp_cache)
+    if haskey(seq_cache, cache_key)
+        sequence = seq_cache[cache_key]
+    else
+        sequence = contraction_sequence(contract_list; alg = alg.kwargs.sequence_alg)
+        set!(seq_cache, cache_key, sequence)
     end
+    updated_message = contract(contract_list; sequence)
 
     if alg.kwargs.normalize
         message_norm = sum(updated_message)

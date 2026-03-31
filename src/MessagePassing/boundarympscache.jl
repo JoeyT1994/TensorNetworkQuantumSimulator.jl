@@ -9,19 +9,20 @@ struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Ve
     supergraph::PartitionedGraph
     sorted_edges::Dictionary{PartitionEdge, Vector{NamedEdge}}
     mps_bond_dimension::Integer
+    contraction_sequences::Dictionary{Pair, Vector}
 end
 
 default_update_alg(bmps_cache::BoundaryMPSCache) = "bp"
 function set_default_kwargs(alg::Algorithm"bp", bmps_cache::BoundaryMPSCache)
     maxiter = get(alg.kwargs, :maxiter, default_bp_maxiter(bmps_cache))
-    edge_sequence = get(alg.kwargs, :edge_sequence, default_bp_edge_sequence(bmps_cache))
+    edge_sequence = get(alg.kwargs, :edge_sequence, bp_edge_sequence(bmps_cache))
     message_update_alg = set_default_kwargs(
         get(alg.kwargs, :message_update_alg, Algorithm(default_message_update_alg(bmps_cache))), bmps_cache
     )
     return Algorithm("bp"; maxiter, edge_sequence, message_update_alg, tolerance = nothing)
 end
 
-function default_bp_edge_sequence(bmps_cache::BoundaryMPSCache)
+function bp_edge_sequence(bmps_cache::BoundaryMPSCache)
     return PartitionEdge.(forest_cover_edge_sequence(partitions_graph(supergraph(bmps_cache))))
 end
 default_bp_maxiter(bmps_cache::BoundaryMPSCache) = is_tree(partitions_graph(supergraph(bmps_cache))) ? 1 : 5
@@ -99,6 +100,8 @@ for f in [
     end
 end
 
+contraction_sequences(bmps_cache::BoundaryMPSCache) = bmps_cache.contraction_sequences
+
 function Base.copy(bmps_cache::BoundaryMPSCache)
     return BoundaryMPSCache(
         copy(network(bmps_cache)),
@@ -106,6 +109,7 @@ function Base.copy(bmps_cache::BoundaryMPSCache)
         copy(supergraph(bmps_cache)),
         copy(sorted_edges(bmps_cache)),
         mps_bond_dimension(bmps_cache),
+        copy(contraction_sequences(bmps_cache)),
     )
 end
 
@@ -159,7 +163,7 @@ function BoundaryMPSCache(
     sorted_es = Dictionary{PartitionEdge, Vector{NamedEdge}}(pes, Vector{NamedEdge}[sorted_edges(supergraph, pe) for pe in pes])
 
     messages = default_messages()
-    bmps_cache = BoundaryMPSCache(tn, messages, supergraph, sorted_es, mps_bond_dimension)
+    bmps_cache = BoundaryMPSCache(tn, messages, supergraph, sorted_es, mps_bond_dimension, Dictionary{Pair, Vector}())
     @assert is_correct_format(bmps_cache)
     set_messages && set_interpartition_messages!(bmps_cache, pes)
 
@@ -226,7 +230,7 @@ end
 
 function update_partition!(bmps_cache::BoundaryMPSCache, seq::Vector)
     isempty(seq) && return bmps_cache
-    alg = set_default_kwargs(Algorithm("contract", normalize = false, enforce_hermiticity = false), bmps_cache)
+    alg = set_default_kwargs(Algorithm("contract", normalize = false), bmps_cache)
     for e in seq
         m = updated_message(alg, bmps_cache, e)
         setmessage!(bmps_cache, e, m)
@@ -304,7 +308,7 @@ function extracter(
         bmps_cache::BoundaryMPSCache,
         update_e::NamedEdge
     )
-    message_update_alg = set_default_kwargs(Algorithm("contract"; normalize = false, enforce_hermiticity = false), bmps_cache)
+    message_update_alg = set_default_kwargs(Algorithm("contract"; normalize = false), bmps_cache)
     m = updated_message(message_update_alg, bmps_cache, update_e)
     return m
 end
