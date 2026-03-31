@@ -329,7 +329,7 @@ function update_message!(
     switch_messages!(bmps_cache, pe)
     es = sorted_edges(bmps_cache, pe)
     g = partition_graph(bmps_cache, src(pe))
-    update_seq = vcat([es[i] for i in 1:length(es)], [es[i] for i in (length(es) - 1):-1:2])
+    update_seq = vcat(es, es[(end - 1):-1:2])
 
     init_gauge_seq = [(reverse(es[i]), reverse(es[i - 1])) for i in length(es):-1:2]
     init_update_seq = post_order_dfs_edges(g, src(first(update_seq)))
@@ -340,7 +340,7 @@ function update_message!(
     for i in 1:alg.kwargs.niters
         cf = 0
         if i == alg.kwargs.niters
-            update_seq = vcat(update_seq, es[1])
+            push!(update_seq, es[1])
         end
         for update_e in update_seq
             updater!(alg, bmps_cache, g, prev_e, update_e)
@@ -434,7 +434,7 @@ function generic_apply(O::MPO, M::MPS; normalize = true, kwargs...)
 
     O_tensors = ITensor[]
     for i in 1:length(O)
-        m_ind = filter(j -> !isempty(ITensors.commoninds(O[i], M[j])), [j for j in 1:length(M)])
+        m_ind = filter(j -> !isempty(ITensors.commoninds(O[i], M[j])), 1:length(M))
         if isempty(m_ind)
             push!(O_tensors, O[i])
         else
@@ -576,13 +576,13 @@ end
 #Functions to get the parellel edges sitting above and below a edge
 function edges_above(bmps_cache::BoundaryMPSCache, e::NamedEdge)
     es = sorted_edges(bmps_cache, partitionedge(supergraph(bmps_cache), e))
-    e_pos = only(findall(x -> x == e, es))
+    e_pos = findfirst(x -> x == e, es)
     return NamedEdge[es[i] for i in (e_pos + 1):length(es)]
 end
 
 function edges_below(bmps_cache::BoundaryMPSCache, e::NamedEdge)
     es = sorted_edges(bmps_cache, partitionedge(supergraph(bmps_cache), e))
-    e_pos = only(findall(x -> x == e, es))
+    e_pos = findfirst(x -> x == e, es)
     return NamedEdge[es[i] for i in 1:(e_pos - 1)]
 end
 

@@ -178,7 +178,7 @@ function updated_message(
     )
     vertex = src(edge)
     incoming_ms = incoming_messages(
-        bp_cache, vertex; ignore_edges = typeof(edge)[reverse(edge)]
+        bp_cache, vertex; ignore_edges = (reverse(edge),)
     )
     state = bp_factors(bp_cache, vertex)
     contract_list = ITensor[incoming_ms; state]

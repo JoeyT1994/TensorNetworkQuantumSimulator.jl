@@ -75,7 +75,7 @@ function apply_gates(
 
             t = @timed ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
 
-            affected_vertices = Set{eltype(vertices(network(ψ_bpc)))}()
+            empty!(affected_vertices)
             if verbose
                 println("Done in $(t.time) secs")
             end
