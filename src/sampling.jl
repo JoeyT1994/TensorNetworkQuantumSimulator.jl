@@ -31,7 +31,7 @@ function sample(
             config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
             # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
             set!(bit_string, v, config - 1)
-            s_ind = only(filter(i -> plev(i) == 0, inds(ρ)))
+            s_ind = inds(ρ)[findfirst(i -> plev(i) == 0, inds(ρ))]
             P = adapt(datatype(ρ))(onehot(s_ind => config))
             setindex_preserve!(projected_bp_cache, ψv * P, v)
 
@@ -244,7 +244,7 @@ function sample_partition!(
         config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
         # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
         set!(bit_string, v, config - 1)
-        s_ind = only(filter(i -> plev(i) == 0, inds(ρ)))
+        s_ind = inds(ρ)[findfirst(i -> plev(i) == 0, inds(ρ))]
         P = adapt(datatype(ρ))(onehot(s_ind => config))
         q = ρ_diag[config]
         logq += log(q)
