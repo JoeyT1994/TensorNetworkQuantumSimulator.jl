@@ -71,6 +71,11 @@ function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCa
     return bp_cache
 end
 
+function setcontractionsequence!(bp_cache::AbstractBeliefPropagationCache, cache_key, sequence, n::Int)
+    set!(contraction_sequences(bp_cache), cache_key, (sequence, n))
+    return bp_cache
+end
+
 function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex; invalidate_sequences = true)
     if invalidate_sequences
         invalidate_contraction_sequences!(bp_cache, vertex)
@@ -184,11 +189,13 @@ function updated_message(
     contract_list = ITensor[incoming_ms; state]
     cache_key = vertex => edge
     seq_cache = contraction_sequences(bp_cache)
-    if haskey(seq_cache, cache_key)
-        sequence = seq_cache[cache_key]
+    n = length(contract_list)
+    seq_changed = true
+    if haskey(seq_cache, cache_key) && seq_cache[cache_key][2] == n
+        sequence = seq_cache[cache_key][1]
+        seq_changed = false
     else
         sequence = contraction_sequence(contract_list; alg = alg.kwargs.sequence_alg)
-        set!(seq_cache, cache_key, sequence)
     end
     updated_message = contract(contract_list; sequence)
 
@@ -199,7 +206,7 @@ function updated_message(
         end
     end
 
-    return updated_message
+    return updated_message, (cache_key, sequence, n, seq_changed)
 end
 
 function updated_message(

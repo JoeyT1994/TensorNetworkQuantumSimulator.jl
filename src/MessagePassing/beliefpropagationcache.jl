@@ -10,7 +10,7 @@ struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITens
     AbstractBeliefPropagationCache{V}
     network::N
     messages::Dictionary{NamedEdge, M}
-    contraction_sequences::Dictionary{Pair, Vector}
+    contraction_sequences::Dictionary{Pair, Tuple{Vector, Int}}
     edge_sequence::Vector
 end
 
@@ -27,7 +27,7 @@ graph(bp_cache::BeliefPropagationCache) = graph(network(bp_cache))
 function BeliefPropagationCache(network, messages, contraction_sequences)
     return BeliefPropagationCache(network, messages, contraction_sequences, forest_cover_edge_sequence(graph(network)))
 end
-BeliefPropagationCache(network, messages) = BeliefPropagationCache(network, messages, Dictionary{Pair, Vector}())
+BeliefPropagationCache(network, messages) = BeliefPropagationCache(network, messages, Dictionary{Pair, Tuple{Vector, Int}}())
 BeliefPropagationCache(network) = BeliefPropagationCache(network, default_messages())
 
 contraction_sequences(bp_cache::BeliefPropagationCache) = bp_cache.contraction_sequences
@@ -74,7 +74,9 @@ end
 function update_message!(
         message_update_alg::Algorithm, bp_cache::BeliefPropagationCache, edge::AbstractEdge
     )
-    return setmessage!(bp_cache, edge, updated_message(message_update_alg, bp_cache, edge))
+    m, (cache_key, sequence, n, seq_changed) = updated_message(message_update_alg, bp_cache, edge)
+    seq_changed && setcontractionsequence!(bp_cache, cache_key, sequence, n)
+    return setmessage!(bp_cache, edge, m)
 end
 
 #Edge sequence stuff
