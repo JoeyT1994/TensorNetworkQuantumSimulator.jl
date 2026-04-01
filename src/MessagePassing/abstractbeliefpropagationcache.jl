@@ -54,27 +54,13 @@ for f in [
     end
 end
 
-function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCache, vertex)
-    seq_cache = contraction_sequences(bp_cache)
-    isnothing(seq_cache) && return bp_cache
-    for key in collect(keys(seq_cache))
-        if first(key) == vertex
-            delete!(seq_cache, key)
-        end
-    end
-    return bp_cache
-end
-
 function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCache)
     seq_cache = contraction_sequences(bp_cache)
     !isnothing(seq_cache) && empty!(seq_cache)
     return bp_cache
 end
 
-function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex; invalidate_sequences = true)
-    if invalidate_sequences
-        invalidate_contraction_sequences!(bp_cache, vertex)
-    end
+function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex)
     setindex_preserve!(network(bp_cache), value, vertex)
     return bp_cache
 end
@@ -184,11 +170,12 @@ function updated_message(
     contract_list = ITensor[incoming_ms; state]
     cache_key = vertex => edge
     seq_cache = contraction_sequences(bp_cache)
+    seq_changed = false
     if haskey(seq_cache, cache_key)
         sequence = seq_cache[cache_key]
     else
         sequence = contraction_sequence(contract_list; alg = alg.kwargs.sequence_alg)
-        set!(seq_cache, cache_key, sequence)
+        seq_changed = true
     end
     updated_message = contract(contract_list; sequence)
 
@@ -199,7 +186,7 @@ function updated_message(
         end
     end
 
-    return updated_message
+    return updated_message, (cache_key, sequence, seq_changed)
 end
 
 function updated_message(
@@ -239,6 +226,7 @@ function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
         error("You need to specify a number of iterations for BP!")
     end
     bpc = copy(bpc)
+    invalidate_contraction_sequences!(bpc)
     for i in 1:alg.kwargs.maxiter
         diff = compute_error ? Ref(0.0) : nothing
         update_iteration!(alg, bpc, alg.kwargs.edge_sequence; (update_diff!) = diff)
@@ -249,6 +237,7 @@ function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
             break
         end
     end
+    invalidate_contraction_sequences!(bpc)
     return bpc
 end
 

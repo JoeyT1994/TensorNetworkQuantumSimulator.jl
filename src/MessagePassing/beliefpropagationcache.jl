@@ -74,7 +74,9 @@ end
 function update_message!(
         message_update_alg::Algorithm, bp_cache::BeliefPropagationCache, edge::AbstractEdge
     )
-    return setmessage!(bp_cache, edge, updated_message(message_update_alg, bp_cache, edge))
+    m, (cache_key, sequence, seq_changed) = updated_message(message_update_alg, bp_cache, edge)
+    seq_changed && set!(contraction_sequences(bp_cache), cache_key, sequence)
+    return setmessage!(bp_cache, edge, m)
 end
 
 #Edge sequence stuff

@@ -232,7 +232,8 @@ function update_partition!(bmps_cache::BoundaryMPSCache, seq::Vector)
     isempty(seq) && return bmps_cache
     alg = set_default_kwargs(Algorithm("contract", normalize = false), bmps_cache)
     for e in seq
-        m = updated_message(alg, bmps_cache, e)
+        m, (cache_key, sequence, seq_changed) = updated_message(alg, bmps_cache, e)
+        seq_changed && set!(contraction_sequences(bmps_cache), cache_key, sequence)
         setmessage!(bmps_cache, e, m)
     end
     return bmps_cache
@@ -309,7 +310,7 @@ function extracter(
         update_e::NamedEdge
     )
     message_update_alg = set_default_kwargs(Algorithm("contract"; normalize = false), bmps_cache)
-    m = updated_message(message_update_alg, bmps_cache, update_e)
+    m, _ = updated_message(message_update_alg, bmps_cache, update_e)
     return m
 end
 
@@ -329,7 +330,7 @@ function update_message!(
     switch_messages!(bmps_cache, pe)
     es = sorted_edges(bmps_cache, pe)
     g = partition_graph(bmps_cache, src(pe))
-    update_seq = vcat(es, es[(end - 1):-1:2])
+    update_seq = vcat(es, @view(es[(end - 1):-1:2]))
 
     init_gauge_seq = [(reverse(es[i]), reverse(es[i - 1])) for i in length(es):-1:2]
     init_update_seq = post_order_dfs_edges(g, src(first(update_seq)))

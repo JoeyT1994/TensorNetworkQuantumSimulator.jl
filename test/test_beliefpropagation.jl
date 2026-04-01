@@ -3,6 +3,7 @@ using ITensors: datatype, norm
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test
+const TNQS = TensorNetworkQuantumSimulator
 
 
 @testset "Test BP" begin
@@ -52,6 +53,20 @@ using Test: @testset, @test
         ρ_exact = reduced_density_matrix(ψ, vc; alg = "exact")
         @test norm(ρ_bp - ρ_exact) <= 10 * eps(real(eltype))
     end
+end
+
+@testset "Test contraction sequence cache clearing" begin
+    Random.seed!(456)
+    g = named_comb_tree((3, 3))
+
+    # Test that sequences are empty before update
+    ψ = random_tensornetworkstate(Float64, g; bond_dimension = 2)
+    bpc = BeliefPropagationCache(ψ)
+    @test isempty(TNQS.contraction_sequences(bpc))
+
+    # Test that sequences are cleared after update returns (only live during update)
+    bpc = update(bpc)
+    @test isempty(TNQS.contraction_sequences(bpc))
 end
 
 end
