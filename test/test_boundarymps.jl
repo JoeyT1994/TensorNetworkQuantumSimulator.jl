@@ -3,6 +3,7 @@ using ITensors: datatype, norm
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test
+const TNQS = TensorNetworkQuantumSimulator
 
 
 @testset "Test BoundaryMPS" begin
@@ -19,7 +20,9 @@ using Test: @testset, @test
         @test datatype(ψ_BMPS) == datatype(ψ)
         @test scalartype(ψ_BMPS) == scalartype(ψ)
 
+        @test isempty(TNQS.contraction_sequences(ψ_BMPS))
         ψ_BMPS = update(ψ_BMPS)
+        @test isempty(TNQS.contraction_sequences(ψ_BMPS))
         z_bmps = partitionfunction(ψ_BMPS)
         @test z_bmps ≈ contract(ψ; alg = "exact")
         @test z_bmps ≈ contract(ψ; alg = "boundarymps", mps_bond_dimension = 4)

@@ -3,6 +3,7 @@ using ITensors: datatype, norm
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test
+const TNQS = TensorNetworkQuantumSimulator
 
 
 @testset "Test BP" begin
@@ -57,7 +58,6 @@ end
 @testset "Test contraction sequence cache clearing" begin
     Random.seed!(456)
     g = named_comb_tree((3, 3))
-    TNQS = TensorNetworkQuantumSimulator
 
     # Test that sequences are empty before update
     ψ = random_tensornetworkstate(Float64, g; bond_dimension = 2)
