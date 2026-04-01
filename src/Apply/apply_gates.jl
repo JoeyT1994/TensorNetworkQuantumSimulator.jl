@@ -107,10 +107,7 @@ function apply_gate!(
     envs = length(v⃗) == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
 
     updated_tensors, s_values, err = simple_update(gate, network(ψ_bpc), v⃗; envs, apply_kwargs...)
-    invalidate_sequences = false
     if length(v⃗) == 2
-        old_bond_dim = dim(commonind(network(ψ_bpc)[v⃗[1]], network(ψ_bpc)[v⃗[2]]))
-        new_dim = commonind(updated_tensors[1], updated_tensors[2])
         v1, v2 = v⃗
         e = NamedEdge(v1 => v2)
         ind2 = commonind(s_values, first(updated_tensors))
@@ -120,11 +117,10 @@ function apply_gate!(
         s_values = denseblocks(s_values) * denseblocks(δuv)
         setmessage!(ψ_bpc, e, dag(s_values))
         setmessage!(ψ_bpc, reverse(e), s_values)
-        invalidate_sequences = dim(new_dim) != old_bond_dim 
     end
 
     for (i, v) in enumerate(v⃗)
-        setindex_preserve!(ψ_bpc, updated_tensors[i], v; invalidate_sequences)
+        setindex_preserve!(ψ_bpc, updated_tensors[i], v)
     end
 
     return ψ_bpc, err

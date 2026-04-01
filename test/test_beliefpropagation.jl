@@ -54,4 +54,19 @@ using Test: @testset, @test
     end
 end
 
+@testset "Test contraction sequence cache clearing" begin
+    Random.seed!(456)
+    g = named_comb_tree((3, 3))
+    TNQS = TensorNetworkQuantumSimulator
+
+    # Test that sequences are empty before update
+    ψ = random_tensornetworkstate(Float64, g; bond_dimension = 2)
+    bpc = BeliefPropagationCache(ψ)
+    @test isempty(TNQS.contraction_sequences(bpc))
+
+    # Test that sequences are cleared after update returns (only live during update)
+    bpc = update(bpc)
+    @test isempty(TNQS.contraction_sequences(bpc))
+end
+
 end

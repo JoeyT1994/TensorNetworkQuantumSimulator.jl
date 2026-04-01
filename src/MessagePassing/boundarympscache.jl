@@ -9,7 +9,7 @@ struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Ve
     supergraph::PartitionedGraph
     sorted_edges::Dictionary{PartitionEdge, Vector{NamedEdge}}
     mps_bond_dimension::Integer
-    contraction_sequences::Dictionary{Pair, Tuple{Vector, Int}}
+    contraction_sequences::Dictionary{Pair, Vector}
 end
 
 default_update_alg(bmps_cache::BoundaryMPSCache) = "bp"
@@ -163,7 +163,7 @@ function BoundaryMPSCache(
     sorted_es = Dictionary{PartitionEdge, Vector{NamedEdge}}(pes, Vector{NamedEdge}[sorted_edges(supergraph, pe) for pe in pes])
 
     messages = default_messages()
-    bmps_cache = BoundaryMPSCache(tn, messages, supergraph, sorted_es, mps_bond_dimension, Dictionary{Pair, Tuple{Vector, Int}}())
+    bmps_cache = BoundaryMPSCache(tn, messages, supergraph, sorted_es, mps_bond_dimension, Dictionary{Pair, Vector}())
     @assert is_correct_format(bmps_cache)
     set_messages && set_interpartition_messages!(bmps_cache, pes)
 
@@ -232,8 +232,7 @@ function update_partition!(bmps_cache::BoundaryMPSCache, seq::Vector)
     isempty(seq) && return bmps_cache
     alg = set_default_kwargs(Algorithm("contract", normalize = false), bmps_cache)
     for e in seq
-        m, (cache_key, sequence, n, seq_changed) = updated_message(alg, bmps_cache, e)
-        seq_changed && setcontractionsequence!(bmps_cache, cache_key, sequence, n)
+        m, _ = updated_message(alg, bmps_cache, e)
         setmessage!(bmps_cache, e, m)
     end
     return bmps_cache

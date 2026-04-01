@@ -173,7 +173,6 @@ function get_one_sample(
         kwargs...,
     )
     norm_bmps_cache = copy(norm_bmps_cache)
-    invalidate_contraction_sequences!(norm_bmps_cache)
     cutoff, maxdim = 1.0e-10, projected_mps_bond_dimension
 
     bit_string = Dictionary{keytype(vertices(network(norm_bmps_cache))), Int}()
@@ -249,7 +248,7 @@ function sample_partition!(
         q = ρ_diag[config]
         logq += log(q)
         Pψv = copy(network(norm_bmps_cache)[v]) * inv(sqrt(q)) * P
-        setindex_preserve!(norm_bmps_cache, Pψv, v; invalidate_sequences = false)
+        setindex_preserve!(norm_bmps_cache, Pψv, v)
         prev_v = v
     end
 
