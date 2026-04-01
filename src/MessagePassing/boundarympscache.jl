@@ -232,7 +232,8 @@ function update_partition!(bmps_cache::BoundaryMPSCache, seq::Vector)
     isempty(seq) && return bmps_cache
     alg = set_default_kwargs(Algorithm("contract", normalize = false), bmps_cache)
     for e in seq
-        m, _ = updated_message(alg, bmps_cache, e)
+        m, (cache_key, sequence, seq_changed) = updated_message(alg, bmps_cache, e)
+        seq_changed && set!(contraction_sequences(bmps_cache), cache_key, sequence)
         setmessage!(bmps_cache, e, m)
     end
     return bmps_cache
