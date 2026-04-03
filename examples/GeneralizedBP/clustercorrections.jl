@@ -32,7 +32,7 @@ function main(nx,ny)
         println("*****************************************")
         println("Testing for $g_str lattice with $(NG.nv(g)) vertices")
 	wmax = min(wmax, NG.nv(g))
-        ψ = TN.random_tensornetworkstate(ComplexF32, g, "S=1/2"; bond_dimension = χ)
+        ψ = TN.random_tensornetworkstate(ComplexF64, g, "S=1/2"; bond_dimension = χ)
 
         ψ = normalize(ψ; alg = "bp")
 	ψIψ = BeliefPropagationCache(ψ)
@@ -64,7 +64,33 @@ function main(nx,ny)
 	println("Cluster cumulant expansions: $(cc_wts), $([expects_cc[w] for w=cc_wts])")
         println("Exact expectation value is $expect_exact_v")
 
+
+	# free energy expansions
 	println("***********************************")
+        free_exact = real(log(TN.norm_sqr(ψ;alg="exact")))
+	free_bp = real(TN.free_energy(ψIψ))
+	clusters, egs, ig = TN.enumerate_clusters(g, wmax; min_deg = 2, min_v = smallest_loop_size)
+	cluster_wts, free_clusters = cluster_free(ψIψ,clusters, egs, ig)
+
+	regs = Dict()
+	cnums = Dict()
+
+	cc_wts = [smallest_loop_size:wmax;]
+	for w=cc_wts
+            regs[w],_,cnums[w]=TN.build_region_family(g,w)
+        end
+
+	free_cc = Dict()
+	for w=cc_wts
+    	    free_cc[w] = real(cc_free(ψIψ,regs[w], cnums[w]; logZbp = free_bp))
+        end
+
+        println("Bp free energy is $(free_bp)")
+	println("Cluster expansion free energy: $(cluster_wts), $(real.(free_clusters))")
+	println("Cluster cumulant expansions: $(cc_wts), $([free_cc[w] for w=cc_wts])")
+        println("Exact free energy is $free_exact")
+
+	println("***********************************************************")
 	u = neighbors(g, v)[1]
 	obs = (["Z","Z"], [u,v])
 	expect_exact_u = real(expect(ψ, ("Z", [u]); alg = "exact"))
