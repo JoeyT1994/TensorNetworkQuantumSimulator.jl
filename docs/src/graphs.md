@@ -58,4 +58,4 @@ ec = edge_color(g, 3)   # hexagonal / heavy-hex (max degree 3)
 ec = edge_color(g, 6)   # 3D cubic lattice (max degree 6)
 ```
 
-The second argument should be the maximum vertex degree (coordination number) of the graph. The returned `ec` is a vector of vectors, where each inner vector contains non-overlapping edges.
+The second argument is the number of colors to use. By [Vizing's theorem](https://en.wikipedia.org/wiki/Vizing%27s_theorem), any graph can be edge-colored with at most `Δ + 1` colors, where `Δ` is the maximum vertex degree. For **bipartite** graphs (e.g. square, hexagonal, and cubic lattices), `Δ` colors suffice — so the second argument should be the maximum degree. For non-bipartite graphs, you may need `Δ + 1`. The returned `ec` is a vector of vectors, where each inner vector contains non-overlapping edges.

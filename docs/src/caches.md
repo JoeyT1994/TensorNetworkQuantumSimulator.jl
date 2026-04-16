@@ -15,7 +15,7 @@ A `BeliefPropagationCache` holds:
 
 ### How belief propagation works
 
-BP is an iterative message-passing algorithm [[Tindall2023]](index.md#references) for tensor network contraction. On each iteration, every directed edge ``e = (u \to v)`` updates its message by contracting the local tensor(s) at vertex ``u`` with all incoming messages _except_ the one from ``v``:
+BP is an iterative message-passing algorithm [[Alkabetz2021]](index.md#references), [[Tindall2023]](index.md#references) for tensor network contraction. On each iteration, every directed edge ``e = (u \to v)`` updates its message by contracting the local tensor(s) at vertex ``u`` with all incoming messages _except_ the one from ``v``:
 
 ```math
 m_{u \to v}^{(t+1)} = \text{contract}\bigl(\text{factors}(u),\; \{m_{w \to u}^{(t)} : w \in \mathcal{N}(u) \setminus v\}\bigr)
@@ -74,7 +74,7 @@ The `update` function accepts several keyword arguments:
 sz = expect(ψ_bpc, [("Z", [(3, 3)])])
 ```
 
-This is favorable than passing a bare `TensorNetworkState` to `apply_gates` as taking the BP based expectation value after would require running BP.
+This is preferable to passing a bare `TensorNetworkState` to `apply_gates`, as taking the BP-based expectation value afterwards would otherwise require running BP from scratch.
 
 ### Symmetric gauge
 
@@ -97,7 +97,7 @@ The symmetric gauge transforms the tensors in the network so that all BP message
 A `BoundaryMPSCache` holds:
 
 1. **The tensor network** (`network`): a `TensorNetwork` or `TensorNetworkState` whose tensors live on the vertices of a graph.
-2. **Messages** (`messages`): a `Dictionary` mapping directed _partition_ edges to MPS tensors. Unlike BP messages (which are uncorrelated with each other --- i.e. they don't share common indices), boundary MPS messages do and the messages along a row / cikumn cut of the network connect together to form an impliit MPS.
+2. **Messages** (`messages`): a `Dictionary` mapping directed _partition_ edges to MPS tensors. Unlike BP messages (which are uncorrelated with each other — i.e. they don't share common indices), boundary MPS messages do and the messages along a row / column cut of the network connect together to form an implicit MPS.
 3. **A partitioned graph** (`supergraph`): a `PartitionedGraph` that encodes how the 2D lattice has been partitioned into rows or columns.
 4. **Sorted edges** (`sorted_edges`): for each partition edge, the ordered list of underlying graph edges, which determines the MPS structure and is reused for efficiency.
 5. **MPS bond dimension** (`mps_bond_dimension`): the maximum dimension of the index connecting up the message tensors into an implicit MPS, controlling the accuracy–cost tradeoff.

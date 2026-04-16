@@ -17,7 +17,7 @@ bitstrings = sample(ψ, 100; alg = "bp")
 
 ## Directly Certified Sampling
 
-Samples are drawn from an approximate distribution ``q(x)`` and for each sample ``\\langle x|\\psi\\rangle`` is calculated on-the-fly to estimate ``p(x)/q(x)``:
+Samples are drawn from an approximate distribution ``q(x)`` and for each sample ``\langle x|\psi\rangle`` is calculated on-the-fly to estimate ``p(x)/q(x)``:
 
 ```julia
 results = sample_directly_certified(ψ, 100;
@@ -70,7 +70,7 @@ sampled_sz = sum(r.poverq * (-2 * r.bitstring[v] + 1) for r in results) / sum(r.
 
 | Keyword | Description |
 |---------|-------------|
-| `norm_mps_bond_dimension` | Bond dimension of the boundary MPS messages for contracting ``\\langle\\psi|\\psi\\rangle``. |
+| `norm_mps_bond_dimension` | Bond dimension of the boundary MPS messages for contracting ``\langle\psi|\psi\rangle``. |
 | `projected_mps_bond_dimension` | Bond dimension for the projected MPS messages (default: `5 * maxvirtualdim(ψ)`). |
 | `norm_cache_message_update_kwargs` | Additional kwargs for the norm cache message update. |
 | `partition_by` | How to partition the graph (`"row"` by default). |

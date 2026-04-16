@@ -68,7 +68,7 @@ Under the hood, each two-site gate is applied via the _simple update_ algorithm 
 3. Apply the gate
 4. Perform an SVD and truncate the singular values to the desired bond dimension.
 5. Multiply the `Q` tensors back in and ungauge the state with the inverse square root messages.
-4. Update the BP messages (both directions) on the affected bond with the singular value matrix `S`.
+6. Update the BP messages (both directions) on the affected bond with the singular value matrix `S`.
 
 Single-site gates are applied by direct contraction with the site tensor (no truncation needed). If the gate is unitary the BP messages will be unchanged.
 

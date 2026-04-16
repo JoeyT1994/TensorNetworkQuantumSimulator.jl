@@ -45,18 +45,18 @@ function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetwor
             return error("Expected BeliefPropagationCache or TensorNetworkState for 'loop correction' algorithm, got $(typeof(tns))")
         end
 
-        if f ∈ ["normalize", "expect", "entanglement", "sample", "truncate", "rdm"]
+        if f ∈ ["normalize", "expect", "sample", "truncate", "rdm"]
             return error("Loop correction-based contraction not supported for this functionality yet")
         end
     elseif alg == "boundarymps"
         if !((tns isa BoundaryMPSCache) || (tns isa TensorNetworkState))
             return error("Expected BoundaryMPSCache or TensorNetworkState for 'boundarymps' algorithm, got $(typeof(tns))")
         end
-        if f ∈ ["normalize", "entanglement"]
+        if f ∈ ["normalize"]
             return error("boundarymps contraction not supported for this functionality yet")
         end
     elseif alg == "exact"
-        if f ∈ ["normalize", "entanglement", "sample", "truncate"]
+        if f ∈ ["normalize", "sample", "truncate"]
             return error("exact contraction not supported for this functionality yet")
         end
     elseif alg ∉ ["exact", "bp", "loopcorrections", "boundarymps"]

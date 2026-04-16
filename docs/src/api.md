@@ -69,12 +69,12 @@ fidelity
 optimise_p_q
 ```
 
-## All Other Documented Symbols
+## Custom Gate Definitions
 
-The following collects all remaining documented symbols not listed above.
-
-```@autodocs
-Modules = [TensorNetworkQuantumSimulator]
+```@docs
+ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"Rxxyy", ::ITensors.SiteTypes.SiteType"S=1/2", ::ITensors.Index, ::ITensors.Index)
+ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"Rxxyyzz", ::ITensors.SiteTypes.SiteType"S=1/2", ::ITensors.Index, ::ITensors.Index)
+ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"xx_plus_yy", ::ITensors.SiteTypes.SiteType"S=1/2")
 ```
 
 ## Index

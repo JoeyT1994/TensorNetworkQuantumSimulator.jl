@@ -14,6 +14,15 @@ makedocs(;
     ),
     pages = [
         "Home" => "index.md",
+        "Getting Started" => "getting_started.md",
+        "Graphs" => "graphs.md",
+        "Tensor Networks" => "states.md",
+        "Gate Application" => "gates.md",
+        "Expectation Values" => "expectation_values.md",
+        "Sampling" => "sampling.md",
+        "Caches" => "caches.md",
+        "Advanced Topics" => "advanced.md",
+        "API Reference" => "api.md",
     ],
 )
 

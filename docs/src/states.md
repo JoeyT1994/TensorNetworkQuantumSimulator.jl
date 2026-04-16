@@ -97,7 +97,7 @@ The built-in `siteinds(sitetype, g)` function supports:
 | `"S=1"` | `"qutrit"`, `"Spin1"` | 3 |
 | `"Pauli"` | | 4 |
 
-However simply defining your own indices and your own gate types, you can build whatever tensor network you wish.
+However, by simply defining your own indices and your own gate types, you can build whatever tensor network you wish.
 
 ## Shared Interface
 
@@ -112,9 +112,9 @@ tn[v]                 # directly access the ITensor at vertex v
 maxvirtualdim(tn)     # maximum bond dimension across all edges
 scalartype(tn)        # element type of the tensors (e.g. ComplexF64)
 datatype(tn)          # storage type (e.g. Array, CuArray)
-virtualinds(tn, e)    #Indices connecting the tensors at tn[src(e)], tn[dst(e)]
-setindex_preserve!(tn, t, v) #Set the tensor at vertex v to t. Assume graph structure unchanged
-istree(tn)            #Is the effective graph a tree. If yes, stick to BP exclusively as the contraction backend.
+virtualinds(tn, e)    # Indices connecting the tensors at tn[src(e)], tn[dst(e)]
+setindex_preserve!(tn, t, v) # Set the tensor at vertex v to t. Assumes graph structure unchanged
+istree(tn)            # Is the effective graph a tree? If yes, stick to BP exclusively as the contraction backend.
 ```
 
 Additionally, `TensorNetworkState` provides:

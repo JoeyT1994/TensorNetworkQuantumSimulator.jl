@@ -81,34 +81,3 @@ function symmetrize_and_bpnormalize(tns::TensorNetworkState; cache_update_kwargs
 end
 
 gauge_and_scale(tns::TensorNetworkState; kwargs...) = symmetrize_and_bpnormalize(tns::TensorNetworkState; kwargs...)
-
-function entanglement(
-        bp_cache::BeliefPropagationCache,
-        e::NamedEdge
-    )
-    ee = 0
-    m1, m2 = message(bp_cache, e), message(bp_cache, reverse(e))
-    edge_ind = only(virtualinds(bp_cache, e))
-    root_m1, root_m2 = first(pseudo_sqrt_inv_sqrt(m1)), first(pseudo_sqrt_inv_sqrt(m2))
-
-    S = root_m1 * replaceinds(root_m2, [edge_ind], [sim(edge_ind)])
-
-    _, S, _ = svd(S, edge_ind)
-
-    S = normalize(S)
-    for d in diag(S)
-        ee -= abs(d) >= eps(real(eltype(m1))) ? d * d * log(d * d) : 0
-    end
-    return abs(ee)
-end
-
-function entanglement(tns::TensorNetworkState, args...; alg)
-    algorithm_check(tns, "entanglement", alg)
-    return entanglement(Algorithm(alg), tns, args...)
-end
-
-function entanglement(alg::Algorithm"bp", tns::TensorNetworkState, e::NamedEdge; cache_update_kwargs = (; maxiter = 40))
-    bp_cache = BeliefPropagationCache(tns)
-    bp_cache = update(bp_cache)
-    return entanglement(bp_cache, e)
-end

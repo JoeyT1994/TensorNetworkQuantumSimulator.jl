@@ -45,4 +45,4 @@ The package supports arbitrary element types. Use the first argument of construc
 ψ_real = tensornetworkstate(Float64, v -> "↑", g, "S=1/2")     # real-valued
 ```
 
-Use `ComplexF32` or `Float32` for GPU workloads where single precision suffices. Use `ComplexF64` or `Float64` (or omit the type argument) for higher precision. Imaginary time simulations can all be done without `Complex` arithmetic. Real time simulations will require it (although the conversion will happen automatically if needed)
+Use `ComplexF32` or `Float32` for GPU workloads where single precision suffices. Use `ComplexF64` or `Float64` (or omit the type argument) for higher precision. Imaginary time simulations can all be done without `Complex` arithmetic. Real time simulations will require it (although the conversion will happen automatically if needed).
