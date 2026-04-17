@@ -10,22 +10,23 @@ A Julia package for simulating quantum circuits, quantum dynamics and equilibriu
 
 ## Features
 
-- **Tensor Networks of Arbitrary geometry**: 2D and 3D lattices (square, hexagonal, heavy-hex, Lieb, cubic), trees, and custom graphs via NamedGraphs.jl
-- **Custom Site Types**: Multiple spin and bosonic modes possible on each tensor in the network. Completely flexible over where the physical degrees of freedom live in your TN.
-- **Gate application**: Apply large numbers of gates seamlessly with control over truncation parameters via the simple update procedure using belief propagation computed environments. Extremely fast, simple and robust. Full update with boundary MPS environments also supported for planar graphs but, naturally, much slower so only useful if your bond dimensions are expected to remain low. Both real time and imaginary time evolution are supported.
-- **Expectation values**: Belief propagation, boundary MPS and exact contraction backends for computing expectation values of multi-point observables.
-- **Sampling**: Sample from planar tensor network states using Boundary MPS, with the mps bond dimension controlling the sample quality. Options to also compute the importance sample ratio $p(x)/q(x)$ to directly assess sample quality.
+- **Tensor Networks of Arbitrary Geometry**: 2D and 3D lattices (square, hexagonal, heavy-hex, Lieb, cubic), trees, and custom graphs via [NamedGraphs.jl](https://github.com/ITensor/NamedGraphs.jl).
+- **Custom Site Types**: Multiple spin and bosonic modes per tensor, with complete flexibility over where physical degrees of freedom live in the network.
+- **Gate Application**: Apply large circuits with full control over SVD truncation via the simple update algorithm with BP-computed environments. Fast, simple, and robust. Full update with boundary MPS environments is also supported for planar graphs. Both real-time and imaginary-time evolution are supported.
+- **Expectation Values**: Belief propagation, boundary MPS, and exact contraction backends for computing expectation values of multi-point observables.
+- **Entanglement Entropy**: Von Neumann and Rényi entropies from BP messages (per bond) or from reduced density matrices (per subsystem).
+- **Sampling**: Sample from planar tensor network states using boundary MPS, with the MPS bond dimension controlling sample quality. Options to compute the importance-sampling ratio ``p(x)/q(x)`` for direct sample quality certification.
 - **Operators**: Operator evolution in the Heisenberg picture and density matrix representation.
-- **GPU support**: GPU acceleration via CUDA.jl or Metal.jl. CUDA.jl highly recommend for large bond dimension simulations as it can provide dramatic speedups that determine whether a simulation is even viable or not.
-- **Arbitrary precision**: `Float32`, `Float64`, `ComplexF32`, `ComplexF64`, and other numeric types
+- **GPU Support**: GPU acceleration via CUDA.jl or Metal.jl. CUDA.jl is highly recommended for large bond dimension simulations, where it can provide dramatic speedups.
+- **Arbitrary Precision**: `Float32`, `Float64`, `ComplexF32`, `ComplexF64`, and other numeric types.
 
 ## Algorithm Overview
 
 | Algorithm | Keyword | Graph Requirement | Cost | Accuracy |
 |-----------|---------|-------------------|------|----------|
 | Belief propagation | `alg = "bp"` | Any | Low | Exact on trees, approximate on loopy graphs |
-| Boundary MPS | `alg = "boundarymps"` | Planar | Variable (generally scales cubically via `mps_bond_dimension`) | Controllably and will converge with increasing MPS bond dimension |
-| Loop corrections | `alg = "loopcorrections"` | Any | Moderate | Systematic corrections to BP, accurate when correlations are exponentially decaying  |
+| Boundary MPS | `alg = "boundarymps"` | Planar | Variable (scales cubically in `mps_bond_dimension`) | Controllably accurate, converges to exact with increasing MPS bond dimension |
+| Loop corrections | `alg = "loopcorrections"` | Any | Moderate | Systematic corrections to BP; accurate when correlations decay exponentially |
 | Exact contraction | `alg = "exact"` | Any (small systems only) | Exponential in system size | Exact |
 
 ## Installation
@@ -36,14 +37,15 @@ julia> using Pkg; Pkg.add("TensorNetworkQuantumSimulator")
 
 ## Documentation Outline
 
-- **[Getting Started](getting_started.md)**: A complete walkthrough from lattice definition to defining and running circuits to measurement
+- **[Getting Started](getting_started.md)**: A complete walkthrough from lattice definition to circuit construction, measurement, and sampling
 - **[Graphs](graphs.md)**: Defining lattice geometries and graph operations
 - **[Tensor Networks](states.md)**: `TensorNetwork` and `TensorNetworkState` types and their construction
 - **[Gate Application](gates.md)**: Building circuits and applying gates
 - **[Expectation Values](expectation_values.md)**: Computing observables, norms, and overlaps
+- **[Entanglement Entropy](entanglement.md)**: Von Neumann and Rényi entropies via BP and boundary MPS
 - **[Sampling](sampling.md)**: Drawing bitstring samples from a planar tensor network state with optional certification
 - **[Caches](caches.md)**: How the `BeliefPropagationCache` and `BoundaryMPSCache` work and why they matter
-- **[Advanced Topics](advanced.md)**: GPU support, loop corrections, precision control, etc
+- **[Advanced Topics](advanced.md)**: GPU support, loop corrections, and precision control
 - **[API Reference](api.md)**: Complete list of documented functions
 
 ## References

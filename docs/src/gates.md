@@ -57,15 +57,15 @@ apply_kwargs = (; maxdim = 10, cutoff = 1e-10, normalize_tensors = true)
 - `ψ_updated` is the updated state (or cache).
 - `errors` is a vector of truncation errors, one per gate.
 
-The product `prod(1 .- errors)` gives the approximate overall fidelity from applying the given gates.
+The product `prod(1 .- errors)` gives a lower bound on the fidelity accumulated across all gate applications.
 
 ## Simple Update Algorithm
 
 Under the hood, each two-site gate is applied via the _simple update_ algorithm [[Tindall2024]](index.md#references) [[Rudolph2025]](index.md#references):
 
-1. Gauge the state locally with the square roots of the BP environment messages
+1. Gauge the state locally using the square roots of the BP environment messages.
 2. Perform a QR decomposition to efficiently isolate the two `R` tensors.
-3. Apply the gate
+3. Apply the gate.
 4. Perform an SVD and truncate the singular values to the desired bond dimension.
 5. Multiply the `Q` tensors back in and ungauge the state with the inverse square root messages.
 6. Update the BP messages (both directions) on the affected bond with the singular value matrix `S`.

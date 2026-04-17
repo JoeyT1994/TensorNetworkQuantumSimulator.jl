@@ -1,6 +1,6 @@
 # Caches
 
-Two central data structures used for efficient tensor network contraction in TensorNetworkQuantumSimulator.jl are the `BeliefPropagationCache` and the `BoundaryMPSCache` which both subtype `AbstractBeliefPropagationCache`. Both wrap a tensor network together with auxiliary _message_ tensors that encode approximate information about the contraction of the rest of the network as seen from each edge. Understanding these caches — what they store, how they are updated, and why they matter — is key to getting the most out of the package as an advanced user.
+The two central data structures in TensorNetworkQuantumSimulator.jl are the `BeliefPropagationCache` and the `BoundaryMPSCache`, both subtypes of `AbstractBeliefPropagationCache`. Each wraps a tensor network together with auxiliary _message_ tensors that encode approximate environment information — the effective contribution of the rest of the network as seen from each bond. Understanding what these caches store, how they are updated, and when to use each is key to getting the most out of the package.
 
 ## Belief Propagation Cache
 
@@ -25,8 +25,7 @@ On a tree graph, BP converges in a single sweep (messages propagate from leaves 
 
 ### How the BP cache is used effectively 
 
-- **Gate application**: Wrapping your `TensorNetworkState` in a `BeliefPropagationCache` before calling `apply_gates` allows the cache to persist across Trotter steps and be used to perform intermediate operations such as measurements. If not, the `apply_gates` function will build the cache internally by wrapping your state, running the circuit and relevant BP updates, and then unwrapping it and pass the updated state back to you.
-The simple update algorithm uses the BP messages as approximate environments when performing SVD truncation after each two-site gate, and the cache is updated intelligently between non-overlapping groups of gates.
+- **Gate application**: Wrapping your `TensorNetworkState` in a `BeliefPropagationCache` before calling `apply_gates` allows the cache to persist across Trotter steps and supports intermediate measurements. If a bare state is passed instead, `apply_gates` constructs the cache internally, runs the circuit, and unwraps the state before returning. The simple update algorithm uses BP messages as approximate environments during SVD truncation, and the cache is refreshed automatically between groups of overlapping gates.
 - **Fast expectation values**: Once the messages have converged, computing ``\langle O \rangle`` only requires contracting the local tensors around the observable's support together with the relevant incoming messages — an operation whose cost is independent of system size and trivially parallelizable with a converged cache.
 - **As a prerequisite for other operations**: If a `TensorNetworkState` is wrapped in a `BoundaryMPSCache` it is, by default, first transformed into the symmetric gauge [[Tindall2023]](index.md#references) which is helpful for numerical stability.
 
@@ -110,7 +109,7 @@ The boundary MPS algorithm contracts a 2D tensor network by sweeping across the 
 The key steps are:
 
 1. **Partition** the 2D lattice into columns (or rows).
-2. **Initialize** boundary MPS message tensors on the the edges of the partition graph.
+2. **Initialize** boundary MPS message tensors on the edges of the partition graph.
 3. **Sweep** across columns / rows, updating each boundary MPS by contracting it with the local column tensors and compressing back to the target bond dimension.
 4. **Extract** expectation values by sandwiching the observable between left and right boundary MPS messages.
 
@@ -118,7 +117,7 @@ Because each sweep involves MPS operations (contraction + SVD truncation), the c
 
 ### When to use it
 
-- **Accurate expectation values on planar graphs**: Boundary MPS provides controllably accurate results on 2D lattices, converging to exact values as the MPS bond dimension increases. Use it when BP isn't accurate enough and you have a loop, correlated tensor network.
+- **Accurate expectation values on planar graphs**: Boundary MPS provides controllably accurate results on 2D lattices, converging to the exact answer as the MPS bond dimension increases. Use it when BP accuracy is insufficient and the graph is loopy and correlated.
 - **Sampling**: The `sample` function with `alg = "boundarymps"` uses a boundary MPS cache internally to compute conditional probabilities for sequential qubit projection.
 - **Benchmarking BP**: Compare BP and boundary MPS results to assess the quality of BP approximations on your specific problem.
 
@@ -161,7 +160,7 @@ sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 16, par
 | **Tuning parameter** | Number of iterations | MPS bond dimension |
 | **Best for** | Fast approximate results, gate application environments | High-accuracy measurements, sampling |
 
-In practice, a common workflow is to use BP for gate application (where speed matters and approximate environments suffice because you can compensate the BP approximation by cranking up the bond dimension) and boundary MPS for final measurements (where accuracy matters and you don't have a tree tensor network):
+In practice, a common workflow is to use BP for gate application — where speed matters and approximate environments suffice, since any approximation error can be compensated by increasing the bond dimension — and boundary MPS for final measurements, where accuracy is critical:
 
 ```julia
 # Fast gate application with BP
@@ -172,6 +171,6 @@ In practice, a common workflow is to use BP for gate application (where speed ma
 ψ = network(ψ_bpc)
 sz_bmps = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 20)
 
-#Compare to BP
+# Compare to BP
 sz_bp = expect(ψ_bpc, ("Z", (3, 3)))
 ```

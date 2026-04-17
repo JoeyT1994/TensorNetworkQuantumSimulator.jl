@@ -30,6 +30,14 @@ inner
 reduced_density_matrix
 ```
 
+## Entanglement Entropy
+
+```@docs
+renyi_entropy
+von_neumann_entanglement_entropy
+second_renyi_entanglement_entropy
+```
+
 ## Normalization and Truncation
 
 ```@docs
@@ -74,7 +82,6 @@ optimise_p_q
 ```@docs
 ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"Rxxyy", ::ITensors.SiteTypes.SiteType"S=1/2", ::ITensors.Index, ::ITensors.Index)
 ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"Rxxyyzz", ::ITensors.SiteTypes.SiteType"S=1/2", ::ITensors.Index, ::ITensors.Index)
-ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"xx_plus_yy", ::ITensors.SiteTypes.SiteType"S=1/2")
 ```
 
 ## Index

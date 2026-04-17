@@ -13,8 +13,7 @@ Observables are specified as tuples with 2 or 3 elements:
 (operator, vertices, coefficient)
 ```
 
-- **`operator`**: Either a single `String` or a `Vector{String}`. If a single string, its taken to represent either a single operator (if one vertex is passed) or a sequence of operators, the nth character in the string matching to the nth vertex passed in `vertices`.
-For example, `"ZZ"` on two vertices means ``Z \otimes Z``. If a `Vector{String}` is passed, each string is one operator per vertex, which is useful for multi-character operator names like `["Sx", "Sy"]`.
+- **`operator`**: Either a `String` or a `Vector{String}`. A single string is interpreted as a sequence of single-character operator names, one per vertex — e.g. `"ZZ"` on two vertices means ``Z \otimes Z``. A `Vector{String}` assigns one (possibly multi-character) operator per vertex, e.g. `["Sx", "Sy"]`.
 - **`vertices`**: A single vertex, a `Vector` of vertices, or a `NamedEdge` (which expands to its two endpoints). Vertices must match the vertex type of your graph (e.g. `(3, 3)` for a 2D grid) and align with the number of operators passed.
 - **`coefficient`** (optional): A scalar multiplier, defaults to `1`.
 
@@ -35,7 +34,7 @@ For example, `"ZZ"` on two vertices means ``Z \otimes Z``. If a `Vector{String}`
 ("Z", (3, 3), 0.5)
 ```
 
-To measure multiple observables at once, pass a `Vector` of such tuples. This is helpful when you don't have a cache defined so as to avoid internally building a cache with each call to `expect`.
+To measure multiple observables at once, pass a `Vector` of tuples. This avoids redundant cache construction when no cache is available — `expect` builds the cache once and evaluates all observables against it.
 
 ```julia
 observables = [("Z", [v]) for v in vertices(g)]

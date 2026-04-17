@@ -9,7 +9,7 @@ Draw bitstring samples from the probability distribution defined by the squared 
 bitstrings = sample(ψ, 100; alg = "boundarymps", norm_mps_bond_dimension = 10)
 ```
 
-BP-based sampling is also available for non-planar graphs but it will scale quadratically with system size (per sample) vs linearly:
+BP-based sampling is also available and works on non-planar graphs, but scales quadratically with system size per sample rather than linearly:
 
 ```julia
 bitstrings = sample(ψ, 100; alg = "bp")

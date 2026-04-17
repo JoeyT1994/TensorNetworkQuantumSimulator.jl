@@ -1,25 +1,25 @@
 # Tensor Networks
 
-TensorNetworkQuantumSimulator provides two core tensor network types `TensorNetworkState` and `TensorNetwork`, both subtypes of `AbstractTensorNetwork`. They share the same graph-based interface but differ in that the former is expected to have physical (site) indices and thus defines a wavefunction whilst the latter isn't and thus defines a scalar. See [Graphs](graphs.md) for how to define the underlying graph.
+TensorNetworkQuantumSimulator provides two core types, `TensorNetworkState` and `TensorNetwork`, both subtypes of `AbstractTensorNetwork`. They share the same graph-based interface but differ in that `TensorNetworkState` carries physical (site) indices — representing a quantum wavefunction ``|\psi\rangle`` — while `TensorNetwork` does not, representing a scalar quantity. See [Graphs](graphs.md) for how to define the underlying graph.
 
 ## TensorNetwork
 
-A `TensorNetwork` is the simpler of the two types: a collection of ITensors living on the vertices of a graph, connected by shared (virtual) indices along the graph's edges. Operationally it is expected that this tensor network represents a single `scalar`, i.e. if all tensors were contracted together you would get a single scalar value.
+A `TensorNetwork` is the simpler of the two types: a collection of ITensors living on the vertices of a graph, connected by shared (virtual) indices along the edges. Contracting all tensors produces a single scalar value.
 
 ```julia
 using TensorNetworkQuantumSimulator
 using ITensors: Index, random_itensor
 
-i,j = Index(2, "i"), Index(2, "j")
-t_a, t_b, t_c = random_itensor(i), random_itensor(i,j),random_itensor(j)
+i, j = Index(2, "i"), Index(2, "j")
+t_a, t_b, t_c = random_itensor(i), random_itensor(i, j), random_itensor(j)
 # Construct from a dictionary of tensors (graph is inferred from shared indices)
 tn = TensorNetwork(Dictionary(["a", "b", "c"], [t_a, t_b, t_c]))
 
-# Should return a scalar
+# Contracts to a scalar
 z = contract(tn; alg = "exact")
 
-# Random tensor network with connectivity specified by the graph and virtual index size specified bond dimension
-g = named_grid((3,3))
+# Random tensor network with graph-specified connectivity and given bond dimension
+g = named_grid((3, 3))
 tn = random_tensornetwork(Float64, g; bond_dimension = 4)
 
 # Should return a scalar
@@ -106,7 +106,7 @@ Both `TensorNetwork` and `TensorNetworkState` support useful operations for acce
 ```julia
 graph(tn)             # underlying NamedGraph
 vertices(tn)          # all vertices
-neighbors(tn, v)      # Neighboring vertices to v
+neighbors(tn, v)      # neighboring vertices of v
 edges(tn)             # all edges
 tn[v]                 # directly access the ITensor at vertex v
 maxvirtualdim(tn)     # maximum bond dimension across all edges

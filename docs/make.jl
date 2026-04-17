@@ -19,6 +19,7 @@ makedocs(;
         "Tensor Networks" => "states.md",
         "Gate Application" => "gates.md",
         "Expectation Values" => "expectation_values.md",
+        "Entanglement Entropy" => "entanglement.md",
         "Sampling" => "sampling.md",
         "Caches" => "caches.md",
         "Advanced Topics" => "advanced.md",

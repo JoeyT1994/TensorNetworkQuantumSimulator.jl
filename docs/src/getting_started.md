@@ -124,9 +124,9 @@ sz = expect(ψ_bpc, [("Z", [(3, 3)])])
 
 See the [examples/](https://github.com/JoeyT1994/TensorNetworkQuantumSimulator.jl/tree/main/examples) directory for complete worked examples:
 
-- **2D Ising dynamics** (`2dIsing_dynamics.jl`) -- time evolution on a square lattice
-- **3D Ising dynamics** (`3dIsing_dynamics.jl`) -- time evolution on a periodic 3D cubic lattice
-- **Heavy-hex Ising dynamics** (`heavyhexIsing_dynamics.jl`) -- evolution, measurement and sampling
-- **Heisenberg picture** (`2dIsing_dynamics_Heisenbergpicture.jl`) -- operator evolution in the Pauli basis
-- **Boundary MPS** (`boundarymps.jl`) -- comparing BP, boundary MPS and exact contraction
-- **Loop corrections** (`loopcorrections.jl`) -- improving BP norm estimates
+- **2D Ising dynamics** (`2dIsing_dynamics.jl`) — time evolution on a square lattice
+- **3D Ising dynamics** (`3dIsing_dynamics.jl`) — time evolution on a periodic 3D cubic lattice
+- **Heavy-hex Ising dynamics** (`heavyhexIsing_dynamics.jl`) — evolution, measurement, and sampling
+- **Heisenberg picture** (`2dIsing_dynamics_Heisenbergpicture.jl`) — operator evolution in the Pauli basis
+- **Boundary MPS** (`boundarymps.jl`) — comparing BP, boundary MPS, and exact contraction
+- **Loop corrections** (`loopcorrections.jl`) — improving BP norm estimates
