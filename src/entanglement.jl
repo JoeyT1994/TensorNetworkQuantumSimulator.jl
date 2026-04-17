@@ -81,6 +81,7 @@ function renyi_entropy(
     root_m2 = first(pseudo_sqrt_inv_sqrt(m2))
 
     ρ =(m1 * replaceind(root_m2, edge_ind', edge_ind''))* root_m2
+    ρ= replaceind(ρ, edge_ind'', edge_ind')
     return renyi_entropy(ρ; α)
 end
 
