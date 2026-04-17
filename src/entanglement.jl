@@ -1,15 +1,15 @@
 function renyi_entropy(ρ::AbstractMatrix, α::Real; normalize = true)
-    λs = eigvals(Hermitian(ρ))
     if normalize
-        λs /= sum(λs)
+        ρ = ρ / tr(ρ)
     end
-    filter!(>(0), λs)
+    λs = eigvals(Hermitian(ρ))
+    filter!(λ -> abs(λ) > 10*eps(real(eltype(λs))), λs)
     α == 1 && return -sum(p -> p * log(p), λs)  # von Neumann limit
     return log(sum(λs .^ α)) / (1 - α)
 end
 
 function matricize(a::ITensor, row_inds = filter(i -> plev(i) ==0, inds(a)))
-    col_inds = setdiff(inds(a), row_inds)
+    col_inds = prime.(row_inds)
     return ITensors.array(a * ITensors.combiner(row_inds) * ITensors.combiner(col_inds))
 end
 
@@ -44,7 +44,7 @@ end
 
 function renyi_entropy(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, verts::Vector; alg, α::Real, kwargs...)
     algorithm_check(ψ, "rdm", alg)
-    return renyi_entropy(reduced_density_matrix(ψ, verts; alg, normalize = false); normalize = true, α)
+    return renyi_entropy(reduced_density_matrix(ψ, verts; alg, normalize = false, kwargs...); normalize = true, α)
 end
 
 second_renyi_entanglement_entropy(args...; kwargs...) = renyi_entropy(args...; kwargs..., α = 2)

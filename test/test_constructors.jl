@@ -70,7 +70,9 @@ using Test: @testset, @test
     ψGHZ = ψ1 + ψ2
     @test ψGHZ isa TensorNetworkState
     @test maxvirtualdim(ψGHZ) == 2
+    v, vn = first(vertices(g)), first(neighbors(g, first(vertices(g))))
     @test von_neumann_entanglement_entropy(ψGHZ, first(edges(ψGHZ)); alg = "bp") ≈ log(2)
+    @test von_neumann_entanglement_entropy(ψGHZ, [v,vn]; alg = "boundarymps", mps_bond_dimension = 2) ≈ log(2)
 
 end
 
