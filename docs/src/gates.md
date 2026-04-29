@@ -2,7 +2,7 @@
 
 ## Building Circuits
 
-A circuit is a `Vector` of gates to be applied sequentially. Each gate is specified as a tuple `(gate_string, vertices, parameter)` or `(gate_string, vertices)` if no parameter is associated with that gate:
+A circuit is a `Vector` of gates to be applied sequentially. Each gate is specified as a tuple `(gate_string, vertices, parameter)` or `(gate_string, vertices)` if no parameter is associated with that gate. For gates that take more than one parameter (e.g. `"xx_plus_yy"`), pass a tuple: `(gate_string, vertices, (θ, β))`.
 
 ```julia
 layer = []
@@ -74,36 +74,88 @@ Single-site gates are applied by direct contraction with the site tensor (no tru
 
 ## Supported Gates
 
-All parameterised gates follow the Qiskit convention.
+All parameterised gates follow the qiskit convention. The canonical names below
+are case-sensitive; the **Alias** column gives the qiskit-style lowercase name
+that is also accepted, where a qiskit equivalent exists. Gates without a qiskit
+equivalent are marked `—`.
 
 ### One-qubit Gates
 
-| Gate | Parameter | Description |
-|------|-----------|-------------|
-| `"X"`, `"Y"`, `"Z"` | -- | Pauli gates |
-| `"H"` | -- | Hadamard |
-| `"P"` | phase | Phase gate |
-| `"Rx"`, `"Ry"`, `"Rz"` | angle | Pauli rotation |
-| `"CRx"`, `"CRy"`, `"CRz"` | angle | Controlled Pauli rotation (single-qubit part) |
+| Gate | Alias | Parameter | Description |
+|------|-------|-----------|-------------|
+| `"X"`, `"Y"`, `"Z"` | `"x"`, `"y"`, `"z"` | -- | Pauli gates |
+| `"H"` | `"h"` | -- | Hadamard |
+| `"P"` | `"p"` | phase | Phase gate |
+| `"Rx"`, `"Ry"`, `"Rz"` | `"rx"`, `"ry"`, `"rz"` | angle | Pauli rotation |
+| `"CRx"`, `"CRy"`, `"CRz"` | `"crx"`, `"cry"`, `"crz"` | angle | Controlled Pauli rotation (single-qubit part) |
 
 ### Two-qubit Gates
 
-| Gate | Parameter | Description |
-|------|-----------|-------------|
-| `"CNOT"`, `"CX"`, `"CY"` | -- | Controlled gates |
-| `"SWAP"`, `"iSWAP"`, `"√SWAP"`, `"√iSWAP"` | -- | Swap variants |
-| `"Rxx"`, `"Ryy"`, `"Rzz"` | angle | Pauli-pair rotations |
-| `"Rxxyy"`, `"Rxxyyzz"` | angle | Multi-Pauli rotations |
-| `"CPHASE"` | phase | Controlled phase |
+| Gate | Alias | Parameter | Description |
+|------|-------|-----------|-------------|
+| `"CNOT"`, `"CX"` | `"cnot"`, `"cx"` | -- | Controlled-X (qiskit name is `"cx"`; `"cnot"` is a convenience alias) |
+| `"CY"`, `"CZ"` | `"cy"`, `"cz"` | -- | Controlled-Y / Z |
+| `"SWAP"`, `"iSWAP"` | `"swap"`, `"iswap"` | -- | SWAP / iSWAP |
+| `"√SWAP"`, `"√iSWAP"` | — | -- | Square-root SWAP variants (no qiskit equivalent) |
+| `"Rxx"`, `"Ryy"`, `"Rzz"` | `"rxx"`, `"ryy"`, `"rzz"` | angle | Pauli-pair rotations |
+| `"Rxxyy"`, `"Rxxyyzz"` | — | angle | XX+YY and XX+YY+ZZ rotations (no qiskit equivalent) |
+| `"xx_plus_yy"` | (canonical) | (angle, phase) | XX+YY interaction with relative phase (qiskit `XXPlusYYGate`) |
+| `"CPHASE"` | `"cp"` | phase | Controlled phase (qiskit name is `"cp"`) |
 
 ### Custom Gates
 
-Custom gates can be defined by constructing the corresponding `ITensor` acting on the physical indices of the target qubits and directly passing to `apply_gates`:
+There are two paths for using a gate that isn't in the built-in registry, depending on whether the gate is one-off or reusable.
+
+#### Path 1: Pass an `ITensor` directly
+
+For a one-off gate, build the `ITensor` yourself from the physical site indices and pass it to `apply_gates`. No registration needed:
 
 ```julia
 s = siteinds(ψ)
 # Custom gates
-gate1 = ITensor(my_local_matrix, s[v1], s[v1])
+gate1 = ITensor(my_local_matrix, s[v1], s[v1]')
 gate2 = ITensor(my_nn_gate, s[v1], s[v2], s[v1]', s[v2]')
 ψ, errors = apply_gates([gate1, gate2], ψ; apply_kwargs)
 ```
+
+#### Path 2: Register a named gate
+
+For a gate you'll reuse repeatedly, register it once and then use the tuple form like any built-in. Two steps:
+
+1. Define the matrix as an `ITensors.op` method.
+2. Call [`register_gate!`](@ref) to tell the dispatcher which keyword arguments your `op` accepts.
+
+```julia
+using ITensors: op, OpName, SiteType, Index
+
+# 1. Define the matrix (the "physics" part)
+function ITensors.op(::OpName"FSim", ::SiteType"S=1/2", s1::Index, s2::Index;
+                     θ::Number, ϕ::Number)
+    # ... return a 4-leg ITensor ...
+end
+
+# 2. Register the dispatch info (the "name → kwargs" part)
+register_gate!("FSim"; paramkeys = (:θ, :ϕ))
+
+# 3. Use it in circuits like any built-in
+circuit = [("FSim", [v1, v2], (π/4, π/8))]
+ψ, _ = apply_gates(circuit, ψ)
+```
+
+The keyword arguments map as:
+
+- `paramkeys = (:θ, :ϕ)` — names of the kwargs your `op` expects, in the order they appear in the circuit-tuple parameter. For a single-parameter gate, use a 1-tuple like `(:θ,)`.
+- `opname = "FSim"` — defaults to the gate name; override if your circuit-level name should differ from the `OpName` your `op` uses.
+- `rescale = identity` — applied to the parameter(s) before forwarding to `op`. Useful when your `op` follows a different convention (e.g., the built-in `"Rxx"` uses `rescale = θ -> θ/2` to bridge our qiskit convention to ITensors').
+
+To add a qiskit-style alias for your gate (so e.g. `"fsim"` resolves to `"FSim"`), call [`register_alias!`](@ref):
+
+```julia
+register_alias!("fsim", "FSim")
+```
+
+!!! note "Persistence"
+    `register_gate!` and `register_alias!` mutate an in-memory dictionary and only persist for the current Julia session. To re-register on every startup, put the calls at the top of your script, or in your downstream package's `__init__()` function.
+
+!!! note "Built-ins are locked"
+    The gates listed in the tables above are protected: `register_gate!` and `unregister_gate!` both refuse to operate on a built-in name. You can freely add new gates and aliases, and overwrite gates you registered yourself, but the library's own canonical entries cannot be mutated through this API.

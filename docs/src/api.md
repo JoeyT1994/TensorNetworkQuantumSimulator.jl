@@ -22,6 +22,14 @@ simple_update
 full_update
 ```
 
+## Custom Gate Registration
+
+```@docs
+register_gate!
+register_alias!
+unregister_gate!
+```
+
 ## Expectation Values and Observables
 
 ```@docs
@@ -82,6 +90,7 @@ optimise_p_q
 ```@docs
 ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"Rxxyy", ::ITensors.SiteTypes.SiteType"S=1/2", ::ITensors.Index, ::ITensors.Index)
 ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"Rxxyyzz", ::ITensors.SiteTypes.SiteType"S=1/2", ::ITensors.Index, ::ITensors.Index)
+ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"xx_plus_yy", ::ITensors.SiteTypes.SiteType"S=1/2")
 ```
 
 ## Index
