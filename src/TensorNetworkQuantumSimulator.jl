@@ -29,6 +29,7 @@ include("inner.jl")
 include("normalize.jl")
 include("sampling.jl")
 include("symmetric_gauge.jl")
+include("entanglement.jl")
 include("truncate.jl")
 include("rdm.jl")
 
@@ -40,13 +41,15 @@ export
     degree,
     apply_gates,
     apply_circuit,
+    register_gate!,
+    register_alias!,
+    unregister_gate!,
     rem_vertex!,
     truncate,
     expect,
     is_tree,
     expect_boundarymps,
     expect_loopcorrect,
-    make_hermitian,
     ket_network,
     truncate,
     maxvirtualdim,
@@ -106,7 +109,8 @@ export
     nv,
     heavy_hexagonal_lattice,
     rescale,
-    entanglement,
+    von_neumann_entanglement_entropy,
+    second_renyi_entanglement_entropy,
     build_graph_from_circuit,
     reduced_density_matrix,
     rdm

@@ -45,18 +45,18 @@ function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetwor
             return error("Expected BeliefPropagationCache or TensorNetworkState for 'loop correction' algorithm, got $(typeof(tns))")
         end
 
-        if f ∈ ["normalize", "expect", "entanglement", "sample", "truncate", "rdm"]
+        if f ∈ ["normalize", "expect", "sample", "truncate", "rdm"]
             return error("Loop correction-based contraction not supported for this functionality yet")
         end
     elseif alg == "boundarymps"
         if !((tns isa BoundaryMPSCache) || (tns isa TensorNetworkState))
             return error("Expected BoundaryMPSCache or TensorNetworkState for 'boundarymps' algorithm, got $(typeof(tns))")
         end
-        if f ∈ ["normalize", "entanglement"]
+        if f ∈ ["normalize"]
             return error("boundarymps contraction not supported for this functionality yet")
         end
     elseif alg == "exact"
-        if f ∈ ["normalize", "entanglement", "sample", "truncate"]
+        if f ∈ ["normalize", "sample", "truncate"]
             return error("exact contraction not supported for this functionality yet")
         end
     elseif alg ∉ ["exact", "bp", "loopcorrections", "boundarymps"]
@@ -96,6 +96,29 @@ end
 
 function collect_vertices(es::Vector{<:NamedEdge}, g::NamedGraph)
     return reduce(vcat, [collect_vertices(e, g) for e in es])
+end
+
+# Levenshtein edit distance between two strings.
+function levenshtein(a::AbstractString, b::AbstractString)
+    av, bv = collect(a), collect(b)
+    m, n = length(av), length(bv)
+    m == 0 && return n
+    n == 0 && return m
+    prev = collect(0:n)
+    curr = zeros(Int, n + 1)
+    for i in 1:m
+        curr[1] = i
+        for j in 1:n
+            cost = av[i] == bv[j] ? 0 : 1
+            curr[j + 1] = min(
+                curr[j] + 1,        # insertion
+                prev[j + 1] + 1,    # deletion
+                prev[j] + cost,     # substitution
+            )
+        end
+        prev, curr = curr, prev
+    end
+    return prev[n + 1]
 end
 
 function collect_vertices(verts, g::NamedGraph)

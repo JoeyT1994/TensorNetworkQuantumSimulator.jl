@@ -1,8 +1,25 @@
 # TensorNetworkQuantumSimulator
 
+[![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/)
+
 A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks (TNs) of near-arbitrary geometry. Built on top of [ITensors](https://github.com/ITensor/ITensors.jl) and [NamedGraphs](https://github.com/ITensor/NamedGraphs.jl).
 
 The main workhorses of the simulation are _belief propagation_ (BP) and the _singular value decomposition_ for applying gates, and _BP_ or _boundary MPS_ for estimating expectation values and sampling.
+
+## Documentation
+
+Full documentation is available at **https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/**, covering:
+
+- [Getting Started](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/getting_started/) — complete tutorial from lattice definition to measurement
+- [Graphs](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/graphs/) — lattice constructors and graph utilities
+- [Tensor Networks](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/states/) — `TensorNetwork` and `TensorNetworkState` types
+- [Gate Application](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/gates/) — circuits, simple update, and supported gates
+- [Expectation Values](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/expectation_values/) — observables, norms, and reduced density matrices
+- [Entanglement Entropy](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/entanglement/) — von Neumann and Rényi entropies
+- [Sampling](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/sampling/) — bitstring sampling with optional certification
+- [Caches](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/caches/) — `BeliefPropagationCache` and `BoundaryMPSCache` in depth
+- [Advanced Topics](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/advanced/) — GPU support, loop corrections, precision control
+- [API Reference](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/api/) — complete function reference
 
 ## Installation
 

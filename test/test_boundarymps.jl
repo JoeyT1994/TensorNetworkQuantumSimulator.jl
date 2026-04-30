@@ -50,6 +50,12 @@ const TNQS = TensorNetworkQuantumSimulator
         ρ_exact = reduced_density_matrix(ψ, vs; alg = "exact")
         @test norm(ρ_bmps_1 - ρ_bmps_2) <= 10 * eps(real(eltype))
         @test norm(ρ_bmps_1 - ρ_exact) <= 10 * eps(real(eltype))
+
+        s_exact = von_neumann_entanglement_entropy(ψ, vs; alg = "exact")
+        s_bmps_1 = von_neumann_entanglement_entropy(ψ, vs; alg = "boundarymps", mps_bond_dimension = 4)
+        s_bmps_2 = TNQS.renyi_entropy(ρ_bmps_2; α = 1)
+        @test abs(s_bmps_1 - s_exact) <= 10 * eps(real(eltype))
+        @test abs(s_bmps_1 - s_bmps_2) <= 10 * eps(real(eltype))
     end
 end
 
