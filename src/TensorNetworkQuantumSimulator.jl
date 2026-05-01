@@ -113,5 +113,8 @@ export
     second_renyi_entanglement_entropy,
     build_graph_from_circuit,
     reduced_density_matrix,
-    rdm
+    rdm,
+    norm_factors,
+    toriccode_groundstate,
+    ising_partitionfunction
 end

@@ -9,7 +9,6 @@ A tensor network state defined on a graph with vertices of type `V`. Wraps a `Te
 - `tensornetwork::TensorNetwork{V}`: The underlying tensor network.
 - `siteinds::Dictionary{V, Vector{<:Index}}`: A dictionary mapping each vertex to its physical (site) indices.
 """
-#TODO: Make this show() nicely.
 struct TensorNetworkState{V} <: AbstractTensorNetwork{V}
     tensornetwork::TensorNetwork{V}
     siteinds::Dictionary{V, Vector{<:Index}}
@@ -67,7 +66,7 @@ function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Functi
     return factors
 end
 
-norm_factors(tns::TensorNetworkState, v) = norm_factors(tns, [v])
+norm_factors(tns::TensorNetworkState, v; kwargs...) = norm_factors(tns, [v]; kwargs...)
 bp_factors(tns::TensorNetworkState, v) = norm_factors(tns, v)
 
 function default_message(tns::TensorNetworkState, edge::AbstractEdge)
