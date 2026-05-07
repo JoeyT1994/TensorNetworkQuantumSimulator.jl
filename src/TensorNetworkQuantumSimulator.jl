@@ -98,6 +98,8 @@ export
     map_tensors!,
     rem_vertex!,
     rem_vertex,
+    src,
+    dst,
     normalize,
     QuadraticForm,
     BilinearForm,

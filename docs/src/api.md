@@ -7,11 +7,19 @@ CurrentModule = TensorNetworkQuantumSimulator
 ## Tensor Network States
 
 ```@docs
+TensorNetworkState
 tensornetworkstate
 random_tensornetworkstate
 zerostate
 paulitensornetworkstate
 identitytensornetworkstate
+toriccode_groundstate
+```
+
+## Classical Partition Functions
+
+```@docs
+ising_partitionfunction
 ```
 
 ## Gate Application

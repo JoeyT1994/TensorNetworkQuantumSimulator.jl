@@ -35,10 +35,21 @@ end
 identitytensornetworkstate(g::NamedGraph, s::Dictionary = siteinds("Pauli", g)) = identitytensornetworkstate(Float64, g, s)
 
 """
-    toriccode_ground_state(n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n,n); periodic = true)))
-    
-Tensor network of bond dimension 2 corresponding to the ground state of the Toric Code on an nxn Torus. If passing your own siteinds
-they should have a single qubit index for each vertex of a periodic n x n grid.
+    toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n, n); periodic = true)))
+
+Construct an exact bond-dimension-2 tensor network state for the ground state of
+Kitaev's toric code on an `n × n` torus. The state lives on a periodic `n × n`
+square lattice with one `S=1/2` site per vertex.
+
+If passing your own `siteinds`, they must have a single qubit index per vertex
+of a periodic `n × n` named grid.
+
+# Arguments
+- `n`: linear size of the torus (so the lattice has `n^2` sites).
+- `s`: site indices keyed by vertex of the periodic grid. Defaults to a fresh
+  `S=1/2` site for each vertex.
+
+Returns a [`TensorNetworkState`](@ref) of bond dimension 2.
 """
 function toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n,n); periodic = true)))
     g = named_grid((n,n); periodic = true)
@@ -76,8 +87,22 @@ end
 """
     ising_partitionfunction(g::NamedGraph, β::Real; Js::Dictionary = Dictionary(edges(g), [1.0 for e in edges(g)]))
 
-Tensor network of bond dimension 2 whose contraction represents the partition function of the classical Ising model at inv. temp beta on the given graph.
-Accepts a dictionary of couplings if one wishes to have anisotropic interactions.
+Construct a bond-dimension-2 tensor network whose full contraction equals the
+partition function ``Z(β) = \\sum_{\\{σ\\}} \\exp(β \\sum_{(u, v)} J_{uv} σ_u σ_v)``
+of the classical Ising model on graph `g` at inverse temperature `β`.
+
+# Arguments
+- `g`: lattice graph. One tensor is placed per vertex.
+- `β`: inverse temperature.
+
+# Keyword Arguments
+- `Js`: dictionary of edge couplings, keyed by `edges(g)`. Defaults to uniform
+  ferromagnetic couplings (`J_e = 1.0` on every edge). Negative entries are
+  promoted to complex internally so the symmetric square-root factorisation of
+  the Boltzmann weight remains valid.
+
+Returns a `TensorNetwork` (not a `TensorNetworkState`); contract it to obtain
+``Z(β)``.
 """
 function ising_partitionfunction(g::NamedGraph, β::Real; Js::Dictionary = Dictionary(edges(g), [1.0 for e in edges(g)]))
     links = Dictionary(edges(g), [Index(2, "e$(src(e))_$(dst(e))") for e in edges(g)])
