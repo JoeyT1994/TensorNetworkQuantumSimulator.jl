@@ -28,6 +28,19 @@ z = contract(tn; alg = "exact")
 
 `TensorNetwork` is a useful type for representing objects like classical partition functions or the solutions to counting problems where you don't need the concept of a physical site index.
 
+The library ships with a built-in constructor for the classical Ising-model partition function on an arbitrary graph. Contracting it yields ``Z(β) = \sum_{\{σ\}} \exp(β \sum_{(u,v)} J_{uv}\, σ_u σ_v)``:
+
+```julia
+g = named_grid((4, 4))
+β = 0.4
+Z_tn = ising_partitionfunction(g, β)              # uniform J = 1
+Z = contract(Z_tn; alg = "bp")                    # approximate via belief propagation
+
+# Anisotropic couplings: pass a Dictionary keyed by edges
+Js = Dictionary(edges(g), [isodd(src(e)[1]) ? 1.0 : 0.5 for e in edges(g)])
+Z_tn = ising_partitionfunction(g, β; Js)
+```
+
 ## TensorNetworkState
 
 A `TensorNetworkState` extends `TensorNetwork` by additionally storing **site indices** — a vector of them per vertex — that represent the physical (local) degrees of freedom. This is the type we expect users to use most often, as it represents a quantum state ``|\psi\rangle`` on a lattice. The typical use case is one site index per vertex, but there is full flexibility here.
@@ -63,6 +76,21 @@ s = siteinds("S=1/2", g)
 ```
 
 Random states are useful for testing and benchmarking.
+
+### Toric Code Ground State
+
+For benchmarking and exploration of topologically ordered states, the library provides an exact bond-dimension-2 representation of Kitaev's toric code ground state on an `n × n` torus:
+
+```julia
+ψ = toriccode_groundstate(4)                      # 4 × 4 torus, S=1/2 sites by default
+
+# Or supply your own site indices (one qubit per vertex of a periodic n × n grid)
+g = named_grid((4, 4); periodic = true)
+s = siteinds("S=1/2", g)
+ψ = toriccode_groundstate(4, s)
+```
+
+The returned state lives on a periodic square lattice (qubits on vertices, not edges) and has bond dimension 2 by construction.
 
 ## More Complex Site Index Structures
 

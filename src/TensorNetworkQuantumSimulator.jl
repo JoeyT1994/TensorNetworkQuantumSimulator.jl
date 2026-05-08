@@ -98,6 +98,8 @@ export
     map_tensors!,
     rem_vertex!,
     rem_vertex,
+    src,
+    dst,
     normalize,
     QuadraticForm,
     BilinearForm,
@@ -113,5 +115,8 @@ export
     second_renyi_entanglement_entropy,
     build_graph_from_circuit,
     reduced_density_matrix,
-    rdm
+    rdm,
+    norm_factors,
+    toriccode_groundstate,
+    ising_partitionfunction
 end

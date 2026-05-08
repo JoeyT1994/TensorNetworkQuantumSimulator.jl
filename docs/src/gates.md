@@ -61,7 +61,7 @@ The product `prod(1 .- errors)` gives a lower bound on the fidelity accumulated 
 
 ## Simple Update Algorithm
 
-Under the hood, each two-site gate is applied via the _simple update_ algorithm [[Tindall2024]](index.md#references) [[Rudolph2025]](index.md#references):
+Under the hood, each two-site gate is applied via the _simple update_ algorithm [[Jiang2008]](index.md#references) [[Tindall2024]](index.md#references):
 
 1. Gauge the state locally using the square roots of the BP environment messages.
 2. Perform a QR decomposition to efficiently isolate the two `R` tensors.
