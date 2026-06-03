@@ -12,6 +12,7 @@ Base.copy(qf::QuadraticForm) = QuadraticForm(copy(qf.ket), copy(qf.operator))
 #Forward onto the ket
 for f in [
         :(graph),
+        :(tensortype),
         :(ITensors.datatype),
         :(ITensors.NDTensors.scalartype),
         :(NamedGraphs.edgeinduced_subgraphs_no_leaves),

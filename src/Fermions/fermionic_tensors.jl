@@ -1,3 +1,5 @@
+using ITensors.NDTensors: NDTensors
+
 """
     random_even_itensor(eltype, is::Vector{<:Index}, grading)
 
@@ -203,6 +205,14 @@ function ITensors.contract(A::FermionicITensor, B::FermionicITensor)
 end
 
 Base.:*(ft1::FermionicITensor, ft2::FermionicITensor) = ITensors.contract(ft1, ft2)
+function Base.:/(ft::FermionicITensor, λ::Number)
+    t = ft.tensor / λ
+    return FermionicITensor(t, ft.order, ft.dirs, ft.grading)
+end
+function Base.:*(ft::FermionicITensor, λ::Number)
+    t = ft.tensor * λ
+    return FermionicITensor(t, ft.order, ft.dirs, ft.grading)
+end
 
 # Walk the nested binary contraction tree `seq` (integer indices into `fts`),
 # folding pairs together with `contract`. Because `contract` is contraction-order
@@ -230,5 +240,27 @@ function Adapt.adapt_structure(to, ft::FermionicITensor)
     return FermionicITensor(t, ft.order, ft.dirs, ft.grading)
 end
 
+function NDTensors.scalartype(ft::FermionicITensor)
+    return scalartype(ft.tensor)
+end
+
+function ITensors.datatype(ft::FermionicITensor)
+    return ITensors.datatype(ft.tensor)
+end
+
+function ITensors.sum(ft::FermionicITensor)
+    return ITensors.sum(ft.tensor)
+end
+
+function ITensors.norm(ft::FermionicITensor)
+    return ITensors.norm(ft.tensor)
+end
+
+
 const Tensor = Union{ITensor, FermionicITensor}
 
+function message_diff(message_a::FermionicITensor, message_b::FermionicITensor)
+    message_b_inds = inds(message_b)
+    p_message_a = ITensors.permute(message_a, message_b_inds)
+    return message_diff(p_message_a.tensor, message_b.tensor)
+end

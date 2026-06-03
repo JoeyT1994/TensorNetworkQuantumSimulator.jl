@@ -6,7 +6,7 @@ abstract type AbstractBeliefPropagationCache{V} <: AbstractNamedGraph{V} end
 #Interface
 messages(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 contraction_sequences(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
-default_messages() = Dictionary{NamedEdge, Union{ITensor, Vector{ITensor}}}()
+default_messages() = Dictionary{NamedEdge, Union{ITensor, Vector{ITensor}, FermionicITensor, Vector{FermionicITensor}}}()
 
 function rescale_messages!(
         bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge}; kwargs...
@@ -24,7 +24,7 @@ function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
     state = bp_factors(bp_cache, vertex)
     contract_list = [state; incoming_ms]
     sequence = contraction_sequence(contract_list; alg = "optimal")
-    return contract(contract_list; sequence)[]
+    return scalar(contract(contract_list; sequence))
 end
 
 function edge_scalar(
@@ -90,7 +90,7 @@ function deletemessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdg
     return bp_cache
 end
 
-function setmessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdge, message::Union{ITensor, Vector{<:ITensor}})
+function setmessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdge, message::Union{ITensor, FermionicITensor, Vector{ITensor}, Vector{FermionicITensor}})
     ms = messages(bp_cache)
     set!(ms, e, message)
     return bp_cache
@@ -103,10 +103,10 @@ end
 
 function messages(bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge})
     isempty(edges) && return ITensor[]
-    ms = ITensor[]
+    ms = tensortype(network(bp_cache))[]
     for e in edges
         m = message(bp_cache, e)
-        if m isa ITensor
+        if m isa ITensor || m isa FermionicITensor
             push!(ms, m)
         else
             append!(ms, m)
@@ -167,7 +167,7 @@ function updated_message(
         bp_cache, vertex; ignore_edges = (reverse(edge),)
     )
     state = bp_factors(bp_cache, vertex)
-    contract_list = ITensor[incoming_ms; state]
+    contract_list = typeof(first(state))[incoming_ms; state]
     cache_key = vertex => edge
     seq_cache = contraction_sequences(bp_cache)
     seq_changed = false

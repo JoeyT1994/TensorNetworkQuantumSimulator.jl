@@ -6,7 +6,7 @@ using ITensors.NDTensors: scalartype
 using LinearAlgebra: normalize
 
 #TODO: Make this show() nicely.
-struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Vector{ITensor}}} <:
+struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, FermionicITensor, Vector{ITensor}, Vector{FermionicITensor}}} <:
     AbstractBeliefPropagationCache{V}
     network::N
     messages::Dictionary{NamedEdge, M}
@@ -20,6 +20,8 @@ function message_diff(message_a::ITensor, message_b::ITensor)
     return 1 - f
 end
 
+#TODO: Make work for fermions
+
 messages(bp_cache::BeliefPropagationCache) = bp_cache.messages
 network(bp_cache::BeliefPropagationCache) = bp_cache.network
 graph(bp_cache::BeliefPropagationCache) = graph(network(bp_cache))
@@ -29,9 +31,6 @@ function BeliefPropagationCache(network, messages, contraction_sequences)
 end
 BeliefPropagationCache(network, messages) = BeliefPropagationCache(network, messages, Dictionary{Pair, Vector}())
 function BeliefPropagationCache(network)
-    if network isa AbstractTensorNetwork && is_fermionic(network)
-        error("Belief propagation is not yet supported for fermionic tensor network states; use alg=\"exact\".")
-    end
     return BeliefPropagationCache(network, default_messages())
 end
 
@@ -50,7 +49,7 @@ function set_edge_sequence(bp_cache::BeliefPropagationCache, edge_sequence::Vect
 end
 
 function edge_scalar(bp_cache::BeliefPropagationCache, edge::AbstractEdge)
-    return (message(bp_cache, edge) * message(bp_cache, reverse(edge)))[]
+    return scalar((message(bp_cache, edge) * message(bp_cache, reverse(edge))))
 end
 
 #Algorithmic defaults
@@ -106,14 +105,14 @@ function rescale_vertices!(
 
     for v in vertices
         vn = vertex_scalar(bpc, v)
-        s = isreal(vn) ? sign(vn) : one(vn)
         if tn isa TensorNetworkState
-            setindex_preserve!(tn, tn[v] * s * inv(sqrt(vn)), v)
+            λ = isreal(vn) ? inv(sqrt(abs(vn))) : inv(sqrt(vn))
         elseif tn isa TensorNetwork
-            setindex_preserve!(tn, tn[v] * s * inv(vn), v)
+            λ = inv(vn)
         else
             error("Don't know how to rescale the vertices of this type")
         end
+        setindex_preserve!(tn, tn[v] * λ, v)
     end
 
     return bpc
@@ -144,7 +143,7 @@ function rescale_messages!(bp_cache::BeliefPropagationCache, edges::Vector{<:Abs
     ms = messages(bp_cache)
     for e in edges
         me, mer = normalize(message(bp_cache, e)), normalize(message(bp_cache, reverse(e)))
-        n = (me * mer)[]
+        n = scalar((me * mer))
         if isreal(n)
             me *= sign(n)
             n *= sign(n)

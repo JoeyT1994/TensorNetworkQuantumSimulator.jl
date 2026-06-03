@@ -13,6 +13,7 @@ Base.copy(blf::BilinearForm) = BilinearForm(copy(blf.ket), copy(blf.operator), c
 #Forward onto the ket
 for f in [
         :(graph),
+        :(tensortype),
         :(ITensors.datatype),
         :(ITensors.NDTensors.scalartype),
         :(NamedGraphs.edgeinduced_subgraphs_no_leaves),

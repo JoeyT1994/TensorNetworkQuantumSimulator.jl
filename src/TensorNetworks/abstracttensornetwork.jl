@@ -38,7 +38,7 @@ function ITensors.uniqueinds(tn::AbstractTensorNetwork, v)
     return is
 end
 
-function setindex_preserve!(tn::AbstractTensorNetwork, value::ITensor, vertex)
+function setindex_preserve!(tn::AbstractTensorNetwork, value::Tensor, vertex)
     tensors(tn)[vertex] = value
     return tn
 end
@@ -56,6 +56,8 @@ end
 function ITensors.datatype(tn::AbstractTensorNetwork)
     return mapreduce(v -> ITensors.datatype(tn[v]), promote_type, vertices(tn))
 end
+
+tensortype(tn::AbstractTensorNetwork) = typeof(tn[first(vertices(tn))])
 
 function map_tensors!(f::Function, tn::AbstractTensorNetwork)
     for v in vertices(tn)

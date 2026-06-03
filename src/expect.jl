@@ -76,7 +76,7 @@ function expect(
     ψIψ_tensors = norm_factors(network(cache), steiner_vs)
     append!(ψIψ_tensors, incoming_ms)
     denom_seq = contraction_sequence(ψIψ_tensors; alg = "optimal", prune_tensors = true)
-    denom = contract(ψIψ_tensors; sequence = denom_seq)[]
+    denom = scalar(contract(ψIψ_tensors; sequence = denom_seq))
 
     op_dict = Dict(zip(obs_vs, op_strings))
     op_string_f = v -> get(op_dict, v, "I")
@@ -85,7 +85,7 @@ function expect(
     ψOψ_tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
     append!(ψOψ_tensors, incoming_ms)
     numer_seq = contraction_sequence(ψOψ_tensors; alg = "optimal", prune_tensors = true)
-    numer = contract(ψOψ_tensors; sequence = numer_seq)[]
+    numer = scalar(contract(ψOψ_tensors; sequence = numer_seq))
 
     return coeff * numer / denom
 end

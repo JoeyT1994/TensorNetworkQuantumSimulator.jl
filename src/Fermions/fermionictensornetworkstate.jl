@@ -16,6 +16,10 @@ function grading(ψ::TensorNetworkState, v)
     error("Tensor is not fermionic and so doesn't have grading")
 end
 
+function grading(ψ::TensorNetworkState, e::NamedEdge)
+    return grading(ψ, src(e))[virtualind(ψ, e)]
+end
+
 grading(ψ::TensorNetworkState) = reduce(merge, [grading(ψ, v) for v in vertices(ψ)])
 
 # Convenience: the per-vertex FermionicITensor is just the underlying tensor.
@@ -129,7 +133,7 @@ function fermionic_norm_factors(ψ::TensorNetworkState, verts::Vector; op_string
         push!(factors, ket, dag(ket, keep))
         op_here || continue
         s = only(siteinds(ψ, v))
-        dim(s) == 2 || error("Fermionic measurement currently supports spinless (dimension-2) sites only.")
+        (dim(s) == 2 || dim(s) == 4) || error("Fermionic measurement currently supports spinless (dimension-2) or spinful (dimension-4) sites only.")
         sgr = ket.grading[s]
         # A pair of ODD factors (e.g. a hopping c_i† c_j) shares the dummy `d`; each carries
         # it with the arrow set by `odd_op_tensor` (creation = bra, annihilation = ket), so

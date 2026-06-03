@@ -79,7 +79,11 @@ bp_factors(tns::TensorNetworkState, v) = norm_factors(tns, v)
 
 function default_message(tns::TensorNetworkState, edge::AbstractEdge)
     linds = virtualinds(tns, edge)
-    return adapt(datatype(tns))(denseblocks(delta(vcat(linds, prime(dag(linds))))))
+    if !is_fermionic(tns)
+        return adapt(datatype(tns))(denseblocks(delta(vcat(linds, prime(dag(linds))))))
+    else
+        return adapt(datatype(tns))(even_op_tensor(only(linds), "I", grading(tns, edge)))
+    end
 end
 
 """

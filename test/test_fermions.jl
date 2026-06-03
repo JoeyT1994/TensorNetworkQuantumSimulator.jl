@@ -214,7 +214,7 @@ end
     end
 
     @testset "expect vs Jordan-Wigner ED ($name)" for (name, g) in
-        ("chain" => named_grid((4, 1)), "grid2x2" => named_grid((2, 2)), "grid2x3" => named_grid((2, 3)))
+        ("chain" => named_grid((4, 1)), "comb3x3" => named_comb_tree((3,3)), "grid2x2" => named_grid((2, 2)), "grid2x3" => named_grid((2, 3)))
         Random.seed!(2468)
         s = siteinds("fermion", g)
         ψ = random_fermionic_tensornetworkstate(ComplexF64, g, s; bond_dimension = 2)
@@ -229,12 +229,18 @@ end
         pos = Dict(v => findfirst(==(only(siteinds(ψ, v))), modes) for v in vs)
 
         nrm = real(ψvec' * ψvec)
-        @test norm_sqr(ψ) ≈ nrm
+        @test norm_sqr(ψ; alg = "exact") ≈ nrm
+        if is_tree(g)
+            @test norm_sqr(ψ; alg = "bp") ≈ nrm
+        end
 
         # ⟨N_v⟩ (even operator)
         for v in vs
             ed = (ψvec' * (num[pos[v]] * ψvec)) / nrm
             @test expect(ψ, ("N", [v]); alg = "exact") ≈ ed
+            if is_tree(g)
+                @test expect(ψ, ("N", [v]); alg = "exact") ≈ expect(ψ, ("N", [v]); alg = "bp")
+            end
         end
 
         # ⟨c_i† c_j⟩ hopping (odd pair -> string dummy bond)
@@ -242,6 +248,9 @@ end
             i == j && continue
             ed = (ψvec' * (cdag[pos[i]] * (cann[pos[j]] * ψvec))) / nrm
             @test expect(ψ, (["Cdag", "C"], [i, j]); alg = "exact") ≈ ed
+            if is_tree(g)
+                @test expect(ψ, (["Cdag", "C"], [i, j]); alg = "exact") ≈ expect(ψ, (["Cdag", "C"], [i, j]); alg = "bp")
+            end
         end
 
         # single odd operator: parity-forbidden ⇒ ⟨O⟩ = 0 (no error).

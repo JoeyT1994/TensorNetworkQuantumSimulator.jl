@@ -3,7 +3,7 @@ using NamedGraphs: add_edges!
 using SplitApplyCombine: group
 
 #TODO: Make this show() nicely.
-struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Vector{<:ITensor}}} <: AbstractBeliefPropagationCache{V}
+struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, FermionicITensor, Vector{<:ITensor}, Vector{<:FermionicITensor}}} <: AbstractBeliefPropagationCache{V}
     network::N
     messages::Dictionary{NamedEdge, M}
     supergraph::PartitionedGraph
