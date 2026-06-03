@@ -4,6 +4,7 @@ module TensorNetworkQuantumSimulator
 include("imports.jl")
 
 include("siteinds.jl")
+include("Fermions/fermionic_tensors.jl")
 include("TensorNetworks/abstracttensornetwork.jl")
 include("TensorNetworks/tensornetwork.jl")
 include("TensorNetworks/tensornetworkstate.jl")
@@ -34,9 +35,7 @@ include("truncate.jl")
 include("rdm.jl")
 
 include("Fermions/ops.jl")
-include("Fermions/fermionic_tensors.jl")
 include("Fermions/fermionictensornetworkstate.jl")
-include("Fermions/observables.jl")
 
 export
     vertices,
@@ -65,12 +64,12 @@ export
     TensorNetworkState,
     tensornetworkstate,
     random_tensornetworkstate,
-    FermionicTensorNetworkState,
     random_fermionic_tensornetworkstate,
-    FermionicTensor,
-    fermionic_contract,
-    fermionic_transpose,
-    fermionic_dag,
+    FermionicITensor,
+    is_fermionic,
+    contract,
+    permute,
+    dag,
     BeliefPropagationCache,
     rescale!,
     message,

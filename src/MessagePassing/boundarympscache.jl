@@ -147,6 +147,8 @@ function BoundaryMPSCache(
         gauge_state = false,
         set_messages = true,
     )
+    tn isa AbstractTensorNetwork && is_fermionic(tn) &&
+        error("Boundary MPS is not yet supported for fermionic tensor network states; use alg=\"exact\".")
     grouping_function = partition_by == "row" ? v -> first(v) : v -> last(v)
     group_sorting_function = partition_by == "row" ? v -> last(v) : v -> first(v)
 

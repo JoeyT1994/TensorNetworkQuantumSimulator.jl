@@ -36,6 +36,9 @@ end
 
 #Function for checking the correct algorithm is being used for the given cache type and functionality
 function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState}, f::String, alg)
+    if tns isa TensorNetworkState && is_fermionic(tns) && alg != "exact"
+        return error("Only alg=\"exact\" is currently supported for fermionic tensor network states.")
+    end
     if alg == "bp"
         if !((tns isa BeliefPropagationCache) || (tns isa TensorNetworkState))
             return error("Expected BeliefPropagationCache or TensorNetworkState for 'bp' algorithm, got $(typeof(tns))")
@@ -68,6 +71,8 @@ end
 
 default_alg(bp_cache::BeliefPropagationCache) = "bp"
 default_alg(bmps_cache::BoundaryMPSCache) = "boundarymps"
+# Fermionic states only support exact contraction; bosonic states must specify an algorithm.
+default_alg(tns::TensorNetworkState) = is_fermionic(tns) ? "exact" : error("You must specify a contraction algorithm. Currently supported: exact, bp and boundarymps.")
 default_alg(any) = error("You must specify a contraction algorithm. Currently supported: exact, bp and boundarymps.")
 
 """

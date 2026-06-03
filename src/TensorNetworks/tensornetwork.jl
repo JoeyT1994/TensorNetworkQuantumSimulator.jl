@@ -5,9 +5,8 @@ using NamedGraphs: NamedGraphs, add_edge!, incident_edges
 using NamedGraphs.GraphsExtensions: rem_edges!
 using Adapt
 
-#TODO: Make this show() nicely.
 struct TensorNetwork{V} <: AbstractTensorNetwork{V}
-    tensors::Dictionary{V, ITensor}
+    tensors::Dictionary{V, <:Tensor}
     graph::NamedGraph{V}
 end
 
@@ -31,7 +30,7 @@ end
 
 Base.copy(tn::TensorNetwork) = TensorNetwork(copy(tensors(tn)), copy(graph(tn)))
 
-function TensorNetwork(tensors::Vector{<:ITensor})
+function TensorNetwork(tensors::Vector{<:Tensor})
     return TensorNetwork(Dictionary([i for i in 1:length(tensors)], tensors))
 end
 

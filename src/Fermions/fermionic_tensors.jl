@@ -1,3 +1,25 @@
+"""
+    random_even_itensor(eltype, is::Vector{<:Index}, grading)
+
+Build a random ITensor over indices `is` whose components with *odd* total Z2 parity are
+zeroed, so the result is parity even with respect to `grading`. Index directions and order are defined later.
+"""
+function random_even_itensor(eltype, is::Vector{<:Index}, grading::Dictionary{Index, Vector{Bool}})
+    bits = [grading[i] for i in is]
+    dims = ntuple(k -> dim(is[k]), length(is))
+    arr = zeros(eltype, dims...)
+    for I in CartesianIndices(dims)
+        odd = false
+        for k in 1:length(is)
+            odd ⊻= bits[k][I[k]]
+        end
+        odd || (arr[I] = randn(eltype))
+    end
+    return ITensor(arr, is...)
+end
+
+random_even_itensor(is::Vector{<:Index}, grading::Dictionary{Index, Vector{Bool}}) = random_even_itensor(Float64, is, grading)
+
 # Locally-ordered fermionic tensor algebra.
 #
 # This implements the "locally ordered" formalism of Gao, Zhai, Gray et al.,
@@ -22,16 +44,17 @@
 
 using Dictionaries: Dictionary
 using ITensors: ITensors, ITensor, Index, dim, inds, dag, commoninds
+using Adapt: Adapt, adapt
 
 """
-    FermionicTensor
+    FermionicITensor
 
 A dense ITensor together with the metadata for locally-ordered fermionic
 operations: the fermionic leg `order`, the per-leg arrow `dirs` (`true` = in/−,
 `false` = out/+), and a reference to the global Z2 `grading` (per-component
 parity bits of each `Index`). `order` and `dirs` are parallel vectors.
 """
-struct FermionicTensor
+struct FermionicITensor
     tensor::ITensor
     order::Vector{Index}
     dirs::Vector{Bool}
@@ -39,7 +62,13 @@ struct FermionicTensor
 end
 
 # Direction (arrow) of leg `i` in `ft`: true = in/−, false = out/+.
-_dir(ft::FermionicTensor, i::Index) = ft.dirs[findfirst(==(i), ft.order)]
+_dir(ft::FermionicITensor, i::Index) = ft.dirs[findfirst(==(i), ft.order)]
+ITensors.inds(ft::FermionicITensor) = ft.order
+ITensors.noncommoninds(ft1::FermionicITensor, ft2::FermionicITensor) = noncommoninds(ft1.tensor, ft2.tensor)
+ITensors.commoninds(ft1::FermionicITensor, ft2::FermionicITensor) = commoninds(ft1.tensor, ft2.tensor)
+ITensors.commonind(ft1::FermionicITensor, ft2::FermionicITensor) = commonind(ft1.tensor, ft2.tensor)
+ITensors.scalar(ft::FermionicITensor) = ITensors.scalar(ft.tensor)
+ITensors.ITensor(ft::FermionicITensor) = ft.tensor
 
 # Diagonal Koszul-sign array (in `from` layout) for reordering legs `from -> to`.
 # For component I the sign is (−1)^{Σ p_a p_b} over leg pairs (a,b) whose relative
@@ -88,35 +117,49 @@ function _apply_parity(gr::Dictionary, T::ITensor, k::Index)
 end
 
 """
-    fermionic_transpose(ft::FermionicTensor, neworder::Vector{<:Index})
+    permute(ft::FermionicITensor, neworder::Vector{<:Index})
 
 Reorder the legs of `ft` to `neworder` (a permutation of `ft.order`), applying the
 fermionic transposition sign `(−1)^{p_i p_j}` for each swapped odd pair.
 """
-function fermionic_transpose(ft::FermionicTensor, neworder::Vector{<:Index})
+function ITensors.permute(ft::FermionicITensor, neworder::Vector{<:Index})
     T = _apply_reorder_sign(ft.grading, ft.tensor, ft.order, neworder)
     perm = [findfirst(==(i), ft.order) for i in neworder]
-    return FermionicTensor(T, copy(neworder), ft.dirs[perm], ft.grading)
+    return FermionicITensor(T, copy(neworder), ft.dirs[perm], ft.grading)
 end
 
 """
-    fermionic_dag(ft::FermionicTensor)
+    dag(ft::FermionicITensor)
 
 Hermitian conjugate in the fermionic sense: conjugate the data, reverse the leg
 order (with the accompanying reversal sign), and flip every arrow (in ↔ out). This
 is the per-tensor operation behind taking ⟨Ψ| from |Ψ⟩ (Fig. 4: all bra arrows are
 reversed relative to the ket).
 """
-function fermionic_dag(ft::FermionicTensor)
+function ITensors.dag(ft::FermionicITensor)
     rev = reverse(ft.order)
     # Eq.33/108: conjugation maps each space to its dual and REVERSES the leg
     # order. Reversing the labels relabels which dual sits where; it is NOT a
     # permutation of stored components, so there is NO extra Koszul sign here.
-    return FermionicTensor(dag(ft.tensor), rev, .!reverse(ft.dirs), ft.grading)
+    return FermionicITensor(dag(ft.tensor), rev, .!reverse(ft.dirs), ft.grading)
+end
+
+# Bra factor for the doubled network: `dag(ket)` (σ-free conjugation: conjugate data,
+# reversed leg order, flipped arrows) with every leg primed EXCEPT those in `keep` (the
+# un-operated site legs, which stay unprimed so the bra contracts straight onto the ket).
+# Priming a leg that carries an operator lets it join the operator's primed output `u =
+# prime(s)`. The result carries a LOCAL grading over its own (primed) legs only.
+function ITensors.dag(ft::FermionicITensor, keep)
+    bt = dag(ft)
+    oldis = bt.order
+    newis = Index[i in keep ? i : prime(i) for i in oldis]
+    gr = Dictionary{Index, Vector{Bool}}(newis, [bt.grading[i] for i in oldis])
+    T = replaceinds(bt.tensor, oldis, newis)
+    return FermionicITensor(T, newis, bt.dirs, gr)
 end
 
 """
-    fermionic_contract(A::FermionicTensor, B::FermionicTensor)
+    contract(A::FermionicITensor, B::FermionicITensor)
 
 Contract `A` and `B` over their shared legs in the locally-ordered formalism. The
 result's leg order is `[open legs of A; open legs of B]` (A's legs first). The bond
@@ -131,8 +174,8 @@ one side reproduces the result of contracting the bonds one at a time, and is wh
 makes the contraction associative on loops. The reversal sign is accumulated
 automatically by `_apply_reorder_sign`; for a single shared bond it is a no-op.
 """
-function fermionic_contract(A::FermionicTensor, B::FermionicTensor)
-    gr = A.grading
+function ITensors.contract(A::FermionicITensor, B::FermionicITensor)
+    gr = merge(A.grading, B.grading)
     K = commoninds(A.tensor, B.tensor)
     Kset = Set(K)
     A_open = filter(!in(Kset), A.order)
@@ -156,5 +199,36 @@ function fermionic_contract(A::FermionicTensor, B::FermionicTensor)
     C = TA * TB
     order_C = Index[A_open; B_open]
     dirs_C = Bool[[_dir(A, i) for i in A_open]; [_dir(B, i) for i in B_open]]
-    return FermionicTensor(C, order_C, dirs_C, gr)
+    return FermionicITensor(C, order_C, dirs_C, gr)
 end
+
+Base.:*(ft1::FermionicITensor, ft2::FermionicITensor) = ITensors.contract(ft1, ft2)
+
+# Walk the nested binary contraction tree `seq` (integer indices into `fts`),
+# folding pairs together with `contract`. Because `contract` is contraction-order
+# independent for parity-even tensors, the result equals the naive fold; the
+# ordering only changes intermediate cost.
+function follow_sequence(seq, fts::Vector{<:FermionicITensor})
+    seq isa Integer && return fts[seq]
+    acc = follow_sequence(seq[1], fts)
+    for k in 2:length(seq)
+        acc = acc * follow_sequence(seq[k], fts)
+    end
+    return acc
+end
+
+# Contract a list of FermionicITensors using the bosonic optimal contraction order
+# (`contraction_sequence(..., alg="optimal")`) on the underlying ITensors, then
+# follow that tree through `contract`.
+function ITensors.contract(fts::Vector{<:FermionicITensor}; sequence = contraction_sequence(fts; alg = "optimal"))
+    length(fts) == 1 && return only(fts)
+    return follow_sequence(sequence, fts)
+end
+
+function Adapt.adapt_structure(to, ft::FermionicITensor)
+    t = adapt(to)(ft.tensor)
+    return FermionicITensor(t, ft.order, ft.dirs, ft.grading)
+end
+
+const Tensor = Union{ITensor, FermionicITensor}
+

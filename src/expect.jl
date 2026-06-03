@@ -4,7 +4,6 @@ function expect(
         observables::Vector{<:Tuple};
         contraction_sequence_kwargs = (; alg = "einexpr", optimizer = Greedy())
     )
-    ITensors.disable_warn_order()
 
     denom = norm_sqr(alg, ψ; contraction_sequence_kwargs)
     out = Number[]
@@ -17,8 +16,14 @@ function expect(
         op_dict = Dict(zip(vs, op_strings))
         op_string_f = v -> get(op_dict, v, "I")
         ψOψ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
+        # `norm_factors` returns `nothing` for a parity-forbidden fermionic observable (odd
+        # number of parity-odd operator factors); such an expectation is zero by parity.
+        if ψOψ_tensors === nothing
+            push!(out, zero(coeff))
+            continue
+        end
         numer_seq = contraction_sequence(ψOψ_tensors; contraction_sequence_kwargs...)
-        numer = contract(ψOψ_tensors; sequence = numer_seq)[]
+        numer = scalar(contract(ψOψ_tensors; sequence = numer_seq))
         push!(out, coeff * (numer / denom))
     end
     return out

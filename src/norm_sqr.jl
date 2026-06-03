@@ -44,7 +44,7 @@ nsq_bmps = norm_sqr(ψ; alg = "boundarymps", mps_bond_dimension = 10)
 ```
 """
 
-function norm_sqr(tns::Union{TensorNetworkState, BeliefPropagationCache}; alg, kwargs...)
+function norm_sqr(tns::Union{TensorNetworkState, BeliefPropagationCache}; alg = default_alg(tns), kwargs...)
     algorithm_check(tns, "norm_sqr", alg)
     return norm_sqr(Algorithm(alg), tns; kwargs...)
 end
@@ -55,7 +55,7 @@ function norm_sqr(
     )
     ψIψ_tensors = norm_factors(ψ, collect(vertices(ψ)))
     denom_seq = contraction_sequence(ψIψ_tensors; contraction_sequence_kwargs...)
-    return contract(ψIψ_tensors; sequence = denom_seq)[]
+    return scalar(contract(ψIψ_tensors; sequence = denom_seq))
 end
 
 function norm_sqr(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)

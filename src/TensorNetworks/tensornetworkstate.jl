@@ -47,7 +47,15 @@ function Base.setindex!(tns::TensorNetworkState, value::ITensor, v)
     return tns
 end
 
+# Fermionic trait: a network is fermionic iff its stored tensors are `FermionicITensor`s.
+# Used to route the shared `norm_factors`/`norm_sqr`/`expect` entry points to the fermionic
+# bodies (defined in src/Fermions/observables.jl) without a separate state type. Only the
+# concrete tensor containers can be fermionic; everything else (Forms, etc.) is bosonic.
+is_fermionic(tn::AbstractTensorNetwork) = false
+is_fermionic(tn::Union{TensorNetwork, TensorNetworkState}) = first(tensors(tn)) isa FermionicITensor
+
 function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I")
+    is_fermionic(tns) && return fermionic_norm_factors(tns, verts; op_strings)
     factors = ITensor[]
     for v in verts
         sinds = siteinds(tns, v)

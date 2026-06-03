@@ -4,29 +4,17 @@ const TN = TensorNetworkQuantumSimulator
 using Test: @testset, @test
 using Random
 using ITensors
-using ITensors: ITensors, Index, ITensor, dim, inds
+using ITensors: ITensors, Index, ITensor, dim, inds, contract, permute, scalar
 using Dictionaries: Dictionary, set!
+using TensorNetworkQuantumSimulator: random_even_itensor
 
-const FT = TN.FermionicTensor
+const FT = TN.FermionicITensor
+
+ITensors.disable_warn_order()
 
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
-
-# random parity-even ITensor over indices `is` w.r.t. grading `gr`
-function rand_even(is::Vector{<:Index}, gr::Dictionary)
-    bits = [gr[i] for i in is]
-    dims = ntuple(k -> dim(is[k]), length(is))
-    arr = zeros(ComplexF64, dims...)
-    for I in CartesianIndices(dims)
-        odd = false
-        for k in 1:length(is)
-            odd ⊻= bits[k][I[k]]
-        end
-        odd || (arr[I] = randn(ComplexF64))
-    end
-    return ITensor(arr, is...)
-end
 
 # Independent brute-force reorder oracle: transform leg order `from -> to` by
 # adjacent bubble swaps, each adjacent swap of legs (a,b) multiplying the data by
@@ -56,8 +44,6 @@ function brute_reorder(gr::Dictionary, T::ITensor, from::Vector{<:Index}, to::Ve
     return ITensor(arr, to...)
 end
 
-fscalar(ft::FT) = ITensors.scalar(ft.tensor)
-
 @testset "Test fermions" begin
     Random.seed!(1234)
 
@@ -73,16 +59,16 @@ fscalar(ft::FT) = ITensors.scalar(ft.tensor)
         end
     end
 
-    @testset "fermionic_transpose vs brute oracle" begin
+    @testset "permute vs brute oracle" begin
         gr = Dictionary{Index, Vector{Bool}}()
         mk(d, bits) = (i = Index(d, "x"); set!(gr, i, bits); i)
         for _ in 1:20
             is = [mk(2, [false, true]), mk(3, [false, true, true]), mk(2, [false, true]), mk(2, [true, false])]
-            T = rand_even(is, gr)
+            T = random_even_itensor(is, gr)
             dirs = rand(Bool, length(is))
             ft = FT(T, copy(is), dirs, gr)
             to = shuffle(is)
-            fast = fermionic_transpose(ft, to)
+            fast = permute(ft, to)
             brute = brute_reorder(gr, T, is, to)
             @test fast.tensor ≈ brute
             @test fast.order == to
@@ -91,13 +77,13 @@ fscalar(ft::FT) = ITensors.scalar(ft.tensor)
         end
     end
 
-    @testset "fermionic_dag is an involution" begin
+    @testset "dag is an involution" begin
         gr = Dictionary{Index, Vector{Bool}}()
         mk(d, bits) = (i = Index(d, "x"); set!(gr, i, bits); i)
         is = [mk(2, [false, true]), mk(2, [false, true]), mk(3, [false, true, true])]
-        T = rand_even(is, gr)
+        T = random_even_itensor(is, gr)
         ft = FT(T, copy(is), rand(Bool, 3), gr)
-        dd = fermionic_dag(fermionic_dag(ft))
+        dd = dag(dag(ft))
         @test dd.order == ft.order
         @test dd.dirs == ft.dirs
         @test dd.tensor ≈ ft.tensor
@@ -109,13 +95,13 @@ fscalar(ft::FT) = ITensors.scalar(ft.tensor)
         for _ in 1:20
             bond = mkbond()
             ao = mkbond(); bo = mkbond()           # extra open bonds
-            A = FT(rand_even([ao, bond], gr), [ao, bond], [false, false], gr)  # A holds bond as out
-            B = FT(rand_even([bond, bo], gr), [bond, bo], [true, false], gr)   # B holds bond as in
-            AB = fermionic_contract(A, B)
-            BA = fermionic_contract(B, A)
+            A = FT(random_even_itensor([ao, bond], gr), [ao, bond], [false, false], gr)  # A holds bond as out
+            B = FT(random_even_itensor([bond, bo], gr), [bond, bo], [true, false], gr)   # B holds bond as in
+            AB = contract(A, B)
+            BA = contract(B, A)
             # AB has leg order [ao, bo] and BA has [bo, ao]; as fermionic tensors
             # they are equal only after matching leg order (the swap rule, Eq. 9).
-            @test AB.tensor ≈ fermionic_transpose(BA, AB.order).tensor
+            @test AB.tensor ≈ permute(BA, AB.order).tensor
         end
     end
 
@@ -125,7 +111,7 @@ fscalar(ft::FT) = ITensors.scalar(ft.tensor)
         a, b, c = mk(2), mk(3), mk(2)
         A = FT(ITensor(randn(2, 3), a, b), [a, b], [false, true], gr)
         B = FT(ITensor(randn(3, 2), b, c), [b, c], [false, true], gr)
-        C = fermionic_contract(A, B)
+        C = contract(A, B)
         @test C.tensor ≈ A.tensor * B.tensor
     end
 
@@ -134,14 +120,14 @@ fscalar(ft::FT) = ITensors.scalar(ft.tensor)
         mkbond() = (i = Index(2, "b"); set!(gr, i, [false, true]); i)
         bab, bbc, bca = mkbond(), mkbond(), mkbond()
         # arrows: a→b, b→c, c→a (each holds the outgoing bond as out)
-        A = FT(rand_even([bab, bca], gr), [bab, bca], [false, true], gr)
-        B = FT(rand_even([bab, bbc], gr), [bab, bbc], [true, false], gr)
-        C = FT(rand_even([bbc, bca], gr), [bbc, bca], [true, false], gr)
+        A = FT(random_even_itensor([bab, bca], gr), [bab, bca], [false, true], gr)
+        B = FT(random_even_itensor([bab, bbc], gr), [bab, bbc], [true, false], gr)
+        C = FT(random_even_itensor([bbc, bca], gr), [bbc, bca], [true, false], gr)
 
-        s1 = fscalar(fermionic_contract(fermionic_contract(A, B), C))
-        s2 = fscalar(fermionic_contract(fermionic_contract(B, C), A))
-        s3 = fscalar(fermionic_contract(fermionic_contract(C, A), B))
-        s4 = fscalar(fermionic_contract(A, fermionic_contract(B, C)))
+        s1 = scalar(contract(contract(A, B), C))
+        s2 = scalar(contract(contract(B, C), A))
+        s3 = scalar(contract(contract(C, A), B))
+        s4 = scalar(contract(A, contract(B, C)))
         @test s1 ≈ s2 ≈ s3 ≈ s4
         @test abs(s1) > 1e-8   # non-trivial
     end
@@ -160,7 +146,7 @@ fscalar(ft::FT) = ITensors.scalar(ft.tensor)
             for si in siteinds(ψ, v)
                 vec = zeros(ComplexF64, dim(si)); vec[1] = randn(ComplexF64)  # even component
                 cap = FT(ITensor(vec, si), [si], [true], gr)
-                ft = fermionic_contract(ft, cap)
+                ft = contract(ft, cap)
             end
             capped[v] = ft
         end
@@ -171,9 +157,9 @@ fscalar(ft::FT) = ITensors.scalar(ft.tensor)
         for ord in orderings
             acc = capped[ord[1]]
             for k in 2:length(ord)
-                acc = fermionic_contract(acc, capped[ord[k]])
+                acc = contract(acc, capped[ord[k]])
             end
-            push!(scalars, fscalar(acc))
+            push!(scalars, scalar(acc))
         end
         @test all(z -> z ≈ scalars[1], scalars)
     end
@@ -188,12 +174,12 @@ fscalar(ft::FT) = ITensors.scalar(ft.tensor)
     # on that same mode order and compare norm_sqr / ⟨N⟩ / ⟨c_i†c_j⟩.
     # -----------------------------------------------------------------------
 
-    # fold-contract all ket tensors -> FermionicTensor whose open legs are the sites
+    # fold-contract all ket tensors -> FermionicITensor whose open legs are the sites
     function ket_ft(ψ)
         vs = collect(vertices(ψ))
-        acc = FT(ψ, vs[1])
+        acc = ψ[vs[1]]
         for k in 2:length(vs)
-            acc = fermionic_contract(acc, FT(ψ, vs[k]))
+            acc = contract(acc, ψ[vs[k]])
         end
         return acc
     end
@@ -248,14 +234,22 @@ fscalar(ft::FT) = ITensors.scalar(ft.tensor)
         # ⟨N_v⟩ (even operator)
         for v in vs
             ed = (ψvec' * (num[pos[v]] * ψvec)) / nrm
-            @test expect(ψ, ("N", [v])) ≈ ed
+            @test expect(ψ, ("N", [v]); alg = "exact") ≈ ed
         end
 
         # ⟨c_i† c_j⟩ hopping (odd pair -> string dummy bond)
         for i in vs, j in vs
             i == j && continue
             ed = (ψvec' * (cdag[pos[i]] * (cann[pos[j]] * ψvec))) / nrm
-            @test expect(ψ, (["Cdag", "C"], [i, j])) ≈ ed
+            @test expect(ψ, (["Cdag", "C"], [i, j]); alg = "exact") ≈ ed
+        end
+
+        # single odd operator: parity-forbidden ⇒ ⟨O⟩ = 0 (no error).
+        # multi-character op names must use the vector form (a bare String is read
+        # as one operator character per vertex).
+        for v in vs
+            @test expect(ψ, (["Cdag"], [v]); alg = "exact") ≈ 0 atol = 1e-12
+            @test expect(ψ, (["C"], [v]); alg = "exact") ≈ 0 atol = 1e-12
         end
     end
 end

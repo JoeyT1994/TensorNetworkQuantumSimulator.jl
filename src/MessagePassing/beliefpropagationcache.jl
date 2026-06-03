@@ -28,7 +28,12 @@ function BeliefPropagationCache(network, messages, contraction_sequences)
     return BeliefPropagationCache(network, messages, contraction_sequences, forest_cover_edge_sequence(graph(network)))
 end
 BeliefPropagationCache(network, messages) = BeliefPropagationCache(network, messages, Dictionary{Pair, Vector}())
-BeliefPropagationCache(network) = BeliefPropagationCache(network, default_messages())
+function BeliefPropagationCache(network)
+    if network isa AbstractTensorNetwork && is_fermionic(network)
+        error("Belief propagation is not yet supported for fermionic tensor network states; use alg=\"exact\".")
+    end
+    return BeliefPropagationCache(network, default_messages())
+end
 
 contraction_sequences(bp_cache::BeliefPropagationCache) = bp_cache.contraction_sequences
 

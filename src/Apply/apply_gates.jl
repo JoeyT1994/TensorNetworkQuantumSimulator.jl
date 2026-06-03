@@ -20,6 +20,7 @@ function apply_gates(
         bp_update_kwargs = default_bp_update_kwargs(ψ),
         kwargs...,
     )
+    is_fermionic(ψ) && error("Gate application is not yet supported for fermionic tensor network states.")
     ψ_bpc = BeliefPropagationCache(ψ)
     ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
     ψ_bpc, truncation_errors = apply_gates(circuit, ψ_bpc; bp_update_kwargs, kwargs...)

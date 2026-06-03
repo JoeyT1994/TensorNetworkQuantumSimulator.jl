@@ -2,7 +2,10 @@ using ITensors: Index, ITensor, @Algorithm_str, inds, noncommoninds, dim
 using TensorOperations: TensorOperations, optimaltree
 using EinExprs: EinExprs, EinExpr, einexpr, SizedEinExpr
 
-function prune_trivial_tensors(tensors::Vector{<:ITensor})
+itensors(fts::Vector{<:FermionicITensor}) = ITensors.ITensor.(fts)
+itensors(ts::Vector{<:ITensor}) = ts
+
+function prune_trivial_tensors(tensors::Vector{<:Tensor})
     pruned_tensors = copy(tensors)
     for (i, t) in enumerate(pruned_tensors)
         if all(d -> d == 1, dim.(inds(tensors[i])))
@@ -12,7 +15,7 @@ function prune_trivial_tensors(tensors::Vector{<:ITensor})
     return pruned_tensors
 end
 
-function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:ITensor}; prune_tensors = false)
+function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:Tensor}; prune_tensors = false)
     #Needed because tensor operations bugs on trivial tensors
     if prune_tensors
         ITensors.disable_warn_order()
@@ -27,19 +30,20 @@ function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:ITensor}; 
 end
 
 function contraction_sequence(
-        ::Algorithm"einexpr", tensors::Vector{<:ITensor}; optimizer = EinExprs.Exhaustive()
+        ::Algorithm"einexpr", tensors::Vector{<:Tensor}; optimizer = EinExprs.Exhaustive()
     )
     expr = to_einexpr(tensors)
     path = einexpr(optimizer, expr)
     return to_contraction_sequence(path, tensor_inds_to_vertex(tensors))
 end
 
-function contraction_sequence(tensors::Vector{<:ITensor}; alg = "optimal", kwargs...)
+function contraction_sequence(tensors::Vector{<:Tensor}; alg = "optimal", kwargs...)
     return contraction_sequence(Algorithm(alg), tensors; kwargs...)
 end
 
 #Ein Exprs helpers
-function to_einexpr(tensors::Vector{<:ITensor})
+function to_einexpr(tensors::Vector{<:Tensor})
+    tensors = itensors(tensors)
     IndexType = Any
 
     tensor_exprs = EinExpr{IndexType}[]
@@ -48,14 +52,15 @@ function to_einexpr(tensors::Vector{<:ITensor})
     for tensor_v in tensors
         inds_v = collect(inds(tensor_v))
         push!(tensor_exprs, EinExpr{IndexType}(; head = inds_v))
-        merge!(inds_dims, Dict(inds_v .=> size(tensor_v)))
+        merge!(inds_dims, Dict(inds_v .=> Tuple(dim.(inds_v))))
     end
 
     externalinds_tn = reduce(noncommoninds, tensors)
     return SizedEinExpr(sum(tensor_exprs; skip = externalinds_tn), inds_dims)
 end
 
-function tensor_inds_to_vertex(tensors::Vector{<:ITensor})
+function tensor_inds_to_vertex(tensors::Vector{<:Tensor})
+    tensors = itensors(tensors)
     IndexType = Any
     VertexType = Int
 
