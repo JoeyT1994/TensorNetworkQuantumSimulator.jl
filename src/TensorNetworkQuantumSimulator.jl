@@ -33,6 +33,10 @@ include("entanglement.jl")
 include("truncate.jl")
 include("rdm.jl")
 
+include("Fermions/ops.jl")
+include("Fermions/fermionic_tensors.jl")
+include("Fermions/fermionictensornetworkstate.jl")
+include("Fermions/observables.jl")
 
 export
     vertices,
@@ -61,6 +65,12 @@ export
     TensorNetworkState,
     tensornetworkstate,
     random_tensornetworkstate,
+    FermionicTensorNetworkState,
+    random_fermionic_tensornetworkstate,
+    FermionicTensor,
+    fermionic_contract,
+    fermionic_transpose,
+    fermionic_dag,
     BeliefPropagationCache,
     rescale!,
     message,
@@ -116,7 +126,6 @@ export
     build_graph_from_circuit,
     reduced_density_matrix,
     rdm,
-    norm_factors,
     toriccode_groundstate,
     ising_partitionfunction
 end
