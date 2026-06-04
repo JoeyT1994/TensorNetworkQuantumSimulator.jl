@@ -68,6 +68,7 @@ _dir(ft::FermionicITensor, i::Index) = ft.dirs[findfirst(==(i), ft.order)]
 ITensors.inds(ft::FermionicITensor) = ft.order
 ITensors.noncommoninds(ft1::FermionicITensor, ft2::FermionicITensor) = noncommoninds(ft1.tensor, ft2.tensor)
 ITensors.commoninds(ft1::FermionicITensor, ft2::FermionicITensor) = commoninds(ft1.tensor, ft2.tensor)
+ITensors.uniqueinds(ft1::FermionicITensor, ft2::FermionicITensor) = uniqueinds(ft1.tensor, ft2.tensor)
 ITensors.commonind(ft1::FermionicITensor, ft2::FermionicITensor) = commonind(ft1.tensor, ft2.tensor)
 ITensors.scalar(ft::FermionicITensor) = ITensors.scalar(ft.tensor)
 ITensors.ITensor(ft::FermionicITensor) = ft.tensor
@@ -158,6 +159,45 @@ function ITensors.dag(ft::FermionicITensor, keep)
     gr = Dictionary{Index, Vector{Bool}}(newis, [bt.grading[i] for i in oldis])
     T = replaceinds(bt.tensor, oldis, newis)
     return FermionicITensor(T, newis, bt.dirs, gr)
+end
+
+"""
+    fit_adjoint(ft)
+    fit_adjoint(ft, metric_legs)
+
+Metric-corrected fermionic adjoint used by the boundary-MPS variational fit. Equal to
+`g · dag(ft)`: on top of the ordinary `dag`, apply the supertrace metric `g = diag((−1)^p)`
+on every leg in `metric_legs` that `ft` holds OUT (the legs on which `contract` would
+otherwise insert `g`). The one-argument form uses `metric_legs = ft.order`, i.e. all legs.
+
+The point: closing the metricised legs of `ft` against `fit_adjoint(ft)` gives a genuine
+positive (Euclidean) closure `Σ_I |ft_I|²` rather than the *signed* supertrace that plain
+`dag` produces, because the metric `g` cancels the `g` that `contract` re-inserts on those
+legs. This makes the Euclidean (LAPACK) QR used to move the orthogonality centre the correct
+orthogonalisation in the fermionic inner product.
+
+The boundary-MPS fit does NOT want this on every leg: its bra-rail tensors close their
+*crossing* legs against the double-layer bulk (a genuine ket/bra supertrace, which needs the
+metric) but carry *virtual MPS bonds* that are pure fitting indices orthogonalised by the
+Euclidean QR (which must NOT be metricised). `fit_adjoint_message` therefore calls the
+two-argument form with `metric_legs` = just the crossing legs; doing so is what makes the
+orthogonal sweep reproduce the exact boundary environment for both update directions.
+
+On parity-EVEN tensors the all-legs form is an involution: the first application puts `g` on
+the OUT legs; after the arrow flip the second application puts `g` on the (now-OUT) IN legs,
+so together they apply `g` on *all* legs, whose net sign `(−1)^{total parity}` is `+1`.
+
+Bosonic tensors need no metric, so the fallback is just `dag`.
+"""
+fit_adjoint(t::ITensor, args...) = dag(t)
+fit_adjoint(ft::FermionicITensor) = fit_adjoint(ft, ft.order)
+function fit_adjoint(ft::FermionicITensor, metric_legs)
+    b = dag(ft)
+    T = b.tensor
+    for k in ft.order
+        (k in metric_legs && !_dir(ft, k)) && (T = _apply_parity(b.grading, T, k))
+    end
+    return FermionicITensor(T, b.order, b.dirs, b.grading)
 end
 
 """

@@ -87,7 +87,12 @@ function default_message(tns::TensorNetworkState, edge::AbstractEdge)
         u = prime(s)
         gr = Dictionary{Index, Vector{Bool}}([u, s], [sgr, sgr])
         T = adapt(datatype(tns))(denseblocks(delta(u, s)))
-        return FermionicITensor(T, Index[u, s], Bool[false, true], gr)
+        # Orientation-aware arrows: e and reverse(e) must carry OPPOSITE arrows on the
+        # shared crossing bonds (u, s) so that contracting message(e) with
+        # message(reverse(e)) is a proper OUT→IN fermionic supertrace closure rather
+        # than an arrow clash. Pick the orientation from the edge endpoints.
+        dirs = src(edge) < dst(edge) ? Bool[false, true] : Bool[true, false]
+        return FermionicITensor(T, Index[u, s], dirs, gr)
     end
 end
 

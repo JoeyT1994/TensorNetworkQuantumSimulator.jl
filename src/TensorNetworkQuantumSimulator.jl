@@ -36,6 +36,7 @@ include("rdm.jl")
 
 include("Fermions/ops.jl")
 include("Fermions/fermionictensornetworkstate.jl")
+include("Fermions/factorize_fermionic_tensors.jl")
 
 export
     vertices,
