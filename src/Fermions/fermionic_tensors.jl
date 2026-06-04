@@ -66,6 +66,7 @@ end
 # Direction (arrow) of leg `i` in `ft`: true = in/−, false = out/+.
 _dir(ft::FermionicITensor, i::Index) = ft.dirs[findfirst(==(i), ft.order)]
 ITensors.inds(ft::FermionicITensor) = ft.order
+ITensors.ndims(ft::FermionicITensor) = ndims(ft.tensor)
 ITensors.noncommoninds(ft1::FermionicITensor, ft2::FermionicITensor) = noncommoninds(ft1.tensor, ft2.tensor)
 ITensors.commoninds(ft1::FermionicITensor, ft2::FermionicITensor) = commoninds(ft1.tensor, ft2.tensor)
 ITensors.uniqueinds(ft1::FermionicITensor, ft2::FermionicITensor) = uniqueinds(ft1.tensor, ft2.tensor)
@@ -278,6 +279,11 @@ end
 function Adapt.adapt_structure(to, ft::FermionicITensor)
     t = adapt(to)(ft.tensor)
     return FermionicITensor(t, ft.order, ft.dirs, ft.grading)
+end
+
+function ITensors.noprime(ft::FermionicITensor)
+    t = noprime(ft.tensor)
+    return FermionicITensor(t, noprime.(ft.order), ft.dirs, ft.grading)
 end
 
 function NDTensors.scalartype(ft::FermionicITensor)

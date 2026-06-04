@@ -37,6 +37,7 @@ include("rdm.jl")
 include("Fermions/ops.jl")
 include("Fermions/fermionictensornetworkstate.jl")
 include("Fermions/factorize_fermionic_tensors.jl")
+include("Fermions/fermionic_gates.jl")
 
 export
     vertices,
@@ -68,6 +69,12 @@ export
     random_fermionic_tensornetworkstate,
     fermionic_tensornetworkstate,
     FermionicITensor,
+    fermionic_hopping_gate,
+    fermionic_number_gate,
+    fermionic_hopping_hamiltonian,
+    fermionic_number_hamiltonian,
+    fermionic_exp_gate,
+    symmetric_svd,
     is_fermionic,
     contract,
     permute,

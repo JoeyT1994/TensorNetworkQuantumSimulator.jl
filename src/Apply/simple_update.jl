@@ -19,11 +19,11 @@ Simple update of one or two tensors in the presence of factorized environments u
 - `err::Number`: The truncation error from the SVD (if applicable).
 """
 function simple_update(
-        o::ITensor, ψ, v⃗; envs, normalize_tensors = true, apply_kwargs...
+        o::Tensor, ψ, v⃗; envs, normalize_tensors = true, apply_kwargs...
     )
 
     if length(v⃗) == 1
-        updated_tensors = ITensor[ITensors.apply(o, ψ[first(v⃗)])]
+        updated_tensors = typeof(o)[noprime(o*ψ[first(v⃗)])]
         s_values, err = nothing, 0
     else
         cutoff = 10 * eps(real(scalartype(ψ[v⃗[1]])))
@@ -44,18 +44,24 @@ function simple_update(
         Qᵥ₂, Rᵥ₂ = qr(ψᵥ₂, uniqueinds(uniqueinds(ψᵥ₂, ψᵥ₁), sᵥ₂))
         rᵥ₁ = commoninds(Qᵥ₁, Rᵥ₁)
         rᵥ₂ = commoninds(Qᵥ₂, Rᵥ₂)
-        oR = ITensors.apply(o, Rᵥ₁ * Rᵥ₂)
+        oR = noprime(o * (Rᵥ₁ * Rᵥ₂))
         e = v⃗[1] => v⃗[2]
-        singular_values! = Ref(ITensor())
-        Rᵥ₁, Rᵥ₂, spec = factorize_svd(
-            oR,
-            unioninds(rᵥ₁, sᵥ₁);
-            ortho = "none",
-            singular_values!,
-            apply_kwargs...,
-        )
-        err = spec.truncerr
-        s_values = singular_values![]
+        if !(o isa FermionicITensor)
+            singular_values! = Ref(ITensor())
+            Rᵥ₁, Rᵥ₂, spec = factorize_svd(
+                oR,
+                unioninds(rᵥ₁, sᵥ₁);
+                ortho = "none",
+                singular_values!,
+                apply_kwargs...,
+            )
+            err = spec.truncerr
+            s_values = singular_values![]
+        else
+            Rᵥ₁, Rᵥ₂, s_values, err = symmetric_svd(
+                oR, collect(unioninds(rᵥ₁, sᵥ₁)); apply_kwargs...
+            )
+        end
         Qᵥ₁ = contract([Qᵥ₁; dag.(inv_sqrt_envs_v1)])
         Qᵥ₂ = contract([Qᵥ₂; dag.(inv_sqrt_envs_v2)])
         updated_tensors = [Qᵥ₁ * Rᵥ₁, Qᵥ₂ * Rᵥ₂]
@@ -65,7 +71,7 @@ function simple_update(
     end
 
     if normalize_tensors
-        updated_tensors = ITensor[ψᵥ / norm(ψᵥ) for ψᵥ in updated_tensors]
+        updated_tensors = typeof(o)[ψᵥ / norm(ψᵥ) for ψᵥ in updated_tensors]
     end
 
     return noprime.(updated_tensors), s_values, err

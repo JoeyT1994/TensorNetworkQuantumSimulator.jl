@@ -100,7 +100,7 @@ end
 
 #Apply function for a single gate
 function apply_gate!(
-        gate::ITensor,
+        gate::Tensor,
         ψ_bpc::BeliefPropagationCache;
         v⃗ = vertices(gate, network(ψ_bpc)),
         apply_kwargs

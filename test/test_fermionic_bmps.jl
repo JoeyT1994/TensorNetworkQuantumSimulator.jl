@@ -5,21 +5,6 @@ using TensorNetworkQuantumSimulator
 using Test: @testset, @test
 const TNQS = TensorNetworkQuantumSimulator
 
-# Regression test for the fermionic boundary-MPS path.
-#
-# The bug this guards against: the inter-partition message virtual bonds were
-# initialised with an alternating parity grading `Bool[isodd(j) for j in 1:D]`,
-# which carries an ODD parity excess for odd `D`. A conjugate-doubled (ket⊗bra)
-# bond can only ever carry an EVEN parity excess `(n_e - n_o)^2 >= 0`, so for an
-# ODD state bond dimension the orthogonal fit converged to the wrong fixed point
-# (norm off by ~1e-6, hopping off by ~1.25%). Even state bond dimensions happened
-# to be balanced and so were unaffected. The fix initialises the message bonds
-# with the same even-excess grading used by the state bonds.
-#
-# We therefore check BOTH an even (χ=2) and an odd (χ=3) state bond dimension and
-# assert that, at large enough boundary-MPS rank, the norm and a hopping
-# observable both match exact contraction to (near) machine precision.
-
 @testset "Test Fermionic BoundaryMPS" begin
     ITensors.disable_warn_order()
     Random.seed!(1234)

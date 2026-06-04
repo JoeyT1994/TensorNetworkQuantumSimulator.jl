@@ -60,7 +60,7 @@ function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCa
     return bp_cache
 end
 
-function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex)
+function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::Tensor, vertex)
     setindex_preserve!(network(bp_cache), value, vertex)
     return bp_cache
 end

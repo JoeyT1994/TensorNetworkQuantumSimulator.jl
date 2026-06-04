@@ -189,6 +189,88 @@ ITensors.svd(ft::FermionicITensor, row_inds::Index...; kwargs...) =
     ITensors.svd(ft, collect(Index, row_inds); kwargs...)
 
 # ---------------------------------------------------------------------------
+# Symmetric SVD:  ft  ≈  X ∘ Y   with   X = U·√S ,  Y = √S·V
+# ---------------------------------------------------------------------------
+"""
+    symmetric_svd(ft::FermionicITensor, row_inds::Vector{<:Index}; cutoff, maxdim, mindim, tags)
+
+Symmetric singular value decomposition of a parity-even `FermionicITensor`: SVD `ft ≈ U S V`,
+then absorb `√S` into both sides, returning `(X, Y, S, err)` with `X = U·√S`, `Y = √S·V`, so
+that `X ∘ Y ≈ ft` under fermionic contraction over their single shared bond. `row_inds` become
+the spectator legs of `X`; the remaining legs become the spectator legs of `Y`.
+
+The shared bond uses the same arrow convention as `qr` (`X.bond = IN`, `Y.bond = OUT`), so no
+net supertrace is inserted on recontraction and `X ∘ Y` is a plain parity-block matmul
+`(U√S)(√S V) = U S V`. `S` is returned as the diagonal singular-value matrix on its own bond
+pair (legs `[b, bd]`, arrows `[IN, OUT]`, parity-diagonal grading), matching `svd`'s `S`.
+
+`err` is the truncation error `(Σ discarded σ² ) / (Σ all σ²)` computed from the full
+pre-truncation spectrum.
+"""
+function symmetric_svd(ft::FermionicITensor, row_inds::Vector{<:Index};
+        cutoff = nothing, maxdim = nothing, mindim = nothing,
+        use_absolute_cutoff = nothing, use_relative_cutoff = nothing, tags = "Link,fermion")
+    M, pr, pc, R, C = _matricize_ft(ft, collect(Index, row_inds))
+    re, ro = findall(!, pr), findall(identity, pr)
+    ce, co = findall(!, pc), findall(identity, pc)
+
+    Ue, Se, Vte = _safe_svd(M[re, ce])
+    Uo, So, Vto = _safe_svd(M[ro, co])
+
+    # Truncation error from the FULL (pre-truncation) spectrum.
+    total = sum(abs2, Se) + sum(abs2, So)
+    ke, ko = _svd_keep(Se, So; cutoff, maxdim, mindim, use_absolute_cutoff, use_relative_cutoff)
+    kept = sum(abs2, @view Se[ke]) + sum(abs2, @view So[ko])
+    err = total == 0 ? zero(total) : (total - kept) / total
+
+    r0, r1 = length(ke), length(ko)
+    nb = r0 + r1
+    bondgr = Bool[fill(false, r0); fill(true, r1)]
+
+    eltp = eltype(M)
+    nr, nc = size(M)
+    Xfull = zeros(eltp, nr, nb)         # spectator(row) × bond
+    Yfull = zeros(eltp, nb, nc)         # bond × spectator(col)
+    svals = zeros(real(eltp), nb)
+    for (col, k) in enumerate(ke)
+        sq = sqrt(Se[k])
+        Xfull[re, col] = Ue[:, k] .* sq
+        Yfull[col, ce] = Vte[k, :] .* sq
+        svals[col] = Se[k]
+    end
+    for (j, k) in enumerate(ko)
+        col = r0 + j
+        sq = sqrt(So[k])
+        Xfull[ro, col] = Uo[:, k] .* sq
+        Yfull[col, co] = Vto[k, :] .* sq
+        svals[col] = So[k]
+    end
+
+    b = Index(nb, tags)                 # shared bond of X and Y
+    Rdirs = Bool[_dir(ft, i) for i in R]
+    Cdirs = Bool[_dir(ft, i) for i in C]
+
+    # Same arrows as qr: X.b = IN, Y.b = OUT → no net supertrace, plain block matmul.
+    X = _factor_tensor(ft, R, Rdirs, b, true, bondgr, Xfull; bond_first = false)
+    Y = _factor_tensor(ft, C, Cdirs, b, false, bondgr, Yfull; bond_first = true)
+
+    # S on its own bond pair, matching the layout produced by `svd`.
+    bs = Index(nb, tags)
+    bsd = Index(nb, tags)
+    Sgr = Dictionary{Index, Vector{Bool}}(Index[bs, bsd], Vector{Bool}[bondgr, bondgr])
+    Smat = zeros(eltp, nb, nb)
+    for i in 1:nb
+        Smat[i, i] = svals[i]
+    end
+    S = FermionicITensor(ITensor(Smat, bs, bsd), Index[bs, bsd], Bool[true, false], Sgr)
+
+    return X, Y, S, err
+end
+
+symmetric_svd(ft::FermionicITensor, row_inds::Index...; kwargs...) =
+    symmetric_svd(ft, collect(Index, row_inds); kwargs...)
+
+# ---------------------------------------------------------------------------
 # QR:  ft  ≈  Q * R   (fermionic contract)
 # ---------------------------------------------------------------------------
 """
