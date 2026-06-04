@@ -147,12 +147,10 @@ function BoundaryMPSCache(
         gauge_state = false,
         set_messages = true,
     )
-    tn isa AbstractTensorNetwork && is_fermionic(tn) &&
-        error("Boundary MPS is not yet supported for fermionic tensor network states; use alg=\"exact\".")
     grouping_function = partition_by == "row" ? v -> first(v) : v -> last(v)
     group_sorting_function = partition_by == "row" ? v -> last(v) : v -> first(v)
 
-    if gauge_state && (tn isa TensorNetworkState)
+    if gauge_state && (tn isa TensorNetworkState) && !is_fermionic(tn)
         tn = gauge_and_scale(tn)
     end
     pseudo_edges = pseudo_planar_edges(tn; grouping_function)
@@ -187,24 +185,19 @@ function set_interpartition_messages!(
                 setmessage!(bmps_cache, e, default_message(bmps_cache, e))
             end
         end
-        for i in 1:(length(es) - 1)
-            virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
-            ind = Index(virt_dim, "m$(i)$(i + 1)")
-            m1, m2 = message(bmps_cache, es[i]), message(bmps_cache, es[i + 1])
-            t = adapt(datatype(m1))(dense(delta(ind)))
-            setmessage!(bmps_cache, es[i], m1 * t)
-            setmessage!(bmps_cache, es[i + 1], m2 * t)
+        if !is_fermionic(network(bmps_cache))
+            for i in 1:(length(es) - 1)
+                virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
+                ind = Index(virt_dim, "m$(i)$(i + 1)")
+                m1, m2 = message(bmps_cache, es[i]), message(bmps_cache, es[i + 1])
+                t = adapt(datatype(m1))(dense(delta(ind)))
+                setmessage!(bmps_cache, es[i], m1 * t)
+                setmessage!(bmps_cache, es[i + 1], m2 * t)
+            end
+        else
+            set_fermionic_interpartition_messages!(bmps_cache, es)
         end
     end
-    return bmps_cache
-end
-
-#Switch the message tensors on partition edges with their reverse (and dagger them)
-function switch_message!(bmps_cache::BoundaryMPSCache, e::NamedEdge)
-    ms = messages(bmps_cache)
-    me, mer = message(bmps_cache, e), message(bmps_cache, reverse(e))
-    set!(ms, e, dag(mer))
-    set!(ms, reverse(e), dag(me))
     return bmps_cache
 end
 
@@ -275,7 +268,11 @@ function gauge_step!(
     m1, m2 = message(bmps_cache, e1), message(bmps_cache, e2)
     @assert !isempty(commoninds(m1, m2))
     left_inds = uniqueinds(m1, m2)
-    m1, Y = factorize(m1, left_inds; ortho = "left", kwargs...)
+    if !(m1 isa FermionicITensor)
+        m1, Y = factorize(m1, left_inds; ortho = "left", kwargs...)
+    else
+        m1, Y = ITensors.qr(m1, left_inds)
+    end
     m2 = m2 * Y
     setmessage!(bmps_cache, e1, m1)
     setmessage!(bmps_cache, e2, m2)
@@ -299,9 +296,13 @@ function inserter!(
         alg::Algorithm,
         bmps_cache::BoundaryMPSCache,
         update_e::NamedEdge,
-        m::ITensor
+        m::Tensor
     )
-    setmessage!(bmps_cache, reverse(update_e), dag(m))
+    # Store the fit-specific adjoint on the reverse slot: it is read back as the bra-rail when
+    # building the next site's environment, where its crossing legs close against the bulk via
+    # the supertrace (`g·dag`, metric on the crossing legs only — see `fit_adjoint_message`),
+    # while its virtual MPS bonds stay plain-`dag` to match the Euclidean-QR canonical form.
+    setmessage!(bmps_cache, reverse(update_e), fit_adjoint_message(bmps_cache, update_e, m))
     return bmps_cache
 end
 
@@ -512,11 +513,11 @@ end
 
 function edge_scalar(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
     es = sorted_edges(bmps_cache, pe)
-    out = ITensor(one(Bool))
+    out = !is_fermionic(network(bmps_cache)) ? ITensor(one(Bool)) : FermionicITensor(adapt(datatype(bmps_cache))(ITensor(1)), Index[], Bool[], Dictionary{Index, Vector{Bool}}())
     for e in es
         out = (out * (message(bmps_cache, e))) * message(bmps_cache, reverse(e))
     end
-    return out[]
+    return scalar(out)
 end
 
 function delete_partition_messages!(bmps_cache::BoundaryMPSCache, partition::PartitionVertex)
@@ -614,6 +615,18 @@ function sorted_edges(pg::PartitionedGraph, pe::PartitionEdge)
     return sort(NamedEdge.(es); by = x -> findfirst(isequal(src(x)), src_vs))
 end
 
+# Per-vertex factor lists for the boundary-MPS path contraction, keyed by vertex. For a
+# bosonic network each vertex's `norm_factors` is independent, so we build them separately.
+# For a fermionic network a pair of odd operators (e.g. a hopping `c_i† c_j`) shares a single
+# operator-string bond that must be created ONCE across all the path vertices — building the
+# factors vertex-by-vertex would make each odd site look parity-forbidden on its own (and
+# `norm_factors` would return `nothing`). So the fermionic case uses the grouped builder,
+# which threads one shared bond through every vertex. Returns `nothing` if parity-forbidden.
+function _path_vertex_factors(net::AbstractTensorNetwork, verts::Vector, op_string_f::Function)
+    is_fermionic(net) && return fermionic_norm_factors_grouped(net, verts; op_strings = op_string_f)
+    return Dictionary(verts, [norm_factors(net, [v]; op_strings = op_string_f) for v in verts])
+end
+
 function path_contract(
         cache::BoundaryMPSCache, vs::Vector{<:Any}, op_string_f::Function; bmps_messages_up_to_date = false,
         calculate_denom = true
@@ -635,13 +648,18 @@ function path_contract(
         @assert length(lvs) == 2
         lv1, lv2 = first(lvs), last(lvs)
         path = a_star(g, lv1, lv2)
+        # The path visits EVERY vertex of the partition lv1..lv2; build all their factors in one
+        # call so a fermionic odd-operator pair shares its single operator-string bond.
+        path_vs = vcat([src(e) for e in path], [lv2])
+        vertex_factors = _path_vertex_factors(network(cache), path_vs, op_string_f)
+        vertex_factors === nothing && return 0, denom
         lv1_vns = neighbors(g, lv1)
         prev_edge = length(lv1_vns) == 1 ? nothing : NamedEdge(setdiff(lv1_vns, [lv2]) => lv1)
         m = length(lv1_vns) == 1 ? nothing : message(cache, prev_edge)
         for e in path
             ignore_edges = prev_edge == nothing ? typeof(e)[reverse(e)] : typeof(e)[reverse(e), prev_edge]
             incoming_ms = incoming_messages(cache, src(e); ignore_edges)
-            contract_list = norm_factors(network(cache), [src(e)]; op_strings = op_string_f)
+            contract_list = copy(vertex_factors[src(e)])
             append!(contract_list, incoming_ms)
             m != nothing && push!(contract_list, m)
 
@@ -650,14 +668,16 @@ function path_contract(
             prev_edge = e
         end
 
-        contract_list = norm_factors(network(cache), [lv2]; op_strings = op_string_f)
+        contract_list = copy(vertex_factors[lv2])
         incoming_ms = incoming_messages(cache, lv2; ignore_edges = typeof(last(path))[last(path)])
         append!(contract_list, incoming_ms)
         push!(contract_list, m)
         sequence = contraction_sequence(contract_list; alg = "optimal")
         numer = contract(contract_list; sequence)
     else
-        contract_list = norm_factors(network(cache), vs; op_strings = op_string_f)
+        vertex_factors = _path_vertex_factors(network(cache), vs, op_string_f)
+        vertex_factors === nothing && return 0, denom
+        contract_list = copy(vertex_factors[only(vs)])
         incoming_ms = incoming_messages(cache, only(vs))
         append!(contract_list, incoming_ms)
         sequence = contraction_sequence(contract_list; alg = "optimal")
@@ -665,4 +685,97 @@ function path_contract(
     end
 
     return numer, denom
+end
+
+### FERMIONIC HELPERS
+
+# Fermionic interpartition messages: each crossing edge `es[i]` carries the ket/bra
+# crossing legs (from `default_message`) plus the MPS virtual bonds shared with its
+# neighbours. A virtual bond stitched with a plain rank-1 delta would force the
+# message tensor odd whenever the bond carries odd-parity entries, so instead we give
+# every virtual bond a graded init and build each message tensor with `random_even_itensor`.
+# That guarantees a parity-even start whose virtual bonds can transmit odd-parity flux;
+# the orthogonal update then re-derives the true bond gradings via the fermionic QR/SVD.
+#
+# The even/odd SPLIT must match the parity excess of the double-layer environment the bond
+# represents. A double-layer bond from a state bond of dimension χ with `n_e` even / `n_o`
+# odd components has `n_e² + n_o²` even and `2 n_e n_o` odd combinations — an EVEN excess of
+# `(n_e − n_o)²` whenever χ is odd (and a balanced split when χ is even). Seeding the virtual
+# bond with an *odd*-excess grading (e.g. the old alternating `isodd(j)`, which is ⌈D/2⌉ odd)
+# under-allocates the even sector for odd χ, and the fit plateaus at a wrong fixed point
+# (~1e-4 in the norm). Using `[falses(cld(D,2)); trues(fld(D,2))]` — ⌈D/2⌉ EVEN, the same
+# convention the state bonds use (see `random_fermionic_tensornetworkstate`) — gives the
+# matching even excess and the orthogonal sweep reproduces the exact partition function for
+# both even and odd χ.
+_msg_init_grading(D::Integer) = Bool[falses(cld(D, 2)); trues(fld(D, 2))]
+
+function set_fermionic_interpartition_messages!(bmps_cache::BoundaryMPSCache, es::Vector{<:NamedEdge})
+    n = length(es)
+    # virtual indices + their (even-excess) gradings, shared between consecutive edges
+    virtinds = Index[]
+    virtgrad = Dictionary{Index, Vector{Bool}}()
+    for i in 1:(n - 1)
+        virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
+        ind = Index(virt_dim, "m$(i)$(i + 1)")
+        push!(virtinds, ind)
+        # even-excess grading (matches the double-layer environment's parity content)
+        set!(virtgrad, ind, _msg_init_grading(virt_dim))
+    end
+
+    for i in 1:n
+        m = message(bmps_cache, es[i])
+        legs = copy(m.order)
+        dirs = copy(m.dirs)
+        gr = copy(m.grading)
+        if i > 1                                   # left virtual bond (incoming)
+            push!(legs, virtinds[i - 1]); push!(dirs, true)
+            set!(gr, virtinds[i - 1], virtgrad[virtinds[i - 1]])
+        end
+        if i < n                                   # right virtual bond (outgoing)
+            push!(legs, virtinds[i]); push!(dirs, false)
+            set!(gr, virtinds[i], virtgrad[virtinds[i]])
+        end
+        T = adapt(datatype(m))(random_even_itensor(scalartype(m), legs, gr))
+        setmessage!(bmps_cache, es[i], FermionicITensor(T, legs, dirs, gr))
+    end
+    return bmps_cache
+end
+
+# Crossing legs of an interpartition message: the network's virtual index/indices on
+# this edge plus their primes (ket+bra rails). Everything else on a message tensor is a
+# virtual MPS bond shared with a neighbour along the partition boundary.
+function _crossing_inds(bmps_cache::BoundaryMPSCache, e::NamedEdge)
+    cinds = virtualinds(network(bmps_cache), e)
+    return Index[cinds; prime.(cinds)]
+end
+
+# Fit-specific fermionic adjoint for a boundary-MPS bra-rail tensor: `g·dag` with the
+# supertrace metric `g = diag((−1)^p)` applied ONLY on the crossing legs (the network legs the
+# bra-rail contracts against the double-layer bulk when the environment is built), NOT on the
+# virtual MPS bonds.
+#
+# Why crossing-only: the crossing legs are where the bra closes against the ket across a
+# physical bond, so they need the metric that promotes `contract`'s arrow-driven sign to the
+# proper OUT→IN supertrace. The virtual MPS bonds are pure fitting indices orthogonalised by
+# the Euclidean LAPACK QR; a metric there would be inconsistent with that QR and break the
+# canonical form. With this split the orthogonal sweep reproduces the exact boundary
+# environment (hence the exact partition function) for BOTH update directions — applying the
+# metric on all legs, or on the bonds only, leaves the two directions inconsistent and the
+# alternating iteration converges to a wrong fixed point. Bosonic messages need no metric.
+function fit_adjoint_message(bmps_cache::BoundaryMPSCache, e::NamedEdge, m)
+    !(m isa FermionicITensor) && return fit_adjoint(m)
+    crossing = intersect(m.order, _crossing_inds(bmps_cache, e))
+    return fit_adjoint(m, crossing)
+end
+
+#Switch the message tensors on partition edges with their reverse (and dagger them)
+function switch_message!(bmps_cache::BoundaryMPSCache, e::NamedEdge)
+    ms = messages(bmps_cache)
+    me, mer = message(bmps_cache, e), message(bmps_cache, reverse(e))
+    # `fit_adjoint_message` = `g·dag` (fermions) / `dag` (bosons), with the metric on the
+    # crossing legs only (see its definition) so the start/end switch is consistent with the
+    # crossing-leg supertrace closure used to build the fit environment.
+    set!(ms, e, fit_adjoint_message(bmps_cache, e, mer))
+    set!(ms, reverse(e), fit_adjoint_message(bmps_cache, e, me))
+    return bmps_cache
 end

@@ -7,10 +7,13 @@ Random.seed!(1234)
 function main()
     ITensors.disable_warn_order()
     χ = 3
-    println("Building Random Complex Spinful Fermion Tensor Network State |psi> of Bond Dim $χ on 3x4 grid of hexagons")
-    g = named_hexagonal_lattice_graph(3,4)
+    println("Building Random Complex Spinful Fermion Tensor Network State |psi> of Bond Dim $χ on 3x3 grid of hexagons")
+    #g = named_hexagonal_lattice_graph(3,3)
+    g = named_grid((4,4))
+    v1, v2= (2,2), (2,3)
     s = siteinds("spinful_fermion", g)
     ψ = random_fermionic_tensornetworkstate(ComplexF64, g, s; bond_dimension = χ)
+    #ψ = fermionic_tensornetworkstate(ComplexF32, v-> isodd(sum(v)) ? "Up" : "Dn", g, s)
     ψ = normalize(ψ; alg = "bp")
 
     println("Testing the norm <psi|psi>")
@@ -18,12 +21,27 @@ function main()
     println("BP norm is $(norm_sqr(ψ; alg = "bp"))")
 
     println("Running through BMPS Ranks")
-    Rs =  [2,4,8, 16]
+    Rs =  [2,4,8,16, 32]
     for R in Rs
         ψ_bmps = BoundaryMPSCache(ψ, R)
         ψ_bmps = update(ψ_bmps)
         println("BMPS Norm at Rank $R is $(partitionfunction(ψ_bmps))")
     end
+
+    # println("Testing hopping CiupCjupdag + CjupCupidag on nearest neighbors")
+    # e_exact = expect(ψ, (["Cupdag", "Cup"], [v1, v2]); alg = "exact") + expect(ψ, (["Cupdag", "Cup"], [v1, v2]); alg = "exact")
+    # e_bp = expect(ψ, (["Cupdag", "Cup"], [v1, v2]); alg = "bp") + expect(ψ, (["Cupdag", "Cup"], [v1, v2]); alg = "bp")
+    # println("Exact hopping is $e_exact")
+    # println("BP hopping is $e_bp")
+
+    # println("Running through BMPS Ranks")
+    # Rs =  [2,4,8,16, 32]
+    # for R in Rs
+    #     e_bmps = expect(ψ, (["Cupdag", "Cup"], [v1, v2]); alg = "boundarymps", mps_bond_dimension = R) + expect(ψ, (["Cupdag", "Cup"], [v1, v2]); alg = "boundarymps", mps_bond_dimension = R)
+    #     println("BMPS hopping at Rank $R is $e_bmps")
+    # end
+
+
 end
 
 main()

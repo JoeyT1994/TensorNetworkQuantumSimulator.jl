@@ -83,6 +83,7 @@ function expect(
 
     #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
     ψOψ_tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
+    ψOψ_tensors === nothing && return 0
     append!(ψOψ_tensors, incoming_ms)
     numer_seq = contraction_sequence(ψOψ_tensors; alg = "optimal", prune_tensors = true)
     numer = scalar(contract(ψOψ_tensors; sequence = numer_seq))
@@ -103,7 +104,10 @@ function expect(
     op_string_f = v -> get(op_dict, v, "I")
 
     numer, denom = path_contract(cache, obs_vs, op_string_f; bmps_messages_up_to_date)
-    return coeff * numer[] / denom
+    # `numer` is a (fermionic or bosonic) scalar tensor, or `0` when the observable is
+    # parity-forbidden (odd total parity ⇒ ⟨O⟩ = 0).
+    numer isa Tensor || return coeff * numer / denom
+    return coeff * scalar(numer) / denom
 end
 
 function expect(

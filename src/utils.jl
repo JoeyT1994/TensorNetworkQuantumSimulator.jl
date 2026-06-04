@@ -36,7 +36,7 @@ end
 
 #Function for checking the correct algorithm is being used for the given cache type and functionality
 function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState}, f::String, alg)
-    if tns isa TensorNetworkState && is_fermionic(tns) && (alg != "exact") && (alg != "bp")
+    if tns isa TensorNetworkState && is_fermionic(tns) && (alg != "exact") && (alg != "bp") && (alg != "boundarymps")
         return error("Only alg=\"exact\" or \"bp\" is currently supported for fermionic tensor network states.")
     end
     if alg == "bp"

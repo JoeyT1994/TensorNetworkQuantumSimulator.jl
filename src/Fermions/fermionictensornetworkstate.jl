@@ -200,7 +200,8 @@ function fermionic_tensornetworkstate(
         end
         is = collect(index_order[v])
         local_grading = Dictionary{Index, Vector{Bool}}(is, [grading[i] for i in is])
-        set!(tensors, v, FermionicITensor(t, index_order[v], index_directions[v], local_grading))
+        ft = FermionicITensor(t, index_order[v], index_directions[v], local_grading)
+        set!(tensors, v, adapt(eltype)(ft))
     end
 
     return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
@@ -216,31 +217,49 @@ end
 # caller folds the list with the order-independent `contract`; the optimal sequence finder
 # picks the fold tree. `op_strings(v)` gives the operator name on vertex `v` ("I"/"ρ" =
 # identity). Returns `nothing` when `O` has odd total parity (⟨O⟩ = 0).
-function fermionic_norm_factors(ψ::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I")
-    # Pre-scan odd operators: an odd number of odd factors is parity-forbidden, and a pair
-    # shares one dummy odd "operator-string" bond `d` (Eq.95-96) created once here.
+# Per-vertex grouped form of `fermionic_norm_factors`: returns a `Dictionary` mapping each
+# vertex in `verts` to its own `[ket, bra, (op)]` factor list, or `nothing` when the operator
+# product has odd total parity (⟨O⟩ = 0). The single operator-string dummy bond `d` (Eq.95-96)
+# shared by a pair of odd factors is created ONCE here and threaded into both vertices, so the
+# grouping is safe to consume vertex-by-vertex (e.g. by the boundary-MPS `path_contract`): the
+# `d` leg simply stays open on the running tensor until the second odd factor is contracted.
+function fermionic_norm_factors_grouped(ψ::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I")
     odd_vs = [v for v in verts if is_odd(op_strings(v))]
     isodd(length(odd_vs)) && return nothing             # parity-forbidden ⇒ ⟨O⟩ = 0
     length(odd_vs) > 2 && error("Fermionic expect currently supports at most one pair of odd operators (e.g. a single hopping term).")
     d = isempty(odd_vs) ? nothing : Index(1, "Fermion,OpString")
 
-    factors = FermionicITensor[]
+    grouped = Dictionary{eltype(verts), Vector{FermionicITensor}}()
     for v in verts
         name = op_strings(v)
         op_here = !(name == "I" || name == "ρ")
         ket = ψ[v]
         # keep the un-operated site legs unprimed; prime everything else (bonds, op sites)
         keep = op_here ? Index[] : collect(siteinds(ψ, v))
-        push!(factors, ket, dag(ket, keep))
-        op_here || continue
-        s = only(siteinds(ψ, v))
-        (dim(s) == 2 || dim(s) == 4) || error("Fermionic measurement currently supports spinless (dimension-2) or spinful (dimension-4) sites only.")
-        sgr = ket.grading[s]
-        # A pair of ODD factors (e.g. a hopping c_i† c_j) shares the dummy `d`; each carries
-        # it with the arrow set by `odd_op_tensor` (creation = bra, annihilation = ket), so
-        # `contract` inserts the supertrace g once — supplying the (−1) of the fermionic
-        # operator ordering automatically, regardless of fold order.
-        push!(factors, is_odd(name) ? odd_op_tensor(s, name, d, sgr) : even_op_tensor(s, name, sgr))
+        fs = FermionicITensor[ket, dag(ket, keep)]
+        if op_here
+            s = only(siteinds(ψ, v))
+            (dim(s) == 2 || dim(s) == 4) || error("Fermionic measurement currently supports spinless (dimension-2) or spinful (dimension-4) sites only.")
+            sgr = ket.grading[s]
+            # A pair of ODD factors (e.g. a hopping c_i† c_j) shares the dummy `d`; each carries
+            # it with the arrow set by `odd_op_tensor` (creation = bra, annihilation = ket), so
+            # `contract` inserts the supertrace g once — supplying the (−1) of the fermionic
+            # operator ordering automatically, regardless of fold order.
+            push!(fs, is_odd(name) ? odd_op_tensor(s, name, d, sgr) : even_op_tensor(s, name, sgr))
+        end
+        set!(grouped, v, fs)
     end
-    return factors
+    return grouped
+end
+
+# Fermionic analogue of the bosonic `norm_factors` (src/TensorNetworks/tensornetworkstate.jl):
+# for each vertex emit its ket tensor, its bra tensor, and any single-site operator factor,
+# producing the flat `2N + n_ops` parity-even tensor list for ⟨ψ|O|ψ⟩ (unnormalised). The
+# caller folds the list with the order-independent `contract`; the optimal sequence finder
+# picks the fold tree. `op_strings(v)` gives the operator name on vertex `v` ("I"/"ρ" =
+# identity). Returns `nothing` when `O` has odd total parity (⟨O⟩ = 0).
+function fermionic_norm_factors(ψ::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I")
+    grouped = fermionic_norm_factors_grouped(ψ, verts; op_strings)
+    grouped === nothing && return nothing
+    return reduce(vcat, [grouped[v] for v in verts]; init = FermionicITensor[])
 end
