@@ -5,11 +5,19 @@ using EinExprs: EinExprs, EinExpr, einexpr, SizedEinExpr
 itensors(fts::Vector{<:FermionicITensor}) = ITensors.ITensor.(fts)
 itensors(ts::Vector{<:ITensor}) = ts
 
+# A trivial (scalar, index-free) replacement of the same tensor type. Only the
+# indices of the pruned tensors are used to compute the contraction sequence, so
+# the numerical content is irrelevant.
+trivial_tensor(t::ITensor) = adapt(datatype(t))(ITensor(1))
+function trivial_tensor(t::FermionicITensor)
+    return FermionicITensor(adapt(datatype(t))(ITensor(1)), Index[], Bool[], Dictionary{Index, Vector{Bool}}())
+end
+
 function prune_trivial_tensors(tensors::Vector{<:Tensor})
     pruned_tensors = copy(tensors)
     for (i, t) in enumerate(pruned_tensors)
         if all(d -> d == 1, dim.(inds(tensors[i])))
-            pruned_tensors[i] = adapt(datatype(t))(ITensor(1))
+            pruned_tensors[i] = trivial_tensor(t)
         end
     end
     return pruned_tensors

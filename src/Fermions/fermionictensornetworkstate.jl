@@ -28,6 +28,55 @@ function FermionicITensor(ψ::TensorNetworkState, v)
     error("Tensor is not fermionic")
 end
 
+# Z2 grading (per-component parity bits) of a fermionic site index.
+function _fermionic_site_grading(sind::Index)
+    if dim(sind) == 2 && occursin("fermion", string(tags(sind)))
+        return [false, true]                       # |0⟩ even, |1⟩ odd
+    elseif dim(sind) == 4 && occursin("spinful_fermion", string(tags(sind)))
+        return [false, true, true, false]          # |0⟩, |↑⟩, |↓⟩, |↑↓⟩
+    end
+    error("Don't recognize this as a fermionic site index")
+end
+
+# Build the locally-ordered leg metadata shared by every fermionic `TensorNetworkState`:
+#   * `grading`          : parity bits for every site and bond `Index`,
+#   * `index_order`      : per-vertex fermionic leg order `[site(s); incident bonds]`,
+#   * `index_directions` : per-vertex arrows (sites out/`false`; each bond out at `src`,
+#                          in at `dst`, so the arrow points `src → dst`),
+#   * `l`                : `NamedEdge → bond Index` (stored for both orientations).
+# `bond_grading(e)` returns the parity-bit vector of edge `e`'s bond; its length is the
+# bond dimension. Arrows are local to bonds, so no global tensor ordering is needed
+# (locally-ordered formalism, arXiv:2410.02215).
+function _fermionic_scaffolding(g::AbstractGraph, siteinds::Dictionary, bond_grading::Function)
+    grading = Dictionary{Index, Vector{Bool}}()
+    index_order = Dictionary{vertextype(g), Vector{<:Index}}()
+    index_directions = Dictionary{vertextype(g), Vector{Bool}}()
+
+    for v in collect(vertices(g))
+        sinds = siteinds[v]
+        for sind in sinds
+            set!(grading, sind, _fermionic_site_grading(sind))
+        end
+        set!(index_order, v, collect(sinds))
+        set!(index_directions, v, fill(false, length(sinds)))
+    end
+
+    l = Dict{NamedEdge{vertextype(g)}, Index}()
+    for e in edges(g)
+        bg = bond_grading(e)
+        b = Index(length(bg), "Fermion,Link")
+        set!(grading, b, bg)
+        index_order[src(e)] = [index_order[src(e)]; [b]]
+        index_order[dst(e)] = [index_order[dst(e)]; [b]]
+        index_directions[src(e)] = [index_directions[src(e)]; [false]]
+        index_directions[dst(e)] = [index_directions[dst(e)]; [true]]
+        l[e] = b
+        l[reverse(e)] = b
+    end
+
+    return grading, index_order, index_directions, l
+end
+
 """
     random_fermionic_tensornetworkstate(eltype, g::AbstractGraph; bond_dimension = 1, bond_grading = ...)
 
@@ -58,39 +107,8 @@ function random_fermionic_tensornetworkstate(
     )
     vs = collect(vertices(g))
 
-    grading = Dictionary{Index, Vector{Bool}}()
-    index_order = Dictionary{vertextype(g), Vector{<:Index}}()
-    index_directions = Dictionary{vertextype(g), Vector{Bool}}()
-
-    # Site indices first
-    for v in vs
-        for sind in siteinds[v]
-            if dim(sind) == 2 && occursin("fermion", string(tags(sind)))
-                set!(grading, sind, [false, true])
-            elseif dim(sind) == 4 && occursin("spinful_fermion", string(tags(sind)))
-                set!(grading, sind, [false, true, true, false])
-            else
-                error("Don't recognize this as a fermionic site index")
-            end
-            set!(index_order, v, [sind])
-            set!(index_directions, v, [false])
-        end
-    end
-
-    # Each bond is appended to both endpoints' leg order, with an arrow `src → dst`
-    # (src holds it as out/+, dst as in/−). Arrows are local to bonds, so no global
-    # ordering of the tensors is needed (locally-ordered formalism, arXiv:2410.02215).
-    l = Dict{NamedEdge{vertextype(g)}, Index}()
-    for e in edges(g)
-        b = Index(bond_dimension, "Fermion,Link")
-        set!(grading, b, bond_grading)
-        index_order[src(e)] = [index_order[src(e)]; [b]]
-        index_order[dst(e)] = [index_order[dst(e)]; [b]]
-        index_directions[src(e)] = [index_directions[src(e)]; [false]]
-        index_directions[dst(e)] = [index_directions[dst(e)]; [true]]
-        l[e] = b
-        l[reverse(e)] = b
-    end
+    # Every bond shares the same dimension and grading.
+    grading, index_order, index_directions, l = _fermionic_scaffolding(g, siteinds, e -> bond_grading)
 
     tensors = Dictionary{vertextype(g), FermionicITensor}()
     for v in vs
@@ -107,6 +125,89 @@ end
 
 function random_fermionic_tensornetworkstate(g::AbstractGraph, args...; kwargs...)
     return random_fermionic_tensornetworkstate(Float64, g, args...; kwargs...)
+end
+
+"""
+    fermionic_tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dictionary = siteinds("fermion", g))
+
+Construct a fermionic product `TensorNetworkState` on graph `g`, where `f` maps each vertex
+to its local state. Local states may be given as basis-state Strings (spinless: `"0"`/`"Emp"`,
+`"1"`/`"Occ"`; spinful: `"0"`/`"Emp"`, `"Up"`/`"↑"`, `"Dn"`/`"↓"`, `"UpDn"`/`"↑↓"`) or as
+parity-definite vectors.
+
+Each tensor is parity even (the locally-ordered formalism, arXiv:2410.02215). Because an
+occupied site (`|1⟩`, `|↑⟩`, `|↓⟩`) is parity *odd*, the occupation parity is carried on
+dimension-1 *odd* virtual bonds: a Jordan–Wigner-style string wired along a spanning tree.
+The required odd-bond set is the unique T-join on the tree, computed in one post-order pass
+(a bond is odd iff the total occupation parity of the subtree below it is odd). Loop (non-tree)
+edges carry even dimension-1 bonds.
+
+This requires an **even** total number of fermions: an odd total parity cannot be represented
+by parity-even tensors alone and raises an error.
+"""
+function fermionic_tensornetworkstate(
+        eltype, f::Function, g::AbstractGraph,
+        siteinds::Dictionary = siteinds("fermion", g),
+    )
+    vs = collect(vertices(g))
+
+    # 1) Resolve each vertex's local state vector and its (definite) parity.
+    state_vecs = Dictionary{vertextype(g), Vector}()
+    p = Dictionary{vertextype(g), Bool}()
+    for v in vs
+        sind = only(siteinds[v])
+        gr = _fermionic_site_grading(sind)
+        fv = f(v)
+        vec = if fv isa String
+            fermionic_statevector(fv, sind)
+        elseif fv isa AbstractVector{<:Number}
+            collect(fv)
+        else
+            error("Unrecognized local state constructor. Supported: String names and parity-definite vectors.")
+        end
+        length(vec) == dim(sind) || error("Local state vector length $(length(vec)) ≠ site dimension $(dim(sind)).")
+        set!(state_vecs, v, vec)
+        set!(p, v, fermionic_state_parity(vec, gr))
+    end
+
+    # 2) Hard error on odd total fermion parity — not representable by parity-even tensors.
+    isodd(sum(values(p))) && error("Total fermion parity is odd: a product state with an odd number of fermions cannot be built from parity-even tensors in the locally-ordered formalism.")
+
+    # 3) T-join on a spanning tree: a dim-1 bond is ODD iff the occupation parity of the
+    #    subtree below it is odd. `post_order_dfs_edges` returns tree edges directed
+    #    child → parent (loop edges excluded); one pass folds subtree parities upward.
+    acc = Dictionary(vs, [p[v] for v in vs])
+    odd_bond = Dict{NamedEdge{vertextype(g)}, Bool}()
+    for e in post_order_dfs_edges(g, first(vs))
+        c, par = src(e), dst(e)
+        odd_bond[e] = acc[c]
+        odd_bond[reverse(e)] = acc[c]
+        acc[par] ⊻= acc[c]
+    end
+
+    # 4) Scaffolding with per-edge bond grading from the T-join (loop edges default even).
+    bond_grading(e) = get(odd_bond, e, false) ? Bool[true] : Bool[false]
+    grading, index_order, index_directions, l = _fermionic_scaffolding(g, siteinds, bond_grading)
+
+    # 5) Build each parity-even vertex tensor: state vector on the site leg, a 1 on every
+    #    dimension-1 incident bond.
+    tensors = Dictionary{vertextype(g), FermionicITensor}()
+    for v in vs
+        sind = only(siteinds[v])
+        t = adapt(eltype)(ITensor(state_vecs[v], sind))
+        for vn in neighbors(g, v)
+            t *= onehot(eltype, l[NamedEdge(v => vn)] => 1)
+        end
+        is = collect(index_order[v])
+        local_grading = Dictionary{Index, Vector{Bool}}(is, [grading[i] for i in is])
+        set!(tensors, v, FermionicITensor(t, index_order[v], index_directions[v], local_grading))
+    end
+
+    return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
+end
+
+function fermionic_tensornetworkstate(f::Function, args...)
+    return fermionic_tensornetworkstate(Float64, f, args...)
 end
 
 # Fermionic analogue of the bosonic `norm_factors` (src/TensorNetworks/tensornetworkstate.jl):

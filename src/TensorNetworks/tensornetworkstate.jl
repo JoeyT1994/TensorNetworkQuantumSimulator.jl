@@ -82,7 +82,12 @@ function default_message(tns::TensorNetworkState, edge::AbstractEdge)
     if !is_fermionic(tns)
         return adapt(datatype(tns))(denseblocks(delta(vcat(linds, prime(dag(linds))))))
     else
-        return adapt(datatype(tns))(even_op_tensor(only(linds), "I", grading(tns, edge)))
+        s = only(linds)
+        sgr = grading(tns, edge)
+        u = prime(s)
+        gr = Dictionary{Index, Vector{Bool}}([u, s], [sgr, sgr])
+        T = adapt(datatype(tns))(denseblocks(delta(u, s)))
+        return FermionicITensor(T, Index[u, s], Bool[false, true], gr)
     end
 end
 

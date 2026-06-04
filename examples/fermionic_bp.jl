@@ -56,3 +56,7 @@ e_exact = expect(ψ, (["Cupdag", "Cup"], [(2,2), (2,3)]); alg = "exact") + expec
 e_bp = expect(ψ, (["Cupdag", "Cup"], [(2,2), (2,3)]); alg = "bp") + expect(ψ, (["Cupdag", "Cup"], [(2,3), (2,2)]); alg = "bp")
 println("Exact hopping is $e_exact")
 println("BP hopping is $e_bp")
+
+ψp = fermionic_tensornetworkstate(ComplexF32, v-> isodd(sum(v)) ? "Up" : "Dn", g, s)
+
+@show expect(ψp, [(["Nup"], [v]) for v in vertices(ψp)]; alg = "bp") + expect(ψp, [(["Ndn"], [v]) for v in vertices(ψp)]; alg = "bp")

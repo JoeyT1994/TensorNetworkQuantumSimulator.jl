@@ -65,6 +65,7 @@ export
     tensornetworkstate,
     random_tensornetworkstate,
     random_fermionic_tensornetworkstate,
+    fermionic_tensornetworkstate,
     FermionicITensor,
     is_fermionic,
     contract,

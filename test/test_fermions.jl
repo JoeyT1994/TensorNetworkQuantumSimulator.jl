@@ -1,7 +1,7 @@
 @eval module $(gensym())
 using TensorNetworkQuantumSimulator
 const TN = TensorNetworkQuantumSimulator
-using Test: @testset, @test
+using Test: @testset, @test, @test_throws
 using Random
 using ITensors
 using ITensors: ITensors, Index, ITensor, dim, inds, contract, permute, scalar
@@ -260,6 +260,71 @@ end
             @test expect(ψ, (["Cdag"], [v]); alg = "exact") ≈ 0 atol = 1e-12
             @test expect(ψ, (["C"], [v]); alg = "exact") ≈ 0 atol = 1e-12
         end
+    end
+
+    # ---------------------------------------------------------------------------
+    # product-state constructor (fermionic_tensornetworkstate)
+    # ---------------------------------------------------------------------------
+    @testset "product state: spinless ($name)" for (name, g) in
+        ("chain" => named_grid((4, 1)), "grid2x2" => named_grid((2, 2)))
+        s = siteinds("fermion", g)
+        vs = collect(vertices(g))
+        # occupy every other vertex; flip one if needed so the total parity is even
+        occ = Dictionary(vs, [isodd(i) ? 1 : 0 for i in eachindex(vs)])
+        isodd(sum(occ)) && (occ[first(vs)] = 1 - occ[first(vs)])
+
+        ψ = fermionic_tensornetworkstate(v -> occ[v] == 1 ? "Occ" : "Emp", g, s)
+        @test norm_sqr(ψ; alg = "exact") ≈ 1
+        is_tree(g) && @test norm_sqr(ψ; alg = "bp") ≈ 1
+        for v in vs
+            @test expect(ψ, (["N"], [v]); alg = "exact") ≈ occ[v]
+            is_tree(g) && @test expect(ψ, (["N"], [v]); alg = "bp") ≈ occ[v]
+        end
+    end
+
+    @testset "product state: spinful" begin
+        g = named_grid((2, 2))
+        s = siteinds("spinful_fermion", g)
+        vs = collect(vertices(g))
+        # Up (odd), Dn (odd), UpDn (even), Emp (even) -> total parity even
+        names = Dictionary(vs, ["Up", "Dn", "UpDn", "Emp"])
+        nup = Dictionary(vs, [1, 0, 1, 0])
+        ndn = Dictionary(vs, [0, 1, 1, 0])
+
+        ψ = fermionic_tensornetworkstate(v -> names[v], g, s)
+        @test norm_sqr(ψ; alg = "exact") ≈ 1
+        for v in vs
+            @test expect(ψ, (["Nup"], [v]); alg = "exact") ≈ nup[v]
+            @test expect(ψ, (["Ndn"], [v]); alg = "exact") ≈ ndn[v]
+        end
+    end
+
+    @testset "product state: vector-form local states" begin
+        g = named_grid((2, 1))
+        s = siteinds("fermion", g)
+        # |1> on both sites (parity-definite vectors); 2 fermions -> even total
+        ψ = fermionic_tensornetworkstate(v -> [0.0, 1.0], g, s)
+        @test norm_sqr(ψ; alg = "exact") ≈ 1
+        for v in vertices(g)
+            @test expect(ψ, (["N"], [v]); alg = "exact") ≈ 1
+        end
+    end
+
+    @testset "product state: eltype + convenience dispatch" begin
+        g = named_grid((2, 1))
+        s = siteinds("fermion", g)
+        ψ = fermionic_tensornetworkstate(ComplexF64, v -> "Emp", g, s)
+        @test eltype(FT(ψ, first(vertices(g))).tensor) == ComplexF64
+    end
+
+    @testset "product state: errors" begin
+        g = named_grid((3, 1))
+        s = siteinds("fermion", g)
+        # odd total fermion parity (a single fermion) is not representable
+        @test_throws ErrorException fermionic_tensornetworkstate(
+            v -> v == first(vertices(g)) ? "Occ" : "Emp", g, s)
+        # coherent parity superposition (|0> + |1>) is forbidden
+        @test_throws ErrorException fermionic_tensornetworkstate(v -> ComplexF64[1, 1], g, s)
     end
 end
 end

@@ -58,3 +58,32 @@ function odd_op_tensor(s::Index, name::String, d::Index, sgr::Vector{Bool})
         return FermionicITensor(T, Index[d, u, s], Bool[false, false, true], gr)
     end
 end
+
+# Local product-state vector for a named fermionic basis state. Spinless (dim 2):
+# |0⟩/|1⟩; spinful (dim 4): |0⟩, |↑⟩, |↓⟩, |↑↓⟩.
+function fermionic_statevector(name::String, sind::Index)
+    d = dim(sind)
+    if d == 2
+        name in ("0", "Emp", "Empty") && return ComplexF64[1, 0]
+        name in ("1", "Occ", "Occupied") && return ComplexF64[0, 1]
+        error("Unrecognized spinless fermion state \"$name\". Supported: 0/Emp, 1/Occ.")
+    elseif d == 4
+        name in ("0", "Emp", "Empty") && return ComplexF64[1, 0, 0, 0]
+        name in ("Up", "↑") && return ComplexF64[0, 1, 0, 0]
+        name in ("Dn", "Down", "↓") && return ComplexF64[0, 0, 1, 0]
+        name in ("UpDn", "↑↓", "2") && return ComplexF64[0, 0, 0, 1]
+        error("Unrecognized spinful fermion state \"$name\". Supported: 0/Emp, Up/↑, Dn/↓, UpDn/↑↓.")
+    end
+    error("Fermionic product states support dimension-2 or dimension-4 sites only.")
+end
+
+# Parity (false = even, true = odd) of a parity-DEFINITE local state. Errors if the
+# vector has weight in both sectors — coherent parity superpositions are forbidden by
+# fermion-parity superselection and would make the local tensor parity-indefinite.
+function fermionic_state_parity(vec::AbstractVector, gr::Vector{Bool})
+    nz = findall(!iszero, vec)
+    isempty(nz) && error("Local fermion state is the zero vector.")
+    ps = unique(gr[i] for i in nz)
+    length(ps) == 1 || error("Local fermion state mixes even and odd parity sectors; fermion-parity superselection forbids this.")
+    return only(ps)
+end
