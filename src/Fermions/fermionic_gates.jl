@@ -20,8 +20,18 @@
 # NOTE: fermionic `contract` of two multi-site OPERATOR tensors is *network*
 # contraction, not operator composition — closing several operator legs at once injects
 # extra supertrace signs. So gates must be exponentiated as matrices here (not by
-# composing tensors), and applied to a state by closing one site bond at a time (the
-# `fermionic_norm_factors` pattern), never as a single double-bond blob.
+# composing tensors).
+#
+# APPLYING a gate to a state: the gate's dense array is an even operator with its sites
+# ADJACENT in a fixed mode order, so it acts as `o ⊗ I` on every other leg. Apply it by
+# (1) bringing the state's physical legs for the gate's sites adjacent via a fermionic
+# `permute` (this threads the correct Koszul sign through any leg — e.g. a QR/virtual
+# bond — sitting between them), then (2) contracting the gate onto those adjacent legs
+# with an ORDINARY (non-fermionic) contraction. See `simple_update`. A fermionic
+# `contract` blob (`o * ψ`) instead injects spurious supertrace signs and is wrong;
+# ordinary contraction WITHOUT the adjacency permute misses the reorder sign. Either
+# error corrupts the gate's odd-odd (e.g. hopping) channel whenever a fermionic bond
+# lies between the two sites.
 
 using ITensors: ITensors, ITensor, Index, prime, array, dim
 using Dictionaries: Dictionary
@@ -68,16 +78,34 @@ end
 
 # --- Hamiltonian-term assembly ----------------------------------------------
 
-# Locally-ordered two-site product c^{name_i}_i c^{name_j}_j (each `name` a single odd
-# creation/annihilation operator) assembled from the validated `odd_op_tensor` pair
-# joined over the operator-string dummy bond. Returns the array in canonical leg order
-# [prime(s_i), s_i, prime(s_j), s_j].
-function _two_site_odd_pair_array(s_i::Index, name_i::String, s_j::Index, name_j::String, sgr_i, sgr_j)
-    d = Index(1, "Fermion,OpString")
-    ti = odd_op_tensor(s_i, name_i, d, sgr_i)
-    tj = odd_op_tensor(s_j, name_j, d, sgr_j)
-    H = contract(ti, tj)
-    return ITensors.array(H.tensor, prime(s_i), s_i, prime(s_j), s_j)
+# Two-site fermion-bilinear `c^{name_i}_i c^{name_j}_j` (each `name` a single odd
+# creation/annihilation operator) as its Jordan-Wigner Fock matrix on the ADJACENT pair,
+# with site `i` ordered before site `j`. Returned in canonical leg order
+# [prime(s_i), s_i, prime(s_j), s_j] (i.e. components A[out_i, in_i, out_j, in_j]).
+#
+# Derivation (no ED fitting): in the mode order (site-i modes, then site-j modes) the
+# product is `(M_i ⊗ 𝟙_j)(P_i ⊗ M_j) = (M_i P_i) ⊗ M_j`, where `M_i`/`M_j` are the
+# single-site Fock matrices (`fermion_op_matrix`, which already bake in each site's INTRA-site
+# spin string) and `P_i = diag((−1)^{p})` is site i's parity. The factor `P_i` is the
+# Jordan-Wigner string that the operator on site j drags across all of site i's modes — for a
+# spinful site this is the FULL on-site parity `(−1)^{n↑+n↓}`, so a hop onto/off a site that
+# already holds the opposite spin (a double-occupancy transition) correctly picks up the
+# spectator-spin sign. (Closing the two odd legs through the operator-string dummy bond instead
+# threads only a single-mode string and drops exactly those doubly-occupied signs.)
+#
+# This is the matrix the gate's `simple_update` application expects: it carries the i→j string
+# for the two sites held ADJACENT, while the fermionic `permute` in `simple_update` supplies the
+# remaining string for any virtual/spectator legs physically lying between them.
+function _two_site_hop_array(s_i::Index, name_i::String, s_j::Index, name_j::String, sgr_i)
+    Mi = fermion_op_matrix(name_i, s_i)            # [out_i, in_i]
+    Mj = fermion_op_matrix(name_j, s_j)            # [out_j, in_j]
+    MiP = Mi * LinearAlgebra.Diagonal(ComplexF64[b ? -1 : 1 for b in sgr_i])   # M_i · P_i
+    di, dj = dim(s_i), dim(s_j)
+    A = Array{ComplexF64}(undef, di, di, dj, dj)
+    for oi in 1:di, ii in 1:di, oj in 1:dj, ij in 1:dj
+        A[oi, ii, oj, ij] = MiP[oi, ii] * Mj[oj, ij]
+    end
+    return A
 end
 
 """
@@ -86,8 +114,9 @@ end
 The nearest-neighbour hopping Hamiltonian `H = Σ_σ (c†_{iσ} c_{jσ} + c†_{jσ} c_{iσ})`
 as a parity-even operator `FermionicITensor` on the two site indices (legs
 `[prime(s_i), s_i, prime(s_j), s_j]`). Spinless (dimension-2) sites carry a single
-mode; spinful (dimension-4) sites sum over the up and down modes. Assembled from the
-validated odd-operator primitives.
+mode; spinful (dimension-4) sites sum over the up and down modes. Each bilinear is built as
+its adjacent-pair Jordan-Wigner Fock matrix (see `_two_site_hop_array`), so the on-site spin
+string is carried correctly through double-occupancy transitions.
 """
 function fermionic_hopping_hamiltonian(s_i::Index, s_j::Index)
     dim(s_i) == dim(s_j) || error("Hopping requires two sites of equal local dimension.")
@@ -106,7 +135,7 @@ function fermionic_hopping_hamiltonian(s_i::Index, s_j::Index)
     end
     A = zeros(ComplexF64, dim(s_i), dim(s_i), dim(s_j), dim(s_j))
     for (c, ni, nj) in terms
-        A .+= c .* _two_site_odd_pair_array(s_i, ni, s_j, nj, sgr_i, sgr_j)
+        A .+= c .* _two_site_hop_array(s_i, ni, s_j, nj, sgr_i)
     end
     order = Index[prime(s_i), s_i, prime(s_j), s_j]
     gr = Dictionary{Index, Vector{Bool}}(order, Vector{Bool}[sgr_i, sgr_i, sgr_j, sgr_j])
@@ -128,6 +157,21 @@ function fermionic_number_hamiltonian(s::Index)
     else
         error("Number operator supports spinless (dim 2) or spinful (dim 4) sites only.")
     end
+    return _onsite_even_ft(s, M, sgr)
+end
+
+"""
+    fermionic_interaction_hamiltonian(s::Index) -> FermionicITensor
+
+The on-site Hubbard interaction operator `n↑ n↓` as a parity-even operator
+`FermionicITensor` on a spinful (dimension-4) site `s` (legs `[prime(s), s]`); it is the
+projector onto the doubly-occupied state. Defined for spinful sites only — `n↑ n↓` has no
+meaning on a spinless (dimension-2) site.
+"""
+function fermionic_interaction_hamiltonian(s::Index)
+    dim(s) == 4 || error("Interaction n↑n↓ requires a spinful (dim 4) site.")
+    sgr = _fermionic_site_grading(s)
+    M = fermion_op_matrix("NupNdn", s)
     return _onsite_even_ft(s, M, sgr)
 end
 
@@ -153,5 +197,19 @@ spinful). With the default `coeff = -im` this is `exp(-i dt N)`.
 """
 function fermionic_number_gate(dt::Number, s::Index; coeff::Number = -im)
     H = fermionic_number_hamiltonian(s)
+    return fermionic_exp_gate(H; outs = Index[prime(s)], ins = Index[s], dt, coeff)
+end
+
+"""
+    fermionic_interaction_gate(dt, s::Index; coeff = -im) -> FermionicITensor
+
+The on-site Hubbard interaction propagator `exp(coeff · dt · n↑ n↓)` on a spinful
+(dimension-4) site. With the default `coeff = -im` this is the real-time Trotter gate
+`exp(-i dt n↑ n↓)`; pass `coeff = -1` for the imaginary-time `exp(-dt n↑ n↓)`. Because
+`n↑ n↓` is the double-occupancy projector, the gate is diagonal and only the doubly-occupied
+state picks up the phase/weight `exp(coeff · dt)`.
+"""
+function fermionic_interaction_gate(dt::Number, s::Index; coeff::Number = -im)
+    H = fermionic_interaction_hamiltonian(s)
     return fermionic_exp_gate(H; outs = Index[prime(s)], ins = Index[s], dt, coeff)
 end

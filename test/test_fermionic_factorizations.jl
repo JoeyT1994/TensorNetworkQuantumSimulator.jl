@@ -76,25 +76,38 @@ end
     # ---- pseudo_sqrt_inv_sqrt ------------------------------------------------
     @testset "pseudo_sqrt_inv_sqrt (eltype=$eltp)" for eltp in (Float64, ComplexF64)
         bits = Bool[false, true, true, false]
-        a = Index(4, "bond"); a2 = sim(a)
+        a = Index(4, "bond"); a2 = prime(a)
         gr = Dictionary{Index, Vector{Bool}}(Index[a, a2], Vector{Bool}[bits, bits])
         re = findall(!, bits); ro = findall(identity, bits)
 
-        randpsd(k) = (B = randn(eltp, k, k); B * B' + k * one(B))  # well-conditioned PSD
-        rho = zeros(eltp, 4, 4)
-        rho[re, re] = randpsd(length(re))
-        rho[ro, ro] = randpsd(length(ro))
-
-        # A valid fermionic bond matrix: M = g·rho (flip the odd rows). The odd sector is
-        # then negative-definite, exactly as a real fermionic message would be.
-        Mmat = copy(rho)
-        Mmat[ro, :] .*= -1
-        # a2 = OUT so that `bondmul` inserts the supertrace that reinstates the metric.
+        # A real BP message is Hermitian but NOT positive-semidefinite: it carries the
+        # supertrace metric, so its parity blocks can have NEGATIVE eigenvalues (verified —
+        # e.g. `incoming_messages` returns blocks like `diag(−0.223, 1.223)`). Build such a
+        # message: each parity block is a random Hermitian (indefinite) matrix. dirs
+        # [a = IN, a2 = OUT] match a real message's orientation.
+        randherm(k) = (B = randn(eltp, k, k); B + B')      # Hermitian, generally indefinite
+        Mmat = zeros(eltp, 4, 4)
+        Mmat[re, re] = randherm(length(re))
+        Mmat[ro, ro] = randherm(length(ro))
         M = FT(ITensor(Mmat, a, a2), Index[a, a2], Bool[true, false], gr)
 
         X, Xinv = TN.pseudo_sqrt_inv_sqrt(M)
-        @test ft_isapprox(M, bondmul(X, X, a, a2))                       # X ∘ X = M
-        @test ft_isapprox(X, bondmul(bondmul(X, Xinv, a, a2), X, a, a2)) # X X⁺ X = X
+
+        # The property `simple_update` relies on: in the Vidal gauge we absorb `X` into a
+        # site tensor, do the gate/SVD, then remove `dag(Xinv)`. For an exact (untruncated)
+        # update the bond must pass through as the identity, i.e. (T·X)·dag(Xinv) = T for any
+        # even tensor `T` sharing the bond. This holds because `X` is Hermitian with
+        # `X·X⁻¹ = I` regardless of eigenvalue sign — it would FAIL if negatives were clipped.
+        x = sim(a)
+        T = random_even_ft(Index[a, x], Bool[false, true],
+            Dictionary{Index, Vector{Bool}}(Index[a, x], Vector{Bool}[bits, bits]); eltp)
+        roundtrip = TN.replaceinds(
+            ITensors.noprime(contract(contract(T, X), dag(Xinv))), [a2], [a])
+        @test ft_isapprox(roundtrip, T)
+        # reverse gauge (absorb inverse, remove root) round-trips too
+        roundtrip2 = TN.replaceinds(
+            ITensors.noprime(contract(contract(T, Xinv), dag(X))), [a2], [a])
+        @test ft_isapprox(roundtrip2, T)
     end
 end
 

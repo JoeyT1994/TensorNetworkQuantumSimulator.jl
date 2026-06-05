@@ -111,13 +111,12 @@ function apply_gate!(
     if length(v⃗) == 2
         v1, v2 = v⃗
         e = NamedEdge(v1 => v2)
-        ind2 = commonind(s_values, first(updated_tensors))
-        δuv = dag(copy(s_values))
-        δuv = replaceind(δuv, ind2, ind2')
-        map_diag!(sign, δuv, δuv)
-        s_values = denseblocks(s_values) * denseblocks(δuv)
-        setmessage!(ψ_bpc, e, dag(s_values))
-        setmessage!(ψ_bpc, reverse(e), s_values)
+        # Re-home the bond spectrum onto the new bond index and install it as the BP
+        # message on both edge orientations (matching `default_message`'s layout).
+        b = commonind(first(updated_tensors), last(updated_tensors))
+        m, m_rev = _bond_spectrum_messages(s_values, b, e)
+        setmessage!(ψ_bpc, e, m)
+        setmessage!(ψ_bpc, reverse(e), m_rev)
     end
 
     for (i, v) in enumerate(v⃗)
@@ -125,6 +124,32 @@ function apply_gate!(
     end
 
     return ψ_bpc, err
+end
+
+# Re-home the diagonal bond spectrum `s_values` produced by `simple_update` onto the new
+# bond index `b` (shared by the two updated tensors) and return the forward/backward BP
+# messages `(m, m_rev)` for the edge, laid out exactly like `default_message`.
+#
+# Bosonic: the message is the diagonal spectrum on `[b, b']`; `m_rev = dag(m)`.
+function _bond_spectrum_messages(s_values::ITensor, b::Index, e)
+    other = only(uniqueinds(s_values, b))
+    m = replaceind(s_values, other, prime(b))
+    return m, dag(m)
+end
+
+# Fermionic: rebuild the spectrum as a diagonal `FermionicITensor` on `[prime(b), b]` with
+# `default_message`'s grading and orientation-dependent arrows. `dag` flips the arrows for
+# the reverse edge, giving the OUT→IN closure the two messages must form.
+function _bond_spectrum_messages(s_values::FermionicITensor, b::Index, e)
+    bs, bsd = s_values.order
+    bondgr = s_values.grading[bs]
+    σ = ITensors.array(s_values.tensor, bs, bsd)
+    u = prime(b)
+    gr = Dictionary{Index, Vector{Bool}}(Index[u, b], Vector{Bool}[bondgr, bondgr])
+    T = ITensor(σ, u, b)
+    dirs = src(e) < dst(e) ? Bool[false, true] : Bool[true, false]
+    m = FermionicITensor(T, Index[u, b], dirs, gr)
+    return m, dag(m)
 end
 
 #Checker for whether the cache needs updating (overlapping gate encountered)

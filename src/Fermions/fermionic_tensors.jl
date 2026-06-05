@@ -63,6 +63,8 @@ struct FermionicITensor
     grading::Dictionary{Index, Vector{Bool}}
 end
 
+Base.copy(ft::FermionicITensor) = FermionicITensor(copy(ft.tensor), copy(ft.order), copy(ft.dirs), copy(ft.grading))
+
 # Direction (arrow) of leg `i` in `ft`: true = in/−, false = out/+.
 _dir(ft::FermionicITensor, i::Index) = ft.dirs[findfirst(==(i), ft.order)]
 ITensors.inds(ft::FermionicITensor) = ft.order
@@ -301,6 +303,8 @@ end
 function ITensors.norm(ft::FermionicITensor)
     return ITensors.norm(ft.tensor)
 end
+
+LinearAlgebra.normalize(ft::FermionicITensor) = ft / norm(ft)
 
 
 const Tensor = Union{ITensor, FermionicITensor}

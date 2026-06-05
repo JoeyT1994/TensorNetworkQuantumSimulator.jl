@@ -44,9 +44,9 @@ function simple_update(
         Qᵥ₂, Rᵥ₂ = qr(ψᵥ₂, uniqueinds(uniqueinds(ψᵥ₂, ψᵥ₁), sᵥ₂))
         rᵥ₁ = commoninds(Qᵥ₁, Rᵥ₁)
         rᵥ₂ = commoninds(Qᵥ₂, Rᵥ₂)
-        oR = noprime(o * (Rᵥ₁ * Rᵥ₂))
         e = v⃗[1] => v⃗[2]
         if !(o isa FermionicITensor)
+            oR = noprime(o * (Rᵥ₁ * Rᵥ₂))
             singular_values! = Ref(ITensor())
             Rᵥ₁, Rᵥ₂, spec = factorize_svd(
                 oR,
@@ -58,6 +58,23 @@ function simple_update(
             err = spec.truncerr
             s_values = singular_values![]
         else
+            # The gate's dense array is an even operator whose two sites are ADJACENT in a
+            # fixed mode ordering. To apply it correctly we bring the state's two physical
+            # legs adjacent first — a fermionic `permute`, which threads the correct Koszul
+            # sign through any leg sitting between them (here the QR bond `rᵥ₁`) — and then
+            # apply the gate as an ordinary `o ⊗ I` contraction on those adjacent legs.
+            # A fermionic-`contract` blob (`o * (Rᵥ₁ * Rᵥ₂)`) instead injects spurious
+            # supertrace signs and is NOT the operator action; ordinary contraction without
+            # the permute misses the reorder sign. Either error corrupts the hopping
+            # (odd-odd) channel of the gate.
+            RR = Rᵥ₁ * Rᵥ₂
+            s1ᵢ, s2ᵢ = only(sᵥ₁), only(sᵥ₂)
+            rest = filter(i -> i != s1ᵢ && i != s2ᵢ, RR.order)
+            RRadj = ITensors.permute(RR, Index[s1ᵢ, s2ᵢ, rest...])
+            oR = FermionicITensor(
+                noprime(o.tensor * RRadj.tensor),
+                copy(RRadj.order), copy(RRadj.dirs), RRadj.grading,
+            )
             Rᵥ₁, Rᵥ₂, s_values, err = symmetric_svd(
                 oR, collect(unioninds(rᵥ₁, sᵥ₁)); apply_kwargs...
             )

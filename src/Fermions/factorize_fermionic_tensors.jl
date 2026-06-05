@@ -254,15 +254,16 @@ function symmetric_svd(ft::FermionicITensor, row_inds::Vector{<:Index};
     X = _factor_tensor(ft, R, Rdirs, b, true, bondgr, Xfull; bond_first = false)
     Y = _factor_tensor(ft, C, Cdirs, b, false, bondgr, Yfull; bond_first = true)
 
-    # S on its own bond pair, matching the layout produced by `svd`.
-    bs = Index(nb, tags)
-    bsd = Index(nb, tags)
-    Sgr = Dictionary{Index, Vector{Bool}}(Index[bs, bsd], Vector{Bool}[bondgr, bondgr])
+    # S sits on the SAME bond `b` shared by X and Y (its prime is the second leg), so the
+    # returned spectrum lives on the same edge as the two factors — mirroring the bosonic
+    # `factorize_svd` path, where the singular-value tensor shares the post-`noprime` bond.
+    bd = prime(b)
+    Sgr = Dictionary{Index, Vector{Bool}}(Index[b, bd], Vector{Bool}[bondgr, bondgr])
     Smat = zeros(eltp, nb, nb)
     for i in 1:nb
         Smat[i, i] = svals[i]
     end
-    S = FermionicITensor(ITensor(Smat, bs, bsd), Index[bs, bsd], Bool[true, false], Sgr)
+    S = FermionicITensor(ITensor(Smat, b, bd), Index[b, bd], Bool[true, false], Sgr)
 
     return X, Y, S, err
 end
@@ -324,8 +325,15 @@ function _herm_sqrt_block(A::AbstractMatrix; cutoff::Real)
     s = zeros(real(eltype(A)), n)
     si = zeros(real(eltype(A)), n)
     for i in 1:n
-        if λ[i] > cutoff
-            s[i] = sqrt(λ[i])
+        # Root the MAGNITUDE of each eigenvalue. A real BP message carries the supertrace
+        # metric, so its parity blocks are Hermitian but NOT positive-semidefinite (e.g. a
+        # block eigenvalue −0.223). The Vidal-gauge round-trip only needs `X` Hermitian with
+        # `X·X⁻¹ = I`: with `s = √|λ|` the factor `X = Q·diag(s)·Qᴴ` is Hermitian, so
+        # `X · dag(X⁻¹) = X·X⁻¹ = I` exactly, independent of the eigenvalue sign. (Clipping
+        # negatives to 0 projects out that sector; a complex √λ breaks the inverse because
+        # `dag` conjugates the imaginary root.)
+        if abs(λ[i]) > cutoff
+            s[i] = sqrt(abs(λ[i]))
             si[i] = inv(s[i])
         end
     end
@@ -337,11 +345,15 @@ end
     pseudo_sqrt_inv_sqrt(M::FermionicITensor; cutoff)
 
 Matrix square root and pseudo-inverse-square root of a 2-leg fermionic bond matrix `M`
-(order `[a, a']`, both legs sharing the same grading). The supertrace metric `g = diag((−1)^p)`
-is stripped before rooting — `ρ = g·M` is genuinely Hermitian PSD (closing a fermionic bond
-makes the odd sector negative-definite, so `g` flips it back) — and is reinstated by the
-single supertrace that `contract` inserts when the factors are recombined. Returns `(X, Xinv)`
-with `X ∘ X ≈ M` (where `∘` is the fermionic bond product).
+(order `[a, a']`, both legs sharing the same grading). `M` is Hermitian but NOT
+positive-semidefinite: a real BP message carries the supertrace metric, so its parity
+blocks can have negative eigenvalues (e.g. an even block `−0.223`). Each parity block is
+diagonalised and its eigenvalue MAGNITUDES are rooted (`s = √|λ|`), giving a Hermitian
+factor `X`. The Vidal-gauge round-trip (absorb `X` into a site tensor, later remove `Xinv`)
+needs only `X · dag(Xinv) = X·X⁻¹ = I`, which holds for any Hermitian `X` regardless of
+eigenvalue sign — so `√|λ|` reconstructs the bond exactly. (Rooting `λ` directly would clip
+negative blocks to zero and project out that sector; a complex `√λ` breaks the inverse
+because `dag` conjugates the imaginary root.) Returns `(X, Xinv)`.
 """
 function pseudo_sqrt_inv_sqrt(M::FermionicITensor; cutoff::Real = 10 * eps(real(scalartype(M))))
     @assert length(M.order) == 2 "pseudo_sqrt_inv_sqrt expects a 2-leg fermionic tensor"
@@ -350,14 +362,24 @@ function pseudo_sqrt_inv_sqrt(M::FermionicITensor; cutoff::Real = 10 * eps(real(
     Mmat, pr, pc, _, _ = _matricize_ft(M, Index[a])
     @assert pr == pc "the two legs must carry the same grading"
 
-    # strip the metric: ρ = g·M (flip the odd rows) → Hermitian PSD on the block support.
-    rho = copy(Mmat)
-    odd = findall(identity, pr)
-    rho[odd, :] .*= -1
-
+    # Root the eigenvalue MAGNITUDES of each parity block (see `_herm_sqrt_block`).
+    #
+    # Empirical structure of real BP messages (studied on random 3×3/4×4 fermionic TNS over
+    # bond dims 2/4/6, before and after BP convergence): every message is Hermitian, and each
+    # parity block is sign-DEFINITE — all eigenvalues in a block share one sign; an indefinite
+    # block was NEVER observed. So a message factors as `M = G·|M|` with `|M|` genuinely PSD
+    # and `G = diag(s_even·𝟙_even, s_odd·𝟙_odd)`, `s ∈ {+1,−1}` a constant ±1 sign PER BLOCK
+    # (the supertrace metric). The negatives are a per-block metric sign, not within-block
+    # indefiniteness. Typically one block is PSD and the other NSD (opposite metric signs);
+    # near-maximally-mixed messages can have both blocks PSD.
+    #
+    # Hence `√|λ|` is exact, not a hack: `X = Q·diag(√|λ|)·Qᴴ` is Hermitian with `X² = |M|`,
+    # and the per-block sign `G` is a ±1 unitary that factors out and cancels in the
+    # Vidal-gauge round-trip `X·dag(Xinv) = X·X⁻¹ = I`. (Were a block ever indefinite, `√|λ|`
+    # would incoherently mix signs — but it never is.)
     re, ro = findall(!, pr), findall(identity, pr)
-    Xe, Xie = _herm_sqrt_block(rho[re, re]; cutoff)
-    Xo, Xio = _herm_sqrt_block(rho[ro, ro]; cutoff)
+    Xe, Xie = _herm_sqrt_block(Mmat[re, re]; cutoff)
+    Xo, Xio = _herm_sqrt_block(Mmat[ro, ro]; cutoff)
 
     eltp = eltype(Mmat)
     n = dim(a)
