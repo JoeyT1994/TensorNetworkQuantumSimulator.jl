@@ -76,39 +76,47 @@ ITensors.commonind(ft1::FermionicITensor, ft2::FermionicITensor) = commonind(ft1
 ITensors.scalar(ft::FermionicITensor) = ITensors.scalar(ft.tensor)
 ITensors.ITensor(ft::FermionicITensor) = ft.tensor
 
-# Diagonal Koszul-sign array (in `from` layout) for reordering legs `from -> to`.
-# For component I the sign is (−1)^{Σ p_a p_b} over leg pairs (a,b) whose relative
-# order is inverted between `from` and `to`. Depends only on parity bits, never on
-# the numerical positions, so it is a pure broadcast over components.
-function _reorder_sign(gr::Dictionary, from::Vector{<:Index}, to::Vector{<:Index})
-    n = length(from)
-    topos = Dict(ind => p for (p, ind) in enumerate(to))
-    invpairs = Tuple{Int, Int}[]
-    for a in 1:n, b in (a + 1):n
-        topos[from[a]] > topos[from[b]] && push!(invpairs, (a, b))
+# Koszul-reorder sign mask for `from -> to`, PLUS the diagonal bond-parity `g =
+# diag((−1)^p)` on each leg in `parity_legs`, returned as a `BitArray` in `T`'s NATIVE
+# storage layout `is` (`true` marks the components that flip sign).
+#
+# The sign of a component is (−1) raised to Σ over (i) leg pairs whose relative order is
+# inverted by the permutation and (ii) the parity legs — a function of the *index pairs*
+# and parity bits only, never of memory layout. Building the mask directly in the native
+# layout `is` (rather than in `from`) is what lets the caller multiply against the cheap
+# native `array(T)` and skip the ~100× more expensive permuting `array(T, from...)`.
+#
+# The accumulation is a vectorised broadcast of reshaped per-leg parity bit-vectors (one
+# fused `.⊻=` per inverted pair / parity leg), not a scalar component loop.
+function _sign_mask(gr::Dictionary, is::Vector{<:Index}, from::Vector{<:Index}, to::Vector{<:Index}, parity_legs)
+    n = length(is)
+    dims = ntuple(k -> length(gr[is[k]]), n)
+    bits = ntuple(k -> gr[is[k]], n)
+    rshp(k) = reshape(bits[k], ntuple(d -> d == k ? dims[k] : 1, n))
+    E = falses(dims...)
+    @inbounds for a in 1:n, b in (a + 1):n
+        ia, ib = is[a], is[b]
+        # inverted iff the pair's order differs between `from` and `to`
+        inverted = (findfirst(==(ia), from) < findfirst(==(ib), from)) !=
+                   (findfirst(==(ia), to) < findfirst(==(ib), to))
+        inverted && (E .⊻= rshp(a) .& rshp(b))
     end
-    bits = [gr[from[k]] for k in 1:n]
-    dims = ntuple(k -> length(bits[k]), n)
-    sgn = ones(Int8, dims...)
-    isempty(invpairs) && return sgn
-    for I in CartesianIndices(dims)
-        s = false
-        for (a, b) in invpairs
-            s ⊻= (bits[a][I[a]] & bits[b][I[b]])
-        end
-        s && (sgn[I] = -one(Int8))
+    for k in parity_legs
+        E .⊻= rshp(findfirst(==(k), is))
     end
-    return sgn
+    return E
 end
 
-# Apply the fermionic transposition sign for `from -> to` to a raw ITensor. The
-# returned ITensor carries the SAME index objects (ITensors are storage-order
-# agnostic); only the component signs change. The caller updates its `order`.
-function _apply_reorder_sign(gr::Dictionary, T::ITensor, from::Vector{<:Index}, to::Vector{<:Index})
-    from == to && return T
-    sgn = _reorder_sign(gr, from, to)
-    arr = ITensors.array(T, from...) .* sgn
-    return ITensor(arr, from...)
+# Multiply `T` by the `from -> to` reorder sign and the bond-parity `g` on `parity_legs`,
+# all in one native-layout pass. Returns an ITensor with the SAME index objects (only the
+# component signs change); the caller updates its fermionic `order`.
+function _apply_reorder_sign(gr::Dictionary, T::ITensor, from::Vector{<:Index}, to::Vector{<:Index}, parity_legs = Index[])
+    (from == to && isempty(parity_legs)) && return T
+    is = collect(inds(T))                       # native storage order: no permute
+    E = _sign_mask(gr, is, from, to, parity_legs)
+    any(E) || return T
+    arr = ITensors.array(T)                      # native layout; skips index-matching/permute
+    return ITensor(arr .* (1 .- 2 .* E), is...)
 end
 
 # Multiply a tensor by the diagonal bond-parity operator g = diag((−1)^{p}) on
@@ -220,31 +228,36 @@ makes the contraction associative on loops. The reversal sign is accumulated
 automatically by `_apply_reorder_sign`; for a single shared bond it is a no-op.
 """
 function ITensors.contract(A::FermionicITensor, B::FermionicITensor)
-    gr = merge(A.grading, B.grading)
-    K = commoninds(A.tensor, B.tensor)
-    Kset = Set(K)
+    # The grading is a GLOBAL, immutable property (an `Index`'s parity bits never
+    # change), so we never need to merge A's and B's dictionaries: A's grading covers
+    # all of A's legs, B's covers all of B's, and a shared bond carries identical bits
+    # in both. Each sign computation below uses whichever operand owns the legs it
+    # touches, and the result carries a TIGHT grading over only its own open legs.
+    Kset = Set(commoninds(A.tensor, B.tensor))
     A_open = filter(!in(Kset), A.order)
     B_open = filter(!in(Kset), B.order)
     Kc = filter(in(Kset), A.order)                 # canonical contracted order = A's order
 
     A_to = Index[A_open; Kc]
     B_to = Index[reverse(Kc); B_open]               # B's contracted block REVERSED (nesting sign)
-    TA = _apply_reorder_sign(gr, A.tensor, A.order, A_to)
-    TB = _apply_reorder_sign(gr, B.tensor, B.order, B_to)
 
-    # Supertrace (bond-parity g) per shared bond. After the reorder above the
-    # contracted pair is linearized as (A's leg)(B's leg). The contraction map C adds
-    # a supertrace (−1)^{p} exactly for a KET-BRA pair (SciPost "Fermionic tensor
-    # networks" Eq. 107): A's leg first as a ket, B's leg as a bra. A holds the leg as
-    # a ket iff it is OUT, so insert g iff A holds k as out (arrow points A → B).
-    for k in Kc
-        !_dir(A, k) && (TA = _apply_parity(gr, TA, k))
-    end
+    # Supertrace (bond-parity g) per shared bond. The contraction map C adds a supertrace
+    # (−1)^{p} exactly for a KET-BRA pair (SciPost "Fermionic tensor networks" Eq. 107):
+    # A's leg first as a ket, B's leg as a bra. A holds the leg as a ket iff it is OUT, so
+    # insert g iff A holds k as out (arrow points A → B). This is diagonal in component
+    # space like the reorder sign, so we fold it into A's single reorder pass.
+    A_parity = Index[k for k in Kc if !_dir(A, k)]
+    TA = _apply_reorder_sign(A.grading, A.tensor, A.order, A_to, A_parity)
+    TB = _apply_reorder_sign(B.grading, B.tensor, B.order, B_to)
 
     C = TA * TB
     order_C = Index[A_open; B_open]
     dirs_C = Bool[[_dir(A, i) for i in A_open]; [_dir(B, i) for i in B_open]]
-    return FermionicITensor(C, order_C, dirs_C, gr)
+    gr_C = Dictionary{Index, Vector{Bool}}(
+        order_C,
+        Vector{Bool}[[A.grading[i] for i in A_open]; [B.grading[i] for i in B_open]],
+    )
+    return FermionicITensor(C, order_C, dirs_C, gr_C)
 end
 
 Base.:*(ft1::FermionicITensor, ft2::FermionicITensor) = ITensors.contract(ft1, ft2)
@@ -257,10 +270,7 @@ function Base.:*(ft::FermionicITensor, λ::Number)
     return FermionicITensor(t, ft.order, ft.dirs, ft.grading)
 end
 
-# Walk the nested binary contraction tree `seq` (integer indices into `fts`),
-# folding pairs together with `contract`. Because `contract` is contraction-order
-# independent for parity-even tensors, the result equals the naive fold; the
-# ordering only changes intermediate cost.
+# Walk the nested binary contraction tree `seq` (integer indices into `fts`).
 function follow_sequence(seq, fts::Vector{<:FermionicITensor})
     seq isa Integer && return fts[seq]
     acc = follow_sequence(seq[1], fts)
@@ -285,7 +295,12 @@ end
 
 function ITensors.noprime(ft::FermionicITensor)
     t = noprime(ft.tensor)
-    return FermionicITensor(t, noprime.(ft.order), ft.dirs, ft.grading)
+    neworder = noprime.(ft.order)
+    # Priming is parity-neutral, so re-key the grading onto the noprimed legs (the
+    # bits are unchanged). `contract` relies on each tensor's grading covering exactly
+    # its own legs, so the keys must track the relabel.
+    gr = Dictionary{Index, Vector{Bool}}(neworder, Vector{Bool}[ft.grading[i] for i in ft.order])
+    return FermionicITensor(t, neworder, ft.dirs, gr)
 end
 
 function NDTensors.scalartype(ft::FermionicITensor)

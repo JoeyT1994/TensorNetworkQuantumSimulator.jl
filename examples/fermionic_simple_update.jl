@@ -6,7 +6,7 @@ Random.seed!(1234)
 
 function main()
     ITensors.disable_warn_order()
-    χ = 2
+    χ = 64
     g = named_hexagonal_lattice_graph(4,4)
     s = siteinds("spinful_fermion", g)
     ψ = fermionic_tensornetworkstate(ComplexF32, v-> isodd(sum(v)) ? "Up" : "Dn", g, s)

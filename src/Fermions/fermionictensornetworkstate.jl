@@ -2,15 +2,12 @@ using ITensors: ITensors, ITensor, Index, dim
 using NamedGraphs: NamedEdge
 
 # A fermionic tensor network state is simply an ordinary `TensorNetworkState` whose tensors
-# are `FermionicITensor`s. The `is_fermionic` trait (src/TensorNetworks/tensornetworkstate.jl)
-# detects this and routes `norm_factors`/`norm_sqr`/`expect` to the fermionic bodies in
-# observables.jl, so no dedicated state type is needed. Each `FermionicITensor` carries its
+# are `FermionicITensor`s. Each `FermionicITensor` carries its
 # own Z2-parity grading (per-component parity bits of each leg) and leg arrows; tensors are
-# parity even. Site legs point out (this is a ket).
+# parity even.
 
 # Whole-network grading: merge every per-tensor grading. The bond Index objects are
 # shared between the two endpoints' tensors, so `merge` collapses the duplicate keys.
-
 function grading(ψ::TensorNetworkState, v)
     ψ[v] isa FermionicITensor && return ψ[v].grading
     error("Tensor is not fermionic and so doesn't have grading")
@@ -22,7 +19,6 @@ end
 
 grading(ψ::TensorNetworkState) = reduce(merge, [grading(ψ, v) for v in vertices(ψ)])
 
-# Convenience: the per-vertex FermionicITensor is just the underlying tensor.
 function FermionicITensor(ψ::TensorNetworkState, v)
     ψ[v] isa FermionicITensor && return ψ[v]
     error("Tensor is not fermionic")
@@ -91,8 +87,7 @@ This is the locally-ordered formalism (arXiv:2410.02215): each tensor stores its
 `index_order`, and each shared bond carries an arrow via `index_directions` (`true` = in/−,
 `false` = out/+). For every edge the `src` endpoint holds the bond as out and the `dst`
 endpoint as in, so the arrow points `src → dst`. Site legs point out. Fermionic signs are
-resolved per-bond at contraction time by [`contract`](@ref) — there is no global
-ordering of the tensors.
+resolved per-bond at contraction time by [`contract`](@ref).
 
 # Keyword Arguments
 - `bond_dimension::Integer`: Virtual bond dimension (default `1`).
@@ -138,10 +133,6 @@ parity-definite vectors.
 Each tensor is parity even (the locally-ordered formalism, arXiv:2410.02215). Because an
 occupied site (`|1⟩`, `|↑⟩`, `|↓⟩`) is parity *odd*, the occupation parity is carried on
 dimension-1 *odd* virtual bonds: a Jordan–Wigner-style string wired along a spanning tree.
-The required odd-bond set is the unique T-join on the tree, computed in one post-order pass
-(a bond is odd iff the total occupation parity of the subtree below it is odd). Loop (non-tree)
-edges carry even dimension-1 bonds.
-
 This requires an **even** total number of fermions: an odd total parity cannot be represented
 by parity-even tensors alone and raises an error.
 """
@@ -253,11 +244,6 @@ function fermionic_norm_factors_grouped(ψ::TensorNetworkState, verts::Vector; o
 end
 
 # Fermionic analogue of the bosonic `norm_factors` (src/TensorNetworks/tensornetworkstate.jl):
-# for each vertex emit its ket tensor, its bra tensor, and any single-site operator factor,
-# producing the flat `2N + n_ops` parity-even tensor list for ⟨ψ|O|ψ⟩ (unnormalised). The
-# caller folds the list with the order-independent `contract`; the optimal sequence finder
-# picks the fold tree. `op_strings(v)` gives the operator name on vertex `v` ("I"/"ρ" =
-# identity). Returns `nothing` when `O` has odd total parity (⟨O⟩ = 0).
 function fermionic_norm_factors(ψ::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I")
     grouped = fermionic_norm_factors_grouped(ψ, verts; op_strings)
     grouped === nothing && return nothing
