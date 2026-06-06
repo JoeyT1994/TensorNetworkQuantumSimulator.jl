@@ -20,7 +20,6 @@ function apply_gates(
         bp_update_kwargs = default_bp_update_kwargs(ψ),
         kwargs...,
     )
-    is_fermionic(ψ) && error("Gate application is not yet supported for fermionic tensor network states.")
     ψ_bpc = BeliefPropagationCache(ψ)
     ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
     ψ_bpc, truncation_errors = apply_gates(circuit, ψ_bpc; bp_update_kwargs, kwargs...)
@@ -33,19 +32,19 @@ function apply_gates(
         kwargs...,
     )
     g = graph(ψ_bpc)
-    circuit = toitensor(circuit, g, siteinds(network(ψ_bpc)))
+    circuit = totensor(circuit, g, siteinds(network(ψ_bpc)))
     gate_vertices = [gate[2] for gate in circuit]
-    itensors = [gate[1] for gate in circuit]
-    return apply_gates(itensors, ψ_bpc; gate_vertices, kwargs...)
+    tensors = [gate[1] for gate in circuit]
+    return apply_gates(tensors, ψ_bpc; gate_vertices, kwargs...)
 end
 
-function adapt_gate(gate::ITensor, ψ_bpc::BeliefPropagationCache)
+function adapt_gate(gate::Tensor, ψ_bpc::BeliefPropagationCache)
     gate = scalartype(gate) <: Complex ? adapt(complex(scalartype(ψ_bpc)), gate) : adapt(scalartype(ψ_bpc), gate)
     return adapt(unspecify_type_parameters(datatype(ψ_bpc)), gate)
 end
 
 function apply_gates(
-        circuit::Vector{<:ITensor},
+        circuit::Vector{<:Tensor},
         ψ_bpc::BeliefPropagationCache;
         gate_vertices::Vector = vertices.(circuit, (network(ψ_bpc),)),
         apply_kwargs = (;),

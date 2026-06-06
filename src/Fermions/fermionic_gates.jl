@@ -213,3 +213,41 @@ function fermionic_interaction_gate(dt::Number, s::Index; coeff::Number = -im)
     H = fermionic_interaction_hamiltonian(s)
     return fermionic_exp_gate(H; outs = Index[prime(s)], ins = Index[s], dt, coeff)
 end
+
+# --- circuit-tuple → fermionic gate -----------------------------------------
+
+"""
+    tofermionicitensor(name::String, θ, s_inds::Vector{<:Index}) -> FermionicITensor
+
+Build the rotated fermionic Trotter gate `exp(-i · θ · H)` named by `name`, acting on the
+fermionic site indices `s_inds`. This is the fermionic analogue of the spin path in
+`totensor`: it turns a circuit tuple `(name, vertices, θ)` into the operator
+`FermionicITensor` that `apply_gates` / `simple_update` consume.
+
+The `R` prefix denotes a rotation (cf. the spin rotations `Rxx(θ) = exp(-i θ XX)`): `θ` is
+the angle and the gate bakes in the `-i`, so the generator's default coefficient is `-im`.
+For imaginary-time evolution `exp(-τ H)` pass an imaginary angle `θ = -im · τ`.
+
+Supported gate names (with the required site count):
+- `"RHop"` (2 sites): rotated hopping, `exp(-i·θ·H)`, `H = Σ_σ (c†_{iσ} c_{jσ} + h.c.)`
+- `"RInt"` (1 spinful site): rotated interaction, `exp(-0.5i·θ·H)`, `H = n↑ n↓`. The angle
+  `θ` multiplies the `-0.5·im` half-step exponent (so `θ = U·dt` for a Hubbard half-step).
+- `"RN"` (1 site): rotated total number, `exp(-i·θ·H)`, `H = N` (spinless `n`; spinful `n↑ + n↓`)
+"""
+function tofermionicitensor(name::String, θ, s_inds::Vector{<:Index})
+    if name == "RHop"
+        length(s_inds) == 2 || throw(ArgumentError(
+            "Fermionic gate \"$name\" acts on 2 sites, got $(length(s_inds))."))
+        return fermionic_hopping_gate(θ, s_inds[1], s_inds[2])
+    elseif name == "RInt"
+        length(s_inds) == 1 || throw(ArgumentError(
+            "Fermionic gate \"$name\" acts on 1 site, got $(length(s_inds))."))
+        return fermionic_interaction_gate(θ, only(s_inds); coeff = -0.5im)
+    elseif name == "RN"
+        length(s_inds) == 1 || throw(ArgumentError(
+            "Fermionic gate \"$name\" acts on 1 site, got $(length(s_inds))."))
+        return fermionic_number_gate(θ, only(s_inds))
+    end
+    throw(ArgumentError(
+        "Unknown fermionic gate \"$name\". Supported: \"RHop\", \"RInt\", \"RN\"."))
+end

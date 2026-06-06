@@ -28,3 +28,6 @@ function site_tag(sitetype::String)
     sitetype ∈ ["spinful_fermion"] && return "spinful_fermion"
     error("Don't know how to interpret that site type. Supported: S=1/2, S=1, Pauli, fermion, spinful_fermion")
 end
+
+has_fermionic_tag(sind::Index) = hastags(sind, "fermion") || hastags(sind, "spinful_fermion")
+has_heisenberg_tag(sind::Index) = hastags(sind, "Pauli")
