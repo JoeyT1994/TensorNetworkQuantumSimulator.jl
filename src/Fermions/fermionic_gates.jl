@@ -242,7 +242,7 @@ function tofermionicitensor(name::String, θ, s_inds::Vector{<:Index})
     elseif name == "RInt"
         length(s_inds) == 1 || throw(ArgumentError(
             "Fermionic gate \"$name\" acts on 1 site, got $(length(s_inds))."))
-        return fermionic_interaction_gate(θ, only(s_inds); coeff = -0.5im)
+        return fermionic_interaction_gate(θ, only(s_inds))
     elseif name == "RN"
         length(s_inds) == 1 || throw(ArgumentError(
             "Fermionic gate \"$name\" acts on 1 site, got $(length(s_inds))."))

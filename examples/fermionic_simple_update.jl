@@ -90,7 +90,7 @@ function main_spins(χ)
     @show sum([expect(ψ_bpc, [(["Z"], [v])]) for v in vertices(g)])
 end
 
-χ = 32
+χ = 16
 main_spins(χ)
 main_fermions(χ)
 

@@ -97,7 +97,11 @@ function _sign_mask(gr::Dictionary, is::Vector{<:Index}, from::Vector{<:Index}, 
     # O(n^3) sweep of `findfirst` over Index vectors inside the pair loop below).
     pf = ntuple(k -> findfirst(==(is[k]), from), n)
     pt = ntuple(k -> findfirst(==(is[k]), to), n)
-    E = falses(dims...)
+    # Accumulate the sign mask with VECTORISED broadcasts (one fused `.⊻=` per inverted
+    # pair / parity leg). Use a contiguous `Array{Bool}` rather than a `BitArray`: the
+    # bit-packed broadcast against singleton-reshaped operands is strided and dominated
+    # `contract` at large bond dimension.
+    E = zeros(Bool, dims...)
     @inbounds for a in 1:n, b in (a + 1):n
         # inverted iff the pair's order differs between `from` and `to`
         inverted = (pf[a] < pf[b]) != (pt[a] < pt[b])
@@ -118,9 +122,21 @@ function _apply_reorder_sign(gr::Dictionary, T::ITensor, from::Vector{<:Index}, 
     E = _sign_mask(gr, is, from, to, parity_legs)
     any(E) || return T
     arr = ITensors.array(T)                      # native layout; skips index-matching/permute
-    # `arr .* mask` is freshly allocated here, so alias it into the ITensor (AllowAlias)
-    # instead of paying for the NeverAlias copy `ITensor(...)` would make.
-    return ITensors.itensor(arr .* (1 .- 2 .* E), is...)
+    # Apply the ±1 sign mask with a hand-written `@simd` loop rather than a broadcast: the
+    # `arr .* (1 .- 2 .* E)` broadcast fails to vectorise (the `Bool` operand breaks SIMD)
+    # and ran ~4× the memcpy floor at large χ. `ifelse` is branchless and generic (negates
+    # both parts for Complex). The fresh array is aliased into the ITensor (AllowAlias).
+    return ITensors.itensor(_flip_signs(arr, E), is...)
+end
+
+# Return a copy of `arr` with the sign of every entry flagged in `E` flipped, via a
+# vectorisable `@simd` loop (≈ memcpy speed; the equivalent broadcast does not vectorise).
+function _flip_signs(arr::AbstractArray, E::AbstractArray{Bool})
+    out = similar(arr)
+    @inbounds @simd for i in eachindex(arr, E)
+        out[i] = ifelse(E[i], -arr[i], arr[i])
+    end
+    return out
 end
 
 # Multiply a tensor by the diagonal bond-parity operator g = diag((−1)^{p}) on
