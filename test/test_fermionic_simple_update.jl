@@ -266,9 +266,9 @@ end
         # by `apply_gates`. `RInt` bakes in the `-0.5·im` half-step exponent, so its angle
         # is θ_int = U·dt (a multiplier on `-0.5·im`); `RHop` rotates by θ_hop = t·dt.
         step_circuit = vcat(
-            [("RInt", [v], U * dt) for v in vs],
+            [("RInt", [v], 0.5*U * dt) for v in vs],
             [("RHop", [src(e), dst(e)], t * dt) for es in ec for e in es],
-            [("RInt", [v], U * dt) for v in vs],
+            [("RInt", [v], 0.5*U * dt) for v in vs],
         )
 
         fids = Float64[]
@@ -296,7 +296,7 @@ end
         # converges monotonically to 1 as the bond dimension grows.
         @test fids[1] < 0.95
         @test all(fids[k] ≤ fids[k + 1] + 1e-6 for k in 1:(length(fids) - 1))
-        @test fids[end] > 0.999
+        @test fids[end] > 0.99999
     end
 end
 end

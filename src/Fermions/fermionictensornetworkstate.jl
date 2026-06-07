@@ -219,7 +219,7 @@ function fermionic_norm_factors_grouped(ψ::TensorNetworkState, verts::Vector; o
     isodd(length(odd_vs)) && return nothing             # parity-forbidden ⇒ ⟨O⟩ = 0
     length(odd_vs) > 2 && error("Fermionic expect currently supports at most one pair of odd operators (e.g. a single hopping term).")
     d = isempty(odd_vs) ? nothing : Index(1, "Fermion,OpString")
-
+    dtype = datatype(ψ)
     grouped = Dictionary{eltype(verts), Vector{FermionicITensor}}()
     for v in verts
         name = op_strings(v)
@@ -236,7 +236,8 @@ function fermionic_norm_factors_grouped(ψ::TensorNetworkState, verts::Vector; o
             # it with the arrow set by `odd_op_tensor` (creation = bra, annihilation = ket), so
             # `contract` inserts the supertrace g once — supplying the (−1) of the fermionic
             # operator ordering automatically, regardless of fold order.
-            push!(fs, is_odd(name) ? odd_op_tensor(s, name, d, sgr) : even_op_tensor(s, name, sgr))
+            t = is_odd(name) ? odd_op_tensor(s, name, d, sgr) : even_op_tensor(s, name, sgr)
+            push!(fs, adapt(dtype)(t))
         end
         set!(grouped, v, fs)
     end
