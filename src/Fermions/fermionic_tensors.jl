@@ -93,12 +93,14 @@ function _sign_mask(gr::Dictionary, is::Vector{<:Index}, from::Vector{<:Index}, 
     dims = ntuple(k -> length(gr[is[k]]), n)
     bits = ntuple(k -> gr[is[k]], n)
     rshp(k) = reshape(bits[k], ntuple(d -> d == k ? dims[k] : 1, n))
+    # Precompute each native leg's position in `from`/`to` ONCE (O(n) instead of an
+    # O(n^3) sweep of `findfirst` over Index vectors inside the pair loop below).
+    pf = ntuple(k -> findfirst(==(is[k]), from), n)
+    pt = ntuple(k -> findfirst(==(is[k]), to), n)
     E = falses(dims...)
     @inbounds for a in 1:n, b in (a + 1):n
-        ia, ib = is[a], is[b]
         # inverted iff the pair's order differs between `from` and `to`
-        inverted = (findfirst(==(ia), from) < findfirst(==(ib), from)) !=
-                   (findfirst(==(ia), to) < findfirst(==(ib), to))
+        inverted = (pf[a] < pf[b]) != (pt[a] < pt[b])
         inverted && (E .⊻= rshp(a) .& rshp(b))
     end
     for k in parity_legs
@@ -116,7 +118,9 @@ function _apply_reorder_sign(gr::Dictionary, T::ITensor, from::Vector{<:Index}, 
     E = _sign_mask(gr, is, from, to, parity_legs)
     any(E) || return T
     arr = ITensors.array(T)                      # native layout; skips index-matching/permute
-    return ITensor(arr .* (1 .- 2 .* E), is...)
+    # `arr .* mask` is freshly allocated here, so alias it into the ITensor (AllowAlias)
+    # instead of paying for the NeverAlias copy `ITensor(...)` would make.
+    return ITensors.itensor(arr .* (1 .- 2 .* E), is...)
 end
 
 # Multiply a tensor by the diagonal bond-parity operator g = diag((−1)^{p}) on
@@ -124,10 +128,10 @@ end
 function _apply_parity(gr::Dictionary, T::ITensor, k::Index)
     is = collect(inds(T))
     pos = findfirst(==(k), is)
-    arr = ITensors.array(T, is...)
+    arr = ITensors.array(T)                      # native layout; skips index-matching/permute
     s = Int8[b ? -1 : 1 for b in gr[k]]
     shape = ntuple(d -> d == pos ? length(s) : 1, ndims(arr))
-    return ITensor(arr .* reshape(s, shape), is...)
+    return ITensors.itensor(arr .* reshape(s, shape), is...)
 end
 
 """
