@@ -131,12 +131,19 @@ end
 
 # Return a copy of `arr` with the sign of every entry flagged in `E` flipped, via a
 # vectorisable `@simd` loop (≈ memcpy speed; the equivalent broadcast does not vectorise).
-function _flip_signs(arr::AbstractArray, E::AbstractArray{Bool})
+function _flip_signs(arr::Array, E::Array{Bool})
     out = similar(arr)
     @inbounds @simd for i in eachindex(arr, E)
         out[i] = ifelse(E[i], -arr[i], arr[i])
     end
     return out
+end
+
+# GPU / generic: move the mask onto arr's device, apply as a fused broadcast kernel
+function _flip_signs(arr::AbstractArray, E::AbstractArray{Bool})
+    signs = similar(arr, Bool, size(E))
+    copyto!(signs, E)                 # one H2D transfer
+    return ifelse.(signs, -arr, arr)  # fuses into a single GPU kernel, no scalar indexing
 end
 
 # Multiply a tensor by the diagonal bond-parity operator g = diag((−1)^{p}) on

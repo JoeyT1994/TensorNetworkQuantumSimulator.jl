@@ -20,6 +20,19 @@ using ITensors.NDTensors: NDTensors
 using Dictionaries: Dictionary
 
 # ---------------------------------------------------------------------------
+# device boundary
+# ---------------------------------------------------------------------------
+# The parity-blocked dense engine below is CPU-only: it gathers/scatters the even/odd parity
+# sectors with integer index vectors and runs a small dense LAPACK solve on each block, none
+# of which maps well onto a GPU (and for the small bonds these decompositions act on, CPU
+# LAPACK + a device round-trip beats a small-matrix GPU solve anyway). So each public
+# factorization forces its input through a host `Array` and adapts the resulting fermionic
+# factors back onto the input's original device.
+_readapt(dtype, x::FermionicITensor) = adapt(dtype)(x)
+_readapt(dtype, x::Tuple) = map(y -> _readapt(dtype, y), x)
+_readapt(dtype, x) = x   # scalars (e.g. the truncation error) pass through untouched
+
+# ---------------------------------------------------------------------------
 # leg relabelling (used by the higher-level algorithms and the squaring identity)
 # ---------------------------------------------------------------------------
 function ITensors.replaceinds(ft::FermionicITensor, oldis, newis)
@@ -138,6 +151,11 @@ values across both parity sectors and applies a single `cutoff`/`maxdim`/`mindim
 function ITensors.svd(ft::FermionicITensor, row_inds::Vector{<:Index};
         cutoff = nothing, maxdim = nothing, mindim = nothing,
         use_absolute_cutoff = nothing, use_relative_cutoff = nothing, tags = "Link,fermion")
+    dtype = ITensors.datatype(ft)
+    if !(dtype <: Array)
+        return _readapt(dtype, ITensors.svd(adapt(Array{scalartype(ft)})(ft), row_inds;
+            cutoff, maxdim, mindim, use_absolute_cutoff, use_relative_cutoff, tags))
+    end
     M, pr, pc, R, C = _matricize_ft(ft, collect(Index, row_inds))
     re, ro = findall(!, pr), findall(identity, pr)
     ce, co = findall(!, pc), findall(identity, pc)
@@ -210,6 +228,11 @@ pre-truncation spectrum.
 function symmetric_svd(ft::FermionicITensor, row_inds::Vector{<:Index};
         cutoff = nothing, maxdim = nothing, mindim = nothing,
         use_absolute_cutoff = nothing, use_relative_cutoff = nothing, tags = "Link,fermion")
+    dtype = ITensors.datatype(ft)
+    if !(dtype <: Array)
+        return _readapt(dtype, symmetric_svd(adapt(Array{scalartype(ft)})(ft), row_inds;
+            cutoff, maxdim, mindim, use_absolute_cutoff, use_relative_cutoff, tags))
+    end
     M, pr, pc, R, C = _matricize_ft(ft, collect(Index, row_inds))
     re, ro = findall(!, pr), findall(identity, pr)
     ce, co = findall(!, pc), findall(identity, pc)
@@ -283,6 +306,10 @@ of `Q`; the remaining legs become the spectator legs of `R`. Returns `(Q, R)` wi
 set so that no net supertrace is inserted on recontraction (`Q.bond = IN`, `R.bond = OUT`).
 """
 function ITensors.qr(ft::FermionicITensor, row_inds::Vector{<:Index}; tags = "Link,fermion")
+    dtype = ITensors.datatype(ft)
+    if !(dtype <: Array)
+        return _readapt(dtype, ITensors.qr(adapt(Array{scalartype(ft)})(ft), row_inds; tags))
+    end
     M, pr, pc, R, C = _matricize_ft(ft, collect(Index, row_inds))
     re, ro = findall(!, pr), findall(identity, pr)
     ce, co = findall(!, pc), findall(identity, pc)
@@ -356,6 +383,10 @@ negative blocks to zero and project out that sector; a complex `√λ` breaks th
 because `dag` conjugates the imaginary root.) Returns `(X, Xinv)`.
 """
 function pseudo_sqrt_inv_sqrt(M::FermionicITensor; cutoff::Real = 10 * eps(real(scalartype(M))))
+    dtype = ITensors.datatype(M)
+    if !(dtype <: Array)
+        return _readapt(dtype, pseudo_sqrt_inv_sqrt(adapt(Array{scalartype(M)})(M); cutoff))
+    end
     @assert length(M.order) == 2 "pseudo_sqrt_inv_sqrt expects a 2-leg fermionic tensor"
     a, a2 = M.order
     @assert dim(a) == dim(a2) "the two legs must have equal dimension"
