@@ -154,7 +154,18 @@ function _apply_parity(gr::Dictionary, T::ITensor, k::Index)
     arr = ITensors.array(T)                      # native layout; skips index-matching/permute
     s = Int8[b ? -1 : 1 for b in gr[k]]
     shape = ntuple(d -> d == pos ? length(s) : 1, ndims(arr))
-    return ITensors.itensor(arr .* reshape(s, shape), is...)
+    return ITensors.itensor(_scale_axis(arr, s, shape), is...)
+end
+
+# Scale `arr` by the reshaped ±1 vector `s` (broadcast along one axis).
+_scale_axis(arr::Array, s::Vector, shape) = arr .* reshape(s, shape)
+
+# GPU / generic: move the sign vector onto arr's device so the broadcast fuses into a
+# single kernel rather than scalar-indexing a host operand.
+function _scale_axis(arr::AbstractArray, s::Vector, shape)
+    sdev = similar(arr, eltype(s), length(s))
+    copyto!(sdev, s)                  # one H2D transfer
+    return arr .* reshape(sdev, shape)
 end
 
 """

@@ -1,8 +1,10 @@
 using TensorNetworkQuantumSimulator
 using Random
-using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuantumSimulator
+using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuantumSimulator, update
 using ITensors: ITensors
 Random.seed!(1234)
+using CUDA
+using Adapt: adapt
 
 function bp_energy(ψ_bpc::BeliefPropagationCache, U, t)
     g = graph(ψ_bpc)
@@ -26,6 +28,7 @@ function main_fermions(χ)
     g = named_grid((10,10))
     s = siteinds("spinful_fermion", g)
     ψ = fermionic_tensornetworkstate(ComplexF32, v-> isodd(sum(v)) ? "Up" : "Dn", g, s)
+    ψ = adapt(CUDA.CuArray{Float64})(ψ)
     ψ_bpc = update(BeliefPropagationCache(ψ))
     rescale!(ψ_bpc)
 

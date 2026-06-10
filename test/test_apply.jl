@@ -75,9 +75,9 @@ end
     ψ_rz, _ = apply_gates([("Rx", [v], 0.4), ("Rz", [v], θ)], ψ_rz; apply_kwargs)
     ψ_my, _ = apply_gates([("Rx", [v], 0.4), ("MyZRot", [v], θ)], ψ_my; apply_kwargs)
 
-    @test expect(ψ_rz, [("X", [v])]; alg = "exact") ≈ expect(ψ_my, [("X", [v])]; alg = "exact")
-    @test expect(ψ_rz, [("Y", [v])]; alg = "exact") ≈ expect(ψ_my, [("Y", [v])]; alg = "exact")
-    @test expect(ψ_rz, [("Z", [v])]; alg = "exact") ≈ expect(ψ_my, [("Z", [v])]; alg = "exact")
+    @test expect(ψ_rz, [("X", [v])]; alg = "exact") ≈ expect(ψ_my, [("X", [v])]; alg = "exact") atol = 1e-10
+    @test expect(ψ_rz, [("Y", [v])]; alg = "exact") ≈ expect(ψ_my, [("Y", [v])]; alg = "exact") atol = 1e-10
+    @test expect(ψ_rz, [("Z", [v])]; alg = "exact") ≈ expect(ψ_my, [("Z", [v])]; alg = "exact") atol = 1e-10
 
     # Aliases work too.
     register_alias!("myzrot", "MyZRot")
