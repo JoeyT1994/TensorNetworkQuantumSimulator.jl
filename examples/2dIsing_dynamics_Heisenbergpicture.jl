@@ -52,7 +52,7 @@ function main()
 
         ψ = network(ψ_bpc)
         #Take traces
-        tr_ψt = inner(ψ, identitytensornetworkstate(g, siteinds(ψ)); alg = "bp")
+        tr_ψt = inner(ψ, identity_tensornetworkstate(g, siteinds(ψ)); alg = "bp")
         tr_ψtψ0 = inner(ψ, ψ0; alg = "bp")
         println("Trace(O(t)) is $(tr_ψt)")
         println("Trace(O(t)O(0)) is $(tr_ψtψ0)")

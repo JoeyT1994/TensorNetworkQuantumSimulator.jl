@@ -3,7 +3,7 @@ using Dictionaries: Dictionary
 using ITensors: ITensors, Index, dag, inds, prime
 using Random
 using TensorNetworkQuantumSimulator
-using Test: @testset, @test
+using Test: @testset, @test, @test_throws
 
 
 @testset "Test Constructors" begin
@@ -72,6 +72,14 @@ using Test: @testset, @test
     @test maxvirtualdim(ψGHZ) == 2
     v, vn = first(vertices(g)), first(neighbors(g, first(vertices(g))))
     @test von_neumann_entanglement_entropy(ψGHZ, first(edges(ψGHZ)); alg = "bp") ≈ log(2)
+
+    #Test identity state constructor
+    s = siteinds("S=1/2", g; inds_per_site = 2)
+    I = identity_tensornetworkstate(Float64, g, s)
+    @test maxvirtualdim(I) == 1
+    @test all([length(siteinds(I, v)) == 2 for v in vertices(g)])
+
+    @test_throws ErrorException identity_tensornetworkstate(Float64, g, siteinds("S=1/2", g; inds_per_site = 3))
 
 end
 
