@@ -1,19 +1,15 @@
 using TensorNetworkQuantumSimulator
-using Random
 using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuantumSimulator, freenergy
 using ITensors: ITensors, ITensor
-Random.seed!(1234)
 
 function main()
-
     χ = 32
-    ITensors.disable_warn_order()
     g = named_hexagonal_lattice_graph(2,2; periodic = true)
     s = siteinds("S=1/2", g; inds_per_site = 2)
     ψ = identity_tensornetworkstate(Float64, g, s)
     ψ_bpc = update(BeliefPropagationCache(ψ))
 
-    println("Imaginary time Evo to find Hubbard model GS lattice of $(length(vertices(g))) sites with BP")
+    println("Finite temp simulation of Hexagonal Heisenberg model in the thermodynamic limit")
     dβ = 0.01
     J = 1.0
 
@@ -24,7 +20,6 @@ function main()
         append!(two_site_gates, [ITensors.op("Rxxyyzz", s[src(e)][1], s[dst(e)][1], θ = -0.5*J*dβ*im) for e in es])
     end
 
-    
     nsteps = 25
     logz = -freenergy(ψ_bpc)
     rescale!(ψ_bpc)
@@ -39,8 +34,6 @@ function main()
             f_bp = logz  / length(vertices(g))
             println("Inverse temp is $(β) and BP measured free energy density is $(f_bp)")
             f_htse_order4 = -log(2) - (9/64)*J*J*β*β - (3/128)*J*J*J*β*β*β + (27/2048)*J*J*J*J*β*β*β*β
-            @show f_htse_order4
-            @show logz / length(vertices(g))
             println("Abs diff between BP value and fourth order HTSE is $(abs(f_htse_order4 - f_bp))")
         end
 
@@ -48,5 +41,3 @@ function main()
 end
 
 main()
-
-
