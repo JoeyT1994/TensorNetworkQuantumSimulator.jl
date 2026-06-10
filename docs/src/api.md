@@ -12,7 +12,7 @@ tensornetworkstate
 random_tensornetworkstate
 zerostate
 paulitensornetworkstate
-identitytensornetworkstate
+identity_tensornetworkstate
 toriccode_groundstate
 ```
 

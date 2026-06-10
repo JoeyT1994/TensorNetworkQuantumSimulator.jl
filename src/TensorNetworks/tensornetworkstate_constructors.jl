@@ -44,8 +44,12 @@ function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = site
         es = incident_edges(g, v; dir = :in)
         ninds = length(s[v])
         ninds % 2 != 0 && error("Odd number of siteinds on vertex $v - don't know how to partition into rows and column")
-        row_inds, col_inds = s[v][1:(ninds÷2)], s[v][((ninds÷2)+1):ninds]
-        t = ITensors.delta(eltype, [links[e] for e in es]) * identity_tensor(eltype, row_inds, col_inds)
+        t = ITensors.delta(eltype, [links[e] for e in es])
+        if ninds > 0
+            row_inds, col_inds = s[v][1:(ninds÷2)], s[v][((ninds÷2)+1):ninds]
+            id = identity_tensor(eltype, row_inds, col_inds)
+            t *= id
+        end
         set!(ts, v, t)
     end
     return TensorNetworkState(TensorNetwork(ts, g), s)
