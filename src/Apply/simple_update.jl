@@ -65,7 +65,9 @@ function simple_update(
     end
 
     if normalize_tensors
-        updated_tensors = ITensor[ψᵥ / norm(ψᵥ) for ψᵥ in updated_tensors]
+        for ψᵥ in updated_tensors
+            rmul!(ITensors.data(ψᵥ), inv(norm(ψᵥ)))
+        end
     end
 
     return noprime.(updated_tensors), s_values, err
