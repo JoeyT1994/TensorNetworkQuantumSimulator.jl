@@ -35,7 +35,7 @@ end
 
 function default_message(qf::QuadraticForm, edge::AbstractEdge)
     linds = virtualinds(qf, edge)
-    return adapt(datatype(qf))(denseblocks(delta(linds)))
+    return adapt_like(qf, denseblocks(delta(linds)))
 end
 
 function virtualinds(qf::QuadraticForm, edge::NamedEdge)

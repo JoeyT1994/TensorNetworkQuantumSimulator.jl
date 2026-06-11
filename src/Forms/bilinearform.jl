@@ -38,7 +38,7 @@ end
 
 function default_message(blf::BilinearForm, edge::NamedEdge)
     linds = virtualinds(blf, edge)
-    return adapt(datatype(blf))(denseblocks(delta(linds)))
+    return adapt_like(blf, denseblocks(delta(linds)))
 end
 
 function virtualinds(blf::BilinearForm, edge::NamedEdge)

@@ -6,7 +6,7 @@ function prune_trivial_tensors(tensors::Vector{<:ITensor})
     pruned_tensors = copy(tensors)
     for (i, t) in enumerate(pruned_tensors)
         if all(d -> d == 1, dim.(inds(tensors[i])))
-            pruned_tensors[i] = adapt(datatype(t))(ITensor(1))
+            pruned_tensors[i] = adapt_like(t, ITensor(1))
         end
     end
     return pruned_tensors

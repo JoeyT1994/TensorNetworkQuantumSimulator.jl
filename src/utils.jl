@@ -34,6 +34,9 @@ function eigendecomp(A::ITensor, linds, rinds; ishermitian = false, kwargs...)
     return Ul, D, dag(U)
 end
 
+# Adapt `t` to the storage datatype (eltype + device) of `ref`.
+adapt_like(ref, t) = adapt(datatype(ref))(t)
+
 function identity_tensor(eltype, row_inds::Vector{<:Index}, col_inds::Vector{<:Index})
     c_row, c_col = ITensors.combiner(row_inds),ITensors.combiner(col_inds)
     t= ITensors.denseblocks(ITensors.delta(eltype, ITensors.combinedind(c_row), ITensors.combinedind(c_col)))
@@ -98,13 +101,9 @@ function safe_eigen(m::ITensor, args...; kwargs...)
     end
 end
 
-function collect_vertices(e::NamedEdge, g::NamedGraph)
-    return collect_vertices([src(e), dst(e)], g)
-end
+collect_vertices(e::NamedEdge, g::NamedGraph) = collect_vertices([src(e), dst(e)], g)
 
-function collect_vertices(es::Vector{<:NamedEdge}, g::NamedGraph)
-    return reduce(vcat, [collect_vertices(e, g) for e in es])
-end
+collect_vertices(es::Vector{<:NamedEdge}, g::NamedGraph) = reduce(vcat, [collect_vertices(e, g) for e in es])
 
 # Levenshtein edit distance between two strings.
 function levenshtein(a::AbstractString, b::AbstractString)
