@@ -6,6 +6,7 @@ using Random
 using ITensors
 using ITensors: ITensors, Index, ITensor, dim, inds, contract, permute, scalar
 using Dictionaries: Dictionary, set!
+using Graphs: ne
 using SparseArrays: sparse, SparseMatrixCSC
 using TensorNetworkQuantumSimulator: random_even_itensor
 
@@ -163,6 +164,23 @@ end
             push!(scalars, scalar(acc))
         end
         @test all(z -> z ≈ scalars[1], scalars)
+    end
+
+    @testset "fermionic loop corrections reproduce exact Z ($name)" for (name, g) in
+        ("grid2x2" => named_grid((2, 2)),   # single chordless plaquette
+         "grid2x3" => named_grid((2, 3)),   # contains a chorded 6-cycle
+         "grid3x3" => named_grid((3, 3)))   # chorded cycles + disconnected configs
+        Random.seed!(42)
+        s = siteinds("fermion", g)
+        ψ = random_fermionic_tensornetworkstate(ComplexF64, g, s; bond_dimension = 2)
+        zexact = norm_sqr(ψ; alg = "exact")
+        cuk = (; maxiter = 200, tol = 1e-14)
+        # Including every no-leaf edge-induced subgraph (the full cluster series, via the
+        # 𝟙 − P fermionic antiprojector with chords capped by the BP projector) is an exact
+        # resummation of Z at the BP fixed point.
+        zloop = norm_sqr(ψ; alg = "loopcorrections", max_configuration_size = ne(g),
+                         cache_update_kwargs = cuk)
+        @test zloop ≈ zexact rtol = 1e-8
     end
 
     # -----------------------------------------------------------------------
