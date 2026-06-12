@@ -1,13 +1,47 @@
 using TensorNetworkQuantumSimulator
 using Random
-using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuantumSimulator
+using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuantumSimulator, add_edge, add_edges, add_vertex
 using ITensors: ITensors
-using NamedGraphs: add_edge!, NamedEdge
+using NamedGraphs: add_edge!, NamedEdge, NamedGraphs
 Random.seed!(1234)
 
-using TensorNetworkQuantumSimulator
 using Graphs: edges, src, dst, vertices
 using LinearAlgebra: Diagonal, transpose, exp
+
+"""
+    hexagonal_lattice(m, n; periodic=(false, false)) -> Vector{UndirectedEdge{NTuple{3,Int}}}
+
+Edges of a honeycomb (hexagonal) lattice of `m × n` unit cells, each carrying two sublattice sites.
+Vertices are labeled `(i, j, s)` with `i ∈ 1:m`, `j ∈ 1:n`, sublattice `s ∈ {1, 2}`.
+Each `A = (i, j, 1)` bonds to `B`-sites `(i, j, 2)`, `(i+1, j, 2)`, `(i, j+1, 2)`, giving coordination 3 in the bulk.
+
+`periodic[1]` / `periodic[2]` wrap the first / second axis (plane / cylinder / torus).
+A periodic axis must have size `≥ 2` to avoid duplicated bonds.
+"""
+function canopy_hexagonal_lattice(m::Int, n::Int; periodic::NTuple{2, Bool} = (false, false))
+    (m ≥ 1 && n ≥ 1) || throw(ArgumentError("hexagonal_lattice: dimensions must be ≥ 1"))
+    #_check_periodic(periodic, (m, n), (2, 2), "hexagonal_lattice")
+    g = NamedGraph()
+    es = NamedEdge[]
+    for i in 1:m, j in 1:n
+        a = (i, j, 1)
+        g = add_vertex(g, (i, j, 1))
+        g = add_vertex(g, (i, j, 2))
+        push!(es, NamedEdge(a => (i, j, 2)))
+        if i < m
+            push!(es, NamedEdge(a => (i + 1, j, 2)))
+        elseif periodic[1]
+            push!(es, NamedEdge(a => (1, j, 2)))
+        end
+        if j < n
+            push!(es, NamedEdge(a => (i, j + 1, 2)))
+        elseif periodic[2]
+            push!(es, NamedEdge(a => (i, 1, 2)))
+        end
+    end
+    g = add_edges(g, es)
+    return g
+end
 
 # C <- conj(u) C transpose(u), u = identity except a 2x2 block w on modes (a,b)
 function _apply_two_mode!(C, a, b, w)
@@ -59,20 +93,20 @@ end
 
 function main_fermions(χ, μ, lattice)
 
-    g = lattice == "Hexagonal" ? named_hexagonal_lattice_graph(4,4; periodic = false) : named_comb_tree((8,6))
+    g = lattice == "Hexagonal" ? canopy_hexagonal_lattice(4,6) : named_comb_tree((8,6))
     s = siteinds("fermion", g)
     mod = 4
-    ψ = fermionic_tensornetworkstate(Float64, v -> sum(v) % mod == 0 ? "Emp" : "Occ", g, s)
+    ψ = fermionic_tensornetworkstate(ComplexF64, v -> sum(v) % mod == 0 ? "Emp" : "Occ", g, s)
     ψ_bpc = update(BeliefPropagationCache(ψ))
     rescale!(ψ_bpc)
 
-    println("Real time Evo in a staggered field")
+    println("Real time Evo in a staggered field on a lattice with $(nv(g)) vertices")
     dt = 0.01
 
     t = -1
     ec = edge_color(g, 3)
     apply_kwargs= (; maxdim = χ, cutoff = nothing)
-    single_site_gates = [isodd(sum(v)) ? ("RN", v, -μ*dt) : ("RN", v, μ*dt) for v in vertices(g)]
+    single_site_gates = [isodd(v[3]) ? ("RN", v, -μ*dt) : ("RN", v, μ*dt) for v in vertices(g)]
     two_site_gates =[]
     for es in ec
         append!(two_site_gates, [("RHop", [src(e), dst(e)], t*dt) for e in es])
@@ -98,7 +132,7 @@ function main_fermions(χ, μ, lattice)
         ψ_bpc, _ = apply_gates(single_site_gates,ψ_bpc;apply_kwargs, update_cache = false)
         t2 = time()
 
-        ψ_bpc = update(ψ_bpc; tolerance = nothing, niters =50)
+        ψ_bpc = update(ψ_bpc; tolerance = nothing, niters =30)
         t3 = time()
 
         t_update += (t2-t1)
@@ -110,7 +144,7 @@ function main_fermions(χ, μ, lattice)
         push!(bp_times, t3-t2 )
         push!(gate_app_times, t2-t1)
 
-        if i % 10 == 0
+        if i % 1 == 0
             println("Time is $(i*dt)")
             println("This Time steps BP update took $(t3-t2) secs")
             println("This Time steps Gate app took $(t2-t1) secs")
@@ -141,7 +175,7 @@ function main_fermions(χ, μ, lattice)
     #    times= times,gate_app_times = gate_app_times, bp_times = bp_times)
 end
 
-χs = [8]
+χs = [32]
 mus =[1.0]
 lattices = ["Hexagonal"]
 for lattice in lattices
