@@ -33,6 +33,10 @@ include("entanglement.jl")
 include("truncate.jl")
 include("rdm.jl")
 
+include("ITNS/infinite_tensornetworkstate.jl")
+include("ITNS/apply_gate.jl")
+include("ITNS/expect.jl")
+
 
 export
     vertices,
@@ -118,5 +122,13 @@ export
     rdm,
     norm_factors,
     toriccode_groundstate,
-    ising_partitionfunction
+    ising_partitionfunction,
+    InfiniteTensorNetworkState,
+    InfiniteTNS,
+    infinite_tensornetworkstate,
+    infinite_tns,
+    coordination,
+    iTNS_apply_gate,
+    iTNS_expect,
+    iTNS_reduced_density_matrix
 end
