@@ -34,6 +34,14 @@ function eigendecomp(A::ITensor, linds, rinds; ishermitian = false, kwargs...)
     return Ul, D, dag(U)
 end
 
+function identity_tensor(eltype, row_inds::Vector{<:Index}, col_inds::Vector{<:Index})
+    c_row, c_col = ITensors.combiner(row_inds),ITensors.combiner(col_inds)
+    t= ITensors.denseblocks(ITensors.delta(eltype, ITensors.combinedind(c_row), ITensors.combinedind(c_col)))
+    return (t * c_row)*c_col
+end
+
+identity_tensor(row_inds::Vector{<:Index}, col_inds::Vector{<:Index}) = identity_tensor(Float64, row_inds, col_inds)
+
 #Function for checking the correct algorithm is being used for the given cache type and functionality
 function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState}, f::String, alg)
     if tns isa TensorNetworkState && is_fermionic(tns) && (alg != "exact") && (alg != "bp") && (alg != "boundarymps")

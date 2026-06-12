@@ -91,7 +91,7 @@ export
     messages,
     gauge_and_scale,
     paulitensornetworkstate,
-    identitytensornetworkstate,
+    identity_tensornetworkstate,
     random_tensornetwork,
     siteinds,
     inner,
