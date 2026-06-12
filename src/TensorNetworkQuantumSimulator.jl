@@ -38,9 +38,9 @@ include("Fermions/ops.jl")
 include("Fermions/fermionictensornetworkstate.jl")
 include("Fermions/factorize_fermionic_tensors.jl")
 include("Fermions/fermionic_gates.jl")
-include("ITNS/infinite_tensornetworkstate.jl")
-include("ITNS/apply_gate.jl")
-include("ITNS/expect.jl")
+include("iTNS/infinite_tensornetworkstate.jl")
+include("iTNS/apply_gate.jl")
+include("iTNS/expect.jl")
 
 
 export
