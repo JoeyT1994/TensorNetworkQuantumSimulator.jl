@@ -40,15 +40,3 @@ function is_pauli(siteinds::Dictionary)
     end
     return true
 end
-
-function is_pauli(siteinds::Dictionary)
-    for k in keys(siteinds)
-        for ind in siteinds[k]
-            !hastags(ind, "Pauli") && return false
-        end
-    end
-    return true
-end
-
-has_fermionic_tag(sind::Index) = hastags(sind, "fermion") || hastags(sind, "spinful_fermion")
-has_heisenberg_tag(sind::Index) = hastags(sind, "Pauli")
