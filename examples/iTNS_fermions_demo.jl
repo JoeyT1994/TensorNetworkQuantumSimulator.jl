@@ -50,7 +50,8 @@ function main()
         return bpc
     end
 
-    @printf("%6s  %10s  %10s  %12s  %12s\n", "t", "<Nup>_A", "<Ndn>_A", "<NupNdn>_A", "<N>_total")
+    @printf("%6s  %10s  %10s  %12s  %12s  %12s\n",
+        "t", "<Nup>_A", "<Ndn>_A", "<NupNdn>_A", "<N>_total", "J_up,bond1")
     for step in 0:nsteps
         if step > 0
             ψ_bpc = trotter_step!(ψ_bpc)
@@ -63,7 +64,12 @@ function main()
         nupB = real(iTNS_expect(ψ_bpc, "Nup", :B))
         ndnB = real(iTNS_expect(ψ_bpc, "Ndn", :B))
         ntot = nupA + ndnA + nupB + ndnB
-        @printf("%6.2f  %10.6f  %10.6f  %12.6f  %12.6f\n", t, nupA, ndnA, dblA, ntot)
+        # a BOND observable: the up-spin hopping coherence c†_{A↑} c_{B↑} across bond 1.
+        # Re gives the hopping energy contribution (2·Re for both directions); Im is the
+        # bond current. The JW string across the bond is handled by iTNS_expect.
+        cAB_up = iTNS_expect(ψ_bpc, ["Cupdag", "Cup"], 1)
+        @printf("%6.2f  %10.6f  %10.6f  %12.6f  %12.6f  %12.6f\n",
+            t, nupA, ndnA, dblA, ntot, imag(cAB_up))
     end
 
     # the final cache still wraps a genuine state — recover it if you like
