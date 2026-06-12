@@ -24,15 +24,38 @@ end
 topaulitensornetwork(f::Function, g::NamedGraph, s::Dictionary = siteinds("Pauli", g)) = topaulitensornetwork(Float64, f, g, s)
 
 """
-    identitytensornetwork(tninds::IndsNetwork)
+    identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2))
 
-Tensor network (in Heisenberg picture) for identity matrix on given IndsNetwork
+Construct a bond-dimension-1 `TensorNetworkState` representing the identity matrix on graph `g`.
+
+For `"Pauli"` site indices this is the identity in the Heisenberg picture (an `"I"` Pauli string on every vertex).
+For other site types it expects an even number `n` of physical indices on each vertex, with the
+first half being the "ket" indices and the second half the "bra" indices; index `i` is paired with
+index `n/2 + i`.
 """
-function identitytensornetworkstate(eltype, g::NamedGraph, s::Dictionary = siteinds("Pauli", g))
-    return paulitensornetworkstate(eltype, v -> "I", g, s)
+function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2))
+    is_pauli(s) && return paulitensornetworkstate(eltype, v -> "I", g, s)
+
+    links = Dictionary(edges(g), [Index(1, "e$(src(e))_$(dst(e))") for e in edges(g)])
+    links = merge(links, Dictionary(reverse.(edges(g)), [links[e] for e in edges(g)]))
+
+    ts = Dictionary{vertextype(g), ITensor}()
+    for v in vertices(g)
+        es = incident_edges(g, v; dir = :in)
+        ninds = length(s[v])
+        ninds % 2 != 0 && error("Odd number of siteinds on vertex $v - don't know how to partition into rows and column")
+        t = ITensors.delta(eltype, [links[e] for e in es])
+        if ninds > 0
+            row_inds, col_inds = s[v][1:(ninds÷2)], s[v][((ninds÷2)+1):ninds]
+            id = identity_tensor(eltype, row_inds, col_inds)
+            t *= id
+        end
+        set!(ts, v, t)
+    end
+    return TensorNetworkState(TensorNetwork(ts, g), s)
 end
 
-identitytensornetworkstate(g::NamedGraph, s::Dictionary = siteinds("Pauli", g)) = identitytensornetworkstate(Float64, g, s)
+identity_tensornetworkstate(g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2)) = identity_tensornetworkstate(Float64, g, s)
 
 """
     toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n, n); periodic = true)))
