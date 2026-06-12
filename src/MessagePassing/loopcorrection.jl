@@ -107,7 +107,7 @@ function _fermionic_loop_weight(bpc::BeliefPropagationCache, eg)
     end
     append!(ts, Qs)
     append!(ts, caps)
-    seq = contraction_sequence(ts; alg = "einexpr", optimizer = Greedy())
+    seq = contraction_sequence(ts; alg = "optimal")
     cfull_anti = scalar(contract(ts; sequence = seq))
     zprod = prod(vertex_scalar(bpc, v) for v in vs)
     return cfull_anti / zprod
@@ -189,7 +189,7 @@ function weight(bpc::BeliefPropagationCache, eg)
         ITensor[message(bpc, e) for e in boundary_edges(bpc, es)]
     local_tensors = collect(Iterators.flatten(bp_factors(bpc, v) for v in vs))
     ts = [incoming_ms; local_tensors; antiprojectors]
-    seq = any(hasqns.(ts)) ? contraction_sequence(ts; alg = "optimal") : contraction_sequence(ts; alg = "einexpr", optimizer = Greedy())
+    seq = contraction_sequence(ts; alg = "optimal")
     return contract(ts; sequence = seq)[]
 end
 
