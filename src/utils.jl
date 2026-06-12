@@ -44,8 +44,8 @@ identity_tensor(row_inds::Vector{<:Index}, col_inds::Vector{<:Index}) = identity
 
 #Function for checking the correct algorithm is being used for the given cache type and functionality
 function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState}, f::String, alg)
-    if tns isa TensorNetworkState && is_fermionic(tns) && (alg != "exact") && (alg != "bp") && (alg != "boundarymps")
-        return error("Only alg=\"exact\" or \"bp\" is currently supported for fermionic tensor network states.")
+    if tns isa TensorNetworkState && is_fermionic(tns) && (alg != "exact") && (alg != "bp") && (alg != "boundarymps") && (alg != "loopcorrections")
+        return error("Only alg=\"exact\", \"bp\" or \"loopcorrections\" is currently supported for fermionic tensor network states.")
     end
     if alg == "bp"
         if !((tns isa BeliefPropagationCache) || (tns isa TensorNetworkState))

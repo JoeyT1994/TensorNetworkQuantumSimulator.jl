@@ -308,6 +308,25 @@ function Base.:*(ft::FermionicITensor, λ::Number)
     return FermionicITensor(t, ft.order, ft.dirs, ft.grading)
 end
 
+# Linear combination of two fermionic tensors over the SAME leg set. `b` is first
+# permuted to `a`'s fermionic leg order (which applies the Koszul reordering sign), so
+# the two dense arrays are aligned component-for-component before the bosonic ITensor `±`
+# (which itself index-matches). The result inherits `a`'s order/dirs/grading; `b` must
+# carry the same arrows/grading on those legs (true when `a` and `b` are two pieces of
+# the same bond object, e.g. an identity and a message outer product).
+function Base.:-(a::FermionicITensor, b::FermionicITensor)
+    bp = ITensors.permute(b, a.order)
+    return FermionicITensor(a.tensor - bp.tensor, a.order, a.dirs, a.grading)
+end
+function Base.:+(a::FermionicITensor, b::FermionicITensor)
+    bp = ITensors.permute(b, a.order)
+    return FermionicITensor(a.tensor + bp.tensor, a.order, a.dirs, a.grading)
+end
+
+# Single-index relabel (`replaceinds` for FermionicITensor lives in
+# factorize_fermionic_tensors.jl): parity-neutral renaming, arrows unchanged.
+ITensors.replaceind(ft::FermionicITensor, i::Index, j::Index) = ITensors.replaceinds(ft, (i,), (j,))
+
 # Walk the nested binary contraction tree `seq` (integer indices into `fts`).
 function follow_sequence(seq, fts::Vector{<:FermionicITensor})
     seq isa Integer && return fts[seq]

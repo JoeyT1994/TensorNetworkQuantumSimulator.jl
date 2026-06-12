@@ -4,7 +4,6 @@ using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuant
 using ITensors: ITensors
 using NamedGraphs: add_edge!, NamedEdge
 Random.seed!(1234)
-using NPZ
 
 using TensorNetworkQuantumSimulator
 using Graphs: edges, src, dst, vertices
@@ -79,7 +78,7 @@ function main_fermions(χ, μ, lattice)
         append!(two_site_gates, [("RHop", [src(e), dst(e)], t*dt) for e in es])
     end
 
-    nsteps = 100
+    nsteps = 1000
     t_update =0
     t_bp = 0
 
@@ -111,9 +110,10 @@ function main_fermions(χ, μ, lattice)
         push!(bp_times, t3-t2 )
         push!(gate_app_times, t2-t1)
 
-        if i % 1 == 0
+        if i % 10 == 0
             println("Time is $(i*dt)")
-            println("This Time step took $(t3-t1) secs")
+            println("This Time steps BP update took $(t3-t2) secs")
+            println("This Time steps Gate app took $(t2-t1) secs")
             println("Current BD is $(maxvirtualdim(ψ_bpc))")
             println("BP Measured hopping is $cidag_cj")
             println("Exact hopping is $(cidag_cjexact)")
