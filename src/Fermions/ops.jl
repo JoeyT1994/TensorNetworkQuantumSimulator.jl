@@ -26,6 +26,7 @@ function fermion_op_matrix(name::String, s::Index)
         name == "Nup" && return _AUPDAG_MAT * _AUP_MAT
         name == "Ndn" && return _ADNDAG_MAT * _ADN_MAT
         name == "NupNdn" && return _AUPDAG_MAT * _AUP_MAT * _ADNDAG_MAT * _ADN_MAT
+        name == "Sz" && return 0.5*(_AUPDAG_MAT * _AUP_MAT - _ADNDAG_MAT * _ADN_MAT)
         (name == "Cupdag" || name == "Aupdag") && return _AUPDAG_MAT
         (name == "Cdndag" || name == "Adndag") && return _ADNDAG_MAT
         (name == "Cup" || name == "Aup") && return _AUP_MAT

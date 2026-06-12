@@ -161,6 +161,22 @@ function fermionic_number_hamiltonian(s::Index)
 end
 
 """
+    fermionic_sz(s::Index) -> FermionicITensor
+
+The on-site magnetisation as a
+parity-even operator `FermionicITensor` on site `s` (legs `[prime(s), s]`).
+"""
+function fermionic_sz(s::Index)
+    sgr = _fermionic_site_grading(s)
+    M = if dim(s) == 4
+        fermion_op_matrix("Sz", s)
+    else
+        error("Number operator supports spinful (dim 4) sites only.")
+    end
+    return _onsite_even_ft(s, M, sgr)
+end
+
+"""
     fermionic_interaction_hamiltonian(s::Index) -> FermionicITensor
 
 The on-site Hubbard interaction operator `n↑ n↓` as a parity-even operator
@@ -199,6 +215,18 @@ function fermionic_number_gate(dt::Number, s::Index; coeff::Number = -im)
     H = fermionic_number_hamiltonian(s)
     return fermionic_exp_gate(H; outs = Index[prime(s)], ins = Index[s], dt, coeff)
 end
+
+"""
+    fermionic_sz_gate(dt, s::Index; coeff = -im) -> FermionicITensor
+
+The on-site magnetisation propagator `exp(coeff · dt · Sz)` .
+With the default `coeff = -im` this is `exp(-i dt N)`.
+"""
+function fermionic_sz_gate(dt::Number, s::Index; coeff::Number = -im)
+    H = fermionic_sz(s)
+    return fermionic_exp_gate(H; outs = Index[prime(s)], ins = Index[s], dt, coeff)
+end
+
 
 """
     fermionic_interaction_gate(dt, s::Index; coeff = -im) -> FermionicITensor
@@ -247,7 +275,11 @@ function tofermionicitensor(name::String, θ, s_inds::Vector{<:Index})
         length(s_inds) == 1 || throw(ArgumentError(
             "Fermionic gate \"$name\" acts on 1 site, got $(length(s_inds))."))
         return fermionic_number_gate(θ, only(s_inds))
+    elseif name == "RSz"
+        length(s_inds) == 1 || throw(ArgumentError(
+            "Fermionic gate \"$name\" acts on 1 site, got $(length(s_inds))."))
+        return fermionic_sz_gate(θ, only(s_inds))
     end
     throw(ArgumentError(
-        "Unknown fermionic gate \"$name\". Supported: \"RHop\", \"RInt\", \"RN\"."))
+        "Unknown fermionic gate \"$name\". Supported: \"RHop\", \"RInt\", \"RN\", \"RSz\"."))
 end
