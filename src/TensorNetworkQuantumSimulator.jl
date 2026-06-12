@@ -146,6 +146,8 @@ export
     InfiniteTNS,
     infinite_tensornetworkstate,
     infinite_tns,
+    infinite_fermionic_tensornetworkstate,
+    infinite_fermionic_tns,
     coordination,
     iTNS_apply_gate,
     iTNS_expect,

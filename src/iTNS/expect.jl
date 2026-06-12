@@ -49,6 +49,14 @@ or across bond `loc::Int` (e.g. `iTNS_expect(ψ, "ZZ", 1)`). Given an
 is supported); given a `BeliefPropagationCache` the backend is already fixed.
 """
 function iTNS_expect(ψ_bpc::BeliefPropagationCache, op, loc::Union{Symbol, Int}; kwargs...)
+    # Fermionic networks measure through the validated parity-aware `expect` (doubled network
+    # with Jordan–Wigner operator strings), not via a reduced density matrix. `op` is given as
+    # operator name(s) understood by the fermionic backend, e.g. `"N"`/`"Nup"` on a site, or a
+    # pair like `["Cdag", "C"]` across a bond.
+    if is_fermionic(network(ψ_bpc))
+        op_strings = op isa AbstractString ? String[op] : collect(String, op)
+        return expect(ψ_bpc, (op_strings, _obsverts(loc)); alg = "bp")
+    end
     ρ = iTNS_reduced_density_matrix(ψ_bpc, loc; kwargs...)
     O = _resolve_gate(op, loc, graph(ψ_bpc), siteinds(network(ψ_bpc)))
     return (ρ * O)[]
