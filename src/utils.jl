@@ -34,6 +34,9 @@ function eigendecomp(A::ITensor, linds, rinds; ishermitian = false, kwargs...)
     return Ul, D, dag(U)
 end
 
+# Adapt `t` to the storage datatype (eltype + device) of `ref`.
+adapt_like(ref, t) = adapt(datatype(ref))(t)
+
 function identity_tensor(eltype, row_inds::Vector{<:Index}, col_inds::Vector{<:Index})
     c_row, c_col = ITensors.combiner(row_inds),ITensors.combiner(col_inds)
     t= ITensors.denseblocks(ITensors.delta(eltype, ITensors.combinedind(c_row), ITensors.combinedind(c_col)))
@@ -83,6 +86,12 @@ default_alg(bmps_cache::BoundaryMPSCache) = "boundarymps"
 default_alg(tns::TensorNetworkState) = error("You must specify a contraction algorithm. Currently supported: exact, bp and boundarymps.")
 default_alg(any) = error("You must specify a contraction algorithm. Currently supported: exact, bp and boundarymps.")
 
+# Fill in the `maxiter` cache-update default for `cache` unless the user already supplied one.
+function with_default_maxiter(cache_update_kwargs, cache)
+    maxiter = get(cache_update_kwargs, :maxiter, default_bp_maxiter(cache))
+    return (; cache_update_kwargs..., maxiter)
+end
+
 """
     safe_eigen(m::ITensor, args...; kwargs...)
     A wrapper around ITensors.eigen that ensures eigen computations are done in Float64/ComplexF64 precision on CPU for better numerical stability.
@@ -103,13 +112,9 @@ function safe_eigen(m::ITensor, args...; kwargs...)
     end
 end
 
-function collect_vertices(e::NamedEdge, g::NamedGraph)
-    return collect_vertices([src(e), dst(e)], g)
-end
+collect_vertices(e::NamedEdge, g::NamedGraph) = collect_vertices([src(e), dst(e)], g)
 
-function collect_vertices(es::Vector{<:NamedEdge}, g::NamedGraph)
-    return reduce(vcat, [collect_vertices(e, g) for e in es])
-end
+collect_vertices(es::Vector{<:NamedEdge}, g::NamedGraph) = reduce(vcat, [collect_vertices(e, g) for e in es])
 
 # Levenshtein edit distance between two strings.
 function levenshtein(a::AbstractString, b::AbstractString)

@@ -49,7 +49,7 @@ function set_edge_sequence(bp_cache::BeliefPropagationCache, edge_sequence::Vect
 end
 
 function edge_scalar(bp_cache::BeliefPropagationCache, edge::AbstractEdge)
-    return scalar((message(bp_cache, edge) * message(bp_cache, reverse(edge))))
+    return scalar(message(bp_cache, edge) * message(bp_cache, reverse(edge)))
 end
 
 #Algorithmic defaults
@@ -143,7 +143,7 @@ function rescale_messages!(bp_cache::BeliefPropagationCache, edges::Vector{<:Abs
     ms = messages(bp_cache)
     for e in edges
         me, mer = normalize(message(bp_cache, e)), normalize(message(bp_cache, reverse(e)))
-        n = scalar((me * mer))
+        n = scalar(me * mer)
         if isreal(n)
             me *= sign(n)
             n *= sign(n)
