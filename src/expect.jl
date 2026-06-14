@@ -17,7 +17,7 @@ function expect(
         op_string_f = op_string_function(op_strings, vs)
         ψOψ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
         numer_seq = contraction_sequence(ψOψ_tensors; contraction_sequence_kwargs...)
-        numer = contract(ψOψ_tensors; sequence = numer_seq)[]
+        numer = scalar(contract(ψOψ_tensors; sequence = numer_seq))
         push!(out, coeff * (numer / denom))
     end
     return out
@@ -65,20 +65,18 @@ function expect(
     iszero(coeff) && return zero(coeff)
 
     steiner_vs = length(obs_vs) == 1 ? obs_vs : collect(vertices(steiner_tree(network(cache), obs_vs)))
-
     incoming_ms = incoming_messages(cache, steiner_vs)
-    ψIψ_tensors = norm_factors(network(cache), steiner_vs)
-    append!(ψIψ_tensors, incoming_ms)
-    denom_seq = contraction_sequence(ψIψ_tensors; alg = "optimal", prune_tensors = true)
-    denom = contract(ψIψ_tensors; sequence = denom_seq)[]
-
-    op_string_f = op_string_function(op_strings, obs_vs)
 
     #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
-    ψOψ_tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
-    append!(ψOψ_tensors, incoming_ms)
-    numer_seq = contraction_sequence(ψOψ_tensors; alg = "optimal", prune_tensors = true)
-    numer = contract(ψOψ_tensors; sequence = numer_seq)[]
+    function contract_region(op_string_f)
+        tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
+        append!(tensors, incoming_ms)
+        seq = contraction_sequence(tensors; alg = "optimal", prune_tensors = true)
+        return scalar(contract(tensors; sequence = seq))
+    end
+
+    denom = contract_region(v -> "I")
+    numer = contract_region(op_string_function(op_strings, obs_vs))
 
     return coeff * numer / denom
 end
@@ -95,7 +93,7 @@ function expect(
     op_string_f = op_string_function(op_strings, obs_vs)
 
     numer, denom = path_contract(cache, obs_vs, op_string_f; bmps_messages_up_to_date)
-    return coeff * numer[] / denom
+    return coeff * scalar(numer) / denom
 end
 
 function expect(

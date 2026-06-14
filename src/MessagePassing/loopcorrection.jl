@@ -87,7 +87,7 @@ function weight(bpc::BeliefPropagationCache, eg)
     local_tensors = collect(Iterators.flatten(bp_factors(bpc, v) for v in vs))
     ts = [incoming_ms; local_tensors; antiprojectors]
     seq = any(hasqns.(ts)) ? contraction_sequence(ts; alg = "optimal") : contraction_sequence(ts; alg = "einexpr", optimizer = Greedy())
-    return contract(ts; sequence = seq)[]
+    return scalar(contract(ts; sequence = seq))
 end
 
 #Vectorized version of weight

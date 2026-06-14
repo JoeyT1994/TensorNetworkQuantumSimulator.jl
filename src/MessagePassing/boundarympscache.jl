@@ -514,7 +514,7 @@ function edge_scalar(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
     for e in es
         out = (out * (message(bmps_cache, e))) * message(bmps_cache, reverse(e))
     end
-    return out[]
+    return scalar(out)
 end
 
 function delete_partition_messages!(bmps_cache::BoundaryMPSCache, partition::PartitionVertex)
