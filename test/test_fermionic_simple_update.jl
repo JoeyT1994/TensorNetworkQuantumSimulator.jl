@@ -91,8 +91,9 @@ end
         o = TN.fermionic_hopping_gate(dt, s1, s2)
         bpc = TN.update(TN.BeliefPropagationCache(ψ))
         envs = TN.incoming_messages(bpc, [v1, v2])
+        net = TN.network(bpc)
         updated, _, err = TN.simple_update(
-            o, TN.network(bpc), [v1, v2]; envs, normalize_tensors = false, maxdim = 64,
+            o, [net[v1], net[v2]]; envs, normalize_tensors = false, maxdim = 64,
         )
 
         # reconstruct the full ket from the two updated tensors + untouched spectators
@@ -149,7 +150,7 @@ end
         end
         target = Dvec .* ψvec
 
-        updated, _, err = TN.simple_update(o, ψ, [v1]; envs = FT[], normalize_tensors = false)
+        updated, _, err = TN.simple_update(o, [ψ[v1]]; envs = FT[], normalize_tensors = false)
         new_tensors = [k == 1 ? updated[1] : ψ[vs[k]] for k in eachindex(vs)]
         acc = new_tensors[1]
         for k in 2:length(vs); acc = contract(acc, new_tensors[k]); end
