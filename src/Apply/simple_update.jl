@@ -1,5 +1,5 @@
 """
-    simple_update(o, ψ⃗; envs, normalize_tensors = true, apply_kwargs...)
+    simple_update(o, ψ⃗; envs, normalize_tensors = true, sqrt_cutoff, apply_kwargs...)
 
 Simple update of one or two local tensors in the presence of factorized environments under the action of a one- or two-site gate. This is a computationally cheaper but less accurate alternative to `full_update`. It is exact if no truncation is performed.
 
