@@ -81,6 +81,12 @@ default_alg(bp_cache::BeliefPropagationCache) = "bp"
 default_alg(bmps_cache::BoundaryMPSCache) = "boundarymps"
 default_alg(any) = error("You must specify a contraction algorithm. Currently supported: exact, bp and boundarymps.")
 
+# Fill in the `maxiter` cache-update default for `cache` unless the user already supplied one.
+function with_default_maxiter(cache_update_kwargs, cache)
+    maxiter = get(cache_update_kwargs, :maxiter, default_bp_maxiter(cache))
+    return (; cache_update_kwargs..., maxiter)
+end
+
 """
     safe_eigen(m::ITensor, args...; kwargs...)
     A wrapper around ITensors.eigen that ensures eigen computations are done in Float64/ComplexF64 precision on CPU for better numerical stability.

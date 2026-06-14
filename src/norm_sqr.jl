@@ -2,8 +2,19 @@ function algorithm_error()
     error("Algorithm choice not supported. Currently supported: bp, boundarymps, loopcorrections and exact.")
 end
 
-function state_error()
-    error("Network type inside is not a TensorNetworkState.")
+function state_error(expected::String)
+    error("Network type inside the cache is not a $expected.")
+end
+
+# Contract a belief-propagation / boundary-MPS cache down to its (scalar) partition function.
+function cache_partitionfunction(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
+    if alg == Algorithm("bp") || alg == Algorithm("boundarymps")
+        return partitionfunction(cache)
+    elseif alg == Algorithm("loopcorrections")
+        return loopcorrected_partitionfunction(cache, max_configuration_size)
+    else
+        return algorithm_error()
+    end
 end
 
 """
@@ -60,18 +71,10 @@ end
 
 function norm_sqr(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
     tn = network(cache)
-
-    if alg == Algorithm("bp") || alg == Algorithm("boundarymps")
-        z = partitionfunction(cache)
-    elseif alg == Algorithm("loopcorrections")
-        z = loopcorrected_partitionfunction(cache, max_configuration_size)
-    else
-        return algorithm_error()
-    end
-
+    z = cache_partitionfunction(alg, cache; max_configuration_size)
     tn isa TensorNetworkState && return z
     tn isa TensorNetwork && return z * z
-    return state_error()
+    return state_error("TensorNetworkState")
 end
 
 function norm_sqr(alg::Union{Algorithm"bp", Algorithm"loopcorrections"}, ψ::TensorNetworkState; cache_update_kwargs = default_bp_update_kwargs(ψ), kwargs...)
@@ -82,8 +85,7 @@ end
 
 function norm_sqr(alg::Algorithm"boundarymps", ψ::TensorNetworkState; mps_bond_dimension::Integer, partition_by = "row", cache_update_kwargs = default_bmps_update_kwargs(ψ), kwargs...)
     ψ_bmps = BoundaryMPSCache(ψ, mps_bond_dimension; partition_by)
-    maxiter = get(cache_update_kwargs, :maxiter, default_bp_maxiter(ψ_bmps))
-    cache_update_kwargs = (; cache_update_kwargs..., maxiter)
+    cache_update_kwargs = with_default_maxiter(cache_update_kwargs, ψ_bmps)
     ψ_bmps = update(ψ_bmps; cache_update_kwargs...)
     return norm_sqr(alg, ψ_bmps; kwargs...)
 end

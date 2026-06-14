@@ -1,11 +1,3 @@
-function inner_algorithm_error()
-    error("Algorithm choice not supported. Currently supported: bp, boundarymps, loopcorrections and exact.")
-end
-
-function inner_state_error()
-    error("Network type inside the cache is not a BilinearForm.")
-end
-
 """
     inner(ψ::TensorNetworkState, ϕ::TensorNetworkState; alg, kwargs...)
 
@@ -65,16 +57,9 @@ end
 
 function ITensors.inner(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
     tn = network(cache)
-    if alg == Algorithm("bp") || alg == Algorithm("boundarymps")
-        z = partitionfunction(cache)
-    elseif alg == Algorithm("loopcorrections")
-        z = loopcorrected_partitionfunction(cache, max_configuration_size)
-    else
-        return inner_algorithm_error()
-    end
-
+    z = cache_partitionfunction(alg, cache; max_configuration_size)
     tn isa BilinearForm && return z
-    return inner_state_error()
+    return state_error("BilinearForm")
 end
 
 function ITensors.inner(alg::Union{Algorithm"bp", Algorithm"loopcorrections"}, ψ::TensorNetworkState, ϕ::TensorNetworkState; cache_update_kwargs = (;), kwargs...)
@@ -85,8 +70,7 @@ end
 
 function ITensors.inner(alg::Algorithm"boundarymps", ψ::TensorNetworkState, ϕ::TensorNetworkState; mps_bond_dimension::Integer, partition_by = "row", cache_update_kwargs = (;), kwargs...)
     ψϕ_bmps = BoundaryMPSCache(BilinearForm(ψ, ϕ), mps_bond_dimension; partition_by)
-    maxiter = get(cache_update_kwargs, :maxiter, default_bp_maxiter(ψϕ_bmps))
-    cache_update_kwargs = (; cache_update_kwargs..., maxiter)
+    cache_update_kwargs = with_default_maxiter(cache_update_kwargs, ψϕ_bmps)
     ψϕ_bmps = update(ψϕ_bmps; cache_update_kwargs...)
     return inner(alg, ψϕ_bmps; kwargs...)
 end

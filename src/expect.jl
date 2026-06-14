@@ -14,8 +14,7 @@ function expect(
             push!(out, zero(coeff))
             continue
         end
-        op_dict = Dict(zip(vs, op_strings))
-        op_string_f = v -> get(op_dict, v, "I")
+        op_string_f = op_string_function(op_strings, vs)
         ψOψ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
         numer_seq = contraction_sequence(ψOψ_tensors; contraction_sequence_kwargs...)
         numer = contract(ψOψ_tensors; sequence = numer_seq)[]
@@ -73,8 +72,7 @@ function expect(
     denom_seq = contraction_sequence(ψIψ_tensors; alg = "optimal", prune_tensors = true)
     denom = contract(ψIψ_tensors; sequence = denom_seq)[]
 
-    op_dict = Dict(zip(obs_vs, op_strings))
-    op_string_f = v -> get(op_dict, v, "I")
+    op_string_f = op_string_function(op_strings, obs_vs)
 
     #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
     ψOψ_tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
@@ -94,8 +92,7 @@ function expect(
     op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
     iszero(coeff) && return zero(coeff)
 
-    op_dict = Dict(zip(obs_vs, op_strings))
-    op_string_f = v -> get(op_dict, v, "I")
+    op_string_f = op_string_function(op_strings, obs_vs)
 
     numer, denom = path_contract(cache, obs_vs, op_string_f; bmps_messages_up_to_date)
     return coeff * numer[] / denom
@@ -151,7 +148,7 @@ function expect(
     )
 
     ψ_bmps = BoundaryMPSCache(ψ, mps_bond_dimension; partition_by, gauge_state)
-    cache_update_kwargs = (; cache_update_kwargs..., maxiter = default_bp_maxiter(ψ_bmps))
+    cache_update_kwargs = with_default_maxiter(cache_update_kwargs, ψ_bmps)
     ψ_bmps = update(ψ_bmps; cache_update_kwargs...)
 
     obs_vs = observables_vertices(observable, graph(ψ))
@@ -177,6 +174,12 @@ function collectobservable(obs::Tuple, g::NamedGraph)
     end
 
     return op_strings, verts, coeff
+end
+
+# Map each vertex to its operator string, defaulting to the identity "I" off the observable's support.
+function op_string_function(op_strings, vs)
+    op_dict = Dict(zip(vs, op_strings))
+    return v -> get(op_dict, v, "I")
 end
 
 observables_vertices(observable::Tuple, g::NamedGraph) = collect_vertices(observable[2], g)
