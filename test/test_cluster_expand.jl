@@ -50,6 +50,30 @@ using Test: @testset, @test
         @test abs(ce - exact) < abs(bp - exact)
     end
 
+    # Justifies the `loopy_core` reduction at the contraction level: with converged
+    # BP messages on the boundary, a region's ratio O_r is unchanged by a *disconnected*
+    # protect-free component (it contracts to a scalar that cancels), but a loop reached
+    # through a *bridge* imposes a non-BP message across the bridge bond and shifts O_r.
+    # So disconnected components may be dropped; bridge-attached loops must be kept.
+    @testset "region ratio: disconnected cancels, bridge matters" begin
+        g = named_grid((7, 7))
+        ψ = random_tensornetworkstate(ComplexF64, g, "S=1/2"; bond_dimension = χ)
+        bpc = update(BeliefPropagationCache(ψ))
+
+        obs_vs = [(4, 4), (4, 5)]
+        op_strings = ["Z", "Z"]
+        A = Set([(4, 4), (4, 5), (5, 4), (5, 5)])           # plaquette holding the bond
+
+        rA = TN._region_ratio(bpc, collect(A), obs_vs, op_strings)
+        # disjoint far loop -> cancels
+        r_disc = TN._region_ratio(bpc, collect(union(A, Set([(1, 1), (1, 2), (2, 1), (2, 2)]))), obs_vs, op_strings)
+        # loop attached by the single bridge edge (4,3)-(4,4) -> matters
+        r_bridge = TN._region_ratio(bpc, collect(union(A, Set([(4, 2), (4, 3), (3, 2), (3, 3)]))), obs_vs, op_strings)
+
+        @test r_disc ≈ rA atol = 1e-10
+        @test !isapprox(r_bridge, rA; atol = 1e-8)
+    end
+
     # The `TensorNetworkState` overload builds + updates its own BP cache; in the
     # single-cluster limit it must reproduce `expect(ψ, obs; alg="bp")`.
     @testset "TensorNetworkState overload" begin

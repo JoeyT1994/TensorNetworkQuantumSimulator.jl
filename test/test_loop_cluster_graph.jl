@@ -127,6 +127,26 @@ _min_induced_degree(g, S) = minimum(degree(subgraph(g, collect(S)), v) for v in 
         # a pure tree reduces to just the protected target
         path = Set([(1, 1), (1, 2), (1, 3)])
         @test loopy_core(g, path, Set([(1, 2)])) == Set([(1, 2)])
+
+        # a disconnected protect-free component is dropped: it contracts to a scalar
+        # that cancels in O_r, so only the observable's component survives.
+        h = named_grid((6, 6))
+        P1 = Set([(1, 1), (1, 2), (2, 1), (2, 2)])
+        P2 = Set([(5, 5), (5, 6), (6, 5), (6, 6)])   # disjoint, non-adjacent loop
+        @test loopy_core(h, union(P1, P2), Set([(1, 1)])) == P1
+        @test loopy_core(h, union(P1, P2), Set([(6, 6)])) == P2
+
+        # an articulation-joined loop is KEPT: Q1 and Q2 share only the vertex (3,3),
+        # so both loops genuinely correct the local RDM and neither is removed.
+        Q1 = Set([(2, 2), (2, 3), (3, 2), (3, 3)])
+        Q2 = Set([(3, 3), (3, 4), (4, 3), (4, 4)])
+        @test loopy_core(h, union(Q1, Q2), Set([(2, 2)])) == union(Q1, Q2)
+
+        # a loop reached only through a bridge-path is KEPT: beyond the bridge it
+        # imposes a non-BP message, so it is not tree-like (cf. test_cluster_expand).
+        L2 = Set([(4, 2), (4, 3), (5, 2), (5, 3)])
+        bridged = union(P1, Set([(3, 2)]), L2)        # (2,2)-(3,2)-(4,2) degree-2 bridge path
+        @test loopy_core(h, bridged, Set([(1, 1)])) == bridged
     end
 end
 end

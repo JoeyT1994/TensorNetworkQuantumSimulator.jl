@@ -120,21 +120,74 @@ end
 
 # --- tree-reduction (Algorithm 1, lines 7-13) ----------------------------------
 
+# Connected components of the subgraph of `g` induced on the vertex set `S`, as a
+# vector of vertex `Set`s. Plain BFS over `neighbors` restricted to `S` (the clusters
+# are small, so this is cheap and avoids materializing a `subgraph`).
+function _connected_components(g::AbstractGraph, S)
+    remaining = Set(S)
+    V = eltype(remaining)
+    comps = Set{V}[]
+    while !isempty(remaining)
+        seen = Set{V}((first(remaining),))
+        stack = collect(seen)
+        while !isempty(stack)
+            x = pop!(stack)
+            for y in neighbors(g, x)
+                (y in remaining && y ∉ seen) || continue
+                push!(seen, y)
+                push!(stack, y)
+            end
+        end
+        push!(comps, seen)
+        setdiff!(remaining, seen)
+    end
+    return comps
+end
+
 """
     loopy_core(g, region, protect) -> Set
 
-The "largest loop with equivalent BP contraction" (Algorithm 1, line 8): iteratively
-strip leaves (induced degree < 2) until only the leaf-free loopy core remains.
-Vertices in `protect` (the observable support) are never removed — the observable
-sits there, so its tensors must be retained even if locally tree-like.
+The "largest loop with equivalent BP contraction" (Algorithm 1, line 8). Two
+reductions, applied to a fixpoint, both leave the region's BP-contracted ratio
+`O_r` unchanged:
+
+  * **strip leaves** (induced degree < 2): a tree appendage contracted with the
+    converged BP messages reproduces exactly the BP message it hangs from, so it
+    cancels between numerator and denominator;
+  * **drop protect-free components**: a connected component carrying no observable
+    site contracts to a scalar identical in numerator and denominator, so it
+    cancels too. (Leaf-stripping can disconnect a region — e.g. severing a tree
+    path between two loops — which is why this runs in the same fixpoint.)
+
+Vertices in `protect` (the observable support) are never removed. Note that an
+in-region **bridge to a loop** is *kept*: that loop imposes a non-BP message across
+the bridge bond and genuinely shifts `O_r`, so it is not tree-like and must stay.
+With an empty `protect` (no anchor) the component drop is skipped, leaving the bare
+leaf-stripped 2-core.
 """
 function loopy_core(g::AbstractGraph, region::Set, protect::Set)
     core = Set(region)
     while true
         sub = subgraph(g, collect(core))
         leaves = [v for v in core if v ∉ protect && degree(sub, v) < 2]
-        isempty(leaves) && break
-        setdiff!(core, leaves)
+        if !isempty(leaves)
+            setdiff!(core, leaves)
+            continue
+        end
+        if !isempty(protect)
+            comps = _connected_components(g, core)
+            if length(comps) > 1
+                keep = Set{eltype(core)}()
+                for comp in comps
+                    any(v -> v in protect, comp) && union!(keep, comp)
+                end
+                if length(keep) < length(core)
+                    core = keep
+                    continue
+                end
+            end
+        end
+        break
     end
     return core
 end
