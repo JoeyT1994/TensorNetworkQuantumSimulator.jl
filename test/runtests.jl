@@ -10,4 +10,6 @@ using Test
     include("test_apply.jl")
     include("test_sampling.jl")
     include("test_truncate.jl")
+    include("test_loop_cluster_graph.jl")
+    include("test_cluster_expand.jl")
 end

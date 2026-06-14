@@ -61,6 +61,32 @@ function expect(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMP
     return expect(Algorithm(alg), ψ, observable; kwargs...)
 end
 
+# Single-cluster ratio O_region = ⟨Ψ|Ô|Ψ⟩_region / ⟨Ψ|Ψ⟩_region, contracting the doubled
+# network restricted to `region` with the converged BP messages capping the boundary ∂region.
+# `region` is any vertex set containing `obs_vs`; the operator (`op_strings` on `obs_vs`,
+# identity elsewhere) is inserted via `norm_factors`. Returns `nothing` when the observable is
+# parity-forbidden (fermionic odd total parity ⇒ ratio is 0 by parity), so callers can decide
+# how to encode the zero. This is the shared primitive behind both the single-cluster `"bp"`
+# expectation (region = Steiner tree) and the loop cluster expansion (region = each cluster).
+function _region_ratio(cache::BeliefPropagationCache, region, obs_vs, op_strings)
+    verts = collect(region)
+    incoming_ms = incoming_messages(cache, verts)
+
+    #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
+    function contract_region(op_string_f)
+        tensors = norm_factors(network(cache), verts; op_strings = op_string_f)
+        tensors === nothing && return nothing
+        append!(tensors, incoming_ms)
+        seq = contraction_sequence(tensors; alg = "optimal", prune_tensors = true)
+        return scalar(contract(tensors; sequence = seq))
+    end
+
+    denom = contract_region(v -> "I")
+    numer = contract_region(op_string_function(op_strings, obs_vs))
+    numer === nothing && return nothing
+    return numer / denom
+end
+
 function expect(
         alg::Algorithm"bp",
         cache::BeliefPropagationCache,
@@ -70,24 +96,10 @@ function expect(
     iszero(coeff) && return zero(coeff)
 
     steiner_vs = length(obs_vs) == 1 ? obs_vs : collect(vertices(steiner_tree(network(cache), obs_vs)))
-    incoming_ms = incoming_messages(cache, steiner_vs)
+    ratio = _region_ratio(cache, steiner_vs, obs_vs, op_strings)
+    ratio === nothing && return zero(coeff)
 
-    #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
-    # For fermionic networks `norm_factors` returns `nothing` when the operator string is
-    # parity-forbidden (odd total parity ⇒ ⟨O⟩ = 0); propagate that as a `nothing` region.
-    function contract_region(op_string_f)
-        tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
-        tensors === nothing && return nothing
-        append!(tensors, incoming_ms)
-        seq = contraction_sequence(tensors; alg = "optimal", prune_tensors = true)
-        return scalar(contract(tensors; sequence = seq))
-    end
-
-    denom = contract_region(v -> "I")
-    numer = contract_region(op_string_function(op_strings, obs_vs))
-    numer === nothing && return zero(coeff)
-
-    return coeff * numer / denom
+    return coeff * ratio
 end
 
 function expect(
