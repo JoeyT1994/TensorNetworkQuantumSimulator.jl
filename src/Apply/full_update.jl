@@ -93,7 +93,7 @@ function fidelity(
     sequence = contraction_sequence(term3_tns; alg = "optimal")
     term3 = ITensors.contract(term3_tns; sequence)
 
-    f = term3[] / sqrt(term1[] * term2[])
+    f = scalar(term3) / sqrt(scalar(term1) * scalar(term2))
     return f * conj(f)
 end
 
