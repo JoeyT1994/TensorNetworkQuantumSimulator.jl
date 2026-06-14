@@ -24,7 +24,7 @@ function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
     state = bp_factors(bp_cache, vertex)
     contract_list = [state; incoming_ms]
     sequence = contraction_sequence(contract_list; alg = "optimal")
-    return contract(contract_list; sequence)[]
+    return scalar(contract(contract_list; sequence))
 end
 
 function edge_scalar(

@@ -52,7 +52,7 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
                 end
                 row_combiner, col_combiner = combiner(row_inds), combiner(col_inds)
                 ap =
-                    adapt(datatype(message(bpc, e)))(denseblocks(delta(combinedind(col_combiner), dag(combinedind(row_combiner)))))
+                    adapt_like(message(bpc, e), denseblocks(delta(combinedind(col_combiner), dag(combinedind(row_combiner)))))
                 ap = ap * row_combiner * dag(col_combiner)
                 ap = ap - message(bpc, e) * mer
                 push!(antiprojectors, ap)
@@ -87,7 +87,7 @@ function weight(bpc::BeliefPropagationCache, eg)
     local_tensors = collect(Iterators.flatten(bp_factors(bpc, v) for v in vs))
     ts = [incoming_ms; local_tensors; antiprojectors]
     seq = any(hasqns.(ts)) ? contraction_sequence(ts; alg = "optimal") : contraction_sequence(ts; alg = "einexpr", optimizer = Greedy())
-    return contract(ts; sequence = seq)[]
+    return scalar(contract(ts; sequence = seq))
 end
 
 #Vectorized version of weight

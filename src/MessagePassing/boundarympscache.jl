@@ -189,7 +189,7 @@ function set_interpartition_messages!(
             virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
             ind = Index(virt_dim, "m$(i)$(i + 1)")
             m1, m2 = message(bmps_cache, es[i]), message(bmps_cache, es[i + 1])
-            t = adapt(datatype(m1))(dense(delta(ind)))
+            t = adapt_like(m1, dense(delta(ind)))
             setmessage!(bmps_cache, es[i], m1 * t)
             setmessage!(bmps_cache, es[i + 1], m2 * t)
         end
@@ -452,7 +452,7 @@ function generic_apply(O::MPO, M::MPS; normalize = true, kwargs...)
         edge_to_split = (i, j)
         for k in inbetween_vertices
             cind = only(commoninds(O_tensors[first(edge_to_split)], O_tensors[last(edge_to_split)]))
-            d = adapt(datatype(O_tensors[k]))(denseblocks(delta(cind, cind')))
+            d = adapt_like(O_tensors[k], denseblocks(delta(cind, cind')))
             O_tensors[j] *= d
             O_tensors[k] *= d
             edge_to_split = (k, j)
@@ -461,7 +461,7 @@ function generic_apply(O::MPO, M::MPS; normalize = true, kwargs...)
     for i in 1:(length(O_tensors) - 1)
         cinds = commoninds(O_tensors[i], O_tensors[i + 1])
         if length(cinds) > 1
-            combiner = adapt(datatype(O_tensors[i]))(ITensors.combiner(cinds))
+            combiner = adapt_like(O_tensors[i], ITensors.combiner(cinds))
             O_tensors[i] *= combiner
             O_tensors[i + 1] *= combiner
         end
@@ -514,7 +514,7 @@ function edge_scalar(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
     for e in es
         out = (out * (message(bmps_cache, e))) * message(bmps_cache, reverse(e))
     end
-    return out[]
+    return scalar(out)
 end
 
 function delete_partition_messages!(bmps_cache::BoundaryMPSCache, partition::PartitionVertex)
