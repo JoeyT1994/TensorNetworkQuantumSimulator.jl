@@ -45,6 +45,7 @@ include("iTNS/expect.jl")
 
 include("LoopClusterExpansion/graph_clusters.jl")
 include("LoopClusterExpansion/cluster_expand.jl")
+include("LoopClusterExpansion/free_energy.jl")
 
 
 export
@@ -161,5 +162,6 @@ export
     region_counting_numbers,
     loopy_core,
     cluster_counting_numbers,
-    expect_clusterexpand
+    expect_clusterexpand,
+    expect_freeenergy
 end
