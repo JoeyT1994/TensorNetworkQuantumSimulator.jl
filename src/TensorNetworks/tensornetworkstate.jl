@@ -67,7 +67,7 @@ function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Functi
             tnv_dag = replaceinds(tnv_dag, prime.(sinds), sinds)
             append!(factors, ITensor[tnv, tnv_dag])
         else
-            op = adapt(datatype(tnv))(ITensors.op(op_strings(v), only(sinds)))
+            op = adapt_like(tnv, ITensors.op(op_strings(v), only(sinds)))
             append!(factors, ITensor[tnv, tnv_dag, op])
         end
     end
@@ -80,13 +80,13 @@ bp_factors(tns::TensorNetworkState, v) = norm_factors(tns, v)
 function default_message(tns::TensorNetworkState, edge::AbstractEdge)
     linds = virtualinds(tns, edge)
     if !is_fermionic(tns)
-        return adapt(datatype(tns))(denseblocks(delta(vcat(linds, prime(dag(linds))))))
+        return adapt_like(tns, denseblocks(delta(vcat(linds, prime(dag(linds))))))
     else
         s = only(linds)
         sgr = grading(tns, edge)
         u = prime(s)
         gr = Dictionary{Index, Vector{Bool}}([u, s], [sgr, sgr])
-        T = adapt(datatype(tns))(denseblocks(delta(u, s)))
+        T = adapt_like(tns, denseblocks(delta(u, s)))
         # Orientation-aware arrows: e and reverse(e) must carry OPPOSITE arrows on the
         # shared crossing bonds (u, s) so that contracting message(e) with
         # message(reverse(e)) is a proper OUT→IN fermionic supertrace closure rather

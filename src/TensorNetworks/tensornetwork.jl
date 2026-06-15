@@ -59,7 +59,7 @@ function add_tensor!(tn::TensorNetwork, tensor::ITensor, v)
 end
 
 function default_message(tn::TensorNetwork, edge::NamedEdge)
-    return adapt(datatype(tn))(denseblocks(delta(virtualinds(tn, edge))))
+    return adapt_like(tn, denseblocks(delta(virtualinds(tn, edge))))
 end
 
 function bp_factors(tn::TensorNetwork, vertex)

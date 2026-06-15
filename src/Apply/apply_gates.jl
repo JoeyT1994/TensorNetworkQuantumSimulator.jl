@@ -106,7 +106,8 @@ function apply_gate!(
     )
     envs = length(v⃗) == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
 
-    updated_tensors, s_values, err = simple_update(gate, network(ψ_bpc), v⃗; envs, apply_kwargs...)
+    ψ⃗ = [network(ψ_bpc)[v] for v in v⃗]
+    updated_tensors, s_values, err = simple_update(gate, ψ⃗; envs, apply_kwargs...)
     if length(v⃗) == 2
         v1, v2 = v⃗
         e = NamedEdge(v1 => v2)
@@ -149,15 +150,6 @@ function _bond_spectrum_messages(s_values::FermionicITensor, b::Index, e)
     dirs = src(e) < dst(e) ? Bool[false, true] : Bool[true, false]
     m = FermionicITensor(T, Index[u, b], dirs, gr)
     return m, dag(m)
-end
-
-#Checker for whether the cache needs updating (overlapping gate encountered)
-function _cacheupdate_check(affected_indices::Set, gate::ITensor; inds_per_site = 1)
-    indices = inds(gate)
-
-    # check if we have a two-site gate and any of the qinds are in the affected_indices. If so update cache
-    length(indices) == 4 * inds_per_site && any(ind in affected_indices for ind in indices) && return true
-    return false
 end
 
 const apply_circuit = apply_gates
