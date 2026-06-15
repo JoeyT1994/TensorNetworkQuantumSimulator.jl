@@ -83,6 +83,12 @@ update
 update_iteration!
 ```
 
+## Loop Cluster Expansion
+
+```@docs
+connected_edgeinduced_subgraphs_no_leaves
+```
+
 ## Utilities
 
 ```@docs
