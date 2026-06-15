@@ -68,7 +68,11 @@ function gated_lc_free_energy(
     )
     ψ = network(ψ_bpc)
     s = only(siteinds(ψ)[v])
-    G = ITensors.exp(α * ITensors.op(op_string, s); ishermitian = true)
+    # Map the single-site Hermitian observable to its generating-function gate `e^{α Ô}`.
+    # Fermionic sites need the locally-ordered `FermionicITensor` exponential (built from the
+    # on-site Fock matrix) rather than the spin `ITensors.op`/`ITensors.exp` path.
+    G = has_fermionic_tag(s) ? fermionic_onsite_exp_gate(op_string, s, α) :
+        ITensors.exp(α * ITensors.op(op_string, s); ishermitian = true)
     # `normalize_tensors = false`: the un-normalized gated tensor is exactly what makes the
     # squared norm equal the partition function ⟨ψ|e^{2α Ô}|ψ⟩ we want to differentiate.
     ψ_bpc, _ = apply_gate(G, ψ_bpc; v⃗ = [v], apply_kwargs = (; normalize_tensors = false))
