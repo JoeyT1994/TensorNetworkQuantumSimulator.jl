@@ -10,7 +10,7 @@ using Random
 Random.seed!(1634)
 
 function main()
-    nx, ny = 4, 4
+    nx, ny = 4,4
     χ = 3
     ITensors.disable_warn_order()
     gs = [
@@ -19,6 +19,7 @@ function main()
         (named_grid((nx, ny)), "square", 4),
     ]
     for (g, g_str, smallest_loop_size) in gs
+        max_configuration_size = 2*smallest_loop_size -1
         println("\n")
         println("-----------------------")
         obs = ("Z", first(center(g)))
@@ -28,7 +29,7 @@ function main()
         ψ = normalize(ψ; alg = "bp")
 
         norm_bp = norm(ψ; alg = "bp")
-        norm_loopcorrected = norm(ψ; alg = "loopcorrections", max_configuration_size = 2 * (smallest_loop_size) - 1)
+        norm_loopcorrected = norm(ψ; alg = "loopcorrections", max_configuration_size)
         norm_exact = norm(ψ; alg = "exact")
 
         println("Bp Value for norm is $norm_bp")
@@ -36,7 +37,7 @@ function main()
         println("Exact Value for norm is $norm_exact")
 
         sz_bp = expect(ψ, obs; alg = "bp")
-        sz_loopcorrected = expect(ψ, obs; alg = "loopcorrections",max_configuration_size = 2 * (smallest_loop_size) - 1)
+        sz_loopcorrected = expect(ψ, obs; alg = "loopcorrections",max_configuration_size)
         sz_exact = expect(ψ, obs; alg = "exact")
 
         println("\n")
