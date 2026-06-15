@@ -44,7 +44,6 @@ include("iTNS/apply_gate.jl")
 include("iTNS/expect.jl")
 
 include("LoopClusterExpansion/graph_clusters.jl")
-include("LoopClusterExpansion/cluster_expand.jl")
 include("LoopClusterExpansion/free_energy.jl")
 
 
@@ -157,11 +156,6 @@ export
     iTNS_apply_gate,
     iTNS_expect,
     iTNS_reduced_density_matrix,
-    loop_clusters,
-    close_under_intersection,
-    region_counting_numbers,
-    loopy_core,
-    cluster_counting_numbers,
-    expect_clusterexpand,
-    expect_freeenergy
+    connected_edgeinduced_subgraphs_no_leaves,
+    loopcorrected_free_energy
 end

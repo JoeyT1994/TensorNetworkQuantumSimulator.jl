@@ -1,251 +1,177 @@
-# Combinatorial core of the loop cluster expansion for local observables
-# (Gray, Park, Evenbly, Pancotti, Kjønstad & Chan, arXiv:2510.05647, Algorithm 1,
-# lines 4-13). This file is PURE GRAPH CODE: it never touches a tensor, knows
-# nothing about fermions/bosons, and operates only on a NamedGraph and vertex sets.
+# Edge-induced no-leaf subgraph enumeration for the loop / linked-cluster expansion.
 #
-# A "region" is a `Set` of vertices. Its geometry is the vertex-induced subgraph
-# `subgraph(g, collect(region))`. A "loop cluster" is a connected region that contains
-# a cycle and is leaf-free *away from the target*: every non-target vertex has induced
-# degree >= 2, while target (observable) vertices may be leaves (the "anomalous"
-# clusters; see `_is_loop_cluster`).
+# This file is PURE GRAPH CODE: it never touches a tensor and operates only on a
+# NamedGraph. A "generalized loop" is a connected edge set in which EVERY vertex has
+# induced degree >= 2 (no leaves). These are exactly the polymers of the hard-core loop
+# gas whose log is the free-energy correction `F − ln Z_BP`, and the configurations whose
+# antiprojector weights sum to `Z / Z_BP − 1` (see `weight`/`weights` and
+# `loopcorrected_free_energy` in `MessagePassing/loopcorrection.jl`).
 #
-# Pipeline (`cluster_counting_numbers`):
-#   1. `loop_clusters`            -- generate loop clusters containing the target (line 4)
-#   2. `close_under_intersection` -- add all pairwise intersections to fixpoint (line 5)
-#   3. `region_counting_numbers`  -- c_r = 1 - sum_{a ⊋ r} c_a, decreasing |r| (line 6)
-#   4. `loopy_core` + fold        -- tree-reduction: collapse to loopy core (lines 7-13)
+# NamedGraphs' `edgeinduced_subgraphs_no_leaves` builds candidates as unions of simple
+# cycles, so it is connected-only AND silently drops any no-leaf subgraph that needs a
+# non-cycle (bridge) edge to be no-leaf — e.g. a "dumbbell" of two triangles joined by a
+# single bridge edge (the bridge lies on no cycle, so it is never added; the two bare
+# triangles fail the connectivity filter). Those diagrams have all degrees >= 2 and a
+# nonzero antiprojector weight, so omitting them under-counts the loop series. The
+# enumerator here grows connected edge sets directly, so it is connected *by construction*
+# and catches the bridge diagrams.
+#
+# Enumeration uses ESU (Wernicke, "A faster algorithm for detecting network motifs",
+# WABI 2006) on the line graph: connected edge sets of `g` are connected vertex sets of the
+# line graph, and ESU visits each connected vertex set EXACTLY ONCE via the "smallest-index
+# vertex is the root, only grow with strictly-larger exclusive neighbours" rule. That makes
+# the de-duplication structural — no `seen` hash set, and no subgraph is ever generated more
+# than once — and the per-node bookkeeping (induced degrees, leaf count) is maintained
+# incrementally on integer-indexed arrays instead of rebuilt from a dictionary each step.
 
-# --- §2 generation: walks out from the observable region -----------------------
-
-# All connected vertex subsets `S` with `target ⊆ S` and `|S| <= C`, grown outward
-# from `target` by repeatedly adjoining a vertex adjacent to the current set. This
-# is the "walk from the observable" enumeration: it only ever explores vertices
-# reachable from the target within `C-1` steps, so the cost is set by the local
-# neighbourhood, NOT the (possibly infinite/huge) global graph. Every connected
-# superset of `target` is reachable this way (peel a non-cut vertex to see the
-# reverse), and a `seen` set removes the duplicate growth orders.
-function _connected_supersets(g::AbstractGraph, target::Set, C::Integer)
-    V = vertextype(g)
-    seed = Set{V}(target)
-    is_connected(subgraph(g, collect(seed))) ||
-        error("observable support $(collect(target)) must induce a connected subgraph")
-    seen = Set{Set{V}}()
-    out = Set{V}[]
-    stack = Set{V}[seed]
-    while !isempty(stack)
-        S = pop!(stack)
-        S in seen && continue
-        push!(seen, S)
-        push!(out, S)
-        length(S) >= C && continue
-        for v in S, w in neighbors(g, v)
-            w in S || push!(stack, union(S, Set{V}((w,))))
-        end
+# Apply edge `i` to the running induced-degree state, updating the leaf counter
+# (`nleaf` = number of vertices whose induced degree is exactly 1).
+@inline function _add_edge!(i, esrc, edst, vdeg, nleaf)
+    @inbounds for v in (esrc[i], edst[i])
+        d = vdeg[v]
+        vdeg[v] = d + 1
+        d == 0 ? (nleaf[] += 1) : d == 1 ? (nleaf[] -= 1) : nothing
     end
-    return out
+    return nothing
 end
 
-# A region is a loop cluster iff its induced subgraph is connected, contains a cycle,
-# and is leaf-free *away from the target*: every non-target vertex has induced degree
-# >= 2, while target (observable) vertices MAY be leaves.
-#
-# The leaf relaxation at the target is what admits the "anomalous" clusters -- a loop
-# sitting next to the observable, with the observable hanging off it by a tree-tail.
-# Because regions are contracted with norm-network BP messages, the BP fixed-point
-# equation does NOT hold at the observable site (the operator is inserted there), so a
-# neighbouring loop feeds a non-BP message into it and genuinely shifts O_r. (With
-# operator-network messages it would cancel and these clusters would be unnecessary.)
-# Non-target leaves still cancel as usual, so requiring them to be loop-internal keeps
-# generation finite: pure trees hanging off the target are rejected -- they reduce to
-# the baseline target region under `loopy_core` and add nothing. The smallest possible
-# loop is a 3-cycle, so < 3 vertices is rejected outright.
-function _is_loop_cluster(g::AbstractGraph, S::Set, target::Set)
-    length(S) < 3 && return false
-    sub = subgraph(g, collect(S))
-    is_connected(sub) || return false
-    degsum = 0
-    for v in S
-        d = degree(sub, v)
-        (v ∉ target && d < 2) && return false   # a non-target leaf is not loop-internal
-        degsum += d
+# Inverse of `_add_edge!`: remove edge `i` from the running state.
+@inline function _del_edge!(i, esrc, edst, vdeg, nleaf)
+    @inbounds for v in (esrc[i], edst[i])
+        d = vdeg[v]
+        vdeg[v] = d - 1
+        d == 1 ? (nleaf[] -= 1) : d == 2 ? (nleaf[] += 1) : nothing
     end
-    return degsum >= 2 * length(S)               # connected + |E| >= |V| ⇒ contains a cycle
+    return nothing
 end
 
-"""
-    loop_clusters(g, target, max_cluster_size) -> Vector{Set}
-
-All loop clusters of `g` that contain every vertex of `target` and have at most
-`max_cluster_size` vertices. `target` is the observable support: a single vertex set
-like `Set([v])`, or a bond `Set([i, j])`. A loop cluster is connected, contains a
-cycle, and is leaf-free away from the target -- non-target vertices have induced degree
->= 2, but target vertices may be leaves (the "anomalous" loops adjacent to the
-observable; see `_is_loop_cluster`). Generated by local growth out from `target` (see
-`_connected_supersets`).
-"""
-function loop_clusters(g::AbstractGraph, target, max_cluster_size::Integer)
-    T = target isa Set ? target : Set(target)
-    return filter(S -> _is_loop_cluster(g, S, T), _connected_supersets(g, T, max_cluster_size))
-end
-
-# --- §3 combinatorics: intersection closure + counting numbers -----------------
-
-"""
-    close_under_intersection(regions) -> Vector{Set}
-
-Close a collection of regions under pairwise intersection (Algorithm 1, line 5):
-repeatedly add `r_a ∩ r_b` until no new (non-empty) region appears. Intersections
-need NOT be loops — they are the overlap regions whose over-counting the counting
-numbers correct. If every input region contains a common target `T`, so does every
-intersection, hence the closure stays `⊇ T`.
-"""
-function close_under_intersection(regions)
-    R = Set(regions)
-    frontier = collect(R)
-    while !isempty(frontier)
-        new_regions = eltype(frontier)[]
-        rs = collect(R)
-        for r in frontier, s in rs
-            inter = intersect(r, s)
-            if !isempty(inter) && inter ∉ R
-                push!(R, inter)
-                push!(new_regions, inter)
+# ESU recursion over the line graph. `Vsub` is the current edge-index set (a stack), `ext`
+# its extension list (candidate edges, all with index > `root`), and `marked[u]` records
+# whether edge `u` is already in `Vsub` or has entered the extension somewhere on the path
+# from the root (so it is never re-queued — this is what enforces exact-once visiting).
+function _esu_extend!(
+        out, Vsub, ext, root, eadj, esrc, edst, vdeg, nleaf, marked, max_edges,
+    )
+    # `nleaf == 0` with a non-empty edge set <=> every touched vertex has degree >= 2.
+    (nleaf[] == 0 && !isempty(Vsub)) && push!(out, copy(Vsub))
+    length(Vsub) >= max_edges && return
+    # Leaf-prune: each added edge clears at most 2 degree-1 vertices, so a set with more
+    # leaves than 2*(remaining budget) can never become leaf-free within budget.
+    nleaf[] > 2 * (max_edges - length(Vsub)) && return
+    added = Int[]
+    while !isempty(ext)
+        w = pop!(ext)
+        newext = copy(ext)                 # siblings still to be processed (ESU: V_ext \ {w})
+        empty!(added)
+        @inbounds for u in eadj[w]          # plus the exclusive neighbours of w, index > root
+            if u > root && !marked[u]
+                marked[u] = true
+                push!(newext, u)
+                push!(added, u)
             end
         end
-        frontier = unique(new_regions)
-    end
-    return collect(R)
-end
-
-"""
-    region_counting_numbers(regions) -> Dict{Set, Int}
-
-Inclusion-exclusion counting numbers (Algorithm 1, line 6): for each region `r`,
-`c_r = 1 - Σ_{a ⊋ r} c_a`, where the sum runs over the proper supersets of `r`
-present in `regions`. Evaluated in order of decreasing `|r|` so every superset's
-counting number is already known. `regions` should already be closed under
-intersection.
-"""
-function region_counting_numbers(regions)
-    order = sort(collect(regions); by = length, rev = true)
-    c = Dict{eltype(order), Int}()
-    for (i, r) in enumerate(order)
-        s = 0
-        for j in 1:(i - 1)               # only strictly larger regions can be proper supersets
-            a = order[j]
-            length(a) > length(r) && issubset(r, a) && (s += c[a])
+        _add_edge!(w, esrc, edst, vdeg, nleaf)
+        push!(Vsub, w)
+        _esu_extend!(out, Vsub, newext, root, eadj, esrc, edst, vdeg, nleaf, marked, max_edges)
+        pop!(Vsub)
+        _del_edge!(w, esrc, edst, vdeg, nleaf)
+        @inbounds for u in added            # unmark only what THIS w introduced; w stays
+            marked[u] = false               # marked for its siblings (parent unmarks it)
         end
-        c[r] = 1 - s
     end
-    return c
+    return nothing
 end
 
-# --- tree-reduction (Algorithm 1, lines 7-13) ----------------------------------
+"""
+    connected_edgeinduced_subgraphs_no_leaves(g, max_edges; anchor = nothing) -> Vector
 
-# Connected components of the subgraph of `g` induced on the vertex set `S`, as a
-# vector of vertex `Set`s. Plain BFS over `neighbors` restricted to `S` (the clusters
-# are small, so this is cheap and avoids materializing a `subgraph`).
-function _connected_components(g::AbstractGraph, S)
-    remaining = Set(S)
-    V = eltype(remaining)
-    comps = Set{V}[]
-    while !isempty(remaining)
-        seen = Set{V}((first(remaining),))
-        stack = collect(seen)
-        while !isempty(stack)
-            x = pop!(stack)
-            for y in neighbors(g, x)
-                (y in remaining && y ∉ seen) || continue
-                push!(seen, y)
-                push!(stack, y)
+All connected edge-induced subgraphs of `g` with at most `max_edges` edges in which every
+vertex has induced degree `>= 2` (no leaves) — the "generalized loops" of the loop/linked-
+cluster series. Unlike `edgeinduced_subgraphs_no_leaves` (which unions simple cycles and so
+misses bridge-joined no-leaf subgraphs such as two triangles linked by a single edge), this
+grows connected edge sets directly and is therefore both connected-by-construction and
+bridge-complete.
+
+Enumeration is ESU on the line graph: every connected edge set is visited exactly once (no
+deduplication hashing), and induced degrees / the leaf count are tracked incrementally. With
+`anchor` set, only subgraphs containing that vertex are produced: the anchor-incident edges
+are given the smallest indices and used as the ESU roots, so a subgraph is generated from
+its minimum edge iff that edge touches the anchor — i.e. iff the subgraph touches the anchor.
+With `anchor = nothing` the whole graph is enumerated.
+"""
+function connected_edgeinduced_subgraphs_no_leaves(
+        g::AbstractGraph, max_edges::Integer; anchor = nothing,
+    )
+    E0 = collect(edges(g))
+    m = length(E0)
+    (m == 0 || max_edges < 3) && return typeof(g)[]   # smallest no-leaf subgraph is a 3-cycle
+
+    # Integer-index the vertices for O(1) degree bookkeeping.
+    V = collect(vertices(g))
+    vidx = Dict{eltype(V), Int}()
+    for (k, v) in enumerate(V)
+        vidx[v] = k
+    end
+
+    # Order the edge list so that, when anchored, the anchor-incident edges occupy the
+    # smallest indices `1:nseed`; ESU rooted at `1:nseed` then yields exactly the subgraphs
+    # whose minimum edge touches the anchor == the subgraphs that touch the anchor.
+    if anchor === nothing
+        E = E0
+        nseed = m
+    else
+        ai = vidx[anchor]
+        anchored_first = sort(eachindex(E0); by = i -> (vidx[src(E0[i])] != ai && vidx[dst(E0[i])] != ai))
+        E = E0[anchored_first]
+        nseed = count(e -> vidx[src(e)] == ai || vidx[dst(e)] == ai, E)
+    end
+
+    esrc = Vector{Int}(undef, m)
+    edst = Vector{Int}(undef, m)
+    inc = [Int[] for _ in 1:length(V)]                # incident edge indices per vertex
+    for (i, e) in enumerate(E)
+        a = vidx[src(e)]
+        b = vidx[dst(e)]
+        esrc[i] = a
+        edst[i] = b
+        push!(inc[a], i)
+        push!(inc[b], i)
+    end
+    # Line-graph adjacency: two edges are adjacent iff they share a vertex.
+    eadj = [Int[] for _ in 1:m]
+    for ev in inc, i in ev, j in ev
+        i != j && push!(eadj[i], j)
+    end
+    for i in 1:m
+        unique!(eadj[i])
+    end
+
+    vdeg = zeros(Int, length(V))
+    nleaf = Ref(0)
+    marked = falses(m)
+    Vsub = Int[]
+    out = Vector{Int}[]
+    added = Int[]
+    for r in 1:nseed
+        _add_edge!(r, esrc, edst, vdeg, nleaf)
+        push!(Vsub, r)
+        marked[r] = true
+        ext = Int[]
+        empty!(added)
+        @inbounds for u in eadj[r]
+            if u > r && !marked[u]
+                marked[u] = true
+                push!(ext, u)
+                push!(added, u)
             end
         end
-        push!(comps, seen)
-        setdiff!(remaining, seen)
-    end
-    return comps
-end
-
-"""
-    loopy_core(g, region, protect) -> Set
-
-The "largest loop with equivalent BP contraction" (Algorithm 1, line 8). Two
-reductions, applied to a fixpoint, both leave the region's BP-contracted ratio
-`O_r` unchanged:
-
-  * **strip leaves** (induced degree < 2): a tree appendage contracted with the
-    converged BP messages reproduces exactly the BP message it hangs from, so it
-    cancels between numerator and denominator;
-  * **drop protect-free components**: a connected component carrying no observable
-    site contracts to a scalar identical in numerator and denominator, so it
-    cancels too. (Leaf-stripping can disconnect a region — e.g. severing a tree
-    path between two loops — which is why this runs in the same fixpoint.)
-
-Vertices in `protect` (the observable support) are never removed. Note that an
-in-region **bridge to a loop** is *kept*: that loop imposes a non-BP message across
-the bridge bond and genuinely shifts `O_r`, so it is not tree-like and must stay.
-With an empty `protect` (no anchor) the component drop is skipped, leaving the bare
-leaf-stripped 2-core.
-"""
-function loopy_core(g::AbstractGraph, region::Set, protect::Set)
-    core = Set(region)
-    while true
-        sub = subgraph(g, collect(core))
-        leaves = [v for v in core if v ∉ protect && degree(sub, v) < 2]
-        if !isempty(leaves)
-            setdiff!(core, leaves)
-            continue
+        _esu_extend!(out, Vsub, ext, r, eadj, esrc, edst, vdeg, nleaf, marked, max_edges)
+        pop!(Vsub)
+        _del_edge!(r, esrc, edst, vdeg, nleaf)
+        marked[r] = false
+        @inbounds for u in added
+            marked[u] = false
         end
-        if !isempty(protect)
-            comps = _connected_components(g, core)
-            if length(comps) > 1
-                keep = Set{eltype(core)}()
-                for comp in comps
-                    any(v -> v in protect, comp) && union!(keep, comp)
-                end
-                if length(keep) < length(core)
-                    core = keep
-                    continue
-                end
-            end
-        end
-        break
     end
-    return core
-end
-
-"""
-    cluster_counting_numbers(g, target, max_cluster_size) -> Dict{Set, Int}
-
-Full graph-side loop cluster expansion accounting (Algorithm 1, lines 4-13) for an
-observable supported on `target`:
-
-  1. generate loop clusters containing `target` up to `max_cluster_size` sites,
-  2. close them under intersection,
-  3. assign inclusion-exclusion counting numbers,
-  4. tree-reduce every region to its loopy core (protecting `target`) and fold the
-     counting numbers of regions sharing a core,
-  5. drop regions whose total counting number is zero.
-
-Returns the surviving `region => counting_number` map. The contraction step (per
-region: `O_r = ⟨Ψ|Ô|Ψ⟩_r / ⟨Ψ|Ψ⟩_r` with BP messages on ∂r) lives elsewhere; this
-function is the combinatorics only.
-"""
-function cluster_counting_numbers(g::AbstractGraph, target, max_cluster_size::Integer)
-    T = target isa Set ? target : Set(target)
-    # Seed the target region itself: it is the single-cluster (BP) baseline with
-    # counting number +1. It is not a loop, so `loop_clusters` never produces it; it
-    # would only appear as an intersection once >=2 loops overlap. Seeding it makes the
-    # minimal-`C` limit reduce to the ordinary BP expectation, and is a no-op whenever
-    # the intersection closure would have produced it anyway.
-    clusters = loop_clusters(g, T, max_cluster_size)
-    regions = close_under_intersection(push!(clusters, T))
-    c = region_counting_numbers(regions)
-
-    reduced = Dict{eltype(regions), Int}()
-    for (r, cr) in c
-        core = loopy_core(g, r, T)
-        reduced[core] = get(reduced, core, 0) + cr
-    end
-    return Dict(r => cr for (r, cr) in reduced if cr != 0)
+    return [edge_subgraph(g, E[S]) for S in out]
 end

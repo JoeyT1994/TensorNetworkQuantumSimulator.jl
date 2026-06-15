@@ -9,7 +9,7 @@ for f in [
         :(tensortype),
         :(ITensors.datatype),
         :(ITensors.NDTensors.scalartype),
-        :(NamedGraphs.edgeinduced_subgraphs_no_leaves),
+        :(connected_edgeinduced_subgraphs_no_leaves),
     ]
     @eval begin
         function $f(form::AbstractForm, args...; kwargs...)

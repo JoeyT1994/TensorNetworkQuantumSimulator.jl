@@ -18,9 +18,7 @@ using NamedGraphs:
     edges,
     vertextype,
     add_vertex!,
-    neighbors,
-    edgeinduced_subgraphs_no_leaves,
-    unique_cyclesubgraphs_limited_length
+    neighbors
 using NamedGraphs.GraphsExtensions:
     src,
     dst,
@@ -40,7 +38,8 @@ using NamedGraphs.GraphsExtensions:
     rem_vertex,
     add_edges,
     rem_vertices,
-    rem_vertex!
+    rem_vertex!,
+    edge_subgraph
 
 using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_graph, named_comb_tree, named_path_graph
 

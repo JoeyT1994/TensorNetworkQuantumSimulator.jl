@@ -51,6 +51,9 @@ Compute the expectation value of one or more observables on a tensor network sta
     - `"exact"`: Exact contraction of the tensor network.
     - `"bp"`: Belief propagation approximation.
     - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
+    - `"loopcorrections"`: Loop-corrected free-energy estimate (requires `max_configuration_size`;
+      **single-site Hermitian observables only**). Estimates `⟨Ô⟩ = ∂_ε ln⟨ψ|e^{εÔ}|ψ⟩|_0`
+      by central finite difference of the loop-corrected squared norm `‖e^{±εÔ/2}|ψ⟩‖²`.
 - `cache_update_kwargs...`: Keyword arguments passed to the `update` function when using `"bp"` or `"boundarymps"` algorithms.
 
 # Returns

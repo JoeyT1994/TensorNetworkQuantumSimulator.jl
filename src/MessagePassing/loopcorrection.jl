@@ -6,13 +6,45 @@ function loopcorrected_partitionfunction(
     )
     zbp = partitionfunction(bp_cache)
     bp_cache = rescale(bp_cache)
-    #TODO: Fix edgeinduced_subgraphs_no_leaves for PartitionedGraphView type
-    #Count the cycles using NamedGraphs
+    # Enumerate the generalized loops (connected, leaf-free edge subgraphs) directly. This is
+    # connected-by-construction and bridge-complete, so it also captures the "dumbbell"
+    # diagrams (no-leaf subgraphs joined by a bridge edge) that the cycle-union enumerator
+    # silently drops.
     g = graph(bp_cache)
-    egs = edgeinduced_subgraphs_no_leaves(g, max_configuration_size)
+    egs = connected_edgeinduced_subgraphs_no_leaves(g, max_configuration_size)
     isempty(egs) && return zbp
     ws = weights(bp_cache, egs)
     return zbp * (1 + sum(ws))
+end
+
+# Linked-cluster (free-energy) form of the loop correction.
+#
+#   F = ln Z = ln Z_BP + ln(Z / Z_BP),   Z / Z_BP = Σ_{polymer configs} ∏ w_C ,
+#
+# where the polymers are the *connected* no-leaf edge subgraphs (generalized loops) and the
+# hard-core exclusion is vertex-sharing. The linked-cluster theorem makes F extensive: its
+# expansion is a sum over CONNECTED clusters only — the vertex-disjoint products that the
+# partition-function series `loopcorrected_partitionfunction` would have to enumerate beyond
+# total size `2·girth − 1` are resummed by the exponential and never appear here. To leading
+# cumulant order this is `ln Z_BP + Σ_C w_C` over the connected no-leaf clusters (overlapping-
+# cluster corrections, `−½ Σ_{C∼C'} w_C w_{C'} + …`, are higher order). Both this and
+# `loopcorrected_partitionfunction` enumerate the same generalized loops via
+# `connected_edgeinduced_subgraphs_no_leaves` (so both capture the bridge "dumbbell"
+# diagrams); they differ only in how the cluster weights are resummed.
+#
+# Note `loopcorrected_free_energy` and `log(loopcorrected_partitionfunction)` differ at
+# O(w²): they agree exactly only when no loops fit (Σw = 0), where both reduce to `ln Z_BP`.
+function loopcorrected_free_energy(
+        bp_cache::BeliefPropagationCache,
+        max_configuration_size::Integer,
+    )
+    zbp = partitionfunction(bp_cache)
+    F = log(complex(zbp))
+    bp_cache = rescale(bp_cache)
+    g = graph(bp_cache)
+    egs = connected_edgeinduced_subgraphs_no_leaves(g, max_configuration_size)
+    isempty(egs) && return F
+    return F + sum(weights(bp_cache, egs))
 end
 
 # Relabel one bond index of a FermionicITensor (no-op if the index is absent), keeping

@@ -10,7 +10,7 @@ using Random
 Random.seed!(1634)
 
 function main()
-    nx, ny = 4, 4
+    nx, ny = 4,4
     χ = 3
     ITensors.disable_warn_order()
     gs = [
@@ -29,7 +29,7 @@ function main()
         norm_exact = norm(ψ; alg = "exact")
 
         println("Bp Value for norm is $norm_bp")
-        println("1st Order Loop Corrected Value for norm is $norm_loopcorrected")
+        println("Loop Corrected Value for norm is $norm_loopcorrected")
         println("Exact Value for norm is $norm_exact")
     end
     return
