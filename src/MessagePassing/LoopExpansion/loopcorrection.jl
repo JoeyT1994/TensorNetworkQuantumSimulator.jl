@@ -63,17 +63,17 @@ end
 # converge well — NOT `log(loopcorrected_partitionfunction) = ln Z_BP + ln(1 + Σ_C w_C)`, which
 # only agrees with it to O(w) and resums the same clusters multiplicatively instead.
 function _gated_loop_free_energy(
-        ψ::TensorNetworkState, op_string::String, v, α, max_configuration_size::Integer;
+        ψ_bpc::BeliefPropagationCache, op_string::String, v, α, max_configuration_size::Integer;
         cache_update_kwargs,
     )
+    ψ = network(ψ_bpc)
     s = only(siteinds(ψ)[v])
     G = ITensors.exp(α * ITensors.op(op_string, s); ishermitian = true)
-    bpc = update(BeliefPropagationCache(ψ); cache_update_kwargs...)
     # `normalize_tensors = false`: the un-normalized gated tensor is exactly what makes the
     # squared norm equal the partition function ⟨ψ|e^{2α Ô}|ψ⟩ we want to differentiate.
-    bpc, _ = apply_gate!(G, bpc; v⃗ = [v], apply_kwargs = (; normalize_tensors = false))
-    bpc = update(bpc; cache_update_kwargs...)
-    return loopcorrected_free_energy(bpc, max_configuration_size)
+    ψ_bpc, _ = apply_gate(G, ψ_bpc; v⃗ = [v], apply_kwargs = (; normalize_tensors = false))
+    ψ_bpc = update(ψ_bpc; cache_update_kwargs...)
+    return loopcorrected_free_energy(ψ_bpc, max_configuration_size)
 end
 
 #Transform the indices in the given subgraph of the tensornetwork so that antiprojectors can be inserted without duplicate indices appearing

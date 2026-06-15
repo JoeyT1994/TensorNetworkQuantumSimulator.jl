@@ -176,26 +176,28 @@ generating-function identity `⟨ψ|e^{εÔ}|ψ⟩ = ‖e^{εÔ/2}|ψ⟩‖²` r
 them; multi-site observables are not supported.
 """
 function expect(
-        ::Algorithm"loopcorrections",
-        ψ::TensorNetworkState,
+        alg::Algorithm"loopcorrections",
+        ψ_bpc::BeliefPropagationCache,
         obs::Tuple;
         max_configuration_size::Integer, ε::Real = 1e-4,
-        cache_update_kwargs = default_bp_update_kwargs(ψ),
+        cache_update_kwargs = default_bp_update_kwargs(ψ_bpc),
     )
-    op_strings, obs_vs, coeff = collectobservable(obs, graph(ψ))
+    op_strings, obs_vs, coeff = collectobservable(obs, graph(ψ_bpc))
     iszero(coeff) && return zero(coeff)
     length(obs_vs) == 1 ||
         error("expect(...; alg = \"loopcorrections\") supports single-site observables only; got $(length(obs_vs)) sites.")
     v = only(obs_vs)
     op_string = only(op_strings)
 
-    Fp = _gated_loop_free_energy(ψ, op_string, v, +ε / 2, max_configuration_size; cache_update_kwargs)
-    Fm = _gated_loop_free_energy(ψ, op_string, v, -ε / 2, max_configuration_size; cache_update_kwargs)
+    Fp = _gated_loop_free_energy(ψ_bpc, op_string, v, +ε / 2, max_configuration_size; cache_update_kwargs)
+    Fm = _gated_loop_free_energy(ψ_bpc, op_string, v, -ε / 2, max_configuration_size; cache_update_kwargs)
     return coeff * (Fp - Fm) / (2ε)
 end
 
-function expect(alg::Algorithm"loopcorrections", cache::BeliefPropagationCache, obs::Tuple; kwargs...)
-    return expect(alg, network(cache), obs; kwargs...)
+function expect(alg::Algorithm"loopcorrections",
+    ψ::TensorNetworkState, obs::Tuple; cache_update_kwargs= default_bp_update_kwargs(ψ), kwargs...)
+    ψ_bpc = update(BeliefPropagationCache(ψ); cache_update_kwargs...)
+    return expect(alg, ψ_bpc, obs; kwargs...)
 end
 
 function expect(
