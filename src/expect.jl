@@ -155,6 +155,59 @@ function expect(
     return expect(alg, ψ_bmps, observable; bmps_messages_up_to_date = true, kwargs...)
 end
 
+"""
+    expect(ψ, obs; alg = "loopcorrections", max_configuration_size, ε = 1e-4, cache_update_kwargs...)
+
+Free-energy / generating-function estimate of a **single-site Hermitian** observable
+`obs = (op, vertex[, coeff])`,
+
+    ⟨Ô⟩ = ∂_ε ln⟨ψ|e^{ε Ô}|ψ⟩|_0  ≈  [F(ε) − F(−ε)] / (2ε),
+
+with `F(t) = ln‖e^{t Ô/2}|ψ⟩‖²` the loop-corrected free energy of that norm network
+(`loopcorrected_free_energy`, the additive linked-cluster form `ln Z_BP + Σ_C w_C`;
+`max_configuration_size` counts EDGES). Because each `F` is the free energy of a genuine
+norm network, every loop cluster is leaf-free and there is no protected operator vertex, so
+this typically converges smoothly (little oscillation). BP is re-solved for each shifted
+network so the loop corrections include the linear response of the messages.
+
+`ε` is the central finite-difference step (default `1e-4`). `Ô` must be Hermitian (the
+generating-function identity `⟨ψ|e^{εÔ}|ψ⟩ = ‖e^{εÔ/2}|ψ⟩‖²` relies on `Ô† = Ô`). Accepts a
+`TensorNetworkState` or a `BeliefPropagationCache`, and a single observable or a vector of
+them; multi-site observables are not supported.
+"""
+function expect(
+        ::Algorithm"loopcorrections",
+        ψ::TensorNetworkState,
+        obs::Tuple;
+        max_configuration_size::Integer, ε::Real = 1e-4,
+        cache_update_kwargs = default_bp_update_kwargs(ψ),
+    )
+    op_strings, obs_vs, coeff = collectobservable(obs, graph(ψ))
+    iszero(coeff) && return zero(coeff)
+    length(obs_vs) == 1 ||
+        error("expect(...; alg = \"loopcorrections\") supports single-site observables only; got $(length(obs_vs)) sites.")
+    v = only(obs_vs)
+    op_string = only(op_strings)
+
+    Fp = _gated_loop_free_energy(ψ, op_string, v, +ε / 2, max_configuration_size; cache_update_kwargs)
+    Fm = _gated_loop_free_energy(ψ, op_string, v, -ε / 2, max_configuration_size; cache_update_kwargs)
+    return coeff * (Fp - Fm) / (2ε)
+end
+
+function expect(alg::Algorithm"loopcorrections", cache::BeliefPropagationCache, obs::Tuple; kwargs...)
+    return expect(alg, network(cache), obs; kwargs...)
+end
+
+function expect(
+        alg::Algorithm"loopcorrections",
+        ψ::Union{TensorNetworkState, BeliefPropagationCache},
+        observables::Vector{<:Tuple};
+        kwargs...,
+    )
+    return map(obs -> expect(alg, ψ, obs; kwargs...), observables)
+end
+
+
 #Process an observable into more readable form
 function collectobservable(obs::Tuple, g::NamedGraph)
 

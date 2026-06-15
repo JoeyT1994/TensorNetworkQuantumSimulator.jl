@@ -6,10 +6,8 @@ function loopcorrected_partitionfunction(
     )
     zbp = partitionfunction(bp_cache)
     bp_cache = rescale(bp_cache)
-    #TODO: Fix edgeinduced_subgraphs_no_leaves for PartitionedGraphView type
-    #Count the cycles using NamedGraphs
     egs =
-        edgeinduced_subgraphs_no_leaves(graph(bp_cache), max_configuration_size)
+        connected_edgeinduced_subgraphs_no_leaves(graph(bp_cache), max_configuration_size)
     isempty(egs) && return zbp
     ws = weights(bp_cache, egs)
     return zbp * (1 + sum(ws))
