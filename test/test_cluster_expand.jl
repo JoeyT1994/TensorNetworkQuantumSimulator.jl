@@ -12,7 +12,7 @@ using Test: @testset, @test
 # the exact value.
 @testset "Loop cluster expansion expectation" begin
     Random.seed!(1234)
-    χ = 2
+    χ = 4
 
     # On the square lattice the smallest loop is a 4-plaquette, so C < 4 admits no
     # loops: the only region is the seeded target and the estimate must equal `bp`.
@@ -45,9 +45,12 @@ using Test: @testset, @test
 
         exact = expect(ψ, ("Z", v); alg = "exact")
         bp = expect(ψ_bpc, ("Z", v); alg = "bp")
-        ce = expect_clusterexpand(ψ_bpc, ("Z", v); max_configuration_size = 8)
+        ce = expect_clusterexpand(ψ_bpc, ("Z", v); max_configuration_size = 6)
 
         @test abs(ce - exact) < abs(bp - exact)
+
+        @show abs(ce-exact)
+        @show abs(bp - exact)
     end
 
     # Justifies the `loopy_core` reduction at the contraction level: with converged

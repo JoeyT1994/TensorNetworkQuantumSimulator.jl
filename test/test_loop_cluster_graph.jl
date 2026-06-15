@@ -5,8 +5,15 @@ using Test: @testset, @test
 using NamedGraphs: neighbors
 using NamedGraphs.GraphsExtensions: subgraph, degree, is_connected
 
-# induced-degree helper for assertions
-_min_induced_degree(g, S) = minimum(degree(subgraph(g, collect(S)), v) for v in S)
+# induced-subgraph helpers for assertions. Under the leaf relaxation, target vertices
+# may be leaves, so the leaf-free invariant is checked over NON-target vertices only.
+_min_nontarget_degree(g, S, T) =
+    minimum((degree(subgraph(g, collect(S)), v) for v in S if v ∉ T); init = typemax(Int))
+# induced |E| >= |V| <=> the region contains a cycle
+function _has_cycle(g, S)
+    sub = subgraph(g, collect(S))
+    return sum(degree(sub, v) for v in S) ÷ 2 >= length(S)
+end
 
 @testset "Loop cluster expansion graph core" begin
 
@@ -21,20 +28,34 @@ _min_induced_degree(g, S) = minimum(degree(subgraph(g, collect(S)), v) for v in 
         for C in (3, 4, 5, 6, 7)
             cls = loop_clusters(g, target, C)
             for S in cls
-                @test issubset(target, S)             # contains observable support
-                @test length(S) <= C                  # size bound
-                @test length(S) >= 3                  # smallest loop is a triangle
+                @test issubset(target, S)                       # contains observable support
+                @test length(S) <= C                            # size bound
+                @test length(S) >= 3                            # smallest loop is a triangle
                 @test is_connected(subgraph(g, collect(S)))
-                @test _min_induced_degree(g, S) >= 2  # leaf-free
+                @test _has_cycle(g, S)                          # contains a cycle
+                @test _min_nontarget_degree(g, S, target) >= 2  # leaf-free away from target
             end
             @test allunique(cls)
         end
-        # square lattice: only plaquettes (4) up to C=5; 2 contain a given bond
-        @test length(loop_clusters(g, target, 5)) == 2
-        @test all(length(S) == 4 for S in loop_clusters(g, target, 5))
-        # at C=6 the seven 2x3 blocks containing the bond appear alongside the 2 plaquettes
-        @test length(loop_clusters(g, target, 6)) == 9
-        @test count(S -> length(S) == 6, loop_clusters(g, target, 6)) == 7
+        # square lattice bond target: only the 2 plaquettes holding the bond up to C=4.
+        @test length(loop_clusters(g, target, 4)) == 2
+        @test all(length(S) == 4 for S in loop_clusters(g, target, 4))
+        # The leaf relaxation at the target admits "anomalous" loops: a plaquette next
+        # to the bond with one target vertex hanging off it as a leaf. C=5 adds 4 of
+        # them (size 5) on top of the 2 plaquettes.
+        c5 = loop_clusters(g, target, 5)
+        @test length(c5) == 6
+        @test count(S -> length(S) == 4, c5) == 2
+        @test count(S -> length(S) == 5, c5) == 4
+        # the relaxation really fires: some C=5 cluster has a target vertex as a leaf
+        @test any(c5) do S
+            sub = subgraph(g, collect(S))
+            any(v -> degree(sub, v) == 1, target)
+        end
+        # C=6 adds the 2x3 blocks and larger anomalous loops: 2 + 4 + 15 = 21
+        c6 = loop_clusters(g, target, 6)
+        @test length(c6) == 21
+        @test count(S -> length(S) == 6, c6) == 15
     end
 
     # -----------------------------------------------------------------------
@@ -65,34 +86,40 @@ _min_induced_degree(g, S) = minimum(degree(subgraph(g, collect(S)), v) for v in 
         @test length(c2) == 1
         @test c2[target] == 1
 
-        # C=4: two plaquettes (+1), shared bond (-1)
+        # C=4: two plaquettes (+1), shared bond (-1). No anomalous loops fit yet, so
+        # this is unchanged by the leaf relaxation.
         c4 = cluster_counting_numbers(g, target, 4)
         @test sum(values(c4)) == 1
         @test sort([cc for (r, cc) in c4 if length(r) == 4]) == [1, 1]
         @test c4[target] == -1
 
-        # C=6: seven 2x3 blocks (+1), two plaquettes (-3); bond region prunes to c=0
+        # C=6: fifteen size-6 loopy cores (+1), two plaquettes (-3); partition of unity
+        # still holds. Unlike the no-relaxation case (where the bond pruned to c=0), the
+        # anomalous loops reshape the inclusion-exclusion and the bond target survives
+        # with a nonzero counting number.
         c6 = cluster_counting_numbers(g, target, 6)
         @test sum(values(c6)) == 1
-        @test sort([cc for (r, cc) in c6 if length(r) == 6]) == fill(1, 7)
+        @test sort([cc for (r, cc) in c6 if length(r) == 6]) == fill(1, 15)
         @test sort([cc for (r, cc) in c6 if length(r) == 4]) == [-3, -3]
-        @test !haskey(c6, target)            # pruned: counting number went to zero
+        @test c6[target] == -8
     end
 
     @testset "counting numbers, square lattice site" begin
         g = named_grid((7, 7))
         target = Set([(4, 4)])
-        # bulk site: 4 plaquettes (+1), site core (-3)
+        # bulk site: 4 plaquettes (+1), site core (-3). The single-vertex target is
+        # always a leaf, but at C=4 no anomalous loop fits, so this is unchanged.
         c4 = cluster_counting_numbers(g, target, 4)
         @test sum(values(c4)) == 1
         @test c4[target] == -3
         @test sort([cc for (r, cc) in c4 if length(r) == 4]) == fill(1, 4)
-        # C=6: 12 blocks (+1), 4 plaquettes (-3), site core (+1)
+        # C=6: twenty-eight size-6 loopy cores (+1), 4 plaquettes (-3), site core (-15).
+        # Partition of unity holds; the anomalous loops drive the site core to -15.
         c6 = cluster_counting_numbers(g, target, 6)
         @test sum(values(c6)) == 1
-        @test sort([cc for (r, cc) in c6 if length(r) == 6]) == fill(1, 12)
+        @test sort([cc for (r, cc) in c6 if length(r) == 6]) == fill(1, 28)
         @test sort([cc for (r, cc) in c6 if length(r) == 4]) == fill(-3, 4)
-        @test c6[target] == 1
+        @test c6[target] == -15
     end
 
     # -----------------------------------------------------------------------
