@@ -62,7 +62,7 @@ end
 # the genuine extensive log-partition-function whose smooth ε-dependence makes this estimator
 # converge well — NOT `log(loopcorrected_partitionfunction) = ln Z_BP + ln(1 + Σ_C w_C)`, which
 # only agrees with it to O(w) and resums the same clusters multiplicatively instead.
-function _gated_loop_free_energy(
+function gated_lc_free_energy(
         ψ_bpc::BeliefPropagationCache, op_string::String, v, α, max_configuration_size::Integer;
         cache_update_kwargs,
     )

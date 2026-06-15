@@ -23,7 +23,7 @@ function main()
         println("-----------------------")
         obs = ("Z", first(center(g)))
         println("Testing for $g_str lattice with $(nv(g)) vertices")
-        ψ = random_tensornetworkstate(Float64, g, "S=1/2"; bond_dimension = χ)
+        ψ = random_tensornetworkstate(ComplexF64, g, "S=1/2"; bond_dimension = χ)
 
         ψ = normalize(ψ; alg = "bp")
 

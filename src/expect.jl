@@ -165,9 +165,7 @@ Free-energy / generating-function estimate of a **single-site Hermitian** observ
 
 with `F(t) = ln‖e^{t Ô/2}|ψ⟩‖²` the loop-corrected free energy of that norm network
 (`loopcorrected_free_energy`, the additive linked-cluster form `ln Z_BP + Σ_C w_C`;
-`max_configuration_size` counts EDGES). Because each `F` is the free energy of a genuine
-norm network, every loop cluster is leaf-free and there is no protected operator vertex, so
-this typically converges smoothly (little oscillation). BP is re-solved for each shifted
+`max_configuration_size` counts EDGES). BP is re-solved for each shifted
 network so the loop corrections include the linear response of the messages.
 
 `ε` is the central finite-difference step (default `1e-4`). `Ô` must be Hermitian (the
@@ -189,8 +187,8 @@ function expect(
     v = only(obs_vs)
     op_string = only(op_strings)
 
-    Fp = _gated_loop_free_energy(ψ_bpc, op_string, v, +ε / 2, max_configuration_size; cache_update_kwargs)
-    Fm = _gated_loop_free_energy(ψ_bpc, op_string, v, -ε / 2, max_configuration_size; cache_update_kwargs)
+    Fp = gated_lc_free_energy(ψ_bpc, op_string, v, +ε / 2, max_configuration_size; cache_update_kwargs)
+    Fm = gated_lc_free_energy(ψ_bpc, op_string, v, -ε / 2, max_configuration_size; cache_update_kwargs)
     return coeff * (Fp - Fm) / (2ε)
 end
 
