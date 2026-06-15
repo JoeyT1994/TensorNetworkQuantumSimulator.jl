@@ -38,6 +38,10 @@ include("Fermions/ops.jl")
 include("Fermions/fermionictensornetworkstate.jl")
 include("Fermions/factorize_fermionic_tensors.jl")
 include("Fermions/fermionic_gates.jl")
+include("iTNS/infinite_tensornetworkstate.jl")
+include("iTNS/apply_gate.jl")
+include("iTNS/expect.jl")
+
 
 export
     vertices,
@@ -137,5 +141,15 @@ export
     reduced_density_matrix,
     rdm,
     toriccode_groundstate,
-    ising_partitionfunction
+    ising_partitionfunction,
+    InfiniteTensorNetworkState,
+    InfiniteTNS,
+    infinite_tensornetworkstate,
+    infinite_tns,
+    infinite_fermionic_tensornetworkstate,
+    infinite_fermionic_tns,
+    coordination,
+    iTNS_apply_gate,
+    iTNS_expect,
+    iTNS_reduced_density_matrix
 end

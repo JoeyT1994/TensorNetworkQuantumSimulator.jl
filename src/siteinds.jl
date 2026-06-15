@@ -31,7 +31,6 @@ end
 
 has_fermionic_tag(sind::Index) = hastags(sind, "fermion") || hastags(sind, "spinful_fermion")
 has_heisenberg_tag(sind::Index) = hastags(sind, "Pauli")
-
 function is_pauli(siteinds::Dictionary)
     for k in keys(siteinds)
         for ind in siteinds[k]

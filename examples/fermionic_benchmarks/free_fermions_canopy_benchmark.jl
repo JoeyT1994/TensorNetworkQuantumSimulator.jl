@@ -91,17 +91,50 @@ function exact_hoppings(μ, g, dt, t, nsteps, v1, v2, mod)
     return (0:nsteps) .* dt, traj
 end
 
-function main_fermions(χ, μ, lattice)
+# Write a wide CSV (one row per Trotter step) from a vector of NamedTuples, using the
+# field names of the first row as the header. Dependency-free (no DataFrames/CSV needed),
+# so it mirrors the columns produced by the collaborator's `run_timings.jl`.
+function write_wide_csv(path, rows)
+    isempty(rows) && return path
+    ks = keys(rows[1])
+    open(path, "w") do io
+        println(io, join(string.(ks), ","))
+        for r in rows
+            println(io, join((string(getfield(r, k)) for k in ks), ","))
+        end
+    end
+    return path
+end
+
+function main_fermions(χ, μ, lattice; nsteps = 25, bp_iters = 30,
+        outdir = joinpath(@__DIR__, "data"), prefix = "tnqs")
 
     g = lattice == "Hexagonal" ? canopy_hexagonal_lattice(4,6) : named_comb_tree((8,6))
     s = siteinds("fermion", g)
     mod = 4
     ψ = fermionic_tensornetworkstate(ComplexF64, v -> sum(v) % mod == 0 ? "Emp" : "Occ", g, s)
-    ψ_bpc = update(BeliefPropagationCache(ψ))
+
+    nt = Threads.nthreads()
+    nsites = nv(g)
+    dt = 0.01
+
+    # `@timed` records both wall-clock and heap bytes per phase, matching run_timings.jl.
+    # Row `step=0` is the initial BP convergence (gate columns 0.0); run BP for a fixed
+    # `bp_iters` sweeps (tol=nothing) so the per-step work is constant and comparable.
+    rows = NamedTuple[]
+    r0 = @timed update(BeliefPropagationCache(ψ); tolerance = nothing, maxiter = bp_iters)
+    ψ_bpc = r0.value
     rescale!(ψ_bpc)
+    push!(
+        rows, (;
+            chi = χ, nthreads = nt, nsites = nsites, dt = dt, step = 0,
+            single1 = 0.0, hop = 0.0, single2 = 0.0, bp = r0.time,
+            single1_bytes = 0, hop_bytes = 0, single2_bytes = 0, bp_bytes = r0.bytes,
+            maxdim = maxvirtualdim(ψ_bpc),
+        )
+    )
 
     println("Real time Evo in a staggered field on a lattice with $(nv(g)) vertices")
-    dt = 0.01
 
     t = -1
     ec = edge_color(g, 3)
@@ -112,7 +145,6 @@ function main_fermions(χ, μ, lattice)
         append!(two_site_gates, [("RHop", [src(e), dst(e)], t*dt) for e in es])
     end
 
-    nsteps = 1000
     t_update =0
     t_bp = 0
 
@@ -126,53 +158,62 @@ function main_fermions(χ, μ, lattice)
     gate_app_times = Float64[0]
     times = [i*dt for i in 0:nsteps]
     for i in 1:nsteps
-        t1 = time()
-        ψ_bpc, _ = apply_gates(single_site_gates,ψ_bpc;apply_kwargs, update_cache = false)
-        ψ_bpc, errs = apply_gates(two_site_gates,ψ_bpc;apply_kwargs, update_cache = false)
-        ψ_bpc, _ = apply_gates(single_site_gates,ψ_bpc;apply_kwargs, update_cache = false)
-        t2 = time()
+        r1 = @timed apply_gates(single_site_gates,ψ_bpc;apply_kwargs, update_cache = false)
+        ψ_bpc, _ = r1.value
+        rh = @timed apply_gates(two_site_gates,ψ_bpc;apply_kwargs, update_cache = false)
+        ψ_bpc, errs = rh.value
+        r2 = @timed apply_gates(single_site_gates,ψ_bpc;apply_kwargs, update_cache = false)
+        ψ_bpc, _ = r2.value
 
-        ψ_bpc = update(ψ_bpc; tolerance = nothing, niters =30)
-        t3 = time()
+        rb = @timed update(ψ_bpc; tolerance = nothing, maxiter = bp_iters)
+        ψ_bpc = rb.value
 
-        t_update += (t2-t1)
-        t_bp += (t3-t2)
+        t_update += (r1.time + rh.time + r2.time)
+        t_bp += rb.time
+
+        push!(
+            rows, (;
+                chi = χ, nthreads = nt, nsites = nsites, dt = dt, step = i,
+                single1 = r1.time, hop = rh.time, single2 = r2.time, bp = rb.time,
+                single1_bytes = r1.bytes, hop_bytes = rh.bytes, single2_bytes = r2.bytes, bp_bytes = rb.bytes,
+                maxdim = maxvirtualdim(ψ_bpc),
+            )
+        )
 
         cidag_cj = only(expect(ψ_bpc, obs1)) + only(expect(ψ_bpc, obs2))
         cidag_cjexact = only(cidag_cjs_exact[i + 1])
         push!(cidag_cjs, cidag_cj)
-        push!(bp_times, t3-t2 )
-        push!(gate_app_times, t2-t1)
+        push!(bp_times, rb.time)
+        push!(gate_app_times, r1.time + rh.time + r2.time)
 
         if i % 1 == 0
             println("Time is $(i*dt)")
-            println("This Time steps BP update took $(t3-t2) secs")
-            println("This Time steps Gate app took $(t2-t1) secs")
-            println("Current BD is $(maxvirtualdim(ψ_bpc))")
-            println("BP Measured hopping is $cidag_cj")
-            println("Exact hopping is $(cidag_cjexact)")
+            #println("This Time steps BP update took $(rb.time) secs")
+            #println("This Time steps Gate app took $(r1.time + rh.time + r2.time) secs")
+            #println("Current BD is $(maxvirtualdim(ψ_bpc))")
+            #println("BP Measured hopping is $cidag_cj")
+            #println("Exact hopping is $(cidag_cjexact)")
 
             println("Absolute Error is $(abs(cidag_cjexact - cidag_cj))")
         end
 
     end
 
-    Rs = [1,2,4,8,16,32]
-    cidag_cj_bmps = []
-    for R in Rs
-        ψ_bmps = update(BoundaryMPSCache(network(ψ_bpc), R; partition_by = "col"))
-        cidag_cj = only(expect(ψ_bmps, obs1)) + only(expect(ψ_bmps, obs2))
-        push!(cidag_cj_bmps, cidag_cj)
-
-        println("Absolute Error on BMPS value at $R is $(abs(cidag_cj - only(cidag_cjs_exact[nsteps + 1])))")
-    end
-
-    @show Rs
-    @show cidag_cj_bmps
-    @show cidag_cjs_exact[nsteps + 1]
-
     #npzwrite("/Users/jtindall/Files/Data/Fermions/SpinlessFreeFermionQuenchMu$(μ)BD$(χ)$(lattice).npz", cidag_cjs_exact = cidag_cjs_exact, cidag_cjs_bp = cidag_cjs,
     #    times= times,gate_app_times = gate_app_times, bp_times = bp_times)
+
+    # Wide per-step timing CSV, matching the columns of the collaborator's run_timings.jl.
+    mkpath(outdir)
+    outfile = joinpath(outdir, "$(prefix)_chi$(χ).csv")
+    write_wide_csv(outfile, rows)
+    loop = filter(r -> r.step >= 1, rows)
+    steptot = sort([r.single1 + r.hop + r.single2 + r.bp for r in loop])
+    medtot = steptot[cld(length(steptot), 2)]
+    medbp = sort([r.bp for r in loop])[cld(length(loop), 2)]
+    medbytes = sort([r.single1_bytes + r.hop_bytes + r.single2_bytes + r.bp_bytes for r in loop])[cld(length(loop), 2)]
+    println("χ=$(χ)  median step $(round(medtot; sigdigits=4))s  (bp $(round(medbp; sigdigits=4))s)  " *
+            "heap $(round(medbytes / 2^20; sigdigits=4)) MiB/step  maxdim=$(maximum(r.maxdim for r in loop))  → $(basename(outfile))")
+    return outfile
 end
 
 χs = [32]
