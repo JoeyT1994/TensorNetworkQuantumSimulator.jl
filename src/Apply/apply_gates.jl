@@ -127,4 +127,9 @@ function apply_gate!(
     return ψ_bpc, err
 end
 
+function apply_gate(gate::ITensor, ψ_bpc::BeliefPropagationCache; kwargs...)
+    ψ_bpc = copy(ψ_bpc)
+    return apply_gate!(gate, ψ_bpc; kwargs...)
+end
+
 const apply_circuit = apply_gates
