@@ -64,12 +64,27 @@ end
 function expect(
         alg::Algorithm"bp",
         cache::BeliefPropagationCache,
-        obs::Tuple
+        obs::Tuple;
+        contract_vertices = nothing,
     )
     op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
     iszero(coeff) && return zero(coeff)
 
-    steiner_vs = length(obs_vs) == 1 ? obs_vs : collect(vertices(steiner_tree(network(cache), obs_vs)))
+    # The cluster contracted exactly (everything else enters through BP messages). Normally it
+    # is the Steiner tree spanning the operator support. `contract_vertices`, when given, fixes
+    # it explicitly — needed when the support alone does not pin the region down, e.g. an iTNS
+    # bond where A and B are joined by several PARALLEL bond vertices and the Steiner tree would
+    # otherwise always pick the same one (making every bond's expectation identical). It must
+    # contain the operator support so the operators still land on their sites.
+    steiner_vs = if contract_vertices !== nothing
+        all(in(contract_vertices), obs_vs) ||
+            error("`contract_vertices` = $(contract_vertices) must contain the observable support $(obs_vs).")
+        collect(contract_vertices)
+    elseif length(obs_vs) == 1
+        obs_vs
+    else
+        collect(vertices(steiner_tree(network(cache), obs_vs)))
+    end
     incoming_ms = incoming_messages(cache, steiner_vs)
 
     #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
