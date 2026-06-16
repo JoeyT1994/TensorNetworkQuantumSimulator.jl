@@ -1,6 +1,8 @@
 module TensorNetworkQuantumSimulator
 
 
+include("ITensorKit/ITensorKit.jl")
+
 include("imports.jl")
 
 include("siteinds.jl")
