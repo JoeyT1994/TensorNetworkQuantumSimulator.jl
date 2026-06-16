@@ -152,4 +152,12 @@ function _bond_spectrum_messages(s_values::FermionicITensor, b::Index, e)
     return m, dag(m)
 end
 
+# `Tensor = Union{ITensor, FermionicITensor}`: a fermionic single-site gate (e.g. the
+# generating-function gate `e^{α Ô}` built by `fermionic_onsite_exp_gate`) must reach
+# `apply_gate!`/`simple_update`, whose single-site branch already handles `FermionicITensor`.
+function apply_gate(gate::Tensor, ψ_bpc::BeliefPropagationCache; kwargs...)
+    ψ_bpc = copy(ψ_bpc)
+    return apply_gate!(gate, ψ_bpc; kwargs...)
+end
+
 const apply_circuit = apply_gates

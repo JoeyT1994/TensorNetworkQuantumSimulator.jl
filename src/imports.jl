@@ -31,6 +31,7 @@ using NamedGraphs.GraphsExtensions:
     a_star,
     add_edge!,
     edgetype,
+    edge_subgraph,
     leaf_vertices,
     post_order_dfs_edges,
     decorate_graph_edges,

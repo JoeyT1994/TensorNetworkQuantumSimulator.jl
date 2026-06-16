@@ -17,7 +17,8 @@ include("Forms/quadraticform.jl")
 include("MessagePassing/abstractbeliefpropagationcache.jl")
 include("MessagePassing/beliefpropagationcache.jl")
 include("MessagePassing/boundarympscache.jl")
-include("MessagePassing/loopcorrection.jl")
+include("MessagePassing/LoopExpansion/graph_clusters.jl")
+include("MessagePassing/LoopExpansion/loopcorrection.jl")
 include("graph_ops.jl")
 include("utils.jl")
 
@@ -42,6 +43,7 @@ include("Fermions/fermionic_gates.jl")
 include("iTNS/infinite_tensornetworkstate.jl")
 include("iTNS/apply_gate.jl")
 include("iTNS/expect.jl")
+include("iTNS/embed.jl")
 
 
 export
@@ -152,5 +154,11 @@ export
     coordination,
     iTNS_apply_gate,
     iTNS_expect,
-    iTNS_reduced_density_matrix
+    iTNS_reduced_density_matrix,
+    NamedLattice,
+    SquareLattice,
+    HexagonalLattice,
+    lattice_coordination,
+    lattice_patch,
+    embed
 end

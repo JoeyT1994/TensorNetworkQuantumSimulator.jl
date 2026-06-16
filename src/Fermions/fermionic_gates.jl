@@ -242,6 +242,35 @@ function fermionic_interaction_gate(dt::Number, s::Index; coeff::Number = -im)
     return fermionic_exp_gate(H; outs = Index[prime(s)], ins = Index[s], dt, coeff)
 end
 
+# --- single-site generating-function gate -----------------------------------
+
+"""
+    fermionic_onsite_exp_gate(op_string::String, s::Index, α::Number) -> FermionicITensor
+
+Single-site generating-function gate `exp(α · Ô)` for a **Hermitian** on-site fermionic
+observable `Ô` named by `op_string` (e.g. `"N"`, `"Nup"`, `"Ndn"`, `"NupNdn"`), as a
+parity-even `FermionicITensor` on legs `[prime(s), s]`. This is the fermionic analogue of
+`ITensors.exp(α * ITensors.op(op_string, s); ishermitian = true)` and is what the
+loop-corrected free-energy observable estimator (`expect(...; alg = "loopcorrections")`)
+absorbs into the ket.
+
+Unlike `fermionic_number_gate` (which bakes in `coeff = -im` for a real-time *rotation*),
+this uses `coeff = 1`, i.e. it builds `exp(α·Ô)` literally — `α` is the (generally real)
+generating-function shift, not a rotation angle. `op_string` must name a Hermitian on-site
+operator; odd operators such as `"C"`/`"Cdag"` are rejected (they are neither Hermitian nor
+valid single-site observables).
+"""
+function fermionic_onsite_exp_gate(op_string::String, s::Index, α::Number)
+    sgr = _fermionic_site_grading(s)
+    M = fermion_op_matrix(op_string, s)
+    LinearAlgebra.ishermitian(M) || throw(ArgumentError(
+        "fermionic_onsite_exp_gate requires a Hermitian on-site observable; " *
+        "\"$op_string\" is not Hermitian. Supported Hermitian on-site observables: " *
+        "\"N\" (spinless), \"Nup\"/\"Ndn\"/\"NupNdn\" (spinful)."))
+    H = _onsite_even_ft(s, M, sgr)
+    return fermionic_exp_gate(H; outs = Index[prime(s)], ins = Index[s], dt = α, coeff = 1)
+end
+
 # --- circuit-tuple → fermionic gate -----------------------------------------
 
 """

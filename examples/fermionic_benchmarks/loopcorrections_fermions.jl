@@ -19,12 +19,13 @@ function main()
         (named_grid((nx, ny)), "square", 4),
     ]
     for (g, g_str, smallest_loop_size) in gs
+        s = siteinds("spinful_fermion", g)
         max_configuration_size = 2*smallest_loop_size -1
         println("\n")
         println("-----------------------")
-        obs = ("Z", first(center(g)))
+        obs = (["Nup"], [first(center(g))])
         println("Testing for $g_str lattice with $(nv(g)) vertices")
-        ψ = random_tensornetworkstate(ComplexF64, g, "S=1/2"; bond_dimension = χ)
+        ψ = random_fermionic_tensornetworkstate(ComplexF64, g, s; bond_dimension = χ)
 
         ψ = normalize(ψ; alg = "bp")
 
@@ -36,15 +37,15 @@ function main()
         println("1st Order Loop Corrected Value for norm is $norm_loopcorrected")
         println("Exact Value for norm is $norm_exact")
 
-        sz_bp = expect(ψ, obs; alg = "bp")
-        sz_loopcorrected = expect(ψ, obs; alg = "loopcorrections",max_configuration_size)
-        sz_exact = expect(ψ, obs; alg = "exact")
+        nupdn_bp = expect(ψ, obs; alg = "bp")
+        nupdn_loopcorrected = expect(ψ, obs; alg = "loopcorrections",max_configuration_size)
+        nupdn_exact = expect(ψ, obs; alg = "exact")
 
         println("\n")
 
-        println("Bp Value for sz is $sz_bp")
-        println("1st Order Loop Corrected Value for sz is $sz_loopcorrected")
-        println("Exact Value for sz is $sz_exact")
+        println("Bp Value for nupdn is $nupdn_bp")
+        println("1st Order Loop Corrected Value for nupdn is $nupdn_loopcorrected")
+        println("Exact Value for nupdn is $nupdn_exact")
     end
     return
 end
