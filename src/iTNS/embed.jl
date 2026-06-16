@@ -193,3 +193,64 @@ function embed(itns::InfiniteTensorNetworkState, lat::NamedLattice, dims::NTuple
 
     return TensorNetworkState(TensorNetwork(tensors, p.graph), sinds)
 end
+
+"""
+    absorb_bonds(ψ::TensorNetworkState)
+
+Contract the identity *bond vertices* of an embedded patch away, returning an equivalent
+`TensorNetworkState` on the bare lattice graph: the physical A/B sites connected directly by
+one shared virtual index per lattice edge, with no bond-vertex subdivision.
+
+A bond vertex is a degree-2 vertex carrying no site index — exactly what [`embed`] places on
+every lattice edge to hold the transparent bond identity. Because that tensor IS an identity,
+contracting it into one of its two neighbours leaves the state unchanged (and a degree-2
+identity is transparent to belief propagation, so every BP marginal is preserved too), while
+halving the edges around each lattice loop. The loop expansion's `max_configuration_size` and
+the graph girth therefore come out in *natural lattice units* — a square plaquette is 4 edges,
+not the 8 of the bond-vertex patch.
+
+Works for bosonic (`ITensor`) and fermionic (`FermionicITensor`) patches alike: the identity is
+genuinely *contracted* (via the locally-ordered `*`), so the fermionic arrow / supertrace
+metric is carried through correctly — a naive index merge would drop the bond metric.
+"""
+function absorb_bonds(ψ::TensorNetworkState)
+    g = graph(ψ)
+    V = vertextype(g)
+    sinds = siteinds(ψ)
+
+    # `embed`'s bond vertices are the degree-2 vertices that carry no site index.
+    isbond(v) = isempty(sinds[v])
+    sites = [v for v in vertices(g) if !isbond(v)]
+    bondverts = [v for v in vertices(g) if isbond(v)]
+
+    T = typeof(first(tensors(ψ)))                          # ITensor or FermionicITensor
+    tensors_new = Dictionary{V, T}()
+    for v in sites
+        set!(tensors_new, v, ψ[v])
+    end
+
+    g_new = NamedGraph()
+    for v in sites
+        add_vertex!(g_new, v)
+    end
+    # Each bond vertex ties its two physical neighbours through an identity. Contract it into
+    # ONE of them (`a`); the surviving leg is the one `a` shared with the bond vertex's OTHER
+    # neighbour (`b`), so after the contraction `a` and `b` share a single index — a direct
+    # lattice edge. The contraction reuses each site's CURRENT tensor, so a site that hosts
+    # several bonds simply absorbs them one after another (their legs are distinct).
+    for w in bondverts
+        nbrs = collect(neighbors(g, w))
+        length(nbrs) == 2 ||
+            error("absorb_bonds: vertex $w has no site index but degree $(length(nbrs)) ≠ 2; not an embed-style bond vertex.")
+        a, b = nbrs
+        set!(tensors_new, a, tensors_new[a] * ψ[w])
+        add_edge!(g_new, a, b)
+    end
+
+    sinds_new = Dictionary{V, Vector{<:Index}}()
+    for v in sites
+        set!(sinds_new, v, sinds[v])
+    end
+
+    return TensorNetworkState(TensorNetwork(tensors_new, g_new), sinds_new)
+end

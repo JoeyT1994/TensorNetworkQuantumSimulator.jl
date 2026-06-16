@@ -160,5 +160,6 @@ export
     HexagonalLattice,
     lattice_coordination,
     lattice_patch,
-    embed
+    embed,
+    absorb_bonds
 end
