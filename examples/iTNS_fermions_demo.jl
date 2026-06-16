@@ -72,8 +72,29 @@ function main()
             t, nupA, ndnA, dblA, ntot, imag(cAB_up))
     end
 
-    # the final cache still wraps a genuine state — recover it if you like
+    # the final cache still wraps a genuine state — recover it
     ψ_final = InfiniteTensorNetworkState(network(ψ_bpc))
+
+    # --- embed the evolved unit cell into a finite periodic patch and check the
+    # nearest-neighbour hopping survives the tiling. `embed` tiles the two-site iTNS
+    # onto a (Lx,Ly) patch of the matching lattice (z=4 -> square, z=3 -> hexagonal);
+    # `absorb_bonds` then contracts the transparent identity bond-vertices away, leaving
+    # the bare lattice graph. Both must reproduce the iTNS bond-1 current — and because
+    # c†↑/c↑ are individually odd, this also checks the fermionic string across the bond.
+    if z in (3, 4)
+        lat = z == 4 ? SquareLattice : HexagonalLattice
+        bpk = (; maxiter = 100, tolerance = 1e-12)
+        patch  = embed(ψ_final, lat, (4, 4))
+        apatch = absorb_bonds(patch)
+        h_itns = iTNS_expect(ψ_final, ["Cupdag", "Cup"], 1; alg = "bp", bp_update_kwargs = bpk)
+        h_pat  = expect(patch,  (["Cupdag", "Cup"], ["0,0", "1,0"]); alg = "bp", cache_update_kwargs = bpk)
+        h_abs  = expect(apatch, (["Cupdag", "Cup"], ["0,0", "1,0"]); alg = "bp", cache_update_kwargs = bpk)
+        @printf("\nembed check (%s 4x4): bond-1 current  iTNS=% .8f  patch=% .8f  absorbed=% .8f\n",
+            lat, imag(h_itns), imag(h_pat), imag(h_abs))
+        @printf("   |patch-iTNS|=%.1e   |absorbed-iTNS|=%.1e\n",
+            abs(h_pat - h_itns), abs(h_abs - h_itns))
+    end
+
     return ψ_final
 end
 

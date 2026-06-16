@@ -55,7 +55,13 @@ function iTNS_expect(ψ_bpc::BeliefPropagationCache, op, loc::Union{Symbol, Int}
     # pair like `["Cdag", "C"]` across a bond.
     if is_fermionic(network(ψ_bpc))
         op_strings = op isa AbstractString ? String[op] : collect(String, op)
-        return expect(ψ_bpc, (op_strings, _obsverts(loc)); alg = "bp")
+        # `_obsverts(loc)` (= [A, B] for a bond) is only the operator SUPPORT and does not name
+        # the bond; A and B are joined by `z` parallel bond vertices, so the contraction region
+        # is ambiguous and the Steiner tree would silently pick the same bond every time. Pass
+        # `_locverts(loc)` (= [A, bond_k, B]) as the explicit cluster so bond `k` is the one
+        # contracted exactly and the other bonds enter through their messages — i.e. the result
+        # actually depends on `loc`.
+        return expect(ψ_bpc, (op_strings, _obsverts(loc)); alg = "bp", contract_vertices = _locverts(loc))
     end
     ρ = iTNS_reduced_density_matrix(ψ_bpc, loc; kwargs...)
     O = _resolve_gate(op, loc, graph(ψ_bpc), siteinds(network(ψ_bpc)))
