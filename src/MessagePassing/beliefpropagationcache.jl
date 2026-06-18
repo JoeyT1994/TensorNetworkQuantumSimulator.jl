@@ -204,3 +204,52 @@ end
 function loop_correlations(tn::AbstractTensorNetwork, smallest_loop_size::Integer; bp_update_kwargs = default_bp_update_kwargs(tn), kwargs...)
     return loop_correlations(update(BeliefPropagationCache(tn); bp_update_kwargs...), smallest_loop_size; kwargs...)
 end
+
+# IO struct for saving/loading BP caches in/from e.g. JLD2 files
+struct BPCContainer{N <: AbstractTensorNetwork, M <: Union{ITensor, Vector{ITensor}}, E}
+    network::N
+    msg_keys::Vector{E}
+    msg_vals::Vector{M}
+    cs_keys::Vector{Pair}
+    cs_vals::Vector{Vector}
+    edge_seq::Vector{E}
+end
+
+# convert BeliefPropagationCache to BPCContainer
+function BPCContainer(bpc::BeliefPropagationCache)
+    net = network(bpc)
+    N = typeof(net)
+    msgs = bpc.messages
+    cs = bpc.contraction_sequences
+    edge_seq = bpc.edge_sequence
+    E = eltype(edge_seq)
+    msg_keys = Vector{E}(collect(keys(msgs)))
+    M = typeof(msgs[msg_keys[1]])
+    msg_vals = Vector{M}([msgs[k] for k in msg_keys])
+    cs_keys = Vector{Pair}(collect(keys(cs)))
+    cs_vals = Vector{Vector}([cs[k] for k in cs_keys])
+
+    return BPCContainer{N, M, E}(
+        net,
+        msg_keys,
+        msg_vals,
+        cs_keys,
+        cs_vals,
+        edge_seq,
+    )
+end
+
+# convert BPCContainer back to BeliefPropagationCache
+function BeliefPropagationCache(bpc_con::BPCContainer{N, M, E}) where {N <: AbstractTensorNetwork, M <: Union{ITensor, Vector{ITensor}}, E}
+    msgs = Dictionary{NamedEdge, M}()
+    for (k, v) in zip(bpc_con.msg_keys, bpc_con.msg_vals)
+        set!(msgs, k, v)
+    end
+
+    cs = Dictionary{Pair, Vector}()
+    for (k, v) in zip(bpc_con.cs_keys, bpc_con.cs_vals)
+        set!(cs, k, v)
+    end
+
+    return BeliefPropagationCache(bpc_con.network, msgs, cs, bpc_con.edge_seq)
+end

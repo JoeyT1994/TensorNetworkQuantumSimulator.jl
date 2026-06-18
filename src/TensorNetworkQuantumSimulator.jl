@@ -63,6 +63,7 @@ export
     tensornetworkstate,
     random_tensornetworkstate,
     BeliefPropagationCache,
+    BPCContainer,
     rescale!,
     message,
     network,
