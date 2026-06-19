@@ -109,27 +109,36 @@ function _two_site_hop_array(s_i::Index, name_i::String, s_j::Index, name_j::Str
 end
 
 """
-    fermionic_hopping_hamiltonian(s_i::Index, s_j::Index) -> FermionicITensor
+    fermionic_hopping_hamiltonian(s_i::Index, s_j::Index; t::Number = 1) -> FermionicITensor
 
-The nearest-neighbour hopping Hamiltonian `H = Σ_σ (c†_{iσ} c_{jσ} + c†_{jσ} c_{iσ})`
+The nearest-neighbour hopping Hamiltonian `H = Σ_σ (t·c†_{iσ} c_{jσ} + conj(t)·c†_{jσ} c_{iσ})`
 as a parity-even operator `FermionicITensor` on the two site indices (legs
 `[prime(s_i), s_i, prime(s_j), s_j]`). Spinless (dimension-2) sites carry a single
 mode; spinful (dimension-4) sites sum over the up and down modes. Each bilinear is built as
 its adjacent-pair Jordan-Wigner Fock matrix (see `_two_site_hop_array`), so the on-site spin
 string is carried correctly through double-occupancy transitions.
+
+`t` is the (generally complex) hopping amplitude *along the ordered direction `i → j`*. The
+default `t = 1` is the real symmetric hopping; a complex `t = |t|·e^{iφ}` is a Peierls phase.
+`H` stays Hermitian for any complex `t` because the `i → j` and `j → i` amplitudes are complex
+conjugates — equivalently, swapping `s_i ↔ s_j` conjugates `t`, so orient every bond
+consistently to realise the flux pattern you want (the phases around a plaquette must sum to
+its enclosed flux).
 """
-function fermionic_hopping_hamiltonian(s_i::Index, s_j::Index)
+function fermionic_hopping_hamiltonian(s_i::Index, s_j::Index; t::Number = 1)
     dim(s_i) == dim(s_j) || error("Hopping requires two sites of equal local dimension.")
     sgr_i = _fermionic_site_grading(s_i)
     sgr_j = _fermionic_site_grading(s_j)
     # Each entry is (coeff, name_i, name_j) for the i-first physical product
-    # c^{name_i}_i c^{name_j}_j. The h.c. partner c†_{jσ} c_{iσ} is built as the
-    # i-first product c_{iσ} c†_{jσ} = −c†_{jσ} c_{iσ}, hence coefficient −1.
+    # c^{name_i}_i c^{name_j}_j. The forward hop c†_{iσ} c_{jσ} carries amplitude `t`; its h.c.
+    # partner c†_{jσ} c_{iσ} (amplitude conj(t)) is built as the i-first product
+    # c_{iσ} c†_{jσ} = −c†_{jσ} c_{iσ}, hence coefficient −conj(t).
+    tb = conj(t)
     terms = if dim(s_i) == 2
-        ((1, "Cdag", "C"), (-1, "C", "Cdag"))
+        ((t, "Cdag", "C"), (-tb, "C", "Cdag"))
     elseif dim(s_i) == 4
-        ((1, "Cupdag", "Cup"), (-1, "Cup", "Cupdag"),
-            (1, "Cdndag", "Cdn"), (-1, "Cdn", "Cdndag"))
+        ((t, "Cupdag", "Cup"), (-tb, "Cup", "Cupdag"),
+            (t, "Cdndag", "Cdn"), (-tb, "Cdn", "Cdndag"))
     else
         error("Hopping supports spinless (dim 2) or spinful (dim 4) sites only.")
     end
@@ -178,14 +187,20 @@ end
 # --- public gate constructors -----------------------------------------------
 
 """
-    fermionic_hopping_gate(dt, s_i::Index, s_j::Index; coeff = -im) -> FermionicITensor
+    fermionic_hopping_gate(dt, s_i::Index, s_j::Index; t = 1, coeff = -im) -> FermionicITensor
 
 The two-site hopping propagator `exp(coeff · dt · H_hop)` where
-`H_hop = Σ_σ (c†_{iσ} c_{jσ} + h.c.)`. With the default `coeff = -im` this is the
-real-time Trotter gate `exp(-i dt H_hop)`.
+`H_hop = Σ_σ (t·c†_{iσ} c_{jσ} + conj(t)·c†_{jσ} c_{iσ})`. With the default `coeff = -im`
+this is the real-time Trotter gate `exp(-i dt H_hop)`.
+
+`t` is the (generally complex) hopping amplitude along the ordered direction `i → j` — pass a
+Peierls phase `t = |t|·e^{iφ}` here. The generator stays Hermitian for any complex `t`, but the
+gate itself is then complex even at real `dt`, so the state must be complex-valued
+(`ComplexF64`) to apply it. Orient every bond consistently so the per-bond phases sum to the
+flux you want around each plaquette.
 """
-function fermionic_hopping_gate(dt::Number, s_i::Index, s_j::Index; coeff::Number = -im)
-    H = fermionic_hopping_hamiltonian(s_i, s_j)
+function fermionic_hopping_gate(dt::Number, s_i::Index, s_j::Index; t::Number = 1, coeff::Number = -im)
+    H = fermionic_hopping_hamiltonian(s_i, s_j; t)
     return fermionic_exp_gate(H; outs = Index[prime(s_i), prime(s_j)], ins = Index[s_i, s_j], dt, coeff)
 end
 

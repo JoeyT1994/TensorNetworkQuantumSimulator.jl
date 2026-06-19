@@ -135,6 +135,12 @@ occupied site (`|1⟩`, `|↑⟩`, `|↓⟩`) is parity *odd*, the occupation pa
 dimension-1 *odd* virtual bonds: a Jordan–Wigner-style string wired along a spanning tree.
 This requires an **even** total number of fermions: an odd total parity cannot be represented
 by parity-even tensors alone and raises an error.
+
+A vertex with an **empty** site-index list (`siteinds[v] == Index[]`) is a no-mode vertex — a
+pure virtual hub carrying no fermion mode (e.g. a Kagome-triangle / honeycomb-vertex centre in
+the incidence-graph representation). It is initialised to the scalar `1` on its (dimension-1)
+incident bonds; it contributes no fermion and even parity to the T-join, and `f` is not called
+on it.
 """
 function fermionic_tensornetworkstate(
         eltype, f::Function, g::AbstractGraph,
@@ -146,7 +152,12 @@ function fermionic_tensornetworkstate(
     state_vecs = Dictionary{vertextype(g), Vector}()
     p = Dictionary{vertextype(g), Bool}()
     for v in vs
-        sind = only(siteinds[v])
+        sinds = siteinds[v]
+        if isempty(sinds)
+            set!(p, v, false)                   # no-mode hub: no fermion, even parity
+            continue                            # leave it out of `state_vecs`; `f` is not called
+        end
+        sind = only(sinds)
         gr = _fermionic_site_grading(sind)
         fv = f(v)
         vec = if fv isa String
@@ -184,8 +195,9 @@ function fermionic_tensornetworkstate(
     #    dimension-1 incident bond.
     tensors = Dictionary{vertextype(g), FermionicITensor}()
     for v in vs
-        sind = only(siteinds[v])
-        t = adapt(eltype)(ITensor(state_vecs[v], sind))
+        sinds = siteinds[v]
+        t = isempty(sinds) ? ITensor(one(eltype)) :        # no-mode hub ⇒ scalar 1
+            adapt(eltype)(ITensor(state_vecs[v], only(sinds)))
         for vn in neighbors(g, v)
             t *= onehot(eltype, l[NamedEdge(v => vn)] => 1)
         end
