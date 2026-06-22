@@ -216,8 +216,8 @@ end
 # ---------------------------------------------------------------------------
 # driver
 # ---------------------------------------------------------------------------
-function run(; nx = 2, ny = 2, dt = 0.05, nsteps = 200, χ = 16, cutoff = 1e-12,
-        ϕ = pi / 5, t_hop = 1.0, measure_every = 20, measure_exact = false, gauge = true,
+function analyse(; nx = 2, ny = 2, χ = 16,
+        ϕ = pi / 5, t_hop = 1.0,
         μ = nothing)
     n_ferm = count(kv -> kv[3] == 1, vertices(named_kagome_lattice_graph(nx, ny)))  # 1/3 filling
 
@@ -230,6 +230,7 @@ function run(; nx = 2, ny = 2, dt = 0.05, nsteps = 200, χ = 16, cutoff = 1e-12,
         μ = (εs[n_ferm] + εs[n_ferm + 1]) / 2
     end
 
+    dt= 0.01
     gk, gi, sinds, up_clusters, down_clusters =
         build_kagome_cluster_problem(nx, ny, dt, ϕ, t_hop; μ)
 
@@ -239,37 +240,17 @@ function run(; nx = 2, ny = 2, dt = 0.05, nsteps = 200, χ = 16, cutoff = 1e-12,
     println("Filling = $(n_ferm)/$(n_sites) = $(round(n_ferm / n_sites; digits = 4)); ",
             "chemical potential μ = $(round(μ; digits = 5))")
 
-    # 1/3-filled product initial state (fermion on every sublattice-1 leaf)
-    ψ = fermionic_tensornetworkstate(ComplexF64,
-        v -> (first(v) === :s && v[4] == 1) ? "Occ" : "Emp", gi, sinds)
-    ψ_bpc = update(BeliefPropagationCache(ψ)); rescale!(ψ_bpc)
-
+    ψ_bpc = deserialize("/Users/jtindall/Files/Data/Fermions/KagomeSpinlessGS/nx$(nx)ny$(ny)maxdim$(χ).jld2")
     ns = expect(ψ_bpc, [("N", leafv(kv)) for kv in vertices(gk)])
-
     e_gs, _ = free_fermion_gs_energy(gk, t_hop, ϕ, n_ferm)
     e0 = energy_incidence(ψ_bpc, gk, t_hop, ϕ)
-    #n_tot = sum([expect(ψ_bpc, ("N", v)) for v in vertices(gk)])
     println("\nED   GS energy density        = $(round(e_gs / n_sites; digits = 8))")
     println("init BP energy density        = $(round(real(e0) / n_sites; digits = 8))")
     println("Filling is $(sum(ns) / n_sites)")
-    #println("Initial filling $(n_tot / length(vertices(gk)))")
-    println("\n step   τ        E_BP/site        E_GS_exact/site")
-    for i in 1:nsteps
-        for cl in up_clusters;   apply_cluster!(ψ_bpc, cl; maxdim = χ, cutoff, gauge); end
-        for cl in down_clusters; apply_cluster!(ψ_bpc, cl; maxdim = χ, cutoff, gauge); end
-        ψ_bpc = update(ψ_bpc); rescale!(ψ_bpc)
-        if i % measure_every == 0 || i == nsteps
-            e_bp = energy_incidence(ψ_bpc, gk, t_hop, ϕ)
-            println(rpad(i, 6), " ", rpad(round(i * dt; digits = 3), 8), " ",
-                rpad(round(real(e_bp) / n_sites; digits = 8), 16), " ",
-                rpad(round(real(e_gs) / n_sites; digits = 8), 16), " ")
-            ns = expect(ψ_bpc, [("N", leafv(kv)) for kv in vertices(gk)])
-            println("Filling is $(sum(ns) / n_sites)")
-        end
-    end
 
-    serialize("/Users/jtindall/Files/Data/Fermions/KagomeSpinlessGS/nx$(nx)ny$(ny)maxdim$(χ).jld2", ψ_bpc)
-    return nothing
+    @show sum(TensorNetworkQuantumSimulator.expect(ψ_bpc, [("N", leafv(kv)) for kv in vertices(gk)]; alg = "bp")) / n_sites
+        @show sum(TensorNetworkQuantumSimulator.expect(ψ_bpc, [("N", leafv(kv)) for kv in vertices(gk)]; alg = "loopcorrections", max_configuration_size = 12)) / n_sites
+    #@show TensorNetworkQuantumSimulator.loopcorrected_partitionfunction(ψ_bpc, 12)
 end
 
 # ---------------------------------------------------------------------------
@@ -279,4 +260,4 @@ end
 # 1/3 filling requires n_fermions = nx*ny to be EVEN (2x2 → 4 ✓, 4x4 → 16 ✓, 3x3 → 9 ✗).
 # ---------------------------------------------------------------------------
 χ = 8
-run(; nx = 4, ny = 4, dt = 0.01, nsteps = 1000, χ, cutoff = 1e-14, measure_every = 10, gauge = true)
+analyse(; nx = 4, ny = 4, χ)
