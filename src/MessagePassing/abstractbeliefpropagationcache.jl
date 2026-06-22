@@ -211,7 +211,7 @@ function update_iteration!(
         prev_message = !isnothing(update_diff!) ? message(bpc, e) : nothing
         update_message!(alg.kwargs.message_update_alg, bpc, e)
         if !isnothing(update_diff!)
-            update_diff![] += message_diff(message(bpc, e), prev_message)
+            update_diff![] += ForwardDiff.value(message_diff(message(bpc, e), prev_message))
         end
     end
     return bpc

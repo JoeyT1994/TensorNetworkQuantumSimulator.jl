@@ -195,7 +195,10 @@ with `F(t) = ln‖e^{t Ô/2}|ψ⟩‖²` the loop-corrected free energy of that 
 `max_configuration_size` counts EDGES). BP is re-solved for each shifted
 network so the loop corrections include the linear response of the messages.
 
-`ε` is the central finite-difference step (default `1e-4`). `Ô` must be Hermitian (the
+`ε` is the central finite-difference step (default `1e-4`). Pass `autodiff = true` to instead
+take the derivative by forward-mode AD (`ForwardDiff` dual numbers): a single BP re-solve with
+a `Dual`-seeded gate gives the exact `∂_ε`, removing the `ε` step-size/truncation tradeoff (at
+the cost of losing BLAS on the dual-typed contractions). `Ô` must be Hermitian (the
 generating-function identity `⟨ψ|e^{εÔ}|ψ⟩ = ‖e^{εÔ/2}|ψ⟩‖²` relies on `Ô† = Ô`). Accepts a
 `TensorNetworkState` or a `BeliefPropagationCache`, and a single observable or a vector of
 them; multi-site observables are not supported.
@@ -204,7 +207,7 @@ function expect(
         alg::Algorithm"loopcorrections",
         ψ_bpc::BeliefPropagationCache,
         obs::Tuple;
-        max_configuration_size::Integer, ε::Real = 1e-4,
+        max_configuration_size::Integer, ε::Real = 1e-4, autodiff::Bool = false,
         cache_update_kwargs = default_bp_update_kwargs(ψ_bpc),
     )
     op_strings, obs_vs, coeff = collectobservable(obs, graph(ψ_bpc))
@@ -213,6 +216,17 @@ function expect(
         error("expect(...; alg = \"loopcorrections\") supports single-site observables only; got $(length(obs_vs)) sites.")
     v = only(obs_vs)
     op_string = only(op_strings)
+
+    if autodiff
+        # Forward-mode AD: ⟨Ô⟩ = ½ F'(0) with F(α) = ln⟨ψ|e^{2αÔ}|ψ⟩. Seed α with a real
+        # `Dual` and read the partial off the (complex) free energy in a SINGLE BP re-solve,
+        # giving the exact derivative (no ε step-size / truncation tradeoff). `cache_update_kwargs`
+        # is computed on the unperturbed (float) cache, so the BP tolerance stays a concrete Float.
+        α = ForwardDiff.Dual(0.0, 1.0)
+        F = gated_lc_free_energy(ψ_bpc, op_string, v, α, max_configuration_size; cache_update_kwargs)
+        dF = complex(ForwardDiff.partials(real(F))[1], ForwardDiff.partials(imag(F))[1])
+        return coeff * dF / 2
+    end
 
     Fp = gated_lc_free_energy(ψ_bpc, op_string, v, +ε / 2, max_configuration_size; cache_update_kwargs)
     Fm = gated_lc_free_energy(ψ_bpc, op_string, v, -ε / 2, max_configuration_size; cache_update_kwargs)

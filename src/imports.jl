@@ -58,4 +58,6 @@ using EinExprs: Greedy
 import PauliPropagation
 const PP = PauliPropagation
 
+import ForwardDiff
+
 using TypeParameterAccessors: unspecify_type_parameters
