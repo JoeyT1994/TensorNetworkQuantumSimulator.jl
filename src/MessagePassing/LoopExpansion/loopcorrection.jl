@@ -104,22 +104,41 @@ _gf_onsite_gate(op_string, s, α::Number, isfermionic::Bool) =
     isfermionic ? _onsite_exp_gate_ad_fermionic(op_string, s, α) :
                   _onsite_exp_gate_ad(op_string, s, α)
 
+# Vector form: apply the generating-function gate `e^{α Ôᵢ}` to each `(op_stringsᵢ, vsᵢ)` pair
+# (one un-normalized single-site gate per vertex) and return the loop-corrected free energy of the
+# resulting squared-norm network. The gates commute (distinct vertices), so the bra/ket sandwich is
+# `⟨ψ| ∏ᵢ e^{2α Ôᵢ} |ψ⟩ = ⟨ψ| e^{2α Σᵢ Ôᵢ} |ψ⟩`: with a shared scalar α this is the generating
+# function of the EXTENSIVE sum `Σᵢ Ôᵢ`, whose ½ ∂_α F|₀ is `Σᵢ ⟨Ôᵢ⟩` in a single BP re-solve.
+function gated_lc_free_energy(
+        ψ_bpc::BeliefPropagationCache, op_strings::AbstractVector, vs::AbstractVector, α,
+        max_configuration_size::Integer; cache_update_kwargs,
+    )
+    length(op_strings) == length(vs) || throw(ArgumentError(
+        "gated_lc_free_energy: need one operator string per vertex (got $(length(op_strings)) ops, $(length(vs)) vertices)."))
+    allunique(vs) || throw(ArgumentError(
+        "gated_lc_free_energy: vertices must be distinct so the single-site gates commute; got repeated vertices in $vs."))
+    ψ = network(ψ_bpc)
+    for (op_string, v) in zip(op_strings, vs)
+        s = only(siteinds(ψ)[v])
+        # Map the single-site Hermitian observable to its generating-function gate `e^{α Ô}`.
+        # Fermionic sites need the locally-ordered `FermionicITensor` exponential (built from the
+        # on-site Fock matrix) rather than the spin `ITensors.op`/`ITensors.exp` path. The builder
+        # is dispatched on `α`'s type so a `Dual`-seeded α takes a matrix-`exp`-free analytic path.
+        G = _gf_onsite_gate(op_string, s, α, has_fermionic_tag(s))
+        # `normalize_tensors = false`: the un-normalized gated tensor is exactly what makes the
+        # squared norm equal the partition function ⟨ψ|e^{2α Ô}|ψ⟩ we want to differentiate.
+        ψ_bpc, _ = apply_gate(G, ψ_bpc; v⃗ = [v], apply_kwargs = (; normalize_tensors = false))
+    end
+    ψ_bpc = update(ψ_bpc; cache_update_kwargs...)
+    return loopcorrected_free_energy(ψ_bpc, max_configuration_size)
+end
+
+# Single-site convenience wrapper (unchanged call sites in `expect`).
 function gated_lc_free_energy(
         ψ_bpc::BeliefPropagationCache, op_string::String, v, α, max_configuration_size::Integer;
         cache_update_kwargs,
     )
-    ψ = network(ψ_bpc)
-    s = only(siteinds(ψ)[v])
-    # Map the single-site Hermitian observable to its generating-function gate `e^{α Ô}`.
-    # Fermionic sites need the locally-ordered `FermionicITensor` exponential (built from the
-    # on-site Fock matrix) rather than the spin `ITensors.op`/`ITensors.exp` path. The builder
-    # is dispatched on `α`'s type so a `Dual`-seeded α takes a matrix-`exp`-free analytic path.
-    G = _gf_onsite_gate(op_string, s, α, has_fermionic_tag(s))
-    # `normalize_tensors = false`: the un-normalized gated tensor is exactly what makes the
-    # squared norm equal the partition function ⟨ψ|e^{2α Ô}|ψ⟩ we want to differentiate.
-    ψ_bpc, _ = apply_gate(G, ψ_bpc; v⃗ = [v], apply_kwargs = (; normalize_tensors = false))
-    ψ_bpc = update(ψ_bpc; cache_update_kwargs...)
-    return loopcorrected_free_energy(ψ_bpc, max_configuration_size)
+    return gated_lc_free_energy(ψ_bpc, [op_string], [v], α, max_configuration_size; cache_update_kwargs)
 end
 
 #Transform the indices in the given subgraph of the tensornetwork so that antiprojectors can be inserted without duplicate indices appearing
