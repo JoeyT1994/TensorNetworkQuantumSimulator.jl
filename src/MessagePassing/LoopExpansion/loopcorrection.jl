@@ -62,6 +62,48 @@ end
 # the genuine extensive log-partition-function whose smooth ε-dependence makes this estimator
 # converge well — NOT `log(loopcorrected_partitionfunction) = ln Z_BP + ln(1 + Σ_C w_C)`, which
 # only agrees with it to O(w) and resums the same clusters multiplicatively instead.
+# Differentiable `exp(scale·M)` for a FIXED Hermitian operator matrix `M`: diagonalize once
+# in floats (LAPACK acts only on the constant `M`) and exponentiate the eigenvalues with the
+# possibly-`Dual` scalar `scale`. This sidesteps the `eigen`/Padé matrix-`exp` paths that
+# cannot accept Dual-valued matrices, while staying exact for an ordinary float `scale`.
+function _hermitian_exp(M::AbstractMatrix, scale::Number)
+    E = eigen(Hermitian(Matrix{ComplexF64}(M)))
+    return E.vectors * Diagonal(exp.(scale .* E.values)) * E.vectors'
+end
+
+# Dual-aware `exp(α·Ô)` single-site gate on legs `[s', s]` (bosonic), reproducing
+# `ITensors.exp(α·op(op_string,s); ishermitian=true)` for ordinary α but letting α carry a
+# `Dual` seed for forward-mode AD of the observable.
+function _onsite_exp_gate_ad(op_string::String, s::Index, α::Number)
+    o = ITensors.op(op_string, s)
+    return ITensor(_hermitian_exp(ITensors.array(o, prime(s), s), α), prime(s), s)
+end
+
+# Fermionic analogue of `_onsite_exp_gate_ad`: same construction as `fermionic_onsite_exp_gate`
+# but the exponential goes through `_hermitian_exp` so α may be a `Dual`.
+function _onsite_exp_gate_ad_fermionic(op_string::String, s::Index, α::Number)
+    sgr = _fermionic_site_grading(s)
+    M = fermion_op_matrix(op_string, s)
+    LinearAlgebra.ishermitian(M) || throw(ArgumentError(
+        "loopcorrections autodiff requires a Hermitian on-site observable; \"$op_string\" is not Hermitian."))
+    H = _onsite_even_ft(s, M, sgr)
+    outs, ins = Index[prime(s)], Index[s]
+    U = _hermitian_exp(_operator_matrix(H, outs, ins), α)
+    dims = (Int[dim(i) for i in outs]..., Int[dim(i) for i in ins]...)
+    T = ITensor(reshape(Array(U), dims...), Index[outs; ins]...)
+    return FermionicITensor(T, copy(H.order), copy(H.dirs), H.grading)
+end
+
+# Float/complex-float α keeps the EXACT existing builders (finite-difference path unchanged);
+# any other Number (`Dual`, `Complex{Dual}`) routes to the analytic eigen-based builders so a
+# Dual seed propagates. `Dual <: Real` but not `<: AbstractFloat`, so this dispatch is clean.
+_gf_onsite_gate(op_string, s, α::Union{AbstractFloat, Complex{<:AbstractFloat}}, isfermionic::Bool) =
+    isfermionic ? fermionic_onsite_exp_gate(op_string, s, α) :
+                  ITensors.exp(α * ITensors.op(op_string, s); ishermitian = true)
+_gf_onsite_gate(op_string, s, α::Number, isfermionic::Bool) =
+    isfermionic ? _onsite_exp_gate_ad_fermionic(op_string, s, α) :
+                  _onsite_exp_gate_ad(op_string, s, α)
+
 function gated_lc_free_energy(
         ψ_bpc::BeliefPropagationCache, op_string::String, v, α, max_configuration_size::Integer;
         cache_update_kwargs,
@@ -70,9 +112,9 @@ function gated_lc_free_energy(
     s = only(siteinds(ψ)[v])
     # Map the single-site Hermitian observable to its generating-function gate `e^{α Ô}`.
     # Fermionic sites need the locally-ordered `FermionicITensor` exponential (built from the
-    # on-site Fock matrix) rather than the spin `ITensors.op`/`ITensors.exp` path.
-    G = has_fermionic_tag(s) ? fermionic_onsite_exp_gate(op_string, s, α) :
-        ITensors.exp(α * ITensors.op(op_string, s); ishermitian = true)
+    # on-site Fock matrix) rather than the spin `ITensors.op`/`ITensors.exp` path. The builder
+    # is dispatched on `α`'s type so a `Dual`-seeded α takes a matrix-`exp`-free analytic path.
+    G = _gf_onsite_gate(op_string, s, α, has_fermionic_tag(s))
     # `normalize_tensors = false`: the un-normalized gated tensor is exactly what makes the
     # squared norm equal the partition function ⟨ψ|e^{2α Ô}|ψ⟩ we want to differentiate.
     ψ_bpc, _ = apply_gate(G, ψ_bpc; v⃗ = [v], apply_kwargs = (; normalize_tensors = false))
