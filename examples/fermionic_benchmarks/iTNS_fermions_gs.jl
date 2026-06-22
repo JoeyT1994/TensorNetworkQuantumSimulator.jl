@@ -28,8 +28,8 @@ end
 function main(U, χ)
     z = 3            # coordination number (each site has z bonds)
     t_hop = 1.0      # hopping amplitude
-    dt = -0.005*im
-    nsteps = 5000
+    dt = -0.01*im
+    nsteps = 2000
 
     # --- the STATE: two spinful-fermion sites, z bonds; :A is up, :B is down ---
     # (both sites carry one fermion => equal parity, which the unit cell requires)
@@ -93,7 +93,7 @@ function main(U, χ)
     serialize("/mnt/home/jtindall/ceph/Data/Fermions/HexagonalHubbard/GS/iTNS/States/HoneyCombHubbardHalffilledU$(U)BondDimension$(χ).ser", ψ_bpc)
 end
 
-# U = 8.0
+# U = 3.1
 # χ = 8
 
 U = parse(Float64, ARGS[1])
