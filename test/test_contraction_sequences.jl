@@ -11,7 +11,7 @@ using Test: @testset, @test
     g = named_grid((3, 3))
     tn = random_tensornetwork(Float64, g; bond_dimension = 2)
 
-    s_default = ITensors.contract(tn; alg = "exact")  # einexpr + Greedy (the default)
+    s_default = ITensors.contract(tn; alg = "exact")  # omeinsum + TreeSA (the default)
     s_optimal = ITensors.contract(tn; alg = "exact",
         contraction_sequence_kwargs = (; alg = "optimal"))
     s_treesa = ITensors.contract(tn; alg = "exact",

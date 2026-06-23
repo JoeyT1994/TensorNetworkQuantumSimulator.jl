@@ -2,7 +2,7 @@ function expect(
         alg::Algorithm"exact",
         ψ::TensorNetworkState,
         observables::Vector{<:Tuple};
-        contraction_sequence_kwargs = (; alg = "einexpr", optimizer = Greedy())
+        contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod())
     )
     ITensors.disable_warn_order()
 

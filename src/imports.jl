@@ -52,8 +52,6 @@ using ITensorMPS
 
 using Adapt: adapt
 
-using EinExprs: Greedy
-
 import PauliPropagation
 const PP = PauliPropagation
 
