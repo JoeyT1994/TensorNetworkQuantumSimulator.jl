@@ -3,6 +3,7 @@
 *.jl.mem
 /docs/Manifest*.toml
 /docs/build/
+/docs/superpowers/
 
 Manifest.toml
 .vscode/

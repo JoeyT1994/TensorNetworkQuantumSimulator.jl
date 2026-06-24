@@ -34,7 +34,7 @@ function reduced_density_matrix(
         alg::Algorithm"exact",
         ψ::TensorNetworkState,
         verts::Vector;
-        contraction_sequence_kwargs = (; alg = "einexpr", optimizer = Greedy()),
+        contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod()),
         normalize = true
     )
     ITensors.disable_warn_order()

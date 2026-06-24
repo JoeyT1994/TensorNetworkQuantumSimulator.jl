@@ -2,8 +2,6 @@ using TensorNetworkQuantumSimulator
 
 using ITensors
 
-using EinExprs: Greedy
-
 using Random
 Random.seed!(1634)
 

@@ -1,4 +1,4 @@
-function ITensors.contract(alg::Algorithm"exact", tn::AbstractTensorNetwork; contraction_sequence_kwargs = (; alg = "einexpr", optimizer = Greedy()))
+function ITensors.contract(alg::Algorithm"exact", tn::AbstractTensorNetwork; contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod()))
     tn_tensors = [tn[v] for v in vertices(tn)]
     seq = contraction_sequence(tn_tensors; contraction_sequence_kwargs...)
     return scalar(ITensors.contract(tn_tensors; sequence = seq))

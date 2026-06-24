@@ -48,7 +48,7 @@ end
 
 function ITensors.inner(
         alg::Algorithm"exact", blf::BilinearForm;
-        contraction_sequence_kwargs = (; alg = "einexpr", optimizer = Greedy())
+        contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod())
     )
     blf_tensors = bp_factors(blf, collect(vertices(ket(blf))))
     seq = contraction_sequence(blf_tensors; contraction_sequence_kwargs...)
