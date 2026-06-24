@@ -101,18 +101,29 @@ function _sign_mask(gr::Dictionary, is::Vector{<:Index}, from::Vector{<:Index}, 
     # O(n^3) sweep of `findfirst` over Index vectors inside the pair loop below).
     pf = ntuple(k -> findfirst(==(is[k]), from), n)
     pt = ntuple(k -> findfirst(==(is[k]), to), n)
-    # Accumulate the sign mask with VECTORISED broadcasts (one fused `.⊻=` per inverted
-    # pair / parity leg). Use a contiguous `Array{Bool}` rather than a `BitArray`: the
-    # bit-packed broadcast against singleton-reshaped operands is strided and dominated
-    # `contract` at large bond dimension.
-    E = zeros(Bool, dims...)
+    # Collect each sign contribution as a LAZY broadcast (no work yet): an inverted pair
+    # (a,b) contributes `bits[a] & bits[b]`, a parity leg `k` contributes `bits[k]`. We
+    # XOR them all together and materialise into `E` in ONE fused write pass below.
+    # Crucially we do NOT accumulate with `E .⊻= term` per contribution: that
+    # read-modify-write against a singleton-reshaped `Bool` operand misses the fast
+    # `copyto!`/SIMD path and measured ~5× slower per term than a single fused write —
+    # it dominated `contract` at large bond dimension.
+    terms = Any[]
     @inbounds for a in 1:n, b in (a + 1):n
         # inverted iff the pair's order differs between `from` and `to`
         inverted = (pf[a] < pf[b]) != (pt[a] < pt[b])
-        inverted && (E .⊻= rshp(a) .& rshp(b))
+        inverted && push!(terms, Base.broadcasted(&, rshp(a), rshp(b)))
     end
     for k in parity_legs
-        E .⊻= rshp(findfirst(==(k), is))
+        push!(terms, rshp(findfirst(==(k), is)))
+    end
+    # Contiguous `Array{Bool}` (not a `BitArray`): the bit-packed broadcast against
+    # singleton-reshaped operands is strided and was a bottleneck at large χ.
+    E = Array{Bool}(undef, dims...)
+    if isempty(terms)
+        fill!(E, false)                                  # no inverted pairs and no parity
+    else
+        Base.materialize!(E, reduce((x, y) -> Base.broadcasted(⊻, x, y), terms))
     end
     return E
 end
