@@ -10,4 +10,5 @@ using Test
     include("test_apply.jl")
     include("test_sampling.jl")
     include("test_truncate.jl")
+    include("test_contraction_sequences.jl")
 end

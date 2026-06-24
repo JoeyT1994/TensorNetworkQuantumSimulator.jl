@@ -1,6 +1,6 @@
 using ITensors: Index, ITensor, @Algorithm_str, inds, noncommoninds, dim
 using TensorOperations: TensorOperations, optimaltree
-using EinExprs: EinExprs, EinExpr, einexpr, SizedEinExpr
+using OMEinsumContractionOrders: OMEinsumContractionOrders, optimize_code, EinCode, NestedEinsum, TreeSA, GreedyMethod, SABipartite, Treewidth, ExactTreewidth, HyperND
 
 itensors(fts::Vector{<:FermionicITensor}) = ITensors.ITensor.(fts)
 itensors(ts::Vector{<:ITensor}) = ts
@@ -37,55 +37,27 @@ function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:Tensor}; p
     return seq
 end
 
-function contraction_sequence(
-        ::Algorithm"einexpr", tensors::Vector{<:Tensor}; optimizer = EinExprs.Exhaustive()
-    )
-    expr = to_einexpr(tensors)
-    path = einexpr(optimizer, expr)
-    return to_contraction_sequence(path, tensor_inds_to_vertex(tensors))
+function contraction_sequence(::Algorithm"omeinsum", tensors::Vector{<:Tensor}; optimizer = TreeSA())
+    code, size_dict = to_eincode(tensors)
+    optcode = optimize_code(code, size_dict, optimizer)
+    return to_contraction_sequence(optcode)
 end
 
 function contraction_sequence(tensors::Vector{<:Tensor}; alg = "optimal", kwargs...)
     return contraction_sequence(Algorithm(alg), tensors; kwargs...)
 end
 
-#Ein Exprs helpers
-function to_einexpr(tensors::Vector{<:Tensor})
+#OMEinsumContractionOrders helpers
+function to_eincode(tensors::Vector{<:Tensor})
     tensors = itensors(tensors)
-    IndexType = Any
-
-    tensor_exprs = EinExpr{IndexType}[]
-    inds_dims = Dict{IndexType, Int}()
-
-    for tensor_v in tensors
-        inds_v = collect(inds(tensor_v))
-        push!(tensor_exprs, EinExpr{IndexType}(; head = inds_v))
-        merge!(inds_dims, Dict(inds_v .=> Tuple(dim.(inds_v))))
-    end
-
-    externalinds_tn = reduce(noncommoninds, tensors)
-    return SizedEinExpr(sum(tensor_exprs; skip = externalinds_tn), inds_dims)
+    ixs = map(t -> collect(inds(t)), tensors)
+    LT = eltype(eltype(ixs))
+    iy = collect(LT, reduce(noncommoninds, tensors))
+    size_dict = Dict{LT, Int}(i => dim(i) for ix in ixs for i in ix)
+    return EinCode(ixs, iy), size_dict
 end
 
-function tensor_inds_to_vertex(tensors::Vector{<:Tensor})
-    tensors = itensors(tensors)
-    IndexType = Any
-    VertexType = Int
-
-    mapping = Dict{Set{IndexType}, VertexType}()
-
-    for (v, tensor_v) in enumerate(tensors)
-        inds_v = collect(inds(tensor_v))
-        mapping[Set(inds_v)] = v
-    end
-
-    return mapping
-end
-
-
-function to_contraction_sequence(expr, tensor_inds_to_vertex)
-    EinExprs.nargs(expr) == 0 && return tensor_inds_to_vertex[Set(expr.head)]
-    return map(
-        expr -> to_contraction_sequence(expr, tensor_inds_to_vertex), EinExprs.args(expr)
-    )
+function to_contraction_sequence(ne::NestedEinsum)
+    OMEinsumContractionOrders.isleaf(ne) && return ne.tensorindex
+    return map(to_contraction_sequence, ne.args)
 end

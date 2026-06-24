@@ -62,7 +62,7 @@ end
 
 function norm_sqr(
         alg::Algorithm"exact", ψ::TensorNetworkState;
-        contraction_sequence_kwargs = (; alg = "einexpr", optimizer = Greedy())
+        contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod())
     )
     ψIψ_tensors = norm_factors(ψ, collect(vertices(ψ)))
     denom_seq = contraction_sequence(ψIψ_tensors; contraction_sequence_kwargs...)

@@ -315,7 +315,7 @@ function weight(bpc::BeliefPropagationCache, eg)
         ITensor[message(bpc, e) for e in boundary_edges(bpc, es)]
     local_tensors = collect(Iterators.flatten(bp_factors(bpc, v) for v in vs))
     ts = [incoming_ms; local_tensors; antiprojectors]
-    seq = any(hasqns.(ts)) ? contraction_sequence(ts; alg = "optimal") : contraction_sequence(ts; alg = "einexpr", optimizer = Greedy())
+    seq = any(hasqns.(ts)) ? contraction_sequence(ts; alg = "optimal") : contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
     return scalar(contract(ts; sequence = seq))
 end
 

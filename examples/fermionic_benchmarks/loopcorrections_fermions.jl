@@ -4,8 +4,6 @@ using ITensors
 
 using LinearAlgebra: norm
 
-using EinExprs: Greedy
-
 using Random
 Random.seed!(1634)
 
