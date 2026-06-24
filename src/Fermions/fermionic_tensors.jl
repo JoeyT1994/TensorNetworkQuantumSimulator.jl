@@ -67,6 +67,10 @@ Base.copy(ft::FermionicITensor) = FermionicITensor(copy(ft.tensor), copy(ft.orde
 
 # Direction (arrow) of leg `i` in `ft`: true = in/−, false = out/+.
 _dir(ft::FermionicITensor, i::Index) = ft.dirs[findfirst(==(i), ft.order)]
+
+# Total element count of an ITensor (product of its index dimensions), computed from the
+# index metadata so no array is materialised.
+_nelements(T::ITensor) = prod(i -> dim(i), inds(T); init = 1)
 ITensors.inds(ft::FermionicITensor) = ft.order
 ITensors.ndims(ft::FermionicITensor) = ndims(ft.tensor)
 ITensors.noncommoninds(ft1::FermionicITensor, ft2::FermionicITensor) = noncommoninds(ft1.tensor, ft2.tensor)
@@ -271,10 +275,17 @@ function ITensors.contract(A::FermionicITensor, B::FermionicITensor)
     # all of A's legs, B's covers all of B's, and a shared bond carries identical bits
     # in both. Each sign computation below uses whichever operand owns the legs it
     # touches, and the result carries a TIGHT grading over only its own open legs.
-    Kset = Set(commoninds(A.tensor, B.tensor))
-    A_open = filter(!in(Kset), A.order)
-    B_open = filter(!in(Kset), B.order)
-    Kc = filter(in(Kset), A.order)                 # canonical contracted order = A's order
+    # Split each operand's legs into shared (contracted) and open. Membership is tested
+    # directly against the other operand's own `order` vector — a linear `in` over the
+    # handful of legs a tensor carries — rather than building a `Set` and calling
+    # `commoninds` on the underlying ITensors. Both were pure per-call fixed overhead
+    # (a Set is a hash table; `commoninds` re-derives the shared indices ITensor already
+    # knows about) and dominate the cost at the small bond dimensions of fermionic BP.
+    # `filter` preserves order, so `Kc` is still A's contracted order.
+    Aord, Bord = A.order, B.order
+    A_open = filter(!in(Bord), Aord)
+    B_open = filter(!in(Aord), Bord)
+    Kc = filter(in(Bord), Aord)                    # canonical contracted order = A's order
 
     A_to = Index[A_open; Kc]
     B_to = Index[reverse(Kc); B_open]               # B's contracted block REVERSED (nesting sign)
@@ -282,11 +293,33 @@ function ITensors.contract(A::FermionicITensor, B::FermionicITensor)
     # Supertrace (bond-parity g) per shared bond. The contraction map C adds a supertrace
     # (−1)^{p} exactly for a KET-BRA pair (SciPost "Fermionic tensor networks" Eq. 107):
     # A's leg first as a ket, B's leg as a bra. A holds the leg as a ket iff it is OUT, so
-    # insert g iff A holds k as out (arrow points A → B). This is diagonal in component
-    # space like the reorder sign, so we fold it into A's single reorder pass.
-    A_parity = Index[k for k in Kc if !_dir(A, k)]
-    TA = _apply_reorder_sign(A.grading, A.tensor, A.order, A_to, A_parity)
-    TB = _apply_reorder_sign(B.grading, B.tensor, B.order, B_to)
+    # insert g iff A holds k as out (arrow points A → B). This is diagonal in component space
+    # like the reorder sign, so it folds into a single reorder pass.
+    #
+    # Crucially, g lives on a CONTRACTED leg, which is summed over: `Σ_k A[..,k] g_k B[k,..]`
+    # is identical whether g weights A's or B's k-axis. We therefore attach g to whichever
+    # operand is ALREADY being copied for its reorder, so it costs no extra allocation. When
+    # an operand does not reorder, `_apply_reorder_sign` returns it untouched (no copy), so
+    # pinning g to a non-reordering operand (the old behaviour: always A) would force a needless
+    # full-size copy — exactly the multi-bond blow-up. Only when NEITHER operand reorders does g
+    # require a copy, and then we flip the smaller operand.
+    parity = Index[k for k in Kc if !_dir(A, k)]
+    A_reorder = A.order != A_to
+    B_reorder = B.order != B_to
+
+    if B_reorder
+        TA = _apply_reorder_sign(A.grading, A.tensor, A.order, A_to)
+        TB = _apply_reorder_sign(B.grading, B.tensor, B.order, B_to, parity)
+    elseif A_reorder
+        TA = _apply_reorder_sign(A.grading, A.tensor, A.order, A_to, parity)
+        TB = _apply_reorder_sign(B.grading, B.tensor, B.order, B_to)
+    elseif _nelements(A.tensor) <= _nelements(B.tensor)
+        TA = _apply_reorder_sign(A.grading, A.tensor, A.order, A_to, parity)
+        TB = B.tensor
+    else
+        TA = A.tensor
+        TB = _apply_reorder_sign(B.grading, B.tensor, B.order, B_to, parity)
+    end
 
     C = TA * TB
     order_C = Index[A_open; B_open]
