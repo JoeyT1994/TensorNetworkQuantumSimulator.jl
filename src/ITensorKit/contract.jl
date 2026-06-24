@@ -11,6 +11,7 @@
 
 export contract
 
+Base.@nospecialize
 # --- contraction ------------------------------------------------------------
 """
     contract(t1::ITensorMap, ts::ITensorMap...; sequence=nothing, alg="optimal", kwargs...)
@@ -109,3 +110,5 @@ No-op compatibility shim (TensorOperations issues no high-rank warning).
 """
 disable_warn_order() = nothing
 export disable_warn_order
+
+Base.@specialize

@@ -1,5 +1,6 @@
 @eval module $(gensym())
-using ITensors: ITensors, datatype, op, Index, @OpName_str, @SiteType_str
+using ITensors: ITensors, op, Index, @OpName_str, @SiteType_str
+using TensorNetworkQuantumSimulator.ITensorKit: datatype
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test, @test_throws

@@ -6,7 +6,7 @@ end
 
 function siteinds(sitetype::String, g::AbstractGraph, sitedimension::Integer = site_dimension(sitetype); inds_per_site::Integer = 1)
     vs = collect(vertices(g))
-    return Dictionary{vertextype(g), Vector{<:Index}}(vs, [Index[Index(sitedimension, site_tag(sitetype)) for i in 1:inds_per_site] for v in vs])
+    return Dictionary{vertextype(g), Vector{<:Index}}(vs, [Index[Index(sitedimension) for i in 1:inds_per_site] for v in vs])
 end
 
 function site_dimension(sitetype::String)
@@ -28,7 +28,7 @@ end
 function is_pauli(siteinds::Dictionary)
     for k in keys(siteinds)
         for ind in siteinds[k]
-            !hastags(ind, "Pauli") && return false
+            dim(ind) != 4 && return false
         end
     end
     return true

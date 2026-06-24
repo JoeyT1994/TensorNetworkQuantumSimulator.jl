@@ -9,6 +9,7 @@ using VectorInterface
 using MatrixAlgebraKit
 using Adapt
 using EinExprs: EinExprs, EinExpr, einexpr, SizedEinExpr
+using OMEinsumContractionOrders: OMEinsumContractionOrders, optimize_code, EinCode, NestedEinsum, TreeSA, GreedyMethod, SABipartite, Treewidth, ExactTreewidth, HyperND
 using ITensors: ITensors, Algorithm, @Algorithm_str
 
 include("index.jl")

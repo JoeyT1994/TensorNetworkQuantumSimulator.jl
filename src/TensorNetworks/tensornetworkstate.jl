@@ -1,4 +1,4 @@
-using ITensors: random_itensor
+using .ITensorKit: random_itensor
 
 """
     TensorNetworkState{V} <: AbstractTensorNetwork{V}
@@ -11,7 +11,8 @@ A tensor network state defined on a graph with vertices of type `V`. Wraps a `Te
 """
 struct TensorNetworkState{V} <: AbstractTensorNetwork{V}
     tensornetwork::TensorNetwork{V}
-    siteinds::Dictionary{V, Vector{<:Index}}
+    # value type left abstract: `Index` is parametric in its spacetype.
+    siteinds::Dictionary{V}
 end
 
 tensornetwork(tns::TensorNetworkState) = tns.tensornetwork
@@ -59,8 +60,8 @@ function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Functi
             tnv_dag = replaceinds(tnv_dag, prime.(sinds), sinds)
             append!(factors, ITensor[tnv, tnv_dag])
         else
-            op = adapt_like(tnv, ITensors.op(op_strings(v), only(sinds)))
-            append!(factors, ITensor[tnv, tnv_dag, op])
+            optensor = adapt_like(tnv, op(op_strings(v), only(sinds)))
+            append!(factors, ITensor[tnv, tnv_dag, optensor])
         end
     end
     return factors
@@ -144,9 +145,9 @@ function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dic
     for v in vs
         tnv = f(v)
         if tnv isa String
-            set!(tensors, v, adapt(eltype)(ITensors.state(f(v), only(siteinds[v]))))
+            set!(tensors, v, adapt(eltype)(state(f(v), only(siteinds[v]))))
         elseif tnv isa Vector{<:Number}
-            set!(tensors, v, adapt(eltype)(ITensors.ITensor(f(v), only(siteinds[v]))))
+            set!(tensors, v, adapt(eltype)(itensor(f(v), (only(siteinds[v]),))))
         else
             error("Unrecognized local state constructor. Currently supported: Strings and Vectors.")
         end
