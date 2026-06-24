@@ -111,7 +111,7 @@ _gf_onsite_gate(op_string, s, α::Number, isfermionic::Bool) =
 # function of the EXTENSIVE sum `Σᵢ Ôᵢ`, whose ½ ∂_α F|₀ is `Σᵢ ⟨Ôᵢ⟩` in a single BP re-solve.
 function gated_lc_free_energy(
         ψ_bpc::BeliefPropagationCache, op_strings::AbstractVector, vs::AbstractVector, α,
-        max_configuration_size::Integer; cache_update_kwargs,
+        max_configuration_size::Integer; cache_update_kwargs = default_bp_update_kwargs(ψ_bpc),
     )
     length(op_strings) == length(vs) || throw(ArgumentError(
         "gated_lc_free_energy: need one operator string per vertex (got $(length(op_strings)) ops, $(length(vs)) vertices)."))
