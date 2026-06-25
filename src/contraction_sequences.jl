@@ -37,7 +37,7 @@ function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:Tensor}; p
     return seq
 end
 
-function contraction_sequence(::Algorithm"omeinsum", tensors::Vector{<:ITensor}; optimizer = TreeSA())
+function contraction_sequence(::Algorithm"omeinsum", tensors::Vector{<:Tensor}; optimizer = TreeSA())
     code, size_dict = to_eincode(tensors)
     optcode = optimize_code(code, size_dict, optimizer)
     return to_contraction_sequence(optcode)
@@ -48,7 +48,8 @@ function contraction_sequence(tensors::Vector{<:Tensor}; alg = "optimal", kwargs
 end
 
 #OMEinsumContractionOrders helpers
-function to_eincode(tensors::Vector{<:ITensor})
+function to_eincode(tensors::Vector{<:Tensor})
+    tensors = itensors(tensors)
     ixs = map(t -> collect(inds(t)), tensors)
     LT = eltype(eltype(ixs))
     iy = collect(LT, reduce(noncommoninds, tensors))
