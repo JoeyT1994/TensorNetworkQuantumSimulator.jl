@@ -248,3 +248,68 @@ function cluster_update_triangle(centre::FermionicITensor, leaves::AbstractVecto
     end
     return newleaves, R, Ss
 end
+
+# ---------------------------------------------------------------------------
+# coarse-grain: absorb the bond fermions onto one triangle sublattice
+# ---------------------------------------------------------------------------
+
+"""
+    absorb_bond_fermions(ψ::TensorNetworkState; onto = :up) -> TensorNetworkState
+    absorb_bond_fermions(ψ_bpc::BeliefPropagationCache; onto = :up) -> TensorNetworkState
+
+Coarse-grain the Kagome→honeycomb incidence network: contract every bond-fermion leaf `(:s,…)`
+into ONE of its two incident triangle centres, then drop the leaf vertices. `onto = :up` absorbs
+each leaf into its up-triangle centre `(:up,…)`; `onto = :dn` absorbs into the down layer
+(`(:dn,…)` triangles and `(:dh,…)` dangling hubs). Each leaf's surviving bond to its *other*
+centre becomes a direct centre↔centre bond, so the result is the honeycomb lattice of triangle
+centres with the absorbed fermion modes now carried by the chosen sublattice (the other sublattice
+stays no-mode). The fermionic `*` is the validated locally-ordered contraction, so this is a pure
+regrouping — the represented state is unchanged.
+
+`onto = :up` is always well defined (every Kagome site lies in exactly one up-triangle). For
+`onto = :dn`, a boundary leaf can touch two dangling hubs (and no down-triangle); that leaf is
+ambiguous and raises an error. Returns a fresh `TensorNetworkState` (its graph is re-inferred from
+the surviving shared bonds); wrap it in a new `BeliefPropagationCache` if you need BP.
+"""
+function absorb_bond_fermions(ψ::TNS.TensorNetworkState; onto::Symbol = :up)
+    onto in (:up, :dn) || throw(ArgumentError("`onto` must be :up or :dn (got :$onto)."))
+    target_tags = onto === :up ? (:up,) : (:dn, :dh)        # the down layer includes dangling hubs
+    g     = TNS.graph(ψ)
+    sinds = TNS.siteinds(ψ)
+    isleaf(v)   = first(v) === :s
+    istarget(v) = first(v) in target_tags
+
+    verts   = collect(TNS.vertices(g))
+    V       = eltype(verts)
+    centres = [v for v in verts if !isleaf(v)]
+    leaves  = [v for v in verts if  isleaf(v)]
+
+    # Assign each leaf to its unique incident target-layer centre.
+    absorb = Dictionary(centres, [V[] for _ in centres])
+    for lf in leaves
+        tcs = [c for c in TNS.neighbors(g, lf) if istarget(c)]
+        length(tcs) == 1 || throw(ArgumentError(
+            "leaf $lf has $(length(tcs)) incident $(onto)-layer centre(s); cannot absorb it " *
+            "unambiguously (boundary dangling case). `onto = :up` is always unique."))
+        push!(absorb[only(tcs)], lf)
+    end
+
+    # Contract leaves into their target centres and move the physical site indices onto the centre.
+    # Non-target centres pass through untouched (their leaf bonds are now shared with the centres
+    # that absorbed those leaves, so the re-inferred graph wires up the honeycomb automatically).
+    new_tensors = Dictionary{V, FermionicITensor}()
+    new_sinds   = Dictionary{V, Vector{<:Index}}()
+    for c in centres
+        T = ψ[c]
+        for lf in absorb[c]
+            T = T * ψ[lf]                                   # fermionic contract kills the centre↔leaf bond
+        end
+        set!(new_tensors, c, T)
+        set!(new_sinds, c, Index[i for lf in absorb[c] for i in sinds[lf]])
+    end
+
+    return TNS.TensorNetworkState(TNS.TensorNetwork(new_tensors), new_sinds)
+end
+
+absorb_bond_fermions(ψ_bpc::TNS.BeliefPropagationCache; kwargs...) =
+    absorb_bond_fermions(TNS.network(ψ_bpc); kwargs...)

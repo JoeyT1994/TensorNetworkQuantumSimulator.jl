@@ -83,7 +83,13 @@ function expect(
     elseif length(obs_vs) == 1
         obs_vs
     else
-        collect(vertices(steiner_tree(network(cache), obs_vs)))
+        # Canonicalize the support order before choosing the region. `steiner_tree` can pick a
+        # different equal-length path depending on the input vertex order, so the bare support
+        # would make ⟨O_i O_j⟩ and ⟨O_j O_i⟩ contract over different clusters and break the
+        # Hermiticity invariant ⟨c†_i c_j⟩ = conj⟨c†_j c_i⟩ on loopy graphs. Sort by `string`
+        # rather than the vertices themselves so this works for any (possibly non-`isless`)
+        # vertex label type.
+        collect(vertices(steiner_tree(network(cache), sort(obs_vs; by = string))))
     end
     incoming_ms = incoming_messages(cache, steiner_vs)
 
