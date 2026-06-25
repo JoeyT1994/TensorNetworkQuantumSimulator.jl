@@ -88,7 +88,7 @@ end
 Flatten a pairwise contraction tree of 1-based tensor positions into the list of
 contracted (positive) `ncon` labels in elimination order (or `nothing` for `ncon`'s
 default). `indexlist[v]` holds the integer labels of tensor `v`. Backend-agnostic: works
-for both `optimaltree` and `einexpr` trees.
+for both `optimaltree` and `omeinsum` trees.
 """
 function _contraction_order(sequence, indexlist)
     order = Int[]

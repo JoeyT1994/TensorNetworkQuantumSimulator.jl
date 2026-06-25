@@ -24,7 +24,7 @@ using Test: @testset, @test
     @test array(A * B * C * D) ≈ reference
 
     # honored sequences from both optimizers must agree with the default / reference
-    for alg in ("optimal", "einexpr")
+    for alg in ("optimal", "omeinsum")
         seq = contraction_sequence(ts; alg)
         @test array(contract(ts; sequence = seq)) ≈ reference
     end
@@ -37,7 +37,7 @@ using Test: @testset, @test
     sc = [random_itensor(i, j), random_itensor(j, k), random_itensor(k, i)]
     full = contract(sc)
     @test full[] ≈ ((sc[1] * sc[2]) * sc[3])[]
-    for alg in ("optimal", "einexpr")
+    for alg in ("optimal", "omeinsum")
         @test contract(sc; sequence = contraction_sequence(sc; alg))[] ≈ full[]
     end
 end
