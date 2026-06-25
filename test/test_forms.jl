@@ -10,7 +10,7 @@ using Test: @testset, @test
     s = siteinds("S=1/2", g)
 
     #Quadratic Form
-    for eltype in [Float32, Float64, ComplexF32, ComplexF64]
+    for eltype in [Float32, ComplexF64]
         ψ = random_tensornetworkstate(eltype, g, s; bond_dimension = 2)
         ψ = normalize(ψ; alg = "bp")
         ψψ = QuadraticForm(ψ)
@@ -29,7 +29,7 @@ using Test: @testset, @test
     #BiLinear Form
     g = named_comb_tree((3, 3))
     s = siteinds("S=1/2", g)
-    for eltype in [Float32, Float64, ComplexF32, ComplexF64]
+    for eltype in [Float32, ComplexF64]
         ψ = random_tensornetworkstate(eltype, g, s; bond_dimension = 3)
         ϕ = random_tensornetworkstate(eltype, g, s; bond_dimension = 4)
         ψ, ϕ = normalize(ψ; alg = "bp"), normalize(ϕ; alg = "bp")

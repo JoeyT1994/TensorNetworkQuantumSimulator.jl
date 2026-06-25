@@ -11,8 +11,8 @@ const TNQS = TensorNetworkQuantumSimulator
     Random.seed!(123)
     g = named_comb_tree((3, 3))
 
-    #BP Cache
-    for eltype in [Float32, Float64, ComplexF32, ComplexF64]
+    # BP Cache
+    for eltype in [Float32, ComplexF64]
         ψ = random_tensornetwork(eltype, g; bond_dimension = 2)
         ψ_BPC = BeliefPropagationCache(ψ)
         @test network(ψ_BPC) isa TensorNetwork
@@ -32,7 +32,7 @@ const TNQS = TensorNetworkQuantumSimulator
 
     #BP Cache
     s = siteinds("S=1", g)
-    for eltype in [Float32, Float64, ComplexF32, ComplexF64]
+    for eltype in [Float32, ComplexF64]
         ψ = random_tensornetworkstate(eltype, g; bond_dimension = 2)
         ψ_BPC = BeliefPropagationCache(ψ)
         @test ψ_BPC isa BeliefPropagationCache

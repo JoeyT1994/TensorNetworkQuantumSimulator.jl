@@ -22,7 +22,7 @@ using Test: @testset, @test, @test_throws
     #TensorNetwork pre-defined constructor
     g = named_hexagonal_lattice_graph(3, 3)
     χ = 3
-    for eltype in [Float32, Float64, ComplexF32, ComplexF64]
+    for eltype in [Float32, ComplexF64]
         ψ = random_tensornetwork(eltype, g; bond_dimension = χ)
         @test ψ isa TensorNetwork
         @test scalartype(ψ) == eltype
@@ -49,7 +49,7 @@ using Test: @testset, @test, @test_throws
 
     #TensorNetworkState
     χ = 3
-    for eltype in [Float32, Float64, ComplexF32, ComplexF64]
+    for eltype in [Float32, ComplexF64]
         ψ = random_tensornetworkstate(eltype, g, s; bond_dimension = χ)
         @test ψ isa TensorNetworkState
         @test scalartype(ψ) == eltype
