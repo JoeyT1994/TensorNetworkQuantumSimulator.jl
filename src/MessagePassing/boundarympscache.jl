@@ -28,29 +28,29 @@ end
 default_bp_maxiter(bmps_cache::BoundaryMPSCache) = is_tree(partitions_graph(supergraph(bmps_cache))) ? 1 : 5
 function default_bmps_message_update_alg(tn)
     if tn isa TensorNetworkState || tn isa BilinearForm || tn isa QuadraticForm
-        return "orthogonal"
+        return "fitting"
     elseif tn isa TensorNetwork
-        return "ITensorMPS"
+        return "zipup"
     end
     return error("Unrecognized network type. Don't know what BMPS message update alg to use.")
 end
 default_message_update_alg(bmps_cache::BoundaryMPSCache) = default_bmps_message_update_alg(network(bmps_cache))
 
-default_normalize(alg::Algorithm"orthogonal") = true
+default_normalize(alg::Algorithm"fitting") = true
 default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(ITensors.NDTensors.scalartype(bmps_cache))
 _default_boundarymps_update_niters = 50
-function set_default_kwargs(alg::Algorithm"orthogonal", bmps_cache::BoundaryMPSCache)
+function set_default_kwargs(alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache)
     normalize = get(alg.kwargs, :normalize, default_normalize(alg))
     tolerance = get(alg.kwargs, :tolerance, default_tolerance(bmps_cache))
     niters = get(alg.kwargs, :niters, _default_boundarymps_update_niters)
-    return Algorithm("orthogonal"; tolerance, niters, normalize)
+    return Algorithm("fitting"; tolerance, niters, normalize)
 end
 
-default_normalize(alg::Algorithm"ITensorMPS") = true
-function set_default_kwargs(alg::Algorithm"ITensorMPS", bmps_cache::BoundaryMPSCache)
+default_normalize(alg::Algorithm"zipup") = true
+function set_default_kwargs(alg::Algorithm"zipup", bmps_cache::BoundaryMPSCache)
     cutoff = get(alg.kwargs, :cutoff, 1.0e-12)
     normalize = get(alg.kwargs, :normalize, default_normalize(alg))
-    return Algorithm("ITensorMPS"; cutoff, normalize)
+    return Algorithm("zipup"; cutoff, normalize)
 end
 
 function default_bmps_update_kwargs(tn::AbstractTensorNetwork)
@@ -264,7 +264,7 @@ end
 
 # #Move the orthogonality centre one step on an interpartition from the message tensor on pe1 to that on pe2
 function gauge_step!(
-        alg::Algorithm"orthogonal",
+        alg::Algorithm"fitting",
         bmps_cache::BoundaryMPSCache,
         e1::NamedEdge,
         e2::NamedEdge;
@@ -305,7 +305,7 @@ end
 
 #Default 1-site extracter
 function extracter(
-        alg::Algorithm"orthogonal",
+        alg::Algorithm"fitting",
         bmps_cache::BoundaryMPSCache,
         update_e::NamedEdge
     )
@@ -314,7 +314,7 @@ function extracter(
     return m
 end
 
-function updater!(alg::Algorithm"orthogonal", bmps_cache::BoundaryMPSCache, partition_graph::AbstractGraph, prev_e, update_e)
+function updater!(alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache, partition_graph::AbstractGraph, prev_e, update_e)
     prev_e == nothing && return bmps_cache
 
     gauge_step!(alg, bmps_cache, reverse(prev_e), reverse(update_e))
@@ -324,7 +324,7 @@ function updater!(alg::Algorithm"orthogonal", bmps_cache::BoundaryMPSCache, part
 end
 
 function update_message!(
-        alg::Algorithm"orthogonal", bmps_cache::BoundaryMPSCache, pe::PartitionEdge
+        alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache, pe::PartitionEdge
     )
     delete_partition_messages!(bmps_cache, src(pe))
     switch_messages!(bmps_cache, pe)
@@ -484,7 +484,7 @@ end
 
 # Update all the message tensors on an interpartition via the position-indexed zip-up apply.
 function update_message!(
-        alg::Algorithm"ITensorMPS",
+        alg::Algorithm"zipup",
         bmps_cache::BoundaryMPSCache,
         pe::PartitionEdge;
         maxdim::Integer = mps_bond_dimension(bmps_cache),

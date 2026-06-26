@@ -60,7 +60,7 @@ function sample(
     leaves = leaf_vertices(partitions_graph(supergraph(norm_bmps_cache)))
     seq = PartitionEdge.(a_star(partitions_graph(supergraph(norm_bmps_cache)), last(leaves), first(leaves)))
     norm_cache_message_update_kwargs = (; norm_cache_message_update_kwargs..., normalize = false)
-    norm_bmps_cache = update(norm_bmps_cache; alg = "bp", edge_sequence = seq, maxiter = 1, message_update_alg = Algorithm("orthogonal"; norm_cache_message_update_kwargs...))
+    norm_bmps_cache = update(norm_bmps_cache; alg = "bp", edge_sequence = seq, maxiter = 1, message_update_alg = Algorithm("fitting"; norm_cache_message_update_kwargs...))
 
     #Generate the bit_strings moving left to right through the network
     probs_and_bitstrings = NamedTuple[]
@@ -275,7 +275,7 @@ function certify_sample(
     certification_mps_cache = BoundaryMPSCache(ψproj, certification_mps_bond_dimension)
     certification_cache_message_update_kwargs = (; normalize = false, certification_cache_message_update_kwargs...)
 
-    certification_mps_cache = update(certification_mps_cache, message_update_alg = Algorithm("ITensorMPS"; certification_cache_message_update_kwargs...))
+    certification_mps_cache = update(certification_mps_cache, message_update_alg = Algorithm("zipup"; certification_cache_message_update_kwargs...))
     p_over_q = partitionfunction(certification_mps_cache)
     p_over_q *= conj(p_over_q)
 
