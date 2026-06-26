@@ -1,8 +1,14 @@
 @eval module $(gensym())
 using Dictionaries: Dictionary
-using ITensors: ITensors, Index, dag, inds, prime
+using ITensorBase: Index, inds
 using Random
 using TensorNetworkQuantumSimulator
+# `random_itensor` / `contract` come from TNQS; alias TNQS as `ITensors` so the
+# `ITensors.`-qualified legacy calls resolve. `dag` and `prime` are TNQS-owned compat
+# (`prime` extends ITensorBase's to whole tensors / index collections, which
+# `map_virtualinds` needs); `inds` is ITensorBase's.
+import TensorNetworkQuantumSimulator as ITensors
+using TensorNetworkQuantumSimulator: dag, prime
 using Test: @testset, @test, @test_throws
 
 

@@ -1,7 +1,8 @@
 @eval module $(gensym())
-using ITensors: datatype, norm
+using LinearAlgebra: norm
 using Random
 using TensorNetworkQuantumSimulator
+using TensorNetworkQuantumSimulator: datatype
 using Test: @testset, @test
 const TNQS = TensorNetworkQuantumSimulator
 

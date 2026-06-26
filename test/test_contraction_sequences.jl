@@ -1,8 +1,11 @@
 @eval module $(gensym())
-using ITensors: ITensors, Index, scalar
+using ITensorBase: Index
 using Random
 using TensorNetworkQuantumSimulator
 const TNQS = TensorNetworkQuantumSimulator
+# `random_itensor`/`contract`/`scalar` come from TNQS's compat layer (see test_constructors).
+import TensorNetworkQuantumSimulator as ITensors
+using TensorNetworkQuantumSimulator: scalar
 using OMEinsumContractionOrders: NestedEinsum, EinCode, getixsv, getiyv
 using Test: @testset, @test
 

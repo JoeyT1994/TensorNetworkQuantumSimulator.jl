@@ -37,7 +37,7 @@ end
 default_message_update_alg(bmps_cache::BoundaryMPSCache) = default_bmps_message_update_alg(network(bmps_cache))
 
 default_normalize(alg::Algorithm"fitting") = true
-default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(ITensors.NDTensors.scalartype(bmps_cache))
+default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(scalartype(bmps_cache))
 _default_boundarymps_update_niters = 50
 function set_default_kwargs(alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache)
     normalize = get(alg.kwargs, :normalize, default_normalize(alg))

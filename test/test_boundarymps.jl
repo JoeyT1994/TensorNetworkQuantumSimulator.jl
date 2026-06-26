@@ -1,5 +1,6 @@
 @eval module $(gensym())
-using ITensors: datatype, norm
+using LinearAlgebra: norm
+using TensorNetworkQuantumSimulator: datatype
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test

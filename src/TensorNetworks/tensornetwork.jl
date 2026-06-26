@@ -1,6 +1,5 @@
 using Dictionaries: Dictionary
 using Graphs: Graphs
-using ITensors: ITensors, ITensor
 using NamedGraphs: NamedGraphs, add_edge!, incident_edges
 using NamedGraphs.GraphsExtensions: rem_edges!
 using Adapt
@@ -15,6 +14,13 @@ graph(tn::TensorNetwork) = tn.graph
 tensors(tn::TensorNetwork) = tn.tensors
 
 Base.getindex(tn::TensorNetwork, v) = getindex(tensors(tn), v)
+
+# The next-gen `ITensor` is parameterized (`ITensor{IndexName}`), which does not match
+# the abstract `Dictionary{V, ITensor}` field type by invariance; convert so a
+# dictionary of concrete ITensors still builds.
+function TensorNetwork(tensors::Dictionary{V, <:ITensor}, graph::NamedGraph{V}) where {V}
+    return TensorNetwork{V}(convert(Dictionary{V, ITensor}, tensors), graph)
+end
 
 function TensorNetwork(tensors::Dictionary)
     g = NamedGraph(keys(tensors))
