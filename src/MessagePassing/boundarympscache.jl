@@ -374,95 +374,12 @@ function prev_partitionedge(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
     return parent(dst(pe)) == v2 && return PartitionEdge(v1 => parent(src(pe)))
 end
 
-function merge_internal_tensors(O::Union{MPS, MPO})
-    internal_inds = filter(i -> isempty(ITensorMPS.siteinds(O, i)), 1:length(O))
-
-    while !isempty(internal_inds)
-        site = first(internal_inds)
-        tensors = [O[i] for i in setdiff(1:length(O), (site,))]
-        if site != length(O)
-            tensors[site] = tensors[site] * O[site]
-        else
-            tensors[site - 1] = tensors[site - 1] * O[site]
-        end
-
-        O = typeof(O)(tensors)
-
-        internal_inds = filter(i -> isempty(ITensorMPS.siteinds(O, i)), 1:length(O))
-    end
-    return O
-end
-
-function ITensorMPS.MPO(bmps_cache::BoundaryMPSCache, partition; interpret_as_flat = false)
-    @assert network(bmps_cache) isa TensorNetwork || interpret_as_flat
-    sorted_vs = sort(vertices(supergraph(bmps_cache), partition))
-    ts = [copy(network(bmps_cache)[v]) for v in sorted_vs]
-    O = ITensorMPS.MPO(ts)
-    return O
-end
-
 function set_interpartition_message!(bmps_cache::BoundaryMPSCache, M::AbstractVector{<:ITensor}, pe::PartitionEdge)
     sorted_es = sorted_edges(bmps_cache, pe)
     for i in 1:length(M)
         setmessage!(bmps_cache, sorted_es[i], M[i])
     end
     return bmps_cache
-end
-
-#TODO: Write a generalized zip up fitter. Fix for TensorNetworkState
-function generic_apply(O::MPO, M::MPS; normalize = true, kwargs...)
-    is_simple_mpo = (length(O) == length(M) && all([length(ITensors.siteinds(O, i)) == 2 for i in 1:length(O)]))
-
-    if is_simple_mpo
-        out = ITensorMPS.apply(O, M; alg = "naive", kwargs...)
-        if normalize
-            out = ITensors.normalize(out)
-        end
-        return out
-    end
-
-    O_tensors = ITensor[]
-    for i in 1:length(O)
-        m_ind = filter(j -> !isempty(ITensors.commoninds(O[i], M[j])), 1:length(M))
-        if isempty(m_ind)
-            push!(O_tensors, O[i])
-        else
-            m_ind = only(m_ind)
-            push!(O_tensors, O[i] * M[m_ind])
-        end
-    end
-
-    #Transform away edges that make a loop
-    loop_edges = [(i, j) for i in 1:length(O_tensors) for j in (i + 1):length(O_tensors)
-                   if !isempty(commoninds(O_tensors[i], O_tensors[j])) && abs(i - j) != 1]
-    for (i, j) in loop_edges
-        inbetween_vertices = (i + 1):(j - 1)
-        edge_to_split = (i, j)
-        for k in inbetween_vertices
-            cind = only(commoninds(O_tensors[first(edge_to_split)], O_tensors[last(edge_to_split)]))
-            d = adapt_like(O_tensors[k], denseblocks(delta(cind, cind')))
-            O_tensors[j] *= d
-            O_tensors[k] *= d
-            edge_to_split = (k, j)
-        end
-    end
-    for i in 1:(length(O_tensors) - 1)
-        cinds = commoninds(O_tensors[i], O_tensors[i + 1])
-        if length(cinds) > 1
-            combiner = adapt_like(O_tensors[i], ITensors.combiner(cinds))
-            O_tensors[i] *= combiner
-            O_tensors[i + 1] *= combiner
-        end
-    end
-
-    O = ITensorMPS.MPS(O_tensors)
-    O = merge_internal_tensors(O)
-
-    if normalize
-        O = ITensors.normalize(O)
-    end
-
-    return truncate(O; kwargs...)
 end
 
 # Position-indexed MPS·MPO application with truncation: a zip-up forward sweep followed by a
@@ -530,7 +447,14 @@ end
 
 # Build the (mpo, mps, right_inds) inputs to `generic_apply` for the outgoing interpartition message
 # on `pe`, read directly off the cache geometry (no MPS/MPO wrapper types).
-function _bmps_apply_inputs(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
+#
+# The incoming MPS is sourced either from the cache messages on the previous interpartition
+# (`incoming_mps === nothing`, the message-update path) or from a supplied single-layer MPS whose
+# tensors are ordered by `sorted_edges(prev_pe)` (the sampling path, where the cache messages are
+# doubled ket/bra but only the ket layer is applied). When the source partition is a line endpoint
+# there is no previous interpartition, so `mps` comes back empty and the call reduces to compressing
+# the MPO chain.
+function _bmps_apply_inputs(bmps_cache::BoundaryMPSCache, pe::PartitionEdge; incoming_mps = nothing)
     net = network(bmps_cache)
     sorted_vs = sort(vertices(supergraph(bmps_cache), src(pe)))
     pos = Dict(v => i for (i, v) in enumerate(sorted_vs))
@@ -539,12 +463,13 @@ function _bmps_apply_inputs(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
     # One MPO tensor per site (position) of the source partition.
     mpo = ITensor[net[v] for v in sorted_vs]
 
-    # Incoming MPS: the messages on the previous interpartition, keyed by the site they attach to.
+    # Incoming MPS, keyed by the site each tensor attaches to.
     mps = Dictionary{Int, ITensor}()
     prev_pe = prev_partitionedge(bmps_cache, pe)
     if prev_pe !== nothing
-        for e in sorted_edges(bmps_cache, prev_pe)   # e = prev_v => current_v
-            set!(mps, pos[dst(e)], message(bmps_cache, e))
+        for (k, e) in enumerate(sorted_edges(bmps_cache, prev_pe))   # e = prev_v => current_v
+            t = incoming_mps === nothing ? message(bmps_cache, e) : incoming_mps[k]
+            set!(mps, pos[dst(e)], t)
         end
     end
 

@@ -190,14 +190,10 @@ function get_one_sample(
             next_partition = partitions[i + 1]
             pe = PartitionEdge(parent(partition), parent(next_partition))
 
-            mpo = ITensorMPS.MPO(norm_bmps_cache, src(pe); interpret_as_flat = true)
-            if incoming_mps == nothing
-                mpo = ITensorMPS.MPS(ITensor[mpo[i] for i in 1:length(mpo)])
-                outgoing_mps = ITensorMPS.truncate(mpo; cutoff, maxdim = projected_mps_bond_dimension)
-                outgoing_mps = merge_internal_tensors(outgoing_mps)
-            else
-                outgoing_mps = generic_apply(mpo, incoming_mps; cutoff, normalize = false, maxdim)
-            end
+            # Apply the (already projected) ket row to the running single-layer boundary MPS. The
+            # cache messages are doubled ket/bra, so we feed the ket-only `incoming_mps` explicitly.
+            mpo, mps, right_inds = _bmps_apply_inputs(norm_bmps_cache, pe; incoming_mps)
+            outgoing_mps = generic_apply(mpo, mps, right_inds; cutoff, maxdim, normalize = false)
 
             es = sorted_edges(norm_bmps_cache, pe)
 
