@@ -401,19 +401,7 @@ function ITensorMPS.MPO(bmps_cache::BoundaryMPSCache, partition; interpret_as_fl
     return O
 end
 
-function ITensorMPS.MPS(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
-    sorted_es = sorted_edges(bmps_cache, pe)
-    ms = [message(bmps_cache, e) for e in sorted_es]
-    return ITensorMPS.MPS(ms)
-end
-
-function truncate!(bmps_cache::BoundaryMPSCache, pe::PartitionEdge; truncate_kwargs...)
-    M = ITensorMPS.MPS(bmps_cache, pe)
-    M = ITensorMPS.truncate(M; truncate_kwargs...)
-    return set_interpartition_message!(bmps_cache, M, pe)
-end
-
-function set_interpartition_message!(bmps_cache::BoundaryMPSCache, M::Union{MPS, MPO}, pe::PartitionEdge)
+function set_interpartition_message!(bmps_cache::BoundaryMPSCache, M::AbstractVector{<:ITensor}, pe::PartitionEdge)
     sorted_es = sorted_edges(bmps_cache, pe)
     for i in 1:length(M)
         setmessage!(bmps_cache, sorted_es[i], M[i])
@@ -477,27 +465,111 @@ function generic_apply(O::MPO, M::MPS; normalize = true, kwargs...)
     return truncate(O; kwargs...)
 end
 
-# #Update all the message tensors on an interpartition via the ITensorMPS apply function
+# Position-indexed MPS·MPO application with truncation: a zip-up forward sweep followed by a
+# right-to-left SVD recompression. Works on a raw `Vector{ITensor}` chain so it needs no MPS/MPO
+# wrapper types.
+#
+#   `mpo`        : the contiguous chain of tensors at positions 1:b.
+#   `mps`        : incoming MPS tensors keyed by the position of the `mpo` tensor they attach to
+#                  (an arbitrary subset of 1:b; a gap is an MPS bond that hops over a site).
+#   `right_inds` : per-position outgoing site legs (`right_inds[i]` may be empty); these become the
+#                  site indices of the result, one output tensor per non-empty entry.
+#
+# Returns the truncated result as a `Vector{ITensor}`, one tensor per non-empty `right_inds[i]`, in
+# increasing position order.
+function generic_apply(
+        mpo::Vector{<:ITensor},
+        mps::Dictionary{Int, <:ITensor},
+        right_inds::Vector{<:Vector{<:Index}};
+        cutoff = 0.0,
+        maxdim = typemax(Int),
+        normalize = true,
+    )
+    b = length(mpo)
+    @assert length(right_inds) == b
+
+    # Forward sweep: carry · MPO[i] · MPS[i], peel off the output legs, truncate the new bond.
+    out = ITensor[]
+    carry = nothing        # forward environment: singular values + still-open virtual bonds
+    left_link = nothing    # bond from the previously emitted output tensor into `carry`
+    for i in 1:b
+        T = mpo[i]
+        haskey(mps, i) && (T *= mps[i])
+        carry === nothing || (T = carry * T)
+
+        site = right_inds[i]
+        if isempty(site)
+            carry = T      # internal / left-only / skipped site: just keep threading the bonds
+            continue
+        end
+
+        keep = left_link === nothing ? Index[site...] : Index[site..., left_link]
+        L, R = factorize(T, keep...; ortho = "left", cutoff, maxdim, tags = "Link,l=$i")
+        push!(out, L)
+        carry = R
+        left_link = only(commoninds(L, R))
+    end
+    @assert !isempty(out) "generic_apply: no outgoing site indices, nothing to build an MPS from"
+    carry === nothing || (out[end] *= carry)   # fold leftover norm / trailing internal tensors in
+
+    # Back sweep: right-to-left SVD recompression (optimal truncation of the forward result).
+    for i in length(out):-1:2
+        bond = only(commoninds(out[i - 1], out[i]))
+        L, R = factorize(out[i], bond; ortho = "right", cutoff, maxdim, tags = "Link,l=$(i - 1)")
+        out[i] = R
+        out[i - 1] *= L
+    end
+
+    if normalize
+        n = norm(out[1])
+        iszero(n) || (out[1] /= n)
+    end
+
+    return out
+end
+
+# Build the (mpo, mps, right_inds) inputs to `generic_apply` for the outgoing interpartition message
+# on `pe`, read directly off the cache geometry (no MPS/MPO wrapper types).
+function _bmps_apply_inputs(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
+    net = network(bmps_cache)
+    sorted_vs = sort(vertices(supergraph(bmps_cache), src(pe)))
+    pos = Dict(v => i for (i, v) in enumerate(sorted_vs))
+    b = length(sorted_vs)
+
+    # One MPO tensor per site (position) of the source partition.
+    mpo = ITensor[net[v] for v in sorted_vs]
+
+    # Incoming MPS: the messages on the previous interpartition, keyed by the site they attach to.
+    mps = Dictionary{Int, ITensor}()
+    prev_pe = prev_partitionedge(bmps_cache, pe)
+    if prev_pe !== nothing
+        for e in sorted_edges(bmps_cache, prev_pe)   # e = prev_v => current_v
+            set!(mps, pos[dst(e)], message(bmps_cache, e))
+        end
+    end
+
+    # Outgoing site legs: the network index on each edge of `pe`, keyed by the source site.
+    right_inds = [Index[] for _ in 1:b]
+    for e in sorted_edges(bmps_cache, pe)            # e = current_v => next_v
+        right_inds[pos[src(e)]] = collect(virtualinds(net, e))
+    end
+
+    return mpo, mps, right_inds
+end
+
+# Update all the message tensors on an interpartition via the position-indexed zip-up apply.
 function update_message!(
         alg::Algorithm"ITensorMPS",
         bmps_cache::BoundaryMPSCache,
         pe::PartitionEdge;
         maxdim::Integer = mps_bond_dimension(bmps_cache),
     )
-    prev_pe = prev_partitionedge(bmps_cache, pe)
-    O = ITensorMPS.MPO(bmps_cache, src(pe))
-    O = ITensorMPS.truncate(O; alg.kwargs.cutoff, maxdim)
-    if isnothing(prev_pe)
-        O = merge_internal_tensors(O)
-        if alg.kwargs.normalize
-            O = ITensors.normalize(O)
-        end
-        return set_interpartition_message!(bmps_cache, O, pe)
-    end
-
-    M = ITensorMPS.MPS(bmps_cache, prev_pe)
-    M_out = generic_apply(O, M; cutoff = alg.kwargs.cutoff, normalize = alg.kwargs.normalize, maxdim)
-    return set_interpartition_message!(bmps_cache, M_out, pe)
+    mpo, mps, right_inds = _bmps_apply_inputs(bmps_cache, pe)
+    out = generic_apply(
+        mpo, mps, right_inds;
+        cutoff = alg.kwargs.cutoff, maxdim, normalize = alg.kwargs.normalize,
+    )
+    return set_interpartition_message!(bmps_cache, out, pe)
 end
 
 function vertex_scalar(bmps_cache::BoundaryMPSCache, partition::PartitionVertex)
