@@ -24,7 +24,7 @@ function simple_update(
     )
 
     if length(ψ⃗) == 1
-        updated_tensors = ITensor[ITensors.apply(o, only(ψ⃗))]
+        updated_tensors = ITensor[apply(o, only(ψ⃗))]
         s_values, err = nothing, 0
     else
         # When envs is empty no gauging happens and the cutoff is unused, so fall back to
@@ -48,8 +48,8 @@ function simple_update(
         Qᵥ₂, Rᵥ₂ = qr(ψᵥ₂, uniqueinds(uniqueinds(ψᵥ₂, ψᵥ₁), sᵥ₂))
         rᵥ₁ = commoninds(Qᵥ₁, Rᵥ₁)
         rᵥ₂ = commoninds(Qᵥ₂, Rᵥ₂)
-        oR = ITensors.apply(o, Rᵥ₁ * Rᵥ₂)
-        singular_values! = Ref(ITensor())
+        oR = apply(o, Rᵥ₁ * Rᵥ₂)
+        singular_values! = Ref{ITensor}()
         Rᵥ₁, Rᵥ₂, spec = factorize_svd(
             oR,
             unioninds(rᵥ₁, sᵥ₁);
@@ -69,7 +69,7 @@ function simple_update(
 
     if normalize_tensors
         for ψᵥ in updated_tensors
-            rmul!(ITensors.data(ψᵥ), inv(norm(ψᵥ)))
+            rmul!(data(ψᵥ), inv(norm(ψᵥ)))
         end
     end
 

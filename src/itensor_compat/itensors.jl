@@ -1,0 +1,570 @@
+# Compatibility shims bridging the legacy `ITensors.jl` API that TNQS was written
+# against to the next-gen `ITensorBase.jl` backend.
+#
+# Strategy (see ITensorDevelopmentPlans api_migration_map.md):
+#   - Names below are thin wrappers over ITensorBase / TensorAlgebra / MatrixAlgebraKit.
+#   - `combiner`, the factorization return shapes, `map_diag`, the operator/SiteType
+#     system, and the boundary-MPS (ITensorMPS) paths are NOT wrapped here; they need
+#     callsite translation or upstream stack work and are tracked separately.
+#
+# ITensorBase keeps most of this API internal (unexported), so we reach for the
+# qualified names and re-publish the legacy spellings into the TNQS namespace.
+
+using ITensorBase: ITensorBase, AbstractITensor, Index, ITensor, NamedUnitRange
+# Call these ITensorBase functions directly — TNQS only calls them, never extends
+# them, so there is no reason to wrap them in forwarding methods. (`prime`/`noprime`
+# are owned below with a fallback, since TNQS also primes whole ITensors.)
+using ITensorBase: inds, name, nameddims, plev, tags, unnamed
+# `replaceinds` gets the legacy two-collection form below (a new argument shape on
+# the same operation), so it's imported for extension.
+import ITensorBase: replaceinds
+using LinearAlgebra: LinearAlgebra
+using Adapt: Adapt
+import MatrixAlgebraKit as MAK
+
+# Functions TNQS adds methods to for its own types (`scalartype`, `contract`,
+# `inner`, `datatype`). Rather than extend the upstream generics, TNQS owns these:
+# `scalartype` falls back to ITensorBase for tensors/arrays; `contract`/`inner` are
+# TNQS operations with their own base methods defined in the library. The per-file
+# method definitions extend these module-owned functions.
+scalartype(x) = ITensorBase.scalartype(x)
+function inner end
+
+# Base contraction of a list of ITensors following a (possibly nested) pairwise
+# contraction `sequence` (legacy `ITensors.contract(tensors; sequence)`); leaves are
+# integer indices into `tensors`. TNQS adds the network-level `contract` methods.
+# The list is typed `AbstractVector` (not `AbstractVector{<:AbstractITensor}`) because
+# callers build it by concatenation that can widen to `Vector{Any}` (e.g. splicing in
+# an empty environment list).
+function contract end
+contract(tensors::AbstractVector; sequence = nothing) =
+    isnothing(sequence) ? reduce(*, tensors) : _contract_sequence(tensors, sequence)
+_contract_sequence(tensors, s::Integer) = tensors[s]
+_contract_sequence(tensors, s) = reduce(*, (_contract_sequence(tensors, x) for x in s))
+
+# Get the index collection of an `ITensor`, or pass an index collection through
+# unchanged. TNQS nests these calls (e.g. `uniqueinds(uniqueinds(...), ...)`), so the
+# index-set helpers below accept both tensors and bare index collections.
+_compat_inds(t::AbstractITensor) = inds(t)
+_compat_inds(is) = is
+
+#
+# Index-set algebra. Legacy ITensors provides these as set operations over the
+# indices of its arguments; in the next-gen stack the same falls out of Base set ops
+# on `inds` (index identity/equality is by id).
+#
+commoninds(a, b) = intersect(_compat_inds(a), _compat_inds(b))
+uniqueinds(a, b) = setdiff(_compat_inds(a), _compat_inds(b))
+unioninds(a, b) = union(_compat_inds(a), _compat_inds(b))
+hascommoninds(a, b) = !isempty(commoninds(a, b))
+
+# Singular forms: the one common / one unique index. `noncommonind` is used in TNQS
+# as "the index of `a` not shared with `b`" (e.g. the non-contracted leg of an
+# eigenvalue tensor); revisit if a symmetric-difference callsite turns up.
+commonind(a, b) = (cs = commoninds(a, b); isempty(cs) ? nothing : first(cs))
+noncommonind(a, b) = (us = uniqueinds(a, b); isempty(us) ? nothing : first(us))
+# Plural: indices not shared by both (symmetric difference).
+noncommoninds(a, b) = symdiff(_compat_inds(a), _compat_inds(b))
+
+# Index dimension (legacy `dim`). `dim(i)` is the length; `dim(is)` the product.
+dim(i::Index) = length(i)
+dim(is::Union{Tuple, AbstractVector}) = isempty(is) ? 1 : prod(length, is)
+
+#
+# Index operations.
+#
+# A fresh index with the same length (legacy `sim`).
+sim(i::Index) = ITensorBase.uniquename(i)
+sim(is::Union{Tuple, AbstractVector{<:Index}}) = map(sim, is)
+
+# Conjugate; on graded axes this flips the sector arrows (legacy `dag`). On the dense
+# backend, `dag` of bare indices is a no-op (legacy reversed QN arrows).
+dag(t::AbstractITensor) = conj(t)
+dag(i::Index) = i
+dag(is::Union{Tuple, AbstractVector}) = is
+
+# `prime` / `noprime`: ITensorBase primes an `Index`; TNQS also primes whole ITensors
+# (all dimnames). Owned here with a fallback to ITensorBase for the index case.
+prime(x) = ITensorBase.prime(x)
+prime(t::AbstractITensor) = nameddims(unnamed(t), map(ITensorBase.prime, ITensorBase.dimnames(t)))
+prime(is::Union{Tuple, AbstractVector{<:Index}}) = map(prime, is)
+noprime(x) = ITensorBase.noprime(x)
+noprime(t::AbstractITensor) = nameddims(unnamed(t), map(ITensorBase.noprime, ITensorBase.dimnames(t)))
+noprime(is::Union{Tuple, AbstractVector{<:Index}}) = map(noprime, is)
+
+# `replaceind` (singular) maps to a single-pair replacement; `prime`/`noprime`/
+# `plev`/`tags`/`inds` are imported from ITensorBase and used directly (above).
+replaceind(t, p::Pair) = replaceinds(t, p)
+replaceind(t, from::Index, to::Index) = replaceinds(t, from => to)
+
+# Concatenate indices and/or index collections into a single `Vector{Index}`. Legacy
+# ITensors code spells this `vcat(i, j)` / `vcat(is, i)`, but next-gen `Index` is a
+# `NamedUnitRange` (`<: AbstractVector`), so `vcat` of bare indices concatenates their
+# integer ranges instead of collecting the indices. Used where the legacy idiom builds
+# an index list from a mix of single indices and collections.
+_as_index_vec(x::Index) = [x]
+_as_index_vec(xs) = collect(xs)
+cat_inds(xs...) = reduce(vcat, map(_as_index_vec, xs))
+# TYPE PIRACY (upstream candidate → ITensorBase): extends `ITensorBase.replaceinds`
+# (imported above) with arg types it doesn't own. These collection-argument forms are
+# generally useful and should move into ITensorBase, retiring the shim.
+#
+# Legacy two-collection form `replaceinds(t, [i, k], [j, l])` — ITensorBase provides
+# only the pair-splat form, so we extend it with this method. NB: an `Index` is itself
+# an `AbstractVector` (it's a `NamedUnitRange`), so the collection types are constrained
+# to `AbstractVector{<:Index}` to avoid capturing a bare `Index` (an `AbstractVector{Int}`)
+# and iterating over its integer range.
+const _IndexColl = Union{Tuple{Vararg{Index}}, AbstractVector{<:Index}}
+function replaceinds(t, from::_IndexColl, to::_IndexColl)
+    return replaceinds(t, map(=>, from, to)...)
+end
+# TYPE PIRACY (upstream candidate → ITensorBase): same as above.
+# Legacy single-`Pair`-of-collections form `replaceinds(t, [i, k] => [j, l])`. Without
+# this, the call falls through to ITensorBase's `replaceinds(t, pairs::Pair...)`, which
+# expects `Index => Index` pairs and silently no-ops on a `collection => collection`
+# pair (it never matches a bare collection against an index).
+function replaceinds(t::AbstractITensor, p::Pair{<:_IndexColl, <:_IndexColl})
+    return replaceinds(t, first(p), last(p))
+end
+
+#
+# ITensor construction.
+#
+# Legacy `itensor(array, inds)`: inherit the index spaces. NB: `ITensor(array, inds)`
+# with raw `Index` objects is intentionally NOT supported by ITensorBase (the space
+# is underdefined); use the indexing form, which inherits the indices' spaces, or
+# `ITensor(array, name.(inds))` to take the space from the array.
+itensor(array, is) = array[is...]
+itensor(array, is...) = array[is...]
+
+# TYPE PIRACY (upstream candidate → ITensorBase): adds a rank-0 `ITensor(x::Number)`
+# constructor, which ITensorBase omits. Legacy ITensors uses it as a multiplicative
+# identity to seed a product accumulator (`out = ITensor(1); out *= t; ...`).
+ITensorBase.ITensor(x::Number) = nameddims(fill(x), ())
+
+# Random ITensor over the given indices (legacy `random_itensor`).
+random_itensor(eltype::Type, is::Index...) = randn(eltype, is...)
+random_itensor(eltype::Type, is::Union{Tuple, AbstractVector}) = randn(eltype, is...)
+random_itensor(is::Index...) = random_itensor(Float64, is...)
+random_itensor(is::Union{Tuple, AbstractVector}) = random_itensor(Float64, is)
+
+# Rank-0 scalar extraction (legacy `scalar`).
+scalar(t::AbstractITensor) = t[]
+
+# Dense Kronecker delta tensor. ITensorBase deliberately omits the `delta` tensor
+# type that legacy ITensors had; this dense version is vendored from
+# ITensorNetworksNext's `ITensorNetworkGenerators/delta_network.jl` (a dense delta
+# defined on a graph generator there), copied because TNQS doesn't depend on
+# ITensorNetworksNext for this migration. A graded/sector-aware `delta` is a stack
+# gap (tracked separately).
+diaglength(a::AbstractArray) = minimum(size(a))
+function diagstride(a::AbstractArray)
+    s = 1
+    p = 1
+    for i in 1:(ndims(a) - 1)
+        p *= size(a, i)
+        s += p
+    end
+    return s
+end
+function diagindices(a::AbstractArray)
+    maxdiag = LinearIndices(a)[CartesianIndex(ntuple(Returns(diaglength(a)), ndims(a)))]
+    return 1:diagstride(a):maxdiag
+end
+diagview(a::AbstractArray) = @view a[diagindices(a)]
+
+# TYPE PIRACY (upstream candidate → ITensorBase): extends `LinearAlgebra.diag` to return
+# an ITensor's diagonal. This also makes `LinearAlgebra.tr` work, since its generic
+# definition is `sum(diag(·))` (legacy ITensors provided `diag(::ITensor)` the same way,
+# and TNQS's sampling path calls `tr(ρ)` on a reduced density matrix).
+LinearAlgebra.diag(T::AbstractITensor) = collect(diagview(unnamed(T)))
+
+function diagonaltensor(diag::AbstractVector, ax::Tuple{Vararg{AbstractUnitRange}})
+    a = similar(diag, ax)
+    fill!(a, zero(eltype(a)))
+    diagview(a) .= diag
+    return a
+end
+function diagonaltensor(diag::AbstractVector, is::Tuple{NamedUnitRange, Vararg{NamedUnitRange}})
+    return nameddims(diagonaltensor(diag, unnamed.(is)), name.(is))
+end
+
+delta(eltype::Type, is::Tuple) = diagonaltensor(ones(eltype, minimum(length, is)), is)
+delta(eltype::Type, is::Index...) = delta(eltype, is)
+delta(eltype::Type, is::AbstractVector{<:Index}) = delta(eltype, Tuple(is))
+delta(is::Tuple) = delta(Float64, is)
+delta(is::Index...) = delta(Float64, is)
+delta(is::AbstractVector{<:Index}) = delta(Float64, Tuple(is))
+
+# One-hot vector along `i` at position `p` (legacy `onehot(i => p)`).
+function onehot(eltype::Type, (i, p)::Pair{<:Index})
+    v = zeros(eltype, length(i))
+    v[p] = one(eltype)
+    return v[i]
+end
+onehot(p::Pair{<:Index}) = onehot(Float64, p)
+
+#
+# Factorizations. These map onto MatrixAlgebraKit's named-tensor methods
+# (`f(a, codomain, domain)`). The legacy return shapes differ from MAK's, so the
+# heavy factorization callsites (simple_update / full_update / symmetric_gauge) are
+# translated directly rather than fully wrapped here; these aliases cover the simple
+# uses. See api_migration_map.md.
+#
+const svd_trunc = MAK.svd_trunc
+
+# Legacy `qr(a, linds)`: `Q` over `(linds..., q)` (isometric), `R` over `(q, rest...)`.
+# `linds` may be splatted, a single index, or one collection.
+function qr(a::AbstractITensor, linds...)
+    left = cat_inds(linds...)
+    right = setdiff(collect(inds(a)), left)
+    return MAK.qr_compact(a, Tuple(left), Tuple(right))
+end
+
+# Legacy `apply(o, ψ)` (gate application): contract `o`'s unprimed legs with `ψ`'s
+# matching indices, then drop the prime so `o`'s output legs become `ψ`'s site legs.
+# Covers the one- and two-site gates TNQS applies to states without pre-existing primes.
+apply(o::AbstractITensor, ψ::AbstractITensor) = noprime(o * ψ)
+
+# `svd` / `eigen` accept a single `Index` or a collection as the codomain, and
+# `eigen` auto-partitions a 2-index tensor when no split is given (legacy behavior).
+_astuple(x::Index) = (x,)
+_astuple(x) = Tuple(x)
+
+svd(a::AbstractITensor, codomain; kwargs...) = MAK.svd_compact(a, _astuple(codomain); kwargs...)
+function svd(a::AbstractITensor, codomain, domain; kwargs...)
+    return MAK.svd_compact(a, _astuple(codomain), _astuple(domain); kwargs...)
+end
+
+# Legacy `eigen` here is a hermitian eigendecomposition returning `(D, U)`. It routes
+# to `MAK.eigh_full` and then renames indices into the legacy ITensors convention the
+# TNQS callsites assume:
+#   - `U` over `(domain..., u)` where `u` is the eigenvalue index shared with `D`.
+#   - `D` diagonal over `(prime(u), u)` — a prime pair, like legacy `eigen`.
+# `eigh_full` returns `D` over two independent fresh indices; we rename its `U`-disjoint
+# index to `prime(u)` so `D` becomes the legacy prime-paired diagonal. The legacy
+# truncation kwargs (`cutoff`/`maxdim`/`mindim`) are not yet translated to MAK's
+# `trunc=(; ...)` spec — see api_migration_map.md; the current callsites pass
+# `cutoff = nothing` (full decomposition).
+function _hermitian_eigh(m::AbstractITensor, codomain, domain; ishermitian = false, cutoff = nothing)
+    ishermitian || error("the compat `eigen` only supports the hermitian case (ishermitian = true)")
+    isnothing(cutoff) || error("the compat `eigen` does not yet translate the `cutoff` truncation kwarg to MatrixAlgebraKit's `trunc` spec")
+    cod, dom = _astuple(codomain), _astuple(domain)
+    # `MAK.eigh_full` rejects a matrix that is hermitian only up to numerical noise, but
+    # the caller asserts `ishermitian = true`. Project onto the hermitian part first
+    # (the conjugate transpose swaps codomain ↔ domain), matching legacy `eigen`'s
+    # treat-as-hermitian behavior.
+    m = (m + replaceinds(conj(m), (cod..., dom...), (dom..., cod...))) / 2
+    D, U = MAK.eigh_full(m, cod, dom)
+    di, ui = collect(inds(D)), collect(inds(U))
+    u = only(intersect(di, ui))        # eigenvalue index shared with U
+    t = only(setdiff(di, ui))          # D's other (independent) index
+    D = ITensorBase.replaceinds(D, t => ITensorBase.prime(u))
+    return D, U
+end
+
+# Partitioned form `eigen(m, Linds, Rinds)` reproduces legacy ITensors' reconstruction
+# `m = Vt * D * dag(V)` (with `Vt` the relabeling of `V` from `Rinds` to `Linds`), which
+# is what `eigendecomp`/`pseudo_sqrt_inv_sqrt` rely on — no conjugation of `U`.
+eigen(m::AbstractITensor, codomain, domain; kwargs...) = _hermitian_eigh(m, codomain, domain; kwargs...)
+
+# No-partition form `eigen(m)` matches legacy ITensors' `eigen(A)`, which auto-partitions
+# `Ris = filterinds(plev = 0)`, `Lis = Ris'`. That orientation is the adjoint view of the
+# partitioned call, so `eigh_full` returns the conjugate eigenvectors; `conj(U)` recovers
+# the convention `symmetric_gauge` uses (`U * D * prime(dag(U)) == m`, a true matrix sqrt).
+function eigen(m::AbstractITensor; kwargs...)
+    is = collect(inds(m))
+    p0 = filter(i -> plev(i) == 0, is)
+    p1 = filter(i -> plev(i) != 0, is)
+    length(p0) == length(p1) || error(
+        "`eigen` without an index partition expects each plev-0 index to be paired with its prime",
+    )
+    D, U = _hermitian_eigh(m, Tuple(p1), Tuple(p0); kwargs...)
+    return D, conj(U)
+end
+
+# Translate the legacy `cutoff`/`maxdim` truncation kwargs to a MatrixAlgebraKit
+# `trunc` strategy. ITensors `cutoff` discards the smallest singular values whose
+# summed squares are a fraction ≤ cutoff of the total, i.e. a relative 2-norm
+# truncation error of `sqrt(cutoff)` on the singular-value vector — MAK's
+# `truncerror(; rtol = sqrt(cutoff), p = 2)`. `maxdim` caps the kept rank
+# (`truncrank`). When both apply, the intersection keeps the more aggressive of the
+# two, matching ITensors. Returns `nothing` when neither truncates.
+function _trunc_spec(cutoff, maxdim)
+    specs = []
+    isnothing(maxdim) || maxdim ≥ typemax(Int) || push!(specs, MAK.truncrank(maxdim))
+    isnothing(cutoff) || iszero(cutoff) || push!(specs, MAK.truncerror(; rtol = sqrt(cutoff), p = 2))
+    isempty(specs) && return nothing
+    return reduce(&, specs)
+end
+
+# Legacy `factorize(a, linds...; ortho, cutoff, maxdim, tags)` splits `a` into `L * R`
+# with the new bond between them. `linds` selects `L`'s indices (besides the bond) and
+# may be passed splatted, as a single index, or as one collection. `ortho = "left"`
+# makes `L` isometric, `"right"` makes `R` isometric. With no truncation this is a
+# plain QR/LQ; with `cutoff`/`maxdim` it is a truncated SVD whose singular values are
+# absorbed into the non-isometric factor. `tags`, if given, names the new bond.
+function factorize(a::AbstractITensor, linds...; ortho = "left", cutoff = nothing, maxdim = nothing, tags = nothing)
+    allinds = collect(inds(a))
+    left = filter(∈(allinds), cat_inds(linds...))
+    right = setdiff(allinds, left)
+    trunc = _trunc_spec(cutoff, maxdim)
+    if isnothing(trunc)
+        if ortho == "left"
+            L, R = MAK.qr_compact(a, Tuple(left), Tuple(right))
+        elseif ortho == "right"
+            L, R = MAK.lq_compact(a, Tuple(left), Tuple(right))
+        else
+            error("compat `factorize` supports ortho = \"left\" / \"right\" (got $(repr(ortho)))")
+        end
+    else
+        U, S, Vt = MAK.svd_trunc(a, Tuple(left), Tuple(right); trunc)
+        if ortho == "left"
+            L, R = U, S * Vt
+        elseif ortho == "right"
+            L, R = U * S, Vt
+        else
+            error("compat `factorize` supports ortho = \"left\" / \"right\" (got $(repr(ortho)))")
+        end
+    end
+    if !isnothing(tags)
+        b = only(commoninds(L, R))
+        bnew = settags(b, tags)
+        L, R = replaceind(L, b, bnew), replaceind(R, b, bnew)
+    end
+    return L, R
+end
+
+# Absorb an SVD `(U, S, Vt)` into two factors per `ortho`: `"left"` makes `U` isometric,
+# `"right"` makes `Vt` isometric, `"none"` splits `S = √S · √S` so the weight is shared.
+# For `"none"` the bond lands on `prime(u)` (where `u`/`v` are the SVD's left/right
+# indices) and the separately-returned `singular_values!` stays over the unprimed
+# `(u, v)` — matching legacy ITensors so a caller that `noprime`s the factors (e.g.
+# `simple_update`) ends up with the bond on `u`, which `S` still shares.
+function _absorb_svd(U, S, Vt, ortho)
+    if ortho == "left"
+        return U, S * Vt
+    elseif ortho == "right"
+        return U * S, Vt
+    elseif ortho == "none"
+        u = only(commoninds(U, S))
+        v = only(commoninds(S, Vt))
+        up = prime(u)
+        sqrtσ = sqrt.(abs.(diagview(unnamed(S))))
+        return U * diagonaltensor(sqrtσ, (u, up)), Vt * diagonaltensor(sqrtσ, (v, up))
+    end
+    return error("compat `factorize_svd` supports ortho = \"left\" / \"right\" / \"none\" (got $(repr(ortho)))")
+end
+
+# Legacy `factorize_svd(a, linds...; ortho, singular_values!, cutoff, maxdim, tags)`:
+# an always-SVD factorization returning `(L, R, spec)`. `spec.truncerr` is the fraction
+# of squared spectral weight discarded (SVD preserves the Frobenius norm, so the total
+# weight is `norm(a)^2`). If `singular_values!` is a `Ref`, it is filled with `S`.
+function factorize_svd(a::AbstractITensor, linds...; ortho = "left", singular_values! = nothing, cutoff = nothing, maxdim = nothing, tags = nothing)
+    allinds = collect(inds(a))
+    left = filter(∈(allinds), cat_inds(linds...))
+    right = setdiff(allinds, left)
+    trunc = _trunc_spec(cutoff, maxdim)
+    U, S, Vt = isnothing(trunc) ?
+        MAK.svd_compact(a, Tuple(left), Tuple(right)) :
+        MAK.svd_trunc(a, Tuple(left), Tuple(right); trunc)
+    total = abs2(LinearAlgebra.norm(a))
+    kept = sum(abs2, diagview(unnamed(S)))
+    truncerr = iszero(total) ? zero(real(scalartype(a))) : max(zero(kept / total), 1 - kept / total)
+    isnothing(singular_values!) || (singular_values![] = S)
+    L, R = _absorb_svd(U, S, Vt, ortho)
+    if !isnothing(tags)
+        b = only(commoninds(L, R))
+        bnew = settags(b, tags)
+        L, R = replaceind(L, b, bnew), replaceind(R, b, bnew)
+    end
+    return L, R, (; truncerr)
+end
+
+#
+# Combiner / index fusion. Legacy `combiner(is...)` returns a tensor that, when
+# contracted, fuses `is` into one index; `dag(C)` splits it back, and
+# `combinedind(C)` recovers that fused index. Reproduced densely as a reshaped
+# identity (`C[is..., c] = δ(c, flatten(is))`), which the next-gen fusion
+# primitives back via ordinary contraction. The fused index carries a sentinel tag
+# so `combinedind` can find it. Dense only; a graded combiner is a stack gap.
+const _COMBINER_TAG = "combiner"
+function combiner(is::Tuple; eltype::Type = Float64)
+    d = prod(length, is)
+    c = ITensorBase.settag(Index(d), _COMBINER_TAG, "combined")
+    return reshape(Matrix{eltype}(LinearAlgebra.I, d, d), (length.(is)..., d))[is..., c]
+end
+combiner(is::Index...; kwargs...) = combiner(is; kwargs...)
+combiner(is::AbstractVector{<:Index}; kwargs...) = combiner(Tuple(is); kwargs...)
+function combinedind(c::AbstractITensor)
+    return only(filter(i -> get(ITensorBase.tags(i), _COMBINER_TAG, "") == "combined", inds(c)))
+end
+
+#
+# Diagonal manipulation. Legacy `map_diag(f, T)` applies `f` to the diagonal of a
+# (diagonal-like) tensor; used on factorization spectra (singular values /
+# eigenvalues). Reproduced via the same diagonal machinery as `delta`.
+_diagcartesian(arr, k) = CartesianIndex(ntuple(Returns(k), ndims(arr)))
+function map_diag(f, T::AbstractITensor)
+    arr = copy(unnamed(T))
+    for k in 1:minimum(size(arr))
+        idx = _diagcartesian(arr, k)
+        arr[idx] = f(arr[idx])
+    end
+    return arr[inds(T)...]
+end
+function map_diag!(f, T::AbstractITensor)
+    arr = unnamed(T)
+    for k in 1:minimum(size(arr))
+        idx = _diagcartesian(arr, k)
+        arr[idx] = f(arr[idx])
+    end
+    return T
+end
+# Out-of-place-into-`dest` form `map_diag!(f, dest, src)`: write `f` of `src`'s diagonal
+# onto `dest`'s diagonal (TNQS calls it with `dest === src` for an in-place diagonal map).
+function map_diag!(f, dest::AbstractITensor, src::AbstractITensor)
+    d, s = unnamed(dest), unnamed(src)
+    for k in 1:minimum(size(s))
+        d[_diagcartesian(d, k)] = f(s[_diagcartesian(s, k)])
+    end
+    return dest
+end
+
+#
+# Storage / element type accessors.
+#
+# `scalartype` is re-exported above. `datatype` is the underlying storage array type
+# (used by `adapt`); `array` / `data` expose the plain unnamed array.
+datatype(T::AbstractITensor) = typeof(unnamed(T))
+array(T::AbstractITensor) = unnamed(T)
+data(T::AbstractITensor) = unnamed(T)
+
+# TYPE PIRACY (upstream candidate → ITensorBase): extends `Adapt.adapt_structure`
+# for `AbstractITensor` with an eltype target. ITensorBase owns `AbstractITensor` but
+# not `Adapt.adapt_structure`, and adapt-eltype support is generally useful — this
+# should move into ITensorBase's Adapt integration, retiring the shim.
+#
+# Legacy `adapt(eltype)(t)` converts an ITensor's scalar (element) type. ITensorBase's
+# Adapt integration adapts the storage array/device type but leaves the element type
+# alone, so reproduce the eltype conversion for a `Number` target (TNQS uses
+# `adapt(eltype)(state(...))` to build typed product states).
+function Adapt.adapt_structure(::Type{elt}, T::AbstractITensor) where {elt <: Number}
+    return nameddims(convert(AbstractArray{elt}, unnamed(T)), ITensorBase.dimnames(T))
+end
+
+# `swapind`: swap two indices (legacy convenience over `replaceinds`).
+swapind(T::AbstractITensor, i::Index, j::Index) = ITensorBase.replaceinds(T, i => j, j => i)
+
+# Dense no-ops. Legacy QN-storage helpers; on the dense next-gen backend the tensor
+# is already dense, so these are identities. (Graded/QN path is a stack gap.)
+denseblocks(T::AbstractITensor) = T
+dense(T::AbstractITensor) = T
+# Dense backend carries no quantum-number block structure.
+hasqns(::AbstractITensor) = false
+hasqns(::Any) = false
+
+# The operator / named-state system (`op` / `state`) is vendored separately in
+# `itensor_compat/ops.jl`, included right after this file.
+
+# Direct sum (legacy `directsum`): block-diagonal placement of several tensors along
+# specified axes, with the non-summed (shared) axes preserved. Vendored densely
+# because the next-gen stack has no `directsum` yet — a real missing ITensorBase
+# feature (tracked); drop this once it lands upstream.
+#   directsum(out_inds, (t1 => summed_inds1), (t2 => summed_inds2), ...)
+function directsum(out_inds, pairs::Pair...)
+    out_inds = Tuple(out_inds)
+    t1, s1 = first(pairs[1]), Tuple(last(pairs[1]))
+    shared = Tuple(filter(i -> !(i in s1), collect(inds(t1))))
+    target = (shared..., out_inds...)
+    out = zeros(scalartype(t1), length.(target))
+    offsets = zeros(Int, length(out_inds))
+    for p in pairs
+        t, sinds = first(p), Tuple(last(p))
+        order = (shared..., sinds...)
+        cur = collect(ITensorBase.dimnames(t))
+        perm = [findfirst(==(name(o)), cur) for o in order]
+        a = permutedims(unnamed(t), perm)
+        ranges = (
+            Base.OneTo.(length.(shared))...,
+            ntuple(k -> (offsets[k] + 1):(offsets[k] + length(sinds[k])), length(sinds))...,
+        )
+        out[ranges...] .= a
+        offsets .+= length.(sinds)
+    end
+    return out[target...]
+end
+
+# No index-order warnings in the next-gen stack (legacy `disable_warn_order`).
+disable_warn_order(args...) = nothing
+
+#
+# Algorithm dispatch tag (legacy `Algorithm` / `@Algorithm_str`). `Algorithm"exact"`
+# is the type `Algorithm{:exact}` (usable in `::Algorithm"exact"` signatures);
+# `Algorithm("exact"; kwargs...)` constructs an instance carrying keyword options.
+# Faithful minimal copy of the ITensors/NDTensors helper.
+struct Algorithm{Alg, Kwargs <: NamedTuple}
+    kwargs::Kwargs
+end
+Algorithm{Alg}(kwargs::NamedTuple) where {Alg} = Algorithm{Alg, typeof(kwargs)}(kwargs)
+Algorithm{Alg}(; kwargs...) where {Alg} = Algorithm{Alg}((; kwargs...))
+Algorithm(alg::Symbol; kwargs...) = Algorithm{alg}(; kwargs...)
+Algorithm(alg::AbstractString; kwargs...) = Algorithm(Symbol(alg); kwargs...)
+Algorithm(alg::Algorithm) = alg
+Base.getproperty(alg::Algorithm, name::Symbol) = name === :kwargs ? getfield(alg, :kwargs) : getfield(getfield(alg, :kwargs), name)
+algorithm_name(::Algorithm{Alg}) where {Alg} = Alg
+macro Algorithm_str(s)
+    return :(Algorithm{$(Expr(:quote, Symbol(s)))})
+end
+
+#
+# Tags. Legacy ITensors uses a flat tag set (`Index(dim, "S=1/2,Site")`); ITensorBase
+# stores tags as a `Dict{String, String}`. For the legacy flat-tag usage TNQS has
+# (site-type labels, link names), we store each token as a keyed tag with empty
+# value, and `hastags` checks membership. (A fuller tag-compat story is a follow-up.)
+function settags(i::Index, tagstr::AbstractString)
+    for t in split(tagstr, ",")
+        s = String(strip(t))
+        isempty(s) || (i = ITensorBase.settag(i, s, ""))
+    end
+    return i
+end
+# Copy a whole tag dictionary onto an index (legacy `settags(i, tags(j))`, used when a
+# factorization is asked to give its new bond the same tags as an existing bond).
+function settags(i::Index, d::AbstractDict)
+    for (k, v) in d
+        i = ITensorBase.settag(i, k, v)
+    end
+    return i
+end
+# TYPE PIRACY (upstream candidate → ITensorBase): the two methods below add
+# `ITensorBase.Index` constructors taking a tag string / tag dict, using only `Integer`
+# and `AbstractString`/`AbstractDict` arg types (none owned here). They belong in
+# ITensorBase's tag-compat story (see the tags note above); upstream and retire.
+#
+# Legacy positional tagged-index constructor `Index(dim, "tag")`.
+ITensorBase.Index(dim::Integer, tagstr::AbstractString) = settags(Index(dim), tagstr)
+# Build a fresh index carrying a tag dictionary (legacy `Index(dim, tags(i))`, where
+# the next-gen `tags` returns a `Dict{String, String}`).
+function ITensorBase.Index(dim::Integer, tags::AbstractDict)
+    i = Index(dim)
+    for (k, v) in tags
+        i = ITensorBase.settag(i, k, v)
+    end
+    return i
+end
+function hastags(i::Index, tagstr::AbstractString)
+    return all(
+        haskey(tags(i), String(strip(t))) for t in split(tagstr, ",") if !isempty(strip(t))
+    )
+end
+
+# TODO (small inline residue — can't be a drop-in shim):
+#   - `contract` / `inner` / `truncate`: TNQS *extends* these (method definitions),
+#     so the call sites drop the `ITensors.` qualifier to extend the generics this
+#     module owns rather than ITensors'. (`truncate` clashes with `Base.truncate`.)
+#
+# TODO (stack gaps — own roadmap items, not solvable in this file):
+#   - op / @OpName_str / @SiteType_str  (operator/site system)
+#   - MPS / MPO / boundary-MPS          (no next-gen MPS layer yet)
+#   - hasqns / QN-aware storage         (next-gen symmetry via GradedArrays)

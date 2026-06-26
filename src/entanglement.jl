@@ -30,7 +30,7 @@ end
 
 function matricize(a::ITensor, row_inds = filter(i -> plev(i) ==0, inds(a)))
     col_inds = prime.(row_inds)
-    return ITensors.array(a * ITensors.combiner(row_inds) * ITensors.combiner(col_inds))
+    return array(a * combiner(row_inds) * combiner(col_inds))
 end
 
 """
@@ -80,8 +80,9 @@ function renyi_entropy(
     edge_ind = only(virtualinds(bp_cache, e))
     root_m2 = first(pseudo_sqrt_inv_sqrt(m2))
 
-    ρ =(m1 * replaceind(root_m2, edge_ind', edge_ind''))* root_m2
-    ρ= replaceind(ρ, edge_ind'', edge_ind')
+    edge_ind_p, edge_ind_pp = prime(edge_ind), prime(prime(edge_ind))
+    ρ = (m1 * replaceind(root_m2, edge_ind_p, edge_ind_pp)) * root_m2
+    ρ = replaceind(ρ, edge_ind_pp, edge_ind_p)
     return renyi_entropy(ρ; α)
 end
 

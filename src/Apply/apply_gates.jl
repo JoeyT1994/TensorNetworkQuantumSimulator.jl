@@ -113,7 +113,7 @@ function apply_gate!(
         e = NamedEdge(v1 => v2)
         ind2 = commonind(s_values, first(updated_tensors))
         δuv = dag(copy(s_values))
-        δuv = replaceind(δuv, ind2, ind2')
+        δuv = replaceind(δuv, ind2, prime(ind2))
         map_diag!(sign, δuv, δuv)
         s_values = denseblocks(s_values) * denseblocks(δuv)
         setmessage!(ψ_bpc, e, dag(s_values))

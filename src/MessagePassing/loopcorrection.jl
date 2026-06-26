@@ -47,8 +47,8 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
             if e ∈ edges(eg) || reverse(e) ∈ edges(eg)
                 row_inds, col_inds = linds, linds_sim
                 if network(bpc) isa TensorNetworkState
-                    row_inds = vcat(row_inds, dag.(prime.(row_inds)))
-                    col_inds = vcat(col_inds, dag.(prime.(col_inds)))
+                    row_inds = cat_inds(row_inds, dag.(prime.(row_inds)))
+                    col_inds = cat_inds(col_inds, dag.(prime.(col_inds)))
                 end
                 row_combiner, col_combiner = combiner(row_inds), combiner(col_inds)
                 ap =
