@@ -219,6 +219,7 @@ end
 function run(; nx = 2, ny = 2, dt = 0.05, nsteps = 200, χ = 16, cutoff = 1e-12,
         ϕ = pi / 5, t_hop = 1.0, measure_every = 20, measure_exact = false, gauge = true,
         μ = nothing)
+
     n_ferm = count(kv -> kv[3] == 1, vertices(named_kagome_lattice_graph(nx, ny)))  # 1/3 filling
 
     # Chemical potential that pins the target filling: the single-particle gap midpoint

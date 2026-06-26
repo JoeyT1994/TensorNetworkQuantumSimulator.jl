@@ -4,7 +4,8 @@ using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuant
 using ITensors: ITensors
 using NamedGraphs: add_edge!, NamedEdge
 Random.seed!(1234)
-using NPZ
+using LinearAlgebra: eigvals, Hermitian
+#using NPZ
 
 function bp_energy(ψ_bpc::BeliefPropagationCache, U, t)
     g = graph(ψ_bpc)
@@ -32,16 +33,32 @@ function hexagonal_unit_cell()
     return g
 end
 
+function free_fermion_gs_energy(g, t,n_fermions)
+    vs  = collect(vertices(g))
+    pos = Dict(v => i for (i, v) in enumerate(vs))
+    N   = length(vs)
+    h = zeros(ComplexF64, N, N)
+    for e in edges(g)
+        v1, v2 = src(e), dst(e)
+        a, b   = pos[v1], pos[v2]
+        tij    = t
+        h[a, b] += tij
+        h[b, a] += conj(tij)
+    end
+    ε    = eigvals(Hermitian(h))
+    return sum(ε[1:n_fermions])
+end
+
 function main_fermions(χ)
 
     honey_comb_Us = [0.0, 1.0, 2.0, 3.0, 3.5,4.0,4.5,5.0,6.0, 7.0, 8.0]
     honey_comb_es = [-1.57, -1.59, -1.62, -1.69, -1.73, -1.78, -1.84, -1.91, -2.06, -2.24, -2.43]
     honey_comb_es = honey_comb_es + honey_comb_Us/4
     ITensors.disable_warn_order()
-    #g = named_hexagonal_lattice_graph(2,2; periodic = true)
-    g = hexagonal_unit_cell()
-    #g = named_grid((10,10))
-    #g = named_grid((4,1))
+    g = named_hexagonal_lattice_graph(6,6; periodic = false)
+    t = 1
+    n_fermions = round(Int, length(vertices(g)) / 2)
+    @show free_fermion_gs_energy(g, t, n_fermions) / (n_fermions)
     s = siteinds("spinful_fermion", g)
     ψ = fermionic_tensornetworkstate(Float64, v-> isodd(sum(v)) ? "Up" : "Dn", g, s)
     ψ_bpc = update(BeliefPropagationCache(ψ))
@@ -49,7 +66,7 @@ function main_fermions(χ)
 
     println("Imaginary time Evo to find Hubbard model GS lattice of $(length(vertices(g))) sites with BP")
     dt = -0.01*im
-    U = 8.0
+    U = 0.0
 
     U_index = findfirst(x -> abs(x - U) < 1e-10, honey_comb_Us)
     t = -1
@@ -76,14 +93,6 @@ function main_fermions(χ)
         ψ_bpc, _ = apply_gates(single_site_gates,ψ_bpc;apply_kwargs, update_cache = false)
         ψ_bpc, errs = apply_gates(two_site_gates,ψ_bpc;apply_kwargs, update_cache = false)
         ψ_bpc, _ = apply_gates(single_site_gates,ψ_bpc;apply_kwargs, update_cache = false)
-        #ψ_bpc, _ = apply_gates(single_site_gates,ψ_bpc;apply_kwargs, update_cache = false)
-        t2 = time()
-
-        #ψ_bpc = update(ψ_bpc)
-        t3 = time()
-
-        t_update += (t2-t1)
-        t_bp += (t3-t2)
 
         
         if i % 5 == 0
@@ -95,16 +104,11 @@ function main_fermions(χ)
             println("Imaginary time is $(i * abs(dt))")
             println("BP energy density is $(e_bp / length(vertices(g)))")
 
-            #println("Chan et al BP Ref for U = 8 is approx $e_ref_U8")
-            println("Honeycomb QMC ref energy is $(honey_comb_es[U_index])")
-
             nup_tot = sum([expect(ψ_bpc, (["Nup"], [v])) for v in vertices(g)])
 
             println("Total Nup density is $(nup_tot / length(vertices(g)))")
         end
     end
-
-    npzwrite("/Users/jtindall/Files/Data/Fermions/HoneyCombHubbardHalffilledU$(U)BondDimension$(χ).npz", energies = energies, imaginary_times = imaginary_times)
 end
 
 χ = 4
