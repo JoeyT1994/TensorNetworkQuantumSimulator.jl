@@ -60,7 +60,7 @@ function sample(
     leaves = leaf_vertices(partitions_graph(supergraph(norm_bmps_cache)))
     seq = PartitionEdge.(a_star(partitions_graph(supergraph(norm_bmps_cache)), last(leaves), first(leaves)))
     norm_cache_message_update_kwargs = (; norm_cache_message_update_kwargs..., normalize = false)
-    norm_bmps_cache = update(norm_bmps_cache; alg = "bp", edge_sequence = seq, maxiter = 1, message_update_alg = Algorithm("orthogonal"; norm_cache_message_update_kwargs...))
+    norm_bmps_cache = update(norm_bmps_cache; alg = "bp", edge_sequence = seq, maxiter = 1, message_update_alg = Algorithm("fitting"; norm_cache_message_update_kwargs...))
 
     #Generate the bit_strings moving left to right through the network
     probs_and_bitstrings = NamedTuple[]
@@ -190,14 +190,10 @@ function get_one_sample(
             next_partition = partitions[i + 1]
             pe = PartitionEdge(parent(partition), parent(next_partition))
 
-            mpo = ITensorMPS.MPO(norm_bmps_cache, src(pe); interpret_as_flat = true)
-            if incoming_mps == nothing
-                mpo = ITensorMPS.MPS(ITensor[mpo[i] for i in 1:length(mpo)])
-                outgoing_mps = ITensorMPS.truncate(mpo; cutoff, maxdim = projected_mps_bond_dimension)
-                outgoing_mps = merge_internal_tensors(outgoing_mps)
-            else
-                outgoing_mps = generic_apply(mpo, incoming_mps; cutoff, normalize = false, maxdim)
-            end
+            # Apply the (already projected) ket row to the running single-layer boundary MPS. The
+            # cache messages are doubled ket/bra, so we feed the ket-only `incoming_mps` explicitly.
+            mpo, mps, right_inds = _bmps_apply_inputs(norm_bmps_cache, pe; incoming_mps)
+            outgoing_mps = generic_apply(mpo, mps, right_inds; cutoff, maxdim, normalize = false)
 
             es = sorted_edges(norm_bmps_cache, pe)
 
@@ -279,7 +275,7 @@ function certify_sample(
     certification_mps_cache = BoundaryMPSCache(ψproj, certification_mps_bond_dimension)
     certification_cache_message_update_kwargs = (; normalize = false, certification_cache_message_update_kwargs...)
 
-    certification_mps_cache = update(certification_mps_cache, message_update_alg = Algorithm("ITensorMPS"; certification_cache_message_update_kwargs...))
+    certification_mps_cache = update(certification_mps_cache, message_update_alg = Algorithm("zipup"; certification_cache_message_update_kwargs...))
     p_over_q = partitionfunction(certification_mps_cache)
     p_over_q *= conj(p_over_q)
 
