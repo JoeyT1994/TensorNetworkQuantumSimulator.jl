@@ -23,11 +23,11 @@ function sample(
             ψv, ψv_dag = network(projected_bp_cache)[v], dag(prime(network(projected_bp_cache)[v]))
             push!(tensors, ψv, ψv_dag)
             seq = contraction_sequence(tensors; alg = "optimal")
-            ρ = ITensors.contract(tensors; sequence = seq)
+            ρ = contract(tensors; sequence = seq)
 
             ρ_tr = tr(ρ)
             ρ *= inv(ρ_tr)
-            ρ_diag = collect(real.(diag(ITensors.array(ρ))))
+            ρ_diag = collect(real.(diag(array(ρ))))
             config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
             # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
             set!(bit_string, v, config - 1)
@@ -190,10 +190,14 @@ function get_one_sample(
             next_partition = partitions[i + 1]
             pe = PartitionEdge(parent(partition), parent(next_partition))
 
-            # Apply the (already projected) ket row to the running single-layer boundary MPS. The
-            # cache messages are doubled ket/bra, so we feed the ket-only `incoming_mps` explicitly.
-            mpo, mps, right_inds = _bmps_apply_inputs(norm_bmps_cache, pe; incoming_mps)
-            outgoing_mps = generic_apply(mpo, mps, right_inds; cutoff, maxdim, normalize = false)
+            mpo = mpo_chain(norm_bmps_cache, src(pe); interpret_as_flat = true)
+            if incoming_mps == nothing
+                mpo = MPSChain(ITensor[mpo[i] for i in 1:length(mpo)])
+                outgoing_mps = truncate_chain(mpo; cutoff, maxdim = projected_mps_bond_dimension)
+                outgoing_mps = merge_internal_tensors(outgoing_mps)
+            else
+                outgoing_mps = generic_apply(mpo, incoming_mps; cutoff, normalize = false, maxdim)
+            end
 
             es = sorted_edges(norm_bmps_cache, pe)
 
@@ -235,7 +239,7 @@ function sample_partition!(
         ρ_tr = tr(ρ)
         push!(traces, ρ_tr)
         ρ *= inv(ρ_tr)
-        ρ_diag = collect(real.(diag(ITensors.array(ρ))))
+        ρ_diag = collect(real.(diag(array(ρ))))
         config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
         # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
         set!(bit_string, v, config - 1)

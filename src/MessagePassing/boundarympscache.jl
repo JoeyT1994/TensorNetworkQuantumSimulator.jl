@@ -1,6 +1,70 @@
 using NamedGraphs.PartitionedGraphs: PartitionedGraph, partitions_graph, partitionvertices, PartitionEdge, partitionedges, partitionedge, PartitionVertex, unpartitioned_graph
 using NamedGraphs: add_edges!
 using SplitApplyCombine: group
+using LinearAlgebra: lq
+
+# --- MPS/MPO chain over ITensorMap -----------------------------------------
+# A boundary "MPS"/"MPO" is just an ordered chain of ITensorMaps; adjacent
+# tensors share a bond Index (matched by id), site/open legs are exposed. This
+# thin wrapper replaces the ITensorMPS MPS/MPO objects used for the boundary-MPS
+# contraction. Truncation/canonicalization use ITensorKit's factorizations,
+# which mint fresh bond indices and thread them onto the neighbouring factor.
+struct MPSChain
+    data::Vector{ITensor}
+end
+MPSChain(ts::AbstractVector) = MPSChain(collect(ITensor, ts))
+Base.length(M::MPSChain) = length(M.data)
+Base.getindex(M::MPSChain, i::Integer) = M.data[i]
+Base.lastindex(M::MPSChain) = length(M)
+Base.firstindex(M::MPSChain) = 1
+Base.setindex!(M::MPSChain, t, i::Integer) = (M.data[i] = t; M)
+Base.iterate(M::MPSChain, args...) = iterate(M.data, args...)
+Base.copy(M::MPSChain) = MPSChain(copy(M.data))
+
+# Site (open) legs of chain tensor `i`: legs not shared with either neighbour.
+function mps_siteinds(M::MPSChain, i::Integer)
+    s = collect(inds(M[i]))
+    i > 1 && (s = uniqueinds(s, inds(M[i - 1])))
+    i < length(M) && (s = uniqueinds(s, inds(M[i + 1])))
+    return s
+end
+
+# Canonicalize + (optionally) truncate the chain. Right-canonicalize sites n..2
+# via LQ (pushing the non-isometric factor left), then a left-to-right truncated
+# SVD sweep leaving the orthogonality centre at the last site (left-canonical).
+function truncate_chain(M::MPSChain; maxdim = nothing, cutoff = nothing, kwargs...)
+    n = length(M)
+    n <= 1 && return copy(M)
+    M = copy(M)
+    for i in n:-1:2
+        L, Q = lq(M[i], commoninds(M[i], M[i - 1]))   # left bond -> codomain; Q right-isometric
+        M[i] = Q
+        M[i - 1] = M[i - 1] * L
+    end
+    for i in 1:(n - 1)
+        linds = uniqueinds(inds(M[i]), inds(M[i + 1]))  # site + left-bond legs
+        U, SV, _ = factorize_svd(M[i], linds; ortho = "left", maxdim, cutoff)
+        M[i] = U
+        M[i + 1] = SV * M[i + 1]
+    end
+    return M
+end
+
+# Frobenius-normalize the chain (canonicalize, then scale the ortho centre).
+function normalize_chain(M::MPSChain)
+    M = truncate_chain(M)
+    M[end] = normalize(M[end])
+    return M
+end
+
+# Zip-up apply of a (simple) MPO onto an MPS: contract O[i] into M[i], then
+# truncate. Parallel bonds between neighbours are handled natively by `svd`'s
+# leg partition, so no pre-fusion combiner is needed.
+function apply_chain(O::MPSChain, M::MPSChain; kwargs...)
+    @assert length(O) == length(M)
+    T = ITensor[O[i] * M[i] for i in 1:length(O)]
+    return truncate_chain(MPSChain(T); kwargs...)
+end
 
 #TODO: Make this show() nicely.
 struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Vector{<:ITensor}}} <: AbstractBeliefPropagationCache{V}
@@ -37,7 +101,7 @@ end
 default_message_update_alg(bmps_cache::BoundaryMPSCache) = default_bmps_message_update_alg(network(bmps_cache))
 
 default_normalize(alg::Algorithm"fitting") = true
-default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(ITensors.NDTensors.scalartype(bmps_cache))
+default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(scalartype(bmps_cache))
 _default_boundarymps_update_niters = 50
 function set_default_kwargs(alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache)
     normalize = get(alg.kwargs, :normalize, default_normalize(alg))
@@ -187,7 +251,7 @@ function set_interpartition_messages!(
         end
         for i in 1:(length(es) - 1)
             virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
-            ind = Index(virt_dim, "m$(i)$(i + 1)")
+            ind = Index(virt_dim)
             m1, m2 = message(bmps_cache, es[i]), message(bmps_cache, es[i + 1])
             t = adapt_like(m1, dense(delta(ind)))
             setmessage!(bmps_cache, es[i], m1 * t)
@@ -374,7 +438,45 @@ function prev_partitionedge(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
     return parent(dst(pe)) == v2 && return PartitionEdge(v1 => parent(src(pe)))
 end
 
-function set_interpartition_message!(bmps_cache::BoundaryMPSCache, M::AbstractVector{<:ITensor}, pe::PartitionEdge)
+function merge_internal_tensors(O::MPSChain)
+    internal_inds = filter(i -> isempty(mps_siteinds(O, i)), 1:length(O))
+
+    while !isempty(internal_inds)
+        site = first(internal_inds)
+        tensors = [O[i] for i in setdiff(1:length(O), (site,))]
+        if site != length(O)
+            tensors[site] = tensors[site] * O[site]
+        else
+            tensors[site - 1] = tensors[site - 1] * O[site]
+        end
+
+        O = MPSChain(tensors)
+
+        internal_inds = filter(i -> isempty(mps_siteinds(O, i)), 1:length(O))
+    end
+    return O
+end
+
+function mpo_chain(bmps_cache::BoundaryMPSCache, partition; interpret_as_flat = false)
+    @assert network(bmps_cache) isa TensorNetwork || interpret_as_flat
+    sorted_vs = sort(vertices(supergraph(bmps_cache), partition))
+    ts = [copy(network(bmps_cache)[v]) for v in sorted_vs]
+    return MPSChain(ts)
+end
+
+function mps_chain(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
+    sorted_es = sorted_edges(bmps_cache, pe)
+    ms = [message(bmps_cache, e) for e in sorted_es]
+    return MPSChain(ms)
+end
+
+function truncate!(bmps_cache::BoundaryMPSCache, pe::PartitionEdge; truncate_kwargs...)
+    M = mps_chain(bmps_cache, pe)
+    M = truncate_chain(M; truncate_kwargs...)
+    return set_interpartition_message!(bmps_cache, M, pe)
+end
+
+function set_interpartition_message!(bmps_cache::BoundaryMPSCache, M::MPSChain, pe::PartitionEdge)
     sorted_es = sorted_edges(bmps_cache, pe)
     for i in 1:length(M)
         setmessage!(bmps_cache, sorted_es[i], M[i])
@@ -382,119 +484,72 @@ function set_interpartition_message!(bmps_cache::BoundaryMPSCache, M::AbstractVe
     return bmps_cache
 end
 
-# Position-indexed MPS·MPO application with truncation: a zip-up forward sweep followed by a
-# right-to-left SVD recompression. Works on a raw `Vector{ITensor}` chain so it needs no MPS/MPO
-# wrapper types.
-#
-#   `mpo`        : the contiguous chain of tensors at positions 1:b.
-#   `mps`        : incoming MPS tensors keyed by the position of the `mpo` tensor they attach to
-#                  (an arbitrary subset of 1:b; a gap is an MPS bond that hops over a site).
-#   `right_inds` : per-position outgoing site legs (`right_inds[i]` may be empty); these become the
-#                  site indices of the result, one output tensor per non-empty entry.
-#
-# Returns the truncated result as a `Vector{ITensor}`, one tensor per non-empty `right_inds[i]`, in
-# increasing position order.
-function generic_apply(
-        mpo::Vector{<:ITensor},
-        mps::Dictionary{Int, <:ITensor},
-        right_inds::Vector{<:Vector{<:Index}};
-        cutoff = 0.0,
-        maxdim = typemax(Int),
-        normalize = true,
-    )
-    b = length(mpo)
-    @assert length(right_inds) == b
+#TODO: Write a generalized zip up fitter. Fix for TensorNetworkState
+function generic_apply(O::MPSChain, M::MPSChain; normalize = true, kwargs...)
+    is_simple_mpo = (length(O) == length(M) && all([length(mps_siteinds(O, i)) == 2 for i in 1:length(O)]))
 
-    # Forward sweep: carry · MPO[i] · MPS[i], peel off the output legs, truncate the new bond.
-    out = ITensor[]
-    carry = nothing        # forward environment: singular values + still-open virtual bonds
-    left_link = nothing    # bond from the previously emitted output tensor into `carry`
-    for i in 1:b
-        T = mpo[i]
-        haskey(mps, i) && (T *= mps[i])
-        carry === nothing || (T = carry * T)
-
-        site = right_inds[i]
-        if isempty(site)
-            carry = T      # internal / left-only / skipped site: just keep threading the bonds
-            continue
-        end
-
-        keep = left_link === nothing ? Index[site...] : Index[site..., left_link]
-        L, R = factorize(T, keep...; ortho = "left", cutoff, maxdim, tags = "Link,l=$i")
-        push!(out, L)
-        carry = R
-        left_link = only(commoninds(L, R))
-    end
-    @assert !isempty(out) "generic_apply: no outgoing site indices, nothing to build an MPS from"
-    carry === nothing || (out[end] *= carry)   # fold leftover norm / trailing internal tensors in
-
-    # Back sweep: right-to-left SVD recompression (optimal truncation of the forward result).
-    for i in length(out):-1:2
-        bond = only(commoninds(out[i - 1], out[i]))
-        L, R = factorize(out[i], bond; ortho = "right", cutoff, maxdim, tags = "Link,l=$(i - 1)")
-        out[i] = R
-        out[i - 1] *= L
+    if is_simple_mpo
+        out = apply_chain(O, M; kwargs...)
+        normalize && (out = normalize_chain(out))
+        return out
     end
 
-    if normalize
-        n = norm(out[1])
-        iszero(n) || (out[1] /= n)
-    end
-
-    return out
-end
-
-# Build the (mpo, mps, right_inds) inputs to `generic_apply` for the outgoing interpartition message
-# on `pe`, read directly off the cache geometry (no MPS/MPO wrapper types).
-#
-# The incoming MPS is sourced either from the cache messages on the previous interpartition
-# (`incoming_mps === nothing`, the message-update path) or from a supplied single-layer MPS whose
-# tensors are ordered by `sorted_edges(prev_pe)` (the sampling path, where the cache messages are
-# doubled ket/bra but only the ket layer is applied). When the source partition is a line endpoint
-# there is no previous interpartition, so `mps` comes back empty and the call reduces to compressing
-# the MPO chain.
-function _bmps_apply_inputs(bmps_cache::BoundaryMPSCache, pe::PartitionEdge; incoming_mps = nothing)
-    net = network(bmps_cache)
-    sorted_vs = sort(vertices(supergraph(bmps_cache), src(pe)))
-    pos = Dict(v => i for (i, v) in enumerate(sorted_vs))
-    b = length(sorted_vs)
-
-    # One MPO tensor per site (position) of the source partition.
-    mpo = ITensor[net[v] for v in sorted_vs]
-
-    # Incoming MPS, keyed by the site each tensor attaches to.
-    mps = Dictionary{Int, ITensor}()
-    prev_pe = prev_partitionedge(bmps_cache, pe)
-    if prev_pe !== nothing
-        for (k, e) in enumerate(sorted_edges(bmps_cache, prev_pe))   # e = prev_v => current_v
-            t = incoming_mps === nothing ? message(bmps_cache, e) : incoming_mps[k]
-            set!(mps, pos[dst(e)], t)
+    O_tensors = ITensor[]
+    for i in 1:length(O)
+        m_ind = filter(j -> !isempty(commoninds(O[i], M[j])), 1:length(M))
+        if isempty(m_ind)
+            push!(O_tensors, O[i])
+        else
+            m_ind = only(m_ind)
+            push!(O_tensors, O[i] * M[m_ind])
         end
     end
 
-    # Outgoing site legs: the network index on each edge of `pe`, keyed by the source site.
-    right_inds = [Index[] for _ in 1:b]
-    for e in sorted_edges(bmps_cache, pe)            # e = current_v => next_v
-        right_inds[pos[src(e)]] = collect(virtualinds(net, e))
+    #Transform away edges that make a loop
+    loop_edges = [(i, j) for i in 1:length(O_tensors) for j in (i + 1):length(O_tensors)
+                   if !isempty(commoninds(O_tensors[i], O_tensors[j])) && abs(i - j) != 1]
+    for (i, j) in loop_edges
+        inbetween_vertices = (i + 1):(j - 1)
+        edge_to_split = (i, j)
+        for k in inbetween_vertices
+            cind = only(commoninds(O_tensors[first(edge_to_split)], O_tensors[last(edge_to_split)]))
+            d = adapt_like(O_tensors[k], denseblocks(delta(cind, cind')))
+            O_tensors[j] *= d
+            O_tensors[k] *= d
+            edge_to_split = (k, j)
+        end
     end
+    # NOTE: parallel bonds between adjacent tensors need no combiner — `svd`'s leg
+    # partition fuses them during truncation.
 
-    return mpo, mps, right_inds
+    O = MPSChain(O_tensors)
+    O = merge_internal_tensors(O)
+
+    normalize && (O = normalize_chain(O))
+
+    return truncate_chain(O; kwargs...)
 end
 
-# Update all the message tensors on an interpartition via the position-indexed zip-up apply.
 function update_message!(
         alg::Algorithm"zipup",
         bmps_cache::BoundaryMPSCache,
         pe::PartitionEdge;
         maxdim::Integer = mps_bond_dimension(bmps_cache),
     )
-    mpo, mps, right_inds = _bmps_apply_inputs(bmps_cache, pe)
-    out = generic_apply(
-        mpo, mps, right_inds;
-        cutoff = alg.kwargs.cutoff, maxdim, normalize = alg.kwargs.normalize,
-    )
-    return set_interpartition_message!(bmps_cache, out, pe)
+    prev_pe = prev_partitionedge(bmps_cache, pe)
+    O = mpo_chain(bmps_cache, src(pe))
+    O = truncate_chain(O; alg.kwargs.cutoff, maxdim)
+    if isnothing(prev_pe)
+        O = merge_internal_tensors(O)
+        if alg.kwargs.normalize
+            O = normalize_chain(O)
+        end
+        return set_interpartition_message!(bmps_cache, O, pe)
+    end
+
+    M = mps_chain(bmps_cache, prev_pe)
+    M_out = generic_apply(O, M; cutoff = alg.kwargs.cutoff, normalize = alg.kwargs.normalize, maxdim)
+    return set_interpartition_message!(bmps_cache, M_out, pe)
 end
 
 function vertex_scalar(bmps_cache::BoundaryMPSCache, partition::PartitionVertex)
@@ -507,11 +562,12 @@ end
 
 function edge_scalar(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
     es = sorted_edges(bmps_cache, pe)
-    out = ITensor(one(Bool))
+    ts = ITensor[]
     for e in es
-        out = (out * (message(bmps_cache, e))) * message(bmps_cache, reverse(e))
+        push!(ts, message(bmps_cache, e))
+        push!(ts, message(bmps_cache, reverse(e)))
     end
-    return scalar(out)
+    return contract(ts)[]
 end
 
 function delete_partition_messages!(bmps_cache::BoundaryMPSCache, partition::PartitionVertex)

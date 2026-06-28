@@ -36,7 +36,7 @@ index `n/2 + i`.
 function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2))
     is_pauli(s) && return paulitensornetworkstate(eltype, v -> "I", g, s)
 
-    links = Dictionary(edges(g), [Index(1, "e$(src(e))_$(dst(e))") for e in edges(g)])
+    links = Dictionary(edges(g), [Index(1) for e in edges(g)])
     links = merge(links, Dictionary(reverse.(edges(g)), [links[e] for e in edges(g)]))
 
     ts = Dictionary{vertextype(g), ITensor}()
@@ -44,7 +44,7 @@ function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = site
         es = incident_edges(g, v; dir = :in)
         ninds = length(s[v])
         ninds % 2 != 0 && error("Odd number of siteinds on vertex $v - don't know how to partition into rows and column")
-        t = ITensors.delta(eltype, [links[e] for e in es])
+        t = delta(eltype, [links[e] for e in es])
         if ninds > 0
             row_inds, col_inds = s[v][1:(ninds÷2)], s[v][((ninds÷2)+1):ninds]
             id = identity_tensor(eltype, row_inds, col_inds)
@@ -95,11 +95,11 @@ function toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_g
         west_index = e_dict[NamedEdge(v => (v[1], mod1(v[2]-1, n)))]
 
         if iseven(sum(v))
-            state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(east_index => 1) + ITensors.onehot(north_index => 2) * ITensors.onehot(east_index => 2)) * (ITensors.onehot(south_index => 1) * ITensors.onehot(west_index => 1) + ITensors.onehot(south_index => 2) * ITensors.onehot(west_index => 2)) * ITensors.onehot(sv => 1)
-            state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(east_index => 1) - ITensors.onehot(north_index => 2) * ITensors.onehot(east_index => 2)) * (ITensors.onehot(south_index => 1) * ITensors.onehot(west_index => 1) - ITensors.onehot(south_index => 2) * ITensors.onehot(west_index => 2)) * ITensors.onehot(sv => 2)
+            state  = state + (onehot(north_index => 1) * onehot(east_index => 1) + onehot(north_index => 2) * onehot(east_index => 2)) * (onehot(south_index => 1) * onehot(west_index => 1) + onehot(south_index => 2) * onehot(west_index => 2)) * onehot(sv => 1)
+            state  = state + (onehot(north_index => 1) * onehot(east_index => 1) - onehot(north_index => 2) * onehot(east_index => 2)) * (onehot(south_index => 1) * onehot(west_index => 1) - onehot(south_index => 2) * onehot(west_index => 2)) * onehot(sv => 2)
         else
-            state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(west_index => 1) + ITensors.onehot(north_index => 2) * ITensors.onehot(west_index => 2)) * (ITensors.onehot(south_index => 1) * ITensors.onehot(east_index => 1) + ITensors.onehot(south_index => 2) * ITensors.onehot(east_index => 2)) * ITensors.onehot(sv => 1)
-            state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(west_index => 1) - ITensors.onehot(north_index => 2) * ITensors.onehot(west_index => 2)) * (ITensors.onehot(south_index => 1) * ITensors.onehot(east_index => 1) - ITensors.onehot(south_index => 2) * ITensors.onehot(east_index => 2)) * ITensors.onehot(sv => 2)
+            state  = state + (onehot(north_index => 1) * onehot(west_index => 1) + onehot(north_index => 2) * onehot(west_index => 2)) * (onehot(south_index => 1) * onehot(east_index => 1) + onehot(south_index => 2) * onehot(east_index => 2)) * onehot(sv => 1)
+            state  = state + (onehot(north_index => 1) * onehot(west_index => 1) - onehot(north_index => 2) * onehot(west_index => 2)) * (onehot(south_index => 1) * onehot(east_index => 1) - onehot(south_index => 2) * onehot(east_index => 2)) * onehot(sv => 2)
         end
         set!(tensors, v, state)
     end
@@ -128,7 +128,7 @@ Returns a `TensorNetwork` (not a `TensorNetworkState`); contract it to obtain
 ``Z(β)``.
 """
 function ising_partitionfunction(g::NamedGraph, β::Real; Js::Dictionary = Dictionary(edges(g), [1.0 for e in edges(g)]))
-    links = Dictionary(edges(g), [Index(2, "e$(src(e))_$(dst(e))") for e in edges(g)])
+    links = Dictionary(edges(g), [Index(2) for e in edges(g)])
     links = merge(links, Dictionary(reverse.(edges(g)), [links[e] for e in edges(g)]))
 
     # symmetric sqrt of Boltzmann matrix W = exp(β σσ')
@@ -150,7 +150,7 @@ function ising_partitionfunction(g::NamedGraph, β::Real; Js::Dictionary = Dicti
     ts = Dictionary{vertextype(g), ITensor}()
     for v in vertices(g)
         es = incident_edges(g, v; dir = :in)
-        t = ITensors.delta([links[e] for e in es])
+        t = delta([links[e] for e in es])
         for e in es
             t = noprime(ITensor(ComplexF64, sqrt_Ws[e], links[e], prime(links[e]))*t)
         end

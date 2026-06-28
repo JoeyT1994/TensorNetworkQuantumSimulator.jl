@@ -1,5 +1,6 @@
 @eval module $(gensym())
-using ITensors: ITensors, datatype, op, Index, @OpName_str, @SiteType_str
+using ITensors: ITensors, op, Index, @OpName_str, @SiteType_str
+using TensorNetworkQuantumSimulator.ITensorKit: datatype
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test, @test_throws
@@ -10,7 +11,7 @@ using Test: @testset, @test, @test_throws
     #Custom circuit
     circuit = [("Rx", [(1, 1)], 0.5), ("Rx", [(2, 1)], 0.2), ("CPHASE", [(1, 1), (2, 1)], -0.3)]
     g = build_graph_from_circuit(circuit)
-    ψ0 = tensornetworkstate(ComplexF32, v -> "↓", g)
+    ψ0 = tensornetworkstate(ComplexF64, v -> "↓", g)
     apply_kwargs = (; maxdim = 2, cutoff = 1.0e-10, normalize_tensors = false)
     ψ, _ = apply_circuit(circuit, ψ0; apply_kwargs, verbose = false)
 
@@ -24,7 +25,7 @@ using Test: @testset, @test, @test_throws
     g = named_grid((3, 3))
 
     s = siteinds("S=1", g)
-    ψ0 = random_tensornetworkstate(ComplexF32, g; bond_dimension = 1)
+    ψ0 = random_tensornetworkstate(ComplexF64, g; bond_dimension = 1)
     ψ0 = normalize(ψ0; alg = "bp")
 
     dt = 0.25

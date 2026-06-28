@@ -46,9 +46,28 @@ using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_grap
 
 using TensorOperations
 
-using ITensors: ITensors
-using ITensors: Index, ITensor, hasqns, noncommonind, combinedind, combiner, replaceinds, sim, onehot, delta, plev, dense, unioninds, uniqueinds, commonind, commoninds, replaceind, datatype, inds, dag, noprime, factorize_svd, prime, hascommoninds, itensor, map_diag!, @Algorithm_str, scalar, @OpName_str, @SiteType_str, denseblocks, tags
-using ITensorMPS
+using OMEinsumContractionOrders: GreedyMethod, TreeSA
+
+# ITensors is retained only as a matrix-data source for the operator/state
+# catalogue (ITensorKit.op/state bridge into it) and for the Algorithm/OpName/
+# SiteType dispatch machinery that the gate registry and message-update algorithms
+# build on. All tensor operations go through ITensorKit (its `ITensor` is a
+# `TensorMap`-backed wrapper).
+using ITensors: ITensors, Algorithm, @Algorithm_str, OpName, @OpName_str, SiteType, @SiteType_str, truncate
+
+using .ITensorKit: ITensorKit,
+    Index, ITensor, itensor, random_itensor, onehot, delta, directsum,
+    inds, plev, dim, space, dag, prime, noprime, sim, setprime,
+    replaceind, replaceinds, swapind,
+    commonind, commoninds, uniqueind, noncommonind, noncommoninds,
+    unioninds, hascommoninds, hasind,
+    combiner, combinedind, dense, denseblocks, hasqns,
+    storagetype, scalar, array,
+    map_diag, map_diag!, factorize_svd,
+    op, state, apply, disable_warn_order, contraction_sequence
+
+# Functions that TNQS adds methods to (extends) must be `import`ed, not `using`d.
+import .ITensorKit: uniqueinds, datatype, scalartype, contract
 
 using Adapt: adapt
 
