@@ -1,4 +1,5 @@
 using Graphs: Graphs, has_vertex
+import .ITensorsITensorBaseCompat as ITensors
 using NamedGraphs: NamedGraphs
 using Adapt
 

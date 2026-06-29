@@ -1,5 +1,7 @@
 using Dictionaries: Dictionary
 using Graphs: Graphs
+import .ITensorsITensorBaseCompat as ITensors
+using .ITensorsITensorBaseCompat: ITensor
 using NamedGraphs: NamedGraphs, add_edge!, incident_edges
 using NamedGraphs.GraphsExtensions: rem_edges!
 using Adapt

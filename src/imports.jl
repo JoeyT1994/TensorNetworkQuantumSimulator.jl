@@ -48,8 +48,10 @@ using TensorOperations
 
 # Legacy `ITensors` / `ITensorMPS` API, republished over the ITensorBase backend by the
 # `ITensorsITensorBaseCompat` submodule (included before this file). It is aliased as
-# `ITensors` so the source keeps Joey's `ITensors.foo` calls unchanged, and its legacy
-# names are imported for unqualified use.
+# `ITensors` so existing `ITensors.foo` call sites and `function ITensors.foo`
+# extensions keep working unchanged, and its legacy names are imported for unqualified
+# use. Each source file keeps its own `import`/`using` of this module exactly where it
+# referenced `ITensors`, so the per-file imports mirror the original ITensors-based code.
 import .ITensorsITensorBaseCompat as ITensors
 using .ITensorsITensorBaseCompat:
     inds, commoninds, commonind, uniqueinds, noncommonind, noncommoninds, unioninds, hascommoninds,
