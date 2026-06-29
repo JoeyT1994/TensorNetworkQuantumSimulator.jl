@@ -23,11 +23,11 @@ function sample(
             ψv, ψv_dag = network(projected_bp_cache)[v], dag(prime(network(projected_bp_cache)[v]))
             push!(tensors, ψv, ψv_dag)
             seq = contraction_sequence(tensors; alg = "optimal")
-            ρ = contract(tensors; sequence = seq)
+            ρ = ITensors.contract(tensors; sequence = seq)
 
-            ρ_tr = tr(ρ)
+            ρ_tr = ITensors.tr(ρ)
             ρ *= inv(ρ_tr)
-            ρ_diag = collect(real.(diag(array(ρ))))
+            ρ_diag = collect(real.(diag(ITensors.array(ρ))))
             config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
             # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
             set!(bit_string, v, config - 1)
@@ -232,10 +232,10 @@ function sample_partition!(
         ts = [incoming_ms; [ψv, ψvdag]]
         seq = contraction_sequence(ts; alg = "optimal")
         ρ = contract(ts; sequence = seq)
-        ρ_tr = tr(ρ)
+        ρ_tr = ITensors.tr(ρ)
         push!(traces, ρ_tr)
         ρ *= inv(ρ_tr)
-        ρ_diag = collect(real.(diag(array(ρ))))
+        ρ_diag = collect(real.(diag(ITensors.array(ρ))))
         config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
         # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
         set!(bit_string, v, config - 1)

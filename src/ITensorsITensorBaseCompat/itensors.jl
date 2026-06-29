@@ -10,17 +10,22 @@
 # ITensorBase keeps most of this API internal (unexported), so we reach for the
 # qualified names and re-publish the legacy spellings into the TNQS namespace.
 
-using ITensorBase: ITensorBase, AbstractITensor, Index, ITensor, NamedUnitRange
-# Call these ITensorBase functions directly — TNQS only calls them, never extends
-# them, so there is no reason to wrap them in forwarding methods. (`prime`/`noprime`
-# are owned below with a fallback, since TNQS also primes whole ITensors.)
-using ITensorBase: inds, name, nameddims, plev, tags, unnamed
-# `replaceinds` gets the legacy two-collection form below (a new argument shape on
-# the same operation), so it's imported for extension.
-import ITensorBase: replaceinds
-using LinearAlgebra: LinearAlgebra
-using Adapt: Adapt
 import MatrixAlgebraKit as MAK
+using Adapt: Adapt
+using ITensorBase: ITensorBase, AbstractITensor, ITensor, Index, NamedUnitRange, name,
+    nameddims, plev, tags, unnamed
+using LinearAlgebra: LinearAlgebra
+
+# Legacy `inds(t; plev, tags)` accepted index-filtering keywords; the next-gen
+# `ITensorBase.inds` takes none. Own a compat `inds` that forwards to `ITensorBase.inds`
+# and applies the legacy filters — a compat-owned function (like `prime`/`dag`), not a
+# pirated method on `ITensorBase.inds`.
+function inds(t::AbstractITensor; plev = nothing, tags = nothing)
+    is = ITensorBase.inds(t)
+    isnothing(plev) || (is = filter(i -> ITensorBase.plev(i) == plev, is))
+    isnothing(tags) || (is = filter(i -> hastags(i, tags), is))
+    return is
+end
 
 # Functions TNQS adds methods to for its own types (`scalartype`, `contract`,
 # `inner`, `datatype`). Rather than extend the upstream generics, TNQS owns these:
@@ -37,8 +42,9 @@ function inner end
 # callers build it by concatenation that can widen to `Vector{Any}` (e.g. splicing in
 # an empty environment list).
 function contract end
-contract(tensors::AbstractVector; sequence = nothing) =
-    isnothing(sequence) ? reduce(*, tensors) : _contract_sequence(tensors, sequence)
+function contract(tensors::AbstractVector; sequence = nothing)
+    return isnothing(sequence) ? reduce(*, tensors) : _contract_sequence(tensors, sequence)
+end
 _contract_sequence(tensors, s::Integer) = tensors[s]
 _contract_sequence(tensors, s) = reduce(*, (_contract_sequence(tensors, x) for x in s))
 
@@ -86,14 +92,18 @@ dag(is::Union{Tuple, AbstractVector}) = is
 # `prime` / `noprime`: ITensorBase primes an `Index`; TNQS also primes whole ITensors
 # (all dimnames). Owned here with a fallback to ITensorBase for the index case.
 prime(x) = ITensorBase.prime(x)
-prime(t::AbstractITensor) = nameddims(unnamed(t), map(ITensorBase.prime, ITensorBase.dimnames(t)))
+function prime(t::AbstractITensor)
+    return nameddims(unnamed(t), map(ITensorBase.prime, ITensorBase.dimnames(t)))
+end
 prime(is::Union{Tuple, AbstractVector{<:Index}}) = map(prime, is)
 noprime(x) = ITensorBase.noprime(x)
-noprime(t::AbstractITensor) = nameddims(unnamed(t), map(ITensorBase.noprime, ITensorBase.dimnames(t)))
+function noprime(t::AbstractITensor)
+    return nameddims(unnamed(t), map(ITensorBase.noprime, ITensorBase.dimnames(t)))
+end
 noprime(is::Union{Tuple, AbstractVector{<:Index}}) = map(noprime, is)
 
-# `replaceind` (singular) maps to a single-pair replacement; `prime`/`noprime`/
-# `plev`/`tags`/`inds` are imported from ITensorBase and used directly (above).
+# `replaceind` (singular) maps to a single-pair replacement, forwarding to the
+# compat-owned `replaceinds` (below).
 replaceind(t, p::Pair) = replaceinds(t, p)
 replaceind(t, from::Index, to::Index) = replaceinds(t, from => to)
 
@@ -105,24 +115,20 @@ replaceind(t, from::Index, to::Index) = replaceinds(t, from => to)
 _as_index_vec(x::Index) = [x]
 _as_index_vec(xs) = collect(xs)
 cat_inds(xs...) = reduce(vcat, map(_as_index_vec, xs))
-# TYPE PIRACY (upstream candidate → ITensorBase): extends `ITensorBase.replaceinds`
-# (imported above) with arg types it doesn't own. These collection-argument forms are
-# generally useful and should move into ITensorBase, retiring the shim.
+# Legacy `replaceinds` accepted collection arguments (`replaceinds(t, [i, k], [j, l])`
+# and `replaceinds(t, [i, k] => [j, l])`); ITensorBase provides only the pair-splat form
+# (`replaceinds(t, i => j, k => l)`). Own a compat `replaceinds` that handles the
+# collection forms and forwards the pair-splat form to `ITensorBase.replaceinds` — a
+# compat-owned function (like `inds`/`prime`/`dag`), not a pirated method.
 #
-# Legacy two-collection form `replaceinds(t, [i, k], [j, l])` — ITensorBase provides
-# only the pair-splat form, so we extend it with this method. NB: an `Index` is itself
-# an `AbstractVector` (it's a `NamedUnitRange`), so the collection types are constrained
-# to `AbstractVector{<:Index}` to avoid capturing a bare `Index` (an `AbstractVector{Int}`)
-# and iterating over its integer range.
+# NB: an `Index` is itself an `AbstractVector` (it's a `NamedUnitRange`), so the
+# collection types are constrained to `AbstractVector{<:Index}` to avoid capturing a
+# bare `Index` (an `AbstractVector{Int}`) and iterating over its integer range.
 const _IndexColl = Union{Tuple{Vararg{Index}}, AbstractVector{<:Index}}
+replaceinds(t, pairs::Pair...) = ITensorBase.replaceinds(t, pairs...)
 function replaceinds(t, from::_IndexColl, to::_IndexColl)
     return replaceinds(t, map(=>, from, to)...)
 end
-# TYPE PIRACY (upstream candidate → ITensorBase): same as above.
-# Legacy single-`Pair`-of-collections form `replaceinds(t, [i, k] => [j, l])`. Without
-# this, the call falls through to ITensorBase's `replaceinds(t, pairs::Pair...)`, which
-# expects `Index => Index` pairs and silently no-ops on a `collection => collection`
-# pair (it never matches a bare collection against an index).
 function replaceinds(t::AbstractITensor, p::Pair{<:_IndexColl, <:_IndexColl})
     return replaceinds(t, first(p), last(p))
 end
@@ -173,19 +179,16 @@ function diagindices(a::AbstractArray)
 end
 diagview(a::AbstractArray) = @view a[diagindices(a)]
 
-# TYPE PIRACY (upstream candidate → ITensorBase): extends `LinearAlgebra.diag` to return
-# an ITensor's diagonal. This also makes `LinearAlgebra.tr` work, since its generic
-# definition is `sum(diag(·))` (legacy ITensors provided `diag(::ITensor)` the same way,
-# and TNQS's sampling path calls `tr(ρ)` on a reduced density matrix).
-LinearAlgebra.diag(T::AbstractITensor) = collect(diagview(unnamed(T)))
-
 function diagonaltensor(diag::AbstractVector, ax::Tuple{Vararg{AbstractUnitRange}})
     a = similar(diag, ax)
     fill!(a, zero(eltype(a)))
     diagview(a) .= diag
     return a
 end
-function diagonaltensor(diag::AbstractVector, is::Tuple{NamedUnitRange, Vararg{NamedUnitRange}})
+function diagonaltensor(
+        diag::AbstractVector,
+        is::Tuple{NamedUnitRange, Vararg{NamedUnitRange}}
+    )
     return nameddims(diagonaltensor(diag, unnamed.(is)), name.(is))
 end
 
@@ -195,6 +198,20 @@ delta(eltype::Type, is::AbstractVector{<:Index}) = delta(eltype, Tuple(is))
 delta(is::Tuple) = delta(Float64, is)
 delta(is::Index...) = delta(Float64, is)
 delta(is::AbstractVector{<:Index}) = delta(Float64, Tuple(is))
+
+# Trace of an ITensor over its prime pairs (legacy `tr`): contract each unprimed index
+# with its prime via a `delta`, the same construction `normalize_rdm` uses. This is the
+# index-paired definition — independent of storage order — rather than `sum` of the
+# underlying array's storage diagonal, which is only the trace for a rank-2 tensor whose
+# legs happen to be ordered to align. Accessed qualified (`ITensors.tr`) so it doesn't
+# shadow `LinearAlgebra.tr`, which TNQS still calls on plain matrices.
+function tr(t::AbstractITensor)
+    out = copy(t)
+    for i in inds(t; plev = 0)
+        out *= Adapt.adapt(datatype(t), delta(i, prime(i)))
+    end
+    return scalar(out)
+end
 
 # One-hot vector along `i` at position `p` (legacy `onehot(i => p)`).
 function onehot(eltype::Type, (i, p)::Pair{<:Index})
@@ -231,7 +248,9 @@ apply(o::AbstractITensor, ψ::AbstractITensor) = noprime(o * ψ)
 _astuple(x::Index) = (x,)
 _astuple(x) = Tuple(x)
 
-svd(a::AbstractITensor, codomain; kwargs...) = MAK.svd_compact(a, _astuple(codomain); kwargs...)
+function svd(a::AbstractITensor, codomain; kwargs...)
+    return MAK.svd_compact(a, _astuple(codomain); kwargs...)
+end
 function svd(a::AbstractITensor, codomain, domain; kwargs...)
     return MAK.svd_compact(a, _astuple(codomain), _astuple(domain); kwargs...)
 end
@@ -246,9 +265,18 @@ end
 # truncation kwargs (`cutoff`/`maxdim`/`mindim`) are not yet translated to MAK's
 # `trunc=(; ...)` spec — see api_migration_map.md; the current callsites pass
 # `cutoff = nothing` (full decomposition).
-function _hermitian_eigh(m::AbstractITensor, codomain, domain; ishermitian = false, cutoff = nothing)
-    ishermitian || error("the compat `eigen` only supports the hermitian case (ishermitian = true)")
-    isnothing(cutoff) || error("the compat `eigen` does not yet translate the `cutoff` truncation kwarg to MatrixAlgebraKit's `trunc` spec")
+function _hermitian_eigh(
+        m::AbstractITensor,
+        codomain,
+        domain;
+        ishermitian = false,
+        cutoff = nothing
+    )
+    ishermitian ||
+        error("the compat `eigen` only supports the hermitian case (ishermitian = true)")
+    isnothing(cutoff) || error(
+        "the compat `eigen` does not yet translate the `cutoff` truncation kwarg to MatrixAlgebraKit's `trunc` spec"
+    )
     cod, dom = _astuple(codomain), _astuple(domain)
     # `MAK.eigh_full` rejects a matrix that is hermitian only up to numerical noise, but
     # the caller asserts `ishermitian = true`. Project onto the hermitian part first
@@ -266,7 +294,9 @@ end
 # Partitioned form `eigen(m, Linds, Rinds)` reproduces legacy ITensors' reconstruction
 # `m = Vt * D * dag(V)` (with `Vt` the relabeling of `V` from `Rinds` to `Linds`), which
 # is what `eigendecomp`/`pseudo_sqrt_inv_sqrt` rely on — no conjugation of `U`.
-eigen(m::AbstractITensor, codomain, domain; kwargs...) = _hermitian_eigh(m, codomain, domain; kwargs...)
+function eigen(m::AbstractITensor, codomain, domain; kwargs...)
+    return _hermitian_eigh(m, codomain, domain; kwargs...)
+end
 
 # No-partition form `eigen(m)` matches legacy ITensors' `eigen(A)`, which auto-partitions
 # `Ris = filterinds(plev = 0)`, `Lis = Ris'`. That orientation is the adjoint view of the
@@ -277,7 +307,7 @@ function eigen(m::AbstractITensor; kwargs...)
     p0 = filter(i -> plev(i) == 0, is)
     p1 = filter(i -> plev(i) != 0, is)
     length(p0) == length(p1) || error(
-        "`eigen` without an index partition expects each plev-0 index to be paired with its prime",
+        "`eigen` without an index partition expects each plev-0 index to be paired with its prime"
     )
     D, U = _hermitian_eigh(m, Tuple(p1), Tuple(p0); kwargs...)
     return D, conj(U)
@@ -293,7 +323,8 @@ end
 function _trunc_spec(cutoff, maxdim)
     specs = []
     isnothing(maxdim) || maxdim ≥ typemax(Int) || push!(specs, MAK.truncrank(maxdim))
-    isnothing(cutoff) || iszero(cutoff) || push!(specs, MAK.truncerror(; rtol = sqrt(cutoff), p = 2))
+    isnothing(cutoff) || iszero(cutoff) ||
+        push!(specs, MAK.truncerror(; rtol = sqrt(cutoff), p = 2))
     isempty(specs) && return nothing
     return reduce(&, specs)
 end
@@ -304,7 +335,14 @@ end
 # makes `L` isometric, `"right"` makes `R` isometric. With no truncation this is a
 # plain QR/LQ; with `cutoff`/`maxdim` it is a truncated SVD whose singular values are
 # absorbed into the non-isometric factor. `tags`, if given, names the new bond.
-function factorize(a::AbstractITensor, linds...; ortho = "left", cutoff = nothing, maxdim = nothing, tags = nothing)
+function factorize(
+        a::AbstractITensor,
+        linds...;
+        ortho = "left",
+        cutoff = nothing,
+        maxdim = nothing,
+        tags = nothing
+    )
     allinds = collect(inds(a))
     left = filter(∈(allinds), cat_inds(linds...))
     right = setdiff(allinds, left)
@@ -315,7 +353,9 @@ function factorize(a::AbstractITensor, linds...; ortho = "left", cutoff = nothin
         elseif ortho == "right"
             L, R = MAK.lq_compact(a, Tuple(left), Tuple(right))
         else
-            error("compat `factorize` supports ortho = \"left\" / \"right\" (got $(repr(ortho)))")
+            error(
+                "compat `factorize` supports ortho = \"left\" / \"right\" (got $(repr(ortho)))"
+            )
         end
     else
         U, S, Vt = MAK.svd_trunc(a, Tuple(left), Tuple(right); trunc)
@@ -324,7 +364,9 @@ function factorize(a::AbstractITensor, linds...; ortho = "left", cutoff = nothin
         elseif ortho == "right"
             L, R = U * S, Vt
         else
-            error("compat `factorize` supports ortho = \"left\" / \"right\" (got $(repr(ortho)))")
+            error(
+                "compat `factorize` supports ortho = \"left\" / \"right\" (got $(repr(ortho)))"
+            )
         end
     end
     if !isnothing(tags)
@@ -353,24 +395,40 @@ function _absorb_svd(U, S, Vt, ortho)
         sqrtσ = sqrt.(abs.(diagview(unnamed(S))))
         return U * diagonaltensor(sqrtσ, (u, up)), Vt * diagonaltensor(sqrtσ, (v, up))
     end
-    return error("compat `factorize_svd` supports ortho = \"left\" / \"right\" / \"none\" (got $(repr(ortho)))")
+    return error(
+        "compat `factorize_svd` supports ortho = \"left\" / \"right\" / \"none\" (got $(repr(ortho)))"
+    )
 end
 
 # Legacy `factorize_svd(a, linds...; ortho, singular_values!, cutoff, maxdim, tags)`:
 # an always-SVD factorization returning `(L, R, spec)`. `spec.truncerr` is the fraction
 # of squared spectral weight discarded (SVD preserves the Frobenius norm, so the total
 # weight is `norm(a)^2`). If `singular_values!` is a `Ref`, it is filled with `S`.
-function factorize_svd(a::AbstractITensor, linds...; ortho = "left", singular_values! = nothing, cutoff = nothing, maxdim = nothing, tags = nothing)
+function factorize_svd(
+        a::AbstractITensor,
+        linds...;
+        ortho = "left",
+        singular_values! = nothing,
+        cutoff = nothing,
+        maxdim = nothing,
+        tags = nothing
+    )
     allinds = collect(inds(a))
     left = filter(∈(allinds), cat_inds(linds...))
     right = setdiff(allinds, left)
     trunc = _trunc_spec(cutoff, maxdim)
-    U, S, Vt = isnothing(trunc) ?
-        MAK.svd_compact(a, Tuple(left), Tuple(right)) :
+    U, S, Vt = if isnothing(trunc)
+        MAK.svd_compact(a, Tuple(left), Tuple(right))
+    else
         MAK.svd_trunc(a, Tuple(left), Tuple(right); trunc)
+    end
     total = abs2(LinearAlgebra.norm(a))
     kept = sum(abs2, diagview(unnamed(S)))
-    truncerr = iszero(total) ? zero(real(scalartype(a))) : max(zero(kept / total), 1 - kept / total)
+    truncerr = if iszero(total)
+        zero(real(scalartype(a)))
+    else
+        max(zero(kept / total), 1 - kept / total)
+    end
     isnothing(singular_values!) || (singular_values![] = S)
     L, R = _absorb_svd(U, S, Vt, ortho)
     if !isnothing(tags)
@@ -397,7 +455,9 @@ end
 combiner(is::Index...; kwargs...) = combiner(is; kwargs...)
 combiner(is::AbstractVector{<:Index}; kwargs...) = combiner(Tuple(is); kwargs...)
 function combinedind(c::AbstractITensor)
-    return only(filter(i -> get(ITensorBase.tags(i), _COMBINER_TAG, "") == "combined", inds(c)))
+    return only(
+        filter(i -> get(ITensorBase.tags(i), _COMBINER_TAG, "") == "combined", inds(c))
+    )
 end
 
 #
@@ -465,7 +525,7 @@ hasqns(::AbstractITensor) = false
 hasqns(::Any) = false
 
 # The operator / named-state system (`op` / `state`) is vendored separately in
-# `itensor_compat/ops.jl`, included right after this file.
+# `ops.jl`, included right after this file by the module file.
 
 # Direct sum (legacy `directsum`): block-diagonal placement of several tensors along
 # specified axes, with the non-summed (shared) axes preserved. Vendored densely
@@ -511,7 +571,13 @@ Algorithm{Alg}(; kwargs...) where {Alg} = Algorithm{Alg}((; kwargs...))
 Algorithm(alg::Symbol; kwargs...) = Algorithm{alg}(; kwargs...)
 Algorithm(alg::AbstractString; kwargs...) = Algorithm(Symbol(alg); kwargs...)
 Algorithm(alg::Algorithm) = alg
-Base.getproperty(alg::Algorithm, name::Symbol) = name === :kwargs ? getfield(alg, :kwargs) : getfield(getfield(alg, :kwargs), name)
+function Base.getproperty(alg::Algorithm, name::Symbol)
+    return if name === :kwargs
+        getfield(alg, :kwargs)
+    else
+        getfield(getfield(alg, :kwargs), name)
+    end
+end
 algorithm_name(::Algorithm{Alg}) where {Alg} = Alg
 macro Algorithm_str(s)
     return :(Algorithm{$(Expr(:quote, Symbol(s)))})

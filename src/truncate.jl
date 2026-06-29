@@ -1,10 +1,5 @@
 using SimpleGraphAlgorithms: SimpleGraphAlgorithms
 
-# Extend `Base.truncate` (which always exists and is exported) rather than defining a
-# distinct `truncate`, so a `using TensorNetworkQuantumSimulator` callsite sees one
-# unambiguous binding.
-import Base: truncate
-
 default_truncate_alg(tns::TensorNetworkState) = nothing
 
 function truncatable_edge(cache::AbstractBeliefPropagationCache, e::NamedEdge)
@@ -14,7 +9,7 @@ function truncatable_edge(cache::AbstractBeliefPropagationCache, e::NamedEdge)
     return true
 end
 
-function truncate(bpc::BeliefPropagationCache; bp_update_kwargs = default_bp_update_kwargs(bpc), maxdim::Integer, cutoff = nothing, edge_color = true, normalize_tensors = true)
+function ITensors.truncate(bpc::BeliefPropagationCache; bp_update_kwargs = default_bp_update_kwargs(bpc), maxdim::Integer, cutoff = nothing, edge_color = true, normalize_tensors = true)
     bpc = copy(bpc)
     s = siteinds(network(bpc))
     apply_kwargs = (; maxdim, cutoff, normalize_tensors)
@@ -26,7 +21,7 @@ function truncate(bpc::BeliefPropagationCache; bp_update_kwargs = default_bp_upd
         for eg in edge_groups
             for e in eg
                 if truncatable_edge(bpc, e)
-                    g1, g2 = reduce(*, [op("I", sv) for sv in s[src(e)] ]), reduce(*, [op("I", sv) for sv in s[dst(e)] ])
+                    g1, g2 = reduce(*, [ITensors.op("I", sv) for sv in s[src(e)] ]), reduce(*, [ITensors.op("I", sv) for sv in s[dst(e)] ])
                     apply_gate!(adapt(dtype)(g1 * g2), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
                 end
             end
@@ -34,7 +29,7 @@ function truncate(bpc::BeliefPropagationCache; bp_update_kwargs = default_bp_upd
         end
     else
         for e in edges(bpc)
-            g1, g2 = reduce(*, [op("I", sv) for sv in s[src(e)]]), reduce(*, [op("I", sv) for sv in s[dst(e)]])
+            g1, g2 = reduce(*, [ITensors.op("I", sv) for sv in s[src(e)]]), reduce(*, [ITensors.op("I", sv) for sv in s[dst(e)]])
             apply_gate!(adapt(dtype)(g1 * g2), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
             bpc = update(bpc; bp_update_kwargs...)
         end
@@ -42,7 +37,7 @@ function truncate(bpc::BeliefPropagationCache; bp_update_kwargs = default_bp_upd
     return bpc
 end
 
-function truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff = nothing, normalize_tensors = true)
+function ITensors.truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff = nothing, normalize_tensors = true)
     bmps_cache = copy(bmps_cache)
     s = siteinds(network(bmps_cache))
     apply_kwargs = (; maxdim, cutoff)
@@ -55,7 +50,7 @@ function truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff = nothin
         !isempty(seq) && update_partition!(bmps_cache, seq)
         for e in reverse.(reverse(seq))
             if truncatable_edge(bmps_cache, e)
-                g1, g2 = reduce(*, [op("I", sv) for sv in s[src(e)]]), reduce(*, [op("I", sv) for sv in s[dst(e)]])
+                g1, g2 = reduce(*, [ITensors.op("I", sv) for sv in s[src(e)]]), reduce(*, [ITensors.op("I", sv) for sv in s[dst(e)]])
                 envs = incoming_messages(bmps_cache, [src(e), dst(e)])
                 ρv1, ρv2 = full_update(adapt(dtype)(g1 * g2), network(bmps_cache), [src(e), dst(e)]; envs, apply_kwargs...)
                 if normalize_tensors
@@ -76,14 +71,14 @@ function truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff = nothin
     return bmps_cache
 end
 
-function truncate(alg::Algorithm"bp", tns::TensorNetworkState; kwargs...)
+function ITensors.truncate(alg::Algorithm"bp", tns::TensorNetworkState; kwargs...)
     bp_cache = BeliefPropagationCache(tns)
     bp_cache = update(bp_cache)
     bp_cache = truncate(bp_cache; kwargs...)
     return network(bp_cache)
 end
 
-function truncate(alg::Algorithm"boundarymps", tns::TensorNetworkState; mps_bond_dimension::Integer, gauge_state = true, kwargs...)
+function ITensors.truncate(alg::Algorithm"boundarymps", tns::TensorNetworkState; mps_bond_dimension::Integer, gauge_state = true, kwargs...)
     tns = copy(tns)
     bmps_cache = BoundaryMPSCache(tns, mps_bond_dimension; partition_by = "row", gauge_state)
     leaves = leaf_vertices(quotient_graph(supergraph(bmps_cache)))
@@ -118,7 +113,7 @@ Truncate the virtual indices of tensors in the given `TensorNetworkState` using 
 # Returns
 - The truncated `TensorNetworkState`.
 """
-function truncate(tns::TensorNetworkState; alg = default_truncate_alg(tns), kwargs...)
+function ITensors.truncate(tns::TensorNetworkState; alg = default_truncate_alg(tns), kwargs...)
     algorithm_check(tns, "truncate", alg)
     return truncate(Algorithm(alg), tns; kwargs...)
 end

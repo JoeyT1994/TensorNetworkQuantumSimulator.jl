@@ -31,22 +31,22 @@ Compute the inner product ⟨ψ|ϕ⟩ between two `TensorNetworkState`s using th
     ϕ = random_tensornetworkstate(ComplexF32, g, s; bond_dimension = 4)
 
     # Exact inner product
-    ip_exact = inner(ψ, ϕ; alg = "exact")
+    ip_exact = ITensors.inner(ψ, ϕ; alg = "exact")
 
     # Belief propagation inner product
-    ip_bp = inner(ψ, ϕ; alg = "bp")
+    ip_bp = ITensors.inner(ψ, ϕ; alg = "bp")
 
     # Boundary MPS inner product with bond dimension 10
-    ip_bmps = inner(ψ, ϕ; alg = "boundarymps", mps_bond_dimension = 10)
+    ip_bmps = ITensors.inner(ψ, ϕ; alg = "boundarymps", mps_bond_dimension = 10)
     ```
 """
-function inner(ψ::TensorNetworkState, ϕ::TensorNetworkState; alg, kwargs...)
+function ITensors.inner(ψ::TensorNetworkState, ϕ::TensorNetworkState; alg, kwargs...)
     algorithm_check(ψ, "inner", alg)
     algorithm_check(ϕ, "inner", alg)
     return inner(Algorithm(alg), ψ, ϕ; kwargs...)
 end
 
-function inner(
+function ITensors.inner(
         alg::Algorithm"exact", blf::BilinearForm;
         contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod())
     )
@@ -55,26 +55,26 @@ function inner(
     return scalar(contract(blf_tensors; sequence = seq))
 end
 
-function inner(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
+function ITensors.inner(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
     tn = network(cache)
     z = cache_partitionfunction(alg, cache; max_configuration_size)
     tn isa BilinearForm && return z
     return state_error("BilinearForm")
 end
 
-function inner(alg::Union{Algorithm"bp", Algorithm"loopcorrections"}, ψ::TensorNetworkState, ϕ::TensorNetworkState; cache_update_kwargs = (;), kwargs...)
+function ITensors.inner(alg::Union{Algorithm"bp", Algorithm"loopcorrections"}, ψ::TensorNetworkState, ϕ::TensorNetworkState; cache_update_kwargs = (;), kwargs...)
     ψϕ_bpc = BeliefPropagationCache(BilinearForm(ψ, ϕ))
     ψϕ_bpc = update(ψϕ_bpc; cache_update_kwargs...)
     return inner(alg, ψϕ_bpc; kwargs...)
 end
 
-function inner(alg::Algorithm"boundarymps", ψ::TensorNetworkState, ϕ::TensorNetworkState; mps_bond_dimension::Integer, partition_by = "row", cache_update_kwargs = (;), kwargs...)
+function ITensors.inner(alg::Algorithm"boundarymps", ψ::TensorNetworkState, ϕ::TensorNetworkState; mps_bond_dimension::Integer, partition_by = "row", cache_update_kwargs = (;), kwargs...)
     ψϕ_bmps = BoundaryMPSCache(BilinearForm(ψ, ϕ), mps_bond_dimension; partition_by)
     cache_update_kwargs = with_default_maxiter(cache_update_kwargs, ψϕ_bmps)
     ψϕ_bmps = update(ψϕ_bmps; cache_update_kwargs...)
     return inner(alg, ψϕ_bmps; kwargs...)
 end
 
-function inner(alg::Algorithm"exact", ψ::TensorNetworkState, ϕ::TensorNetworkState)
+function ITensors.inner(alg::Algorithm"exact", ψ::TensorNetworkState, ϕ::TensorNetworkState)
     return inner(alg, BilinearForm(ψ, ϕ))
 end

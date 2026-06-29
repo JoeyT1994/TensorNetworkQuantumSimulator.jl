@@ -27,7 +27,7 @@ function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = site
         es = incident_edges(g, v; dir = :in)
         ninds = length(s[v])
         ninds % 2 != 0 && error("Odd number of siteinds on vertex $v - don't know how to partition into rows and column")
-        t = delta(eltype, [links[e] for e in es])
+        t = ITensors.delta(eltype, [links[e] for e in es])
         if ninds > 0
             row_inds, col_inds = s[v][1:(ninds÷2)], s[v][((ninds÷2)+1):ninds]
             id = identity_tensor(eltype, row_inds, col_inds)
@@ -78,11 +78,11 @@ function toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_g
         west_index = e_dict[NamedEdge(v => (v[1], mod1(v[2]-1, n)))]
 
         if iseven(sum(v))
-            state  = state + (onehot(north_index => 1) * onehot(east_index => 1) + onehot(north_index => 2) * onehot(east_index => 2)) * (onehot(south_index => 1) * onehot(west_index => 1) + onehot(south_index => 2) * onehot(west_index => 2)) * onehot(sv => 1)
-            state  = state + (onehot(north_index => 1) * onehot(east_index => 1) - onehot(north_index => 2) * onehot(east_index => 2)) * (onehot(south_index => 1) * onehot(west_index => 1) - onehot(south_index => 2) * onehot(west_index => 2)) * onehot(sv => 2)
+            state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(east_index => 1) + ITensors.onehot(north_index => 2) * ITensors.onehot(east_index => 2)) * (ITensors.onehot(south_index => 1) * ITensors.onehot(west_index => 1) + ITensors.onehot(south_index => 2) * ITensors.onehot(west_index => 2)) * ITensors.onehot(sv => 1)
+            state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(east_index => 1) - ITensors.onehot(north_index => 2) * ITensors.onehot(east_index => 2)) * (ITensors.onehot(south_index => 1) * ITensors.onehot(west_index => 1) - ITensors.onehot(south_index => 2) * ITensors.onehot(west_index => 2)) * ITensors.onehot(sv => 2)
         else
-            state  = state + (onehot(north_index => 1) * onehot(west_index => 1) + onehot(north_index => 2) * onehot(west_index => 2)) * (onehot(south_index => 1) * onehot(east_index => 1) + onehot(south_index => 2) * onehot(east_index => 2)) * onehot(sv => 1)
-            state  = state + (onehot(north_index => 1) * onehot(west_index => 1) - onehot(north_index => 2) * onehot(west_index => 2)) * (onehot(south_index => 1) * onehot(east_index => 1) - onehot(south_index => 2) * onehot(east_index => 2)) * onehot(sv => 2)
+            state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(west_index => 1) + ITensors.onehot(north_index => 2) * ITensors.onehot(west_index => 2)) * (ITensors.onehot(south_index => 1) * ITensors.onehot(east_index => 1) + ITensors.onehot(south_index => 2) * ITensors.onehot(east_index => 2)) * ITensors.onehot(sv => 1)
+            state  = state + (ITensors.onehot(north_index => 1) * ITensors.onehot(west_index => 1) - ITensors.onehot(north_index => 2) * ITensors.onehot(west_index => 2)) * (ITensors.onehot(south_index => 1) * ITensors.onehot(east_index => 1) - ITensors.onehot(south_index => 2) * ITensors.onehot(east_index => 2)) * ITensors.onehot(sv => 2)
         end
         set!(tensors, v, state)
     end
@@ -133,7 +133,7 @@ function ising_partitionfunction(g::NamedGraph, β::Real; Js::Dictionary = Dicti
     ts = Dictionary{vertextype(g), ITensor}()
     for v in vertices(g)
         es = incident_edges(g, v; dir = :in)
-        t = delta([links[e] for e in es])
+        t = ITensors.delta([links[e] for e in es])
         for e in es
             t = noprime(ITensor(ComplexF64, sqrt_Ws[e], links[e], prime(links[e]))*t)
         end
