@@ -18,8 +18,8 @@ end
 function pseudo_sqrt_inv_sqrt(M::ITensor; cutoff = 10 * eps(real(scalartype(M))))
     @assert length(inds(M)) == 2
     Q, D, Qdag = eigendecomp(M, inds(M)[1], inds(M)[2]; ishermitian = true)
-    D_sqrt = map_diag(x -> iszero(x) || abs(x) < cutoff ? 0 : sqrt(x), D)
-    D_inv_sqrt = map_diag(x -> iszero(x) || abs(x) < cutoff ? 0 : inv(sqrt(x)), D)
+    D_sqrt = ITensors.map_diag(x -> iszero(x) || abs(x) < cutoff ? 0 : sqrt(x), D)
+    D_inv_sqrt = ITensors.map_diag(x -> iszero(x) || abs(x) < cutoff ? 0 : inv(sqrt(x)), D)
     M_sqrt = Q * D_sqrt * Qdag
     M_inv_sqrt = Q * D_inv_sqrt * Qdag
     return M_sqrt, M_inv_sqrt
@@ -30,7 +30,7 @@ function eigendecomp(A::ITensor, linds, rinds; ishermitian = false, kwargs...)
     @assert ishermitian
     D, U = safe_eigen(A, linds, rinds; ishermitian, kwargs...)
     ul, ur = noncommonind(D, U), commonind(D, U)
-    Ul = replaceinds(U, cat_inds(rinds, ur), cat_inds(linds, ul))
+    Ul = replaceinds(U, [rinds, ur], [linds, ul])
     return Ul, D, dag(U)
 end
 
@@ -38,8 +38,8 @@ end
 adapt_like(ref, t) = adapt(datatype(ref))(t)
 
 function identity_tensor(eltype, row_inds::Vector{<:Index}, col_inds::Vector{<:Index})
-    c_row, c_col = combiner(row_inds),combiner(col_inds)
-    t= denseblocks(delta(eltype, combinedind(c_row), combinedind(c_col)))
+    c_row, c_col = ITensors.combiner(row_inds),ITensors.combiner(col_inds)
+    t= ITensors.denseblocks(ITensors.delta(eltype, ITensors.combinedind(c_row), ITensors.combinedind(c_col)))
     return (t * c_row)*c_col
 end
 
@@ -89,20 +89,20 @@ end
 
 """
     safe_eigen(m::ITensor, args...; kwargs...)
-    A wrapper around eigen that ensures eigen computations are done in Float64/ComplexF64 precision on CPU for better numerical stability.
+    A wrapper around ITensors.eigen that ensures eigen computations are done in Float64/ComplexF64 precision on CPU for better numerical stability.
 """
 function safe_eigen(m::ITensor, args...; kwargs...)
     dtype = datatype(m)
     e = eltype(m)
     if e == ComplexF64 || e == Float64
-        return eigen(m, args...; kwargs...)
+        return ITensors.eigen(m, args...; kwargs...)
     elseif e == Float32
         m = adapt(Vector{Float64}, m)
-        D, U = eigen(m, args...; kwargs...)
+        D, U = ITensors.eigen(m, args...; kwargs...)
         return adapt(dtype)(D), adapt(dtype)(U)
     elseif e == ComplexF32
         m = adapt(Vector{ComplexF64}, m)
-        D, U = eigen(m, args...; kwargs...)
+        D, U = ITensors.eigen(m, args...; kwargs...)
         return adapt(dtype)(D), adapt(dtype)(U)
     end
 end

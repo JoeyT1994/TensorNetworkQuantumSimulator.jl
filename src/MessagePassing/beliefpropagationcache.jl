@@ -1,6 +1,8 @@
 using Dictionaries: Dictionary, set!, delete!
 using Graphs: AbstractGraph, is_tree, connected_components
 using NamedGraphs.GraphsExtensions: default_root_vertex, forest_cover, post_order_dfs_edges
+using .ITensorsITensorBaseCompat: dim, ITensor, delta, Algorithm
+using .ITensorsITensorBaseCompat: scalartype
 using LinearAlgebra: normalize
 
 #TODO: Make this show() nicely.
@@ -120,7 +122,7 @@ end
 
 function default_bp_update_kwargs(tn::AbstractTensorNetwork)
     maxiter = is_tree(tn) ? 1 : _default_bp_update_maxiter
-    tolerance = default_tolerance( scalartype(tn))
+    tolerance = default_tolerance(ITensors.scalartype(tn))
     verbose = false
     return (; maxiter, tolerance, verbose)
 end
@@ -128,9 +130,9 @@ end
 default_bp_update_kwargs(bp_cache::BeliefPropagationCache) = default_bp_update_kwargs(network(bp_cache))
 
 function make_hermitian(A::ITensor)
-    A_inds = inds(A)
+    A_inds = ITensors.inds(A)
     @assert length(A_inds) == 2
-    return (A + swapind(dag(A), first(A_inds), last(A_inds))) / 2
+    return (A + ITensors.swapind(dag(A), first(A_inds), last(A_inds))) / 2
 end
 
 function rescale_messages!(bp_cache::BeliefPropagationCache, edges::Vector{<:AbstractEdge})
@@ -179,10 +181,10 @@ function loop_correlation(bpc::BeliefPropagationCache, loop::Vector{<:NamedEdge}
     seq = contraction_sequence(tensors; alg = "omeinsum", optimizer = GreedyMethod())
     t = contract(tensors; sequence = seq)
 
-    row_combiner, col_combiner = combiner(e_virtualinds), combiner(e_virtualinds_sim)
+    row_combiner, col_combiner = ITensors.combiner(e_virtualinds), ITensors.combiner(e_virtualinds_sim)
     t = t * row_combiner * col_combiner
     t = adapt(Vector{ComplexF64})(t)
-    t =  array(t)
+    t = ITensors.array(t)
     λs = reverse(sort(LinearAlgebra.eigvals(t); by = abs))
     err = 1 - abs(λs[1]) / sum(abs.(λs))
     return err

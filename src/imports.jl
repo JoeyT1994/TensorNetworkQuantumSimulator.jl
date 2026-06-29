@@ -46,11 +46,25 @@ using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_grap
 
 using TensorOperations
 
-# Next-gen ITensor backend. The legacy `ITensors` / `ITensorMPS` API that TNQS was
-# written against is provided by the compatibility layer in `itensor_compat/`
-# (included right after this file), which re-publishes the legacy names in terms of
-# `ITensorBase`, `TensorAlgebra`, and `MatrixAlgebraKit`.
-using ITensorBase: ITensorBase, Index, ITensor
+# Legacy `ITensors` / `ITensorMPS` API, republished over the ITensorBase backend by the
+# `ITensorsITensorBaseCompat` submodule (included before this file). It is aliased as
+# `ITensors` so the source keeps Joey's `ITensors.foo` calls unchanged, and its legacy
+# names are imported for unqualified use.
+import .ITensorsITensorBaseCompat as ITensors
+using .ITensorsITensorBaseCompat:
+    inds, commoninds, commonind, uniqueinds, noncommonind, noncommoninds, unioninds, hascommoninds,
+    sim, dag, prime, noprime, replaceind, replaceinds, dim, swapind,
+    itensor, random_itensor, scalar, delta, onehot, combiner, combinedind,
+    qr, svd, eigen, factorize, factorize_svd,
+    map_diag, map_diag!,
+    scalartype, datatype, array, data,
+    denseblocks, dense, hasqns,
+    contract, inner, apply,
+    directsum, disable_warn_order,
+    Algorithm, @Algorithm_str,
+    hastags,
+    state, op, OpName, SiteType, @OpName_str, @SiteType_str
+using ITensorBase: ITensorBase, Index, ITensor, name, plev, tags
 
 using Adapt: adapt
 

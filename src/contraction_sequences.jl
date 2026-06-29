@@ -1,3 +1,4 @@
+using .ITensorsITensorBaseCompat: Index, ITensor, @Algorithm_str, inds, noncommoninds, dim
 using TensorOperations: TensorOperations, optimaltree
 using OMEinsumContractionOrders: OMEinsumContractionOrders, optimize_code, EinCode, NestedEinsum, TreeSA, GreedyMethod, SABipartite, Treewidth, ExactTreewidth, HyperND
 
@@ -14,7 +15,7 @@ end
 function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:ITensor}; prune_tensors = false)
     #Needed because tensor operations bugs on trivial tensors
     if prune_tensors
-        disable_warn_order()
+        ITensors.disable_warn_order()
         tensors = prune_trivial_tensors(tensors)
     end
     network = collect.(inds.(tensors))

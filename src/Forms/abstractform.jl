@@ -6,8 +6,8 @@ abstract type AbstractForm{V} <: AbstractTensorNetwork{V} end
 #Forward onto the ket
 for f in [
         :(graph),
-        :(datatype),
-        :( scalartype),
+        :(ITensors.datatype),
+        :(ITensors.scalartype),
         :(NamedGraphs.edgeinduced_subgraphs_no_leaves),
     ]
     @eval begin

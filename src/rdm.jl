@@ -1,7 +1,7 @@
 function normalize_rdm(ρ::ITensor)
     dtype = datatype(ρ)
     tr_ρ = copy(ρ)
-    for i in filter(i -> plev(i) == 0, inds(ρ))
+    for i in inds(ρ; plev = 0)
         tr_ρ *= adapt(dtype)(delta(i, prime(i)))
     end
     return ρ / scalar(tr_ρ)
@@ -37,7 +37,7 @@ function reduced_density_matrix(
         contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod()),
         normalize = true
     )
-    disable_warn_order()
+    ITensors.disable_warn_order()
     op_string_f = v -> v ∈ verts ? "ρ" : "I"
     ρ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
     seq = contraction_sequence(ρ_tensors; contraction_sequence_kwargs...)

@@ -1,14 +1,15 @@
+using .ITensorsITensorBaseCompat: hastags
 
 # --- Gate registry -----------------------------------------------------------
 
 # Internal dispatch record for a circuit-tuple gate name.
 #
-# - `opname`: the `OpName` string forwarded to `op`. Usually equal to the
+# - `opname`: the `OpName` string forwarded to `ITensors.op`. Usually equal to the
 #   user-facing key, but kept separate so a registry entry can rename if needed.
 # - `paramkeys`: keyword names accepted by the underlying `op` definition, e.g.
 #   `(:θ,)`, `(:ϕ,)`, or `(:θ, :β)`. Empty for fixed gates.
 # - `rescale`: applied to the user-supplied parameter(s) before forwarding. Used
-#   when our (qiskit) convention differs from the `op` convention. For
+#   when our (qiskit) convention differs from the `ITensors.op` convention. For
 #   multi-parameter gates, `rescale` receives and returns a tuple/vector.
 struct GateSpec
     opname::String
@@ -18,7 +19,7 @@ end
 GateSpec(opname; paramkeys = (), rescale = identity) = GateSpec(opname, paramkeys, rescale)
 
 # Registry of circuit-tuple gates. Adding a new gate is one entry here (plus an
-# `op` method if upstream doesn't already provide one).
+# `ITensors.op` method if upstream doesn't already provide one).
 const GATES = Dict{String, GateSpec}(
     # Single-qubit fixed
     "X" => GateSpec("X"),
@@ -128,7 +129,7 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     # Multi-letter Pauli-string sugar: "XYZ" → X⊗Y⊗Z applied componentwise.
     # Single-letter "X"/"Y"/"Z" goes through the registry below.
     if _ispaulistring(name) && length(name) > 1
-        t = prod(op(string(c), sind) for (c, sind) in zip(name, s_inds))
+        t = prod(ITensors.op(string(c), sind) for (c, sind) in zip(name, s_inds))
         return t, verts
     end
 
@@ -145,7 +146,7 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     end
 
     if isempty(spec.paramkeys)
-        return op(spec.opname, s_inds...), verts
+        return ITensors.op(spec.opname, s_inds...), verts
     end
 
     raw = spec.rescale(gate[3])
@@ -154,7 +155,7 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
         "Gate \"$name\" expects $(length(spec.paramkeys)) parameter(s), got $(length(pvals))."
     ))
     kwargs = NamedTuple{spec.paramkeys}(pvals)
-    return op(spec.opname, s_inds...; kwargs...), verts
+    return ITensors.op(spec.opname, s_inds...; kwargs...), verts
 end
 
 # --- Public registration API ------------------------------------------------
@@ -165,7 +166,7 @@ end
 Register a custom gate `name` so it can be used in circuit-tuple form
 `(name, vertices, parameter)` with `apply_gates`.
 
-The matrix itself must be defined separately as an `op` method whose
+The matrix itself must be defined separately as an `ITensors.op` method whose
 `OpName` matches `opname` (defaults to `name`). See "Custom Gates" in the gate
 docs for a worked example.
 
@@ -175,14 +176,14 @@ in your script's startup, or in a downstream package's `__init__()`.
 
 Built-in gates are locked: passing a built-in name throws `ArgumentError`.
 Choose a different name for your custom gate, or — if you really need a new
-matrix under an existing name — define your own `op` method directly.
+matrix under an existing name — define your own `ITensors.op` method directly.
 Previously user-registered names may be overwritten freely.
 
 # Arguments
 - `name`: name used in circuit tuples.
 
 # Keyword Arguments
-- `opname`: the `OpName` string forwarded to `op`. Defaults to `name`.
+- `opname`: the `OpName` string forwarded to `ITensors.op`. Defaults to `name`.
 - `paramkeys`: tuple of keyword names accepted by the underlying `op`, e.g.
   `(:θ,)` for a single rotation angle, `(:θ, :β)` for a two-parameter gate.
   Empty (`()`) for non-parametric gates.
@@ -200,7 +201,7 @@ function register_gate!(
     name in BUILTIN_GATES && throw(ArgumentError(
         "\"$name\" is a built-in gate and cannot be overwritten. " *
         "Choose a different name for your custom gate, or define your own " *
-        "`op` method directly if you need to override the matrix."
+        "`ITensors.op` method directly if you need to override the matrix."
     ))
     GATES[name] = GateSpec(opname, paramkeys, rescale)
     return name
@@ -270,11 +271,11 @@ end
 # --- In-house gate definitions ----------------------------------------------
 
 """
-    op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Number)
+    ITensors.op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Number)
 
 Gate for rotation by XX+YY at a given angle with Rz rotations either side. Consistent with qiskit.
 """
-function op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Number)
+function ITensors.op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Number)
     return [
         [1 0 0 0];
         [0 cos(θ / 2) -im * sin(θ / 2) * exp(-im * β) 0]
@@ -282,29 +283,29 @@ function op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Number)
         [0 0 0 1]
     ]
 end
-op(o::OpName"xx_plus_yy", ::SiteType"Qubit"; θ::Number, β::Number) =
-    op(o, SiteType("S=1/2"); θ, β)
+ITensors.op(o::OpName"xx_plus_yy", ::SiteType"Qubit"; θ::Number, β::Number) =
+    ITensors.op(o, ITensors.SiteType("S=1/2"); θ, β)
 
 """
-    op(::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Number)
+    ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Number)
 
 Gate for rotation by XXYY at a given angle.
 """
-function op(::OpName"Rxxyy", ::SiteType"S=1/2", s1::Index, s2::Index; θ = 1)
+function ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2", s1::Index, s2::Index; θ = 1)
     h = 0.5 * (op("X", s1) * op("X", s2) + op("Y", s1) * op("Y", s2))
     return exp(-im * θ * h)
 end
-op(o::OpName"Rxxyy", ::SiteType"Qubit"; θ::Number) =
-    op(o, SiteType("S=1/2"); θ)
+ITensors.op(o::OpName"Rxxyy", ::SiteType"Qubit"; θ::Number) =
+    ITensors.op(o, ITensors.SiteType("S=1/2"); θ)
 
 """
-    op(::OpName"Rxxyyzz", ::SiteType"S=1/2"; θ::Number)
+    ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2"; θ::Number)
 
 Gate for rotation by XXYYZZ at a given angle.
 """
-function op(::OpName"Rxxyyzz", ::SiteType"S=1/2", s1::Index, s2::Index; θ = 1)
+function ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2", s1::Index, s2::Index; θ = 1)
     h = 0.5 * (op("X", s1) * op("X", s2) + op("Y", s1) * op("Y", s2) + op("Z", s1) * op("Z", s2))
     return exp(-im * θ * h)
 end
-op(o::OpName"Rxxyyzz", ::SiteType"Qubit"; θ::Number) =
-    op(o, SiteType("S=1/2"); θ)
+ITensors.op(o::OpName"Rxxyyzz", ::SiteType"Qubit"; θ::Number) =
+    ITensors.op(o, ITensors.SiteType("S=1/2"); θ)

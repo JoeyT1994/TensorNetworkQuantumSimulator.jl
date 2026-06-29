@@ -1,10 +1,10 @@
 module TensorNetworkQuantumSimulator
 
 
+# Legacy `ITensors` / `ITensorMPS` API, provided over the ITensorBase backend. Included
+# before `imports.jl`, which aliases it as `ITensors` and imports the legacy names.
+include("ITensorsITensorBaseCompat/ITensorsITensorBaseCompat.jl")
 include("imports.jl")
-# Legacy-API compatibility shims over the ITensorBase backend.
-include("itensor_compat/itensors.jl")
-include("itensor_compat/ops.jl")
 
 include("siteinds.jl")
 include("TensorNetworks/abstracttensornetwork.jl")
