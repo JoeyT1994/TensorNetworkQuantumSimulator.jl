@@ -492,6 +492,7 @@ function update_message!(
         pe::PartitionEdge;
         maxdim::Integer = mps_bond_dimension(bmps_cache),
     )
+    #TODO: call gauge_partition before this.
     mpo, mps, right_inds = _bmps_apply_inputs(bmps_cache, pe)
     out = generic_apply(
         mpo, mps, right_inds;
