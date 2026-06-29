@@ -15,6 +15,8 @@ using NPZ
 using Serialization
 using NamedGraphs
 const NG = NamedGraphs
+using CUDA
+using TensorNetworkQuantumSimulator: update, freenergy
 
 function energy_doubleocc(ψ_bpc, U, t)
     ndubs = 0
@@ -26,6 +28,27 @@ function energy_doubleocc(ψ_bpc, U, t)
     for e in edges(g)
         tot_kin_e +=  expect(ψ_bpc, (["Cupdag", "Cup"], [src(e), dst(e)])) + expect(ψ_bpc, (["Cupdag", "Cup"], [dst(e), src(e)]))
         tot_kin_e +=  expect(ψ_bpc, (["Cdndag", "Cdn"], [src(e), dst(e)])) + expect(ψ_bpc, (["Cdndag", "Cdn"], [dst(e), src(e)]))
+    end
+
+    return -t  * tot_kin_e + U *ndubs, ndubs
+end
+
+function energy_doubleocc_bmps(ψ_bpc_row, ψ_bpc_col, U, t)
+    ndubs = 0
+    g = graph(ψ_bpc_row)
+    for v in vertices(g)
+        ndubs += only(expect(ψ_bpc_row, [(["NupNdn"], [v])]))
+    end
+    tot_kin_e = 0
+    for e in edges(g)
+        v1, v2 = src(e), dst(e)
+        if first(v1) == first(v2)
+            tot_kin_e +=  expect(ψ_bpc_row, (["Cupdag", "Cup"], [src(e), dst(e)])) + expect(ψ_bpc_row, (["Cupdag", "Cup"], [dst(e), src(e)]))
+            tot_kin_e +=  expect(ψ_bpc_row, (["Cdndag", "Cdn"], [src(e), dst(e)])) + expect(ψ_bpc_row, (["Cdndag", "Cdn"], [dst(e), src(e)]))
+        else
+            tot_kin_e +=  expect(ψ_bpc_col, (["Cupdag", "Cup"], [src(e), dst(e)])) + expect(ψ_bpc_col, (["Cupdag", "Cup"], [dst(e), src(e)]))
+            tot_kin_e +=  expect(ψ_bpc_col, (["Cdndag", "Cdn"], [src(e), dst(e)])) + expect(ψ_bpc_col, (["Cdndag", "Cdn"], [dst(e), src(e)]))
+        end
     end
 
     return -t  * tot_kin_e + U *ndubs, ndubs
@@ -121,10 +144,8 @@ function main(U, χ)
     # coordination number (each site has z bonds)
     t_hop = 1.0      # hopping amplitude
     dt = -0.01*im
-    nsteps = 1000
-    cylinder_height = 20
-    ny = cylinder_height - 1
-    g = named_hexagonal_cylinder(ny)
+    nsteps = 500
+    g = named_hexagonal_lattice_graph(6,6; periodic = false)
     s = siteinds("spinful_fermion", g)
 
     println("Total number of sites is $(nv(g))")
@@ -132,63 +153,54 @@ function main(U, χ)
 
     # --- the STATE: two spinful-fermion sites, z bonds; :A is up, :B is down ---
     # (both sites carry one fermion => equal parity, which the unit cell requires)
-    δ = 0.2
-    ψ = fermionic_tensornetworkstate(v -> initial_state_f(g, v, δ), g, s)
-    
-    # --- wrap it in a BP cache and converge the messages ---
-    ψ_bpc = BeliefPropagationCache(ψ)
-    ψ_bpc = update(ψ_bpc)
+    ψ_bpc = deserialize("/mnt/home/jtindall/ceph/Data/Fermions/HexagonalHubbard/GS/OBCHex/States/HoneyCombHubbardHalffilledU$(U)BondDimension$(χ).ser")
+    #ψ_bpc = update(ψ_bpc)
 
     Ntot_up = sum([expect(ψ_bpc, (["Nup"], [v])) for v in vertices(g)])
     Ntot_dn = sum([expect(ψ_bpc, (["Ndn"], [v])) for v in vertices(g)])
     println("Total init spin up density is $(Ntot_up / length(vertices(g)))")
     println("Total init spin dn density is $(Ntot_dn / length(vertices(g)))")
-    println("Effective δ is $(1 - (Ntot_up + Ntot_dn)/ length(vertices(g))). Target is $(δ)")
 
-    μ = U / 2
+    
 
-    apply_kwargs = (; maxdim = χ, cutoff = 1e-14, normalize_tensors = true)
-    single_site_gates = [("RInt", v, U * dt) for v in vertices(g)]
-    single_site_gates = [single_site_gates; [("RN", v, -μ * dt) for v in vertices(g)]]
-    ec = edge_color(g, 3)
-    two_site_gates = []
-    for es in ec
-        append!(two_site_gates, [("RHop", [src(e), dst(e)], -t_hop * dt) for e in es])
-    end
     e, ndubs = energy_doubleocc(ψ_bpc, U, t_hop)
-    imaginary_times = Float64[]
-    energies = ComplexF64[e]
-    double_occs = ComplexF64[ndubs]
-    gates = [single_site_gates; two_site_gates]
+    e, ndubs = e / length(vertices(g)), ndubs / length(vertices(g))
+    e = e - U/4
 
-    for step in 1:nsteps
-        ψ_bpc, _ = apply_gates(gates, ψ_bpc; apply_kwargs, update_cache = false)
+    println("BP NUMBERS:")
+    println("Doublon density is $ndubs")
+    println("Energy density is $e")
 
-        if step % 4 == 0
-            ψ_bpc = update(ψ_bpc)
-            rescale!(ψ_bpc)
-            t = step * dt
-            e, ndubs = energy_doubleocc(ψ_bpc, U, t_hop)
-            println("Time is $(abs(t))")
-            println("Doublon density is $(ndubs / length(vertices(g)))")
-            println("Energy density is $(e/ length(vertices(g)))")
-            Ntot = sum([expect(ψ_bpc, (["Nup"], [v])) for v in vertices(g)])
-            println("Total spin up is $(Ntot / length(vertices(g)))")
-            push!(energies, e)
-            push!(double_occs, ndubs)
-            push!(imaginary_times, abs(step*dt))
-            flush(stdout)
-        end
+    ψ_cpu = network(ψ_bpc)
+    ψ_gpu = CUDA.cu(ψ_cpu)
+
+    #@time ψ_bpc_cpu = update(BeliefPropagationCache(ψ_cpu))
+    #@time ψ_bpc_gpu = update(BeliefPropagationCache(ψ_gpu))
+
+    #@show freenergy(ψ_bpc_gpu)
+    #@show freenergy(ψ_bpc_cpu)
+
+
+    Rs = [1,2,4,8,16,32]
+
+    for R in Rs
+        ψ_bmps_row = update(BoundaryMPSCache(ψ_gpu, R; partition_by = "row"))
+        ψ_bmps_col = update(BoundaryMPSCache(ψ_gpu, R; partition_by = "col"))
+
+        @show freenergy(ψ_bmps_row)
+
+        e, ndubs = energy_doubleocc_bmps(ψ_bmps_row, ψ_bmps_col, U, t_hop)
+        e, ndubs = e / length(vertices(g)), ndubs / length(vertices(g))
+        e = e - U/4
+
+        println("BMPS NUMBERS at R = $R:")
+        println("Doublon density is $ndubs")
+        println("Energy density is $e")
     end
-
-    #f_str = "/mnt/home/jtindall/ceph/Data/Fermions/HexagonalHubbard/GS/Cylinder/HoneyCombHubbardHalffilledU$(U)BondDimension$(χ).npz"
-    #npzwrite(f_str, energies = energies, imaginary_times = imaginary_times, double_occs = double_occs)
-
-    #serialize("/mnt/home/jtindall/ceph/Data/Fermions/HexagonalHubbard/GS/Cylinder/States/HoneyCombHubbardHalffilledU$(U)BondDimension$(χ).ser", ψ_bpc)
 end
 
-U = 4.0
-χ =8
+U = 9.0
+χ =4
 
 #U = parse(Float64, ARGS[1])
 #χ = parse(Int64, ARGS[2])

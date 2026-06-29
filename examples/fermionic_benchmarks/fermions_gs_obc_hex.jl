@@ -120,11 +120,9 @@ end
 function main(U, χ)
     # coordination number (each site has z bonds)
     t_hop = 1.0      # hopping amplitude
-    dt = -0.01*im
-    nsteps = 1000
-    cylinder_height = 20
-    ny = cylinder_height - 1
-    g = named_hexagonal_cylinder(ny)
+    dt = -0.05*im
+    nsteps = 500
+    g = named_hexagonal_lattice_graph(6,6; periodic = false)
     s = siteinds("spinful_fermion", g)
 
     println("Total number of sites is $(nv(g))")
@@ -132,8 +130,7 @@ function main(U, χ)
 
     # --- the STATE: two spinful-fermion sites, z bonds; :A is up, :B is down ---
     # (both sites carry one fermion => equal parity, which the unit cell requires)
-    δ = 0.2
-    ψ = fermionic_tensornetworkstate(v -> initial_state_f(g, v, δ), g, s)
+    ψ = fermionic_tensornetworkstate(Float64,v -> isodd(sum(v)) ? "Up" : "Dn", g, s)
     
     # --- wrap it in a BP cache and converge the messages ---
     ψ_bpc = BeliefPropagationCache(ψ)
@@ -143,7 +140,6 @@ function main(U, χ)
     Ntot_dn = sum([expect(ψ_bpc, (["Ndn"], [v])) for v in vertices(g)])
     println("Total init spin up density is $(Ntot_up / length(vertices(g)))")
     println("Total init spin dn density is $(Ntot_dn / length(vertices(g)))")
-    println("Effective δ is $(1 - (Ntot_up + Ntot_dn)/ length(vertices(g))). Target is $(δ)")
 
     μ = U / 2
 
@@ -162,9 +158,9 @@ function main(U, χ)
     gates = [single_site_gates; two_site_gates]
 
     for step in 1:nsteps
-        ψ_bpc, _ = apply_gates(gates, ψ_bpc; apply_kwargs, update_cache = false)
+        ψ_bpc, _ = apply_gates(gates, ψ_bpc; apply_kwargs, update_cache =false)
 
-        if step % 4 == 0
+        if step % 2 == 0
             ψ_bpc = update(ψ_bpc)
             rescale!(ψ_bpc)
             t = step * dt
@@ -179,16 +175,20 @@ function main(U, χ)
             push!(imaginary_times, abs(step*dt))
             flush(stdout)
         end
+
+        if step % 100 == 0
+            serialize("/mnt/home/jtindall/ceph/Data/Fermions/HexagonalHubbard/GS/OBCHex/States/HoneyCombHubbardHalffilledU$(U)BondDimension$(χ).ser", ψ_bpc)
+        end
     end
 
-    #f_str = "/mnt/home/jtindall/ceph/Data/Fermions/HexagonalHubbard/GS/Cylinder/HoneyCombHubbardHalffilledU$(U)BondDimension$(χ).npz"
-    #npzwrite(f_str, energies = energies, imaginary_times = imaginary_times, double_occs = double_occs)
+    f_str = "/mnt/home/jtindall/ceph/Data/Fermions/HexagonalHubbard/GS/OBCHex/HoneyCombHubbardHalffilledU$(U)BondDimension$(χ).npz"
+    npzwrite(f_str, energies = energies, imaginary_times = imaginary_times, double_occs = double_occs)
 
-    #serialize("/mnt/home/jtindall/ceph/Data/Fermions/HexagonalHubbard/GS/Cylinder/States/HoneyCombHubbardHalffilledU$(U)BondDimension$(χ).ser", ψ_bpc)
+    serialize("/mnt/home/jtindall/ceph/Data/Fermions/HexagonalHubbard/GS/OBCHex/States/HoneyCombHubbardHalffilledU$(U)BondDimension$(χ).ser", ψ_bpc)
 end
 
-U = 4.0
-χ =8
+U = 9.0
+χ =4
 
 #U = parse(Float64, ARGS[1])
 #χ = parse(Int64, ARGS[2])

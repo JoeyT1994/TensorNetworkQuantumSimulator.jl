@@ -1,12 +1,13 @@
 using TensorNetworkQuantumSimulator
 using Random
-using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuantumSimulator, freenergy, _fermionic_loop_weight, connected_edgeinduced_subgraphs_no_leaves, loopcorrected_free_energy
+using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuantumSimulator, freenergy, _fermionic_loop_weight, connected_edgeinduced_subgraphs_no_leaves, loopcorrected_free_energy, gated_lc_free_energy
 using ITensors: ITensors
 using NamedGraphs: add_edge!, NamedEdge, NamedGraphs
 Random.seed!(1234)
 using NPZ
 using JLD2
 using Serialization
+using ForwardDiff
 
 function iTNS_energy_doubleocc(ψ_bpc, U, t)
 
@@ -51,6 +52,16 @@ function loop_corrected_doublons(ψ_bpc, C; epsilon = 1e-4)
     return (f_plus - f_minus) / (2*epsilon)
 end
 
+function loop_corrected_doublons_AD(ψ_bpc, C; cache_update_kwargs = TensorNetworkQuantumSimulator.default_bp_update_kwargs(network(ψ_bpc)))
+    g = graph(ψ_bpc)
+    op_strings = ["NupNdn" for v in vertices(g)]
+    vs = collect(vertices(g))
+    α = ForwardDiff.Dual(0.0, 1.0)
+    F = gated_lc_free_energy(ψ_bpc, op_strings, vs, α, C; cache_update_kwargs)
+    dF = complex(ForwardDiff.partials(real(F))[1], ForwardDiff.partials(imag(F))[1])
+    return dF / 2
+end
+
 function main_fermions(U, χ)
     t = 1
     ITensors.disable_warn_order()
@@ -58,31 +69,22 @@ function main_fermions(U, χ)
     f_str = "/mnt/home/jtindall/ceph/Data/Fermions/HexagonalHubbard/GS/iTNS/States/HoneyCombHubbardHalffilledU$(U)BondDimension$(χ).ser"
     ψ_bpc = deserialize(f_str)
 
-    #ψ = InfiniteTensorNetworkState(network(ψ_bpc))
-    #ψ_bpc = update(BeliefPropagationCache(ψ))
-    #rescale!(ψ_bpc)
-
-    #e, Nd = iTNS_energy_doubleocc(ψ_bpc, U, t)
-
-    #println("iTNS BP energy density is $(e - U/4)")
-    #println("iTNS BP double occ is $(Nd)")
 
     ψ_embedded = absorb_bonds(embed(InfiniteTensorNetworkState(network(ψ_bpc)), HexagonalLattice, (12,12)))
     g = graph(ψ_embedded)
     println("Embedded onto a graph of $(length(vertices(g))) vertices")
 
     
-    cs = connected_edgeinduced_subgraphs_no_leaves(g, 11)
+    cs = connected_edgeinduced_subgraphs_no_leaves(g, 10)
     @show length(cs) / length(vertices(g))
     ψ_bpc_embedded = update(BeliefPropagationCache(ψ_embedded))
-    #rescale!(ψ_bpc_embedded)
 
     C = 6
-    Nd_lc1 = loop_corrected_doublons(ψ_bpc_embedded, C; epsilon = 1e-3)/ length(vertices(g))
+    Nd_lc1 = loop_corrected_doublons_AD(ψ_bpc_embedded, C)/ length(vertices(g))
     println("TNS BP 1st order LC double occ is $(Nd_lc1)")
 
-    C = 11
-    Nd_lc2 = loop_corrected_doublons(ψ_bpc_embedded, C; epsilon = 1e-3)/ length(vertices(g))
+    C = 10
+    Nd_lc2 = loop_corrected_doublons_AD(ψ_bpc_embedded, C)/ length(vertices(g))
     println("TNS BP 2nd order LC double occ is $(Nd_lc2)")
 
     e, Nd = TNS_energy_doubleocc(ψ_bpc_embedded, U, t)

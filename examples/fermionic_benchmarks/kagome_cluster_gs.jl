@@ -268,7 +268,7 @@ function run(; nx = 2, ny = 2, dt = 0.05, nsteps = 200, χ = 16, cutoff = 1e-12,
         end
     end
 
-    serialize("/Users/jtindall/Files/Data/Fermions/KagomeSpinlessGS/nx$(nx)ny$(ny)maxdim$(χ).jld2", ψ_bpc)
+    serialize("/mnt/home/jtindall/ceph/Data/Fermions/Kagome/States/GSnx$(nx)ny$(ny)maxdim$(χ).jld2", ψ_bpc)
     return nothing
 end
 

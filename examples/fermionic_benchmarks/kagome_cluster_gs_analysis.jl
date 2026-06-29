@@ -240,7 +240,7 @@ function analyse(; nx = 2, ny = 2, χ = 16,
     println("Filling = $(n_ferm)/$(n_sites) = $(round(n_ferm / n_sites; digits = 4)); ",
             "chemical potential μ = $(round(μ; digits = 5))")
 
-    ψ_bpc = deserialize("/Users/jtindall/Files/Data/Fermions/KagomeSpinlessGS/nx$(nx)ny$(ny)maxdim$(χ).jld2")
+    ψ_bpc = deserialize("/mnt/home/jtindall/ceph/Data/Fermions/Kagome/States/GSnx$(nx)ny$(ny)maxdim$(χ).jld2")
     ns = expect(ψ_bpc, [("N", leafv(kv)) for kv in vertices(gk)])
     e_gs, _ = free_fermion_gs_energy(gk, t_hop, ϕ, n_ferm)
     e0 = energy_incidence(ψ_bpc, gk, t_hop, ϕ)
@@ -248,8 +248,10 @@ function analyse(; nx = 2, ny = 2, χ = 16,
     println("init BP energy density        = $(round(real(e0) / n_sites; digits = 8))")
     println("Filling is $(sum(ns) / n_sites)")
 
+    @show graph(ψ_bpc)
+
     @show sum(TensorNetworkQuantumSimulator.expect(ψ_bpc, [("N", leafv(kv)) for kv in vertices(gk)]; alg = "bp")) / n_sites
-        @show sum(TensorNetworkQuantumSimulator.expect(ψ_bpc, [("N", leafv(kv)) for kv in vertices(gk)]; alg = "loopcorrections", max_configuration_size = 12)) / n_sites
+    #@show sum(TensorNetworkQuantumSimulator.expect(ψ_bpc, [("N", leafv(kv)) for kv in vertices(gk)]; alg = "loopcorrections", max_configuration_size = 12)) / n_sites
     #@show TensorNetworkQuantumSimulator.loopcorrected_partitionfunction(ψ_bpc, 12)
 end
 
