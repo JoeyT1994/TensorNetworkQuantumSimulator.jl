@@ -59,9 +59,17 @@ _compat_inds(is) = is
 # indices of its arguments; in the next-gen stack the same falls out of Base set ops
 # on `inds` (index identity/equality is by id).
 #
-commoninds(a, b) = intersect(_compat_inds(a), _compat_inds(b))
-uniqueinds(a, b) = setdiff(_compat_inds(a), _compat_inds(b))
-unioninds(a, b) = union(_compat_inds(a), _compat_inds(b))
+# Matching is by index *name* (`IndexName`), not by full `Index` equality: two indices
+# name the same leg when their names match. On a graded axis a shared bond appears as an
+# index on one tensor and its dual (`conj`) on the other — same name, opposite arrow — so
+# `==` on the full `Index` misses it while the names still match. On the dense backend
+# name-matching and `==` coincide, so this is a strict generalization. The full `Index` is
+# returned, not the bare name: callers take `dim`/`tags` of the result and feed it to
+# `Index`/`qr`/`replaceinds`, which need the space. Results are always `Vector`s.
+_indvec(x) = collect(_compat_inds(x))
+commoninds(a, b) = (nb = name.(_indvec(b)); filter(i -> name(i) ∈ nb, _indvec(a)))
+uniqueinds(a, b) = (nb = name.(_indvec(b)); filter(i -> name(i) ∉ nb, _indvec(a)))
+unioninds(a, b) = vcat(_indvec(a), uniqueinds(b, a))
 hascommoninds(a, b) = !isempty(commoninds(a, b))
 
 # Singular forms: the one common / one unique index. `noncommonind` is used in TNQS
@@ -70,7 +78,7 @@ hascommoninds(a, b) = !isempty(commoninds(a, b))
 commonind(a, b) = (cs = commoninds(a, b); isempty(cs) ? nothing : first(cs))
 noncommonind(a, b) = (us = uniqueinds(a, b); isempty(us) ? nothing : first(us))
 # Plural: indices not shared by both (symmetric difference).
-noncommoninds(a, b) = symdiff(_compat_inds(a), _compat_inds(b))
+noncommoninds(a, b) = vcat(uniqueinds(a, b), uniqueinds(b, a))
 
 # Index dimension (legacy `dim`). `dim(i)` is the length; `dim(is)` the product.
 dim(i::Index) = length(i)
@@ -83,11 +91,12 @@ dim(is::Union{Tuple, AbstractVector}) = isempty(is) ? 1 : prod(length, is)
 sim(i::Index) = ITensorBase.uniquename(i)
 sim(is::Union{Tuple, AbstractVector{<:Index}}) = map(sim, is)
 
-# Conjugate; on graded axes this flips the sector arrows (legacy `dag`). On the dense
-# backend, `dag` of bare indices is a no-op (legacy reversed QN arrows).
+# Conjugate (legacy `dag`): `conj` the tensor, and on bare indices flip the sector arrows
+# on a graded axis. `conj(::Index)` is id-preserving on the dense backend, so `dag` there
+# is effectively the identity on indices, matching legacy behavior.
 dag(t::AbstractITensor) = conj(t)
-dag(i::Index) = i
-dag(is::Union{Tuple, AbstractVector}) = is
+dag(i::Index) = conj(i)
+dag(is::Union{Tuple, AbstractVector}) = map(conj, is)
 
 # `prime` / `noprime`: ITensorBase primes an `Index`; TNQS also primes whole ITensors
 # (all dimnames). Owned here with a fallback to ITensorBase for the index case.
@@ -118,14 +127,24 @@ cat_inds(xs...) = reduce(vcat, map(_as_index_vec, xs))
 # Legacy `replaceinds` accepted collection arguments (`replaceinds(t, [i, k], [j, l])`
 # and `replaceinds(t, [i, k] => [j, l])`); ITensorBase provides only the pair-splat form
 # (`replaceinds(t, i => j, k => l)`). Own a compat `replaceinds` that handles the
-# collection forms and forwards the pair-splat form to `ITensorBase.replaceinds` — a
-# compat-owned function (like `inds`/`prime`/`dag`), not a pirated method.
+# collection forms and forwards the pair-splat form.
+#
+# The base case relabels *names* via `replacedimnames`, not `ITensorBase.replaceinds`.
+# The latter replaces the index *space* (routing through `axes`/`getindex`), which
+# scalar-indexes a graded axis and errors; a pure name relabel is space-agnostic and works
+# on every backend. Keys are stripped to their `IndexName` because `replacedimnames`
+# matches on `dimnames` and silently no-ops on a raw `Index` key.
 #
 # NB: an `Index` is itself an `AbstractVector` (it's a `NamedUnitRange`), so the
 # collection types are constrained to `AbstractVector{<:Index}` to avoid capturing a
 # bare `Index` (an `AbstractVector{Int}`) and iterating over its integer range.
 const _IndexColl = Union{Tuple{Vararg{Index}}, AbstractVector{<:Index}}
-replaceinds(t, pairs::Pair...) = ITensorBase.replaceinds(t, pairs...)
+function replaceinds(t, pairs::Pair...)
+    return ITensorBase.replacedimnames(
+        t,
+        map(p -> name(first(p)) => name(last(p)), pairs)...
+    )
+end
 function replaceinds(t, from::_IndexColl, to::_IndexColl)
     return replaceinds(t, map(=>, from, to)...)
 end
@@ -284,10 +303,9 @@ function _hermitian_eigh(
     # treat-as-hermitian behavior.
     m = (m + replaceinds(conj(m), (cod..., dom...), (dom..., cod...))) / 2
     D, U = MAK.eigh_full(m, cod, dom)
-    di, ui = collect(inds(D)), collect(inds(U))
-    u = only(intersect(di, ui))        # eigenvalue index shared with U
-    t = only(setdiff(di, ui))          # D's other (independent) index
-    D = ITensorBase.replaceinds(D, t => ITensorBase.prime(u))
+    u = only(commoninds(D, U))         # eigenvalue index shared with U
+    t = only(uniqueinds(D, U))         # D's other (independent) index
+    D = replaceinds(D, t => ITensorBase.prime(u))
     return D, U
 end
 
@@ -514,14 +532,19 @@ function Adapt.adapt_structure(::Type{elt}, T::AbstractITensor) where {elt <: Nu
 end
 
 # `swapind`: swap two indices (legacy convenience over `replaceinds`).
-swapind(T::AbstractITensor, i::Index, j::Index) = ITensorBase.replaceinds(T, i => j, j => i)
+swapind(T::AbstractITensor, i::Index, j::Index) = replaceinds(T, i => j, j => i)
 
 # Dense no-ops. Legacy QN-storage helpers; on the dense next-gen backend the tensor
 # is already dense, so these are identities. (Graded/QN path is a stack gap.)
 denseblocks(T::AbstractITensor) = T
 dense(T::AbstractITensor) = T
-# Dense backend carries no quantum-number block structure.
-hasqns(::AbstractITensor) = false
+# Whether a tensor carries quantum-number (graded) block structure: true when any of its
+# indices is graded. `loopcorrection` branches on this to pick a contraction-order
+# algorithm. A graded axis differs from its conjugate (conjugation flips the sector
+# arrows) while a dense axis is self-conjugate — a dependency-free discriminator that needs
+# no GradedArrays import and hardcodes no dense range type.
+hasqns(i::Index) = conj(unnamed(i)) != unnamed(i)
+hasqns(t::AbstractITensor) = any(hasqns, inds(t))
 hasqns(::Any) = false
 
 # The operator / named-state system (`op` / `state`) is vendored separately in
