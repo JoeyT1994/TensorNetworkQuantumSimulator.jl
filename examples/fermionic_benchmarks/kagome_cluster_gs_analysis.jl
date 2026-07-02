@@ -19,7 +19,7 @@
 
 using TensorNetworkQuantumSimulator
 const TNS = TensorNetworkQuantumSimulator
-using TensorNetworkQuantumSimulator: fermionic_hopping_gate
+using TensorNetworkQuantumSimulator: fermionic_hopping_gate, freenergy
 using NamedGraphs: NamedGraph, NamedEdge, add_edge!
 using Graphs: neighbors, has_edge
 using ITensors: Index
@@ -249,7 +249,16 @@ function analyse(; nx = 2, ny = 2, χ = 16,
     println("Filling is $(sum(ns) / n_sites)")
 
     @show sum(TensorNetworkQuantumSimulator.expect(ψ_bpc, [("N", leafv(kv)) for kv in vertices(gk)]; alg = "bp")) / n_sites
-        @show sum(TensorNetworkQuantumSimulator.expect(ψ_bpc, [("N", leafv(kv)) for kv in vertices(gk)]; alg = "loopcorrections", max_configuration_size = 12)) / n_sites
+
+    @show freenergy(ψ_bpc)
+    ψ = network(ψ_bpc)
+    @show norm_sqr(ψ; alg = "exact")
+    ψ_absorbed = absorb_bond_fermions(ψ)
+
+    ψ_absorbed_bpc = update(BeliefPropagationCache(ψ_absorbed))
+
+    @show norm_sqr(ψ_absorbed; alg = "exact")
+    #@show sum(TensorNetworkQuantumSimulator.expect(ψ_bpc, [("N", leafv(kv)) for kv in vertices(gk)]; alg = "loopcorrections", max_configuration_size = 12)) / n_sites
     #@show TensorNetworkQuantumSimulator.loopcorrected_partitionfunction(ψ_bpc, 12)
 end
 
