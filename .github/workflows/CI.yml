@@ -36,6 +36,11 @@ jobs:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
       - uses: julia-actions/cache@v2
+      - name: Add the ITensorRegistry package registry
+        shell: julia --color=yes {0}
+        run: |
+          using Pkg
+          Pkg.Registry.add(Pkg.RegistrySpec(url = "https://github.com/ITensor/ITensorRegistry"))
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
       - uses: julia-actions/julia-processcoverage@v1
@@ -57,6 +62,11 @@ jobs:
         with:
           version: '1'
       - uses: julia-actions/cache@v2
+      - name: Add the ITensorRegistry package registry
+        shell: julia --color=yes {0}
+        run: |
+          using Pkg
+          Pkg.Registry.add(Pkg.RegistrySpec(url = "https://github.com/ITensor/ITensorRegistry"))
       - name: Configure doc environment
         shell: julia --project=docs --color=yes {0}
         run: |
