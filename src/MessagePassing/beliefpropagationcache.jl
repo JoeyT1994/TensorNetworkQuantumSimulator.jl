@@ -1,6 +1,6 @@
 using Dictionaries: Dictionary, set!, delete!
 using Graphs: AbstractGraph, is_tree, connected_components
-using NamedGraphs.GraphsExtensions: default_root_vertex, forest_cover, post_order_dfs_edges
+using NamedGraphs.GraphsExtensions: default_root_vertex, forest_cover, post_order_dfs_edges, forest_cover_edge_sequence, boundary_edges, leaf_vertices, a_star
 using ITensors: dim, ITensor, delta, Algorithm
 using ITensors.NDTensors: scalartype
 using LinearAlgebra: normalize
@@ -77,20 +77,6 @@ function update_message!(
     m, (cache_key, sequence, seq_changed) = updated_message(message_update_alg, bp_cache, edge)
     seq_changed && set!(contraction_sequences(bp_cache), cache_key, sequence)
     return setmessage!(bp_cache, edge, m)
-end
-
-#Edge sequence stuff
-function forest_cover_edge_sequence(g::AbstractGraph; root_vertex = default_root_vertex)
-    forests = forest_cover(g)
-    edges = edgetype(g)[]
-    for forest in forests
-        trees = [forest[vs] for vs in connected_components(forest)]
-        for tree in trees
-            tree_edges = post_order_dfs_edges(tree, root_vertex(tree))
-            push!(edges, vcat(tree_edges, reverse(reverse.(tree_edges)))...)
-        end
-    end
-    return edges
 end
 
 function rescale_vertices!(
