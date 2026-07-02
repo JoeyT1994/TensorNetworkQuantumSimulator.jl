@@ -96,9 +96,9 @@ optimise_p_q
 ## Custom Gate Definitions
 
 ```@docs
-ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"Rxxyy", ::ITensors.SiteTypes.SiteType"S=1/2", ::ITensors.Index, ::ITensors.Index)
-ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"Rxxyyzz", ::ITensors.SiteTypes.SiteType"S=1/2", ::ITensors.Index, ::ITensors.Index)
-ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"xx_plus_yy", ::ITensors.SiteTypes.SiteType"S=1/2")
+op(::OpName"Rxxyy", ::SiteType"S=1/2", ::Index, ::Index)
+op(::OpName"Rxxyyzz", ::SiteType"S=1/2", ::Index, ::Index)
+op(::OpName"xx_plus_yy", ::SiteType"S=1/2")
 ```
 
 ## Index
