@@ -162,9 +162,11 @@ end
 itensor(array, is) = array[is...]
 itensor(array, is...) = array[is...]
 
-# TYPE PIRACY (upstream candidate → ITensorBase): adds a rank-0 `ITensor(x::Number)`
-# constructor, which ITensorBase omits. Legacy ITensors uses it as a multiplicative
-# identity to seed a product accumulator (`out = ITensor(1); out *= t; ...`).
+# TYPE PIRACY (temporary, compat-owned — NOT an upstream candidate): adds a rank-0
+# `ITensor(x::Number)` constructor, which ITensorBase deliberately omits and does not plan to
+# support. Legacy ITensors uses it as a multiplicative identity to seed a product accumulator
+# (`out = ITensor(1); out *= t; ...`). Kept here for now; the accumulator call sites get rewritten
+# to a different pattern later, retiring this method rather than upstreaming it.
 ITensorBase.ITensor(x::Number) = nameddims(fill(x), ())
 
 # Random ITensor over the given indices (legacy `random_itensor`).
@@ -518,10 +520,12 @@ datatype(T::AbstractITensor) = typeof(unnamed(T))
 array(T::AbstractITensor) = unnamed(T)
 data(T::AbstractITensor) = unnamed(T)
 
-# TYPE PIRACY (upstream candidate → ITensorBase): extends `Adapt.adapt_structure`
-# for `AbstractITensor` with an eltype target. ITensorBase owns `AbstractITensor` but
-# not `Adapt.adapt_structure`, and adapt-eltype support is generally useful — this
-# should move into ITensorBase's Adapt integration, retiring the shim.
+# TYPE PIRACY (temporary, compat-owned — NOT an upstream candidate): extends
+# `Adapt.adapt_structure` for `AbstractITensor` with an eltype target. Using
+# `Adapt.adapt_structure` for eltype *conversion* is an abuse of Adapt.jl (Adapt is for
+# storage/device adaptation, not changing the scalar type), so this does not belong upstream.
+# Kept here for now; the eltype-conversion call sites get rewritten with a different pattern
+# later, retiring this shim rather than upstreaming it.
 #
 # Legacy `adapt(eltype)(t)` converts an ITensor's scalar (element) type. ITensorBase's
 # Adapt integration adapts the storage array/device type but leaves the element type
@@ -626,10 +630,11 @@ function settags(i::Index, d::AbstractDict)
     end
     return i
 end
-# TYPE PIRACY (upstream candidate → ITensorBase): the two methods below add
-# `ITensorBase.Index` constructors taking a tag string / tag dict, using only `Integer`
-# and `AbstractString`/`AbstractDict` arg types (none owned here). They belong in
-# ITensorBase's tag-compat story (see the tags note above); upstream and retire.
+# TYPE PIRACY (temporary, compat-owned — NOT an upstream candidate): the two methods below add
+# `ITensorBase.Index` constructors taking a tag string / tag dict, a legacy positional-tag form
+# ITensorBase does not plan to support (the next-gen spelling passes tags via the `tags` keyword
+# argument). Kept here for now; the call sites get modernized to the `tags` kwarg later, retiring
+# these methods rather than upstreaming them.
 #
 # Legacy positional tagged-index constructor `Index(dim, "tag")`.
 ITensorBase.Index(dim::Integer, tagstr::AbstractString) = settags(Index(dim), tagstr)
