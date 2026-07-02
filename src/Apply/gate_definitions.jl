@@ -284,7 +284,7 @@ function ITensors.op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Nu
     ]
 end
 ITensors.op(o::OpName"xx_plus_yy", ::SiteType"Qubit"; θ::Number, β::Number) =
-    ITensors.op(o, ITensorMPS.SiteType("S=1/2"); θ, β)
+    ITensors.op(o, ITensors.SiteType("S=1/2"); θ, β)
 
 """
     ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Number)
@@ -296,7 +296,7 @@ function ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2", s1::Index, s2::Index; �
     return exp(-im * θ * h)
 end
 ITensors.op(o::OpName"Rxxyy", ::SiteType"Qubit"; θ::Number) =
-    ITensors.op(o, ITensorMPS.SiteType("S=1/2"); θ)
+    ITensors.op(o, ITensors.SiteType("S=1/2"); θ)
 
 """
     ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2"; θ::Number)
@@ -308,4 +308,4 @@ function ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2", s1::Index, s2::Index;
     return exp(-im * θ * h)
 end
 ITensors.op(o::OpName"Rxxyyzz", ::SiteType"Qubit"; θ::Number) =
-    ITensors.op(o, ITensorMPS.SiteType("S=1/2"); θ)
+    ITensors.op(o, ITensors.SiteType("S=1/2"); θ)
