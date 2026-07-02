@@ -49,7 +49,7 @@ function simple_update(
         rᵥ₁ = commoninds(Qᵥ₁, Rᵥ₁)
         rᵥ₂ = commoninds(Qᵥ₂, Rᵥ₂)
         oR = ITensors.apply(o, Rᵥ₁ * Rᵥ₂)
-        singular_values! = Ref(ITensor())
+        singular_values! = Ref{ITensor}()
         Rᵥ₁, Rᵥ₂, spec = factorize_svd(
             oR,
             unioninds(rᵥ₁, sᵥ₁);

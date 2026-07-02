@@ -7,7 +7,7 @@ abstract type AbstractForm{V} <: AbstractTensorNetwork{V} end
 for f in [
         :(graph),
         :(ITensors.datatype),
-        :(ITensors.NDTensors.scalartype),
+        :(ITensors.scalartype),
         :(NamedGraphs.edgeinduced_subgraphs_no_leaves),
     ]
     @eval begin

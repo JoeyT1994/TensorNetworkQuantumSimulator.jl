@@ -37,7 +37,7 @@ function full_update(
         apply_kwargs...,
     )
     if symmetrize
-        singular_values! = Ref(ITensor())
+        singular_values! = Ref{ITensor}()
         Rᵥ₁, Rᵥ₂, spec = factorize_svd(
             Rᵥ₁ * Rᵥ₂,
             inds(Rᵥ₁);

@@ -80,8 +80,9 @@ function renyi_entropy(
     edge_ind = only(virtualinds(bp_cache, e))
     root_m2 = first(pseudo_sqrt_inv_sqrt(m2))
 
-    ρ =(m1 * replaceind(root_m2, edge_ind', edge_ind''))* root_m2
-    ρ= replaceind(ρ, edge_ind'', edge_ind')
+    edge_ind_p, edge_ind_pp = prime(edge_ind), prime(prime(edge_ind))
+    ρ = (m1 * replaceind(root_m2, edge_ind_p, edge_ind_pp)) * root_m2
+    ρ = replaceind(ρ, edge_ind_pp, edge_ind_p)
     return renyi_entropy(ρ; α)
 end
 

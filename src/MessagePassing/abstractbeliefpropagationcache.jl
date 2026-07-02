@@ -42,7 +42,7 @@ for f in [
         :(default_bp_maxiter),
         :(virtualinds),
         :(ITensors.datatype),
-        :(ITensors.NDTensors.scalartype),
+        :(ITensors.scalartype),
         :(maxvirtualdim),
         :(default_message),
         :(siteinds),

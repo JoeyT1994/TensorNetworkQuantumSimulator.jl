@@ -1,4 +1,4 @@
-using ITensors: random_itensor
+using .ITensorsITensorBaseCompat: random_itensor
 
 """
     TensorNetworkState{V} <: AbstractTensorNetwork{V}

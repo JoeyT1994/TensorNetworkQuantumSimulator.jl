@@ -30,7 +30,7 @@ function eigendecomp(A::ITensor, linds, rinds; ishermitian = false, kwargs...)
     @assert ishermitian
     D, U = safe_eigen(A, linds, rinds; ishermitian, kwargs...)
     ul, ur = noncommonind(D, U), commonind(D, U)
-    Ul = replaceinds(U, vcat(rinds, ur), vcat(linds, ul))
+    Ul = replaceinds(U, vcat([rinds], [ur]), vcat([linds], [ul]))
     return Ul, D, dag(U)
 end
 

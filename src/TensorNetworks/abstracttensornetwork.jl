@@ -1,6 +1,5 @@
 using Graphs: Graphs, has_vertex
-using ITensors: ITensors
-using ITensors.NDTensors: NDTensors
+import .ITensorsITensorBaseCompat as ITensors
 using NamedGraphs: NamedGraphs
 using Adapt
 
@@ -49,7 +48,7 @@ function Base.setindex!(tn::AbstractTensorNetwork, value::ITensor, vertex)
     return tn
 end
 
-function NDTensors.scalartype(tn::AbstractTensorNetwork)
+function ITensors.scalartype(tn::AbstractTensorNetwork)
     return mapreduce(v -> scalartype(tn[v]), promote_type, vertices(tn))
 end
 

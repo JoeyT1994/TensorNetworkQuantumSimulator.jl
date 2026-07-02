@@ -1,4 +1,4 @@
-using ITensors: hastags
+using .ITensorsITensorBaseCompat: hastags
 
 # --- Gate registry -----------------------------------------------------------
 
@@ -264,7 +264,7 @@ function toitensor_heisenberg(generator, θ, indices)
     U = paulirotationmatrix(generator, θ)
     U = PP.calculateptm(U, heisenberg = true)
 
-    legs = (indices..., [ind' for ind in indices]...)
+    legs = (indices..., [prime(ind) for ind in indices]...)
     return itensor(transpose(U), legs)
 end
 
