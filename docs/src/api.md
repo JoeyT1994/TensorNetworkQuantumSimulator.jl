@@ -86,7 +86,6 @@ update_iteration!
 ## Utilities
 
 ```@docs
-paulirotationmatrix
 safe_eigen
 add
 fidelity
