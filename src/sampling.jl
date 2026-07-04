@@ -57,8 +57,8 @@ function sample(
         kwargs...,
     )
     norm_bmps_cache = BoundaryMPSCache(ψ, norm_mps_bond_dimension; gauge_state, partition_by)
-    leaves = leaf_vertices(partitions_graph(supergraph(norm_bmps_cache)))
-    seq = PartitionEdge.(a_star(partitions_graph(supergraph(norm_bmps_cache)), last(leaves), first(leaves)))
+    leaves = leaf_vertices(quotient_graph(supergraph(norm_bmps_cache)))
+    seq = QuotientEdge.(a_star(quotient_graph(supergraph(norm_bmps_cache)), last(leaves), first(leaves)))
     norm_cache_message_update_kwargs = (; norm_cache_message_update_kwargs..., normalize = false)
     norm_bmps_cache = update(norm_bmps_cache; alg = "bp", edge_sequence = seq, maxiter = 1, message_update_alg = Algorithm("fitting"; norm_cache_message_update_kwargs...))
 
@@ -168,7 +168,7 @@ end
 
 function get_one_sample(
         norm_bmps_cache::BoundaryMPSCache,
-        seq::Vector{<:PartitionEdge};
+        seq::Vector{<:QuotientEdge};
         projected_mps_bond_dimension::Integer,
         kwargs...,
     )
@@ -188,7 +188,7 @@ function get_one_sample(
 
         if i < length(partitions)
             next_partition = partitions[i + 1]
-            pe = PartitionEdge(parent(partition), parent(next_partition))
+            pe = QuotientEdge(parent(partition), parent(next_partition))
 
             # Apply the (already projected) ket row to the running single-layer boundary MPS. The
             # cache messages are doubled ket/bra, so we feed the ket-only `incoming_mps` explicitly.
@@ -204,7 +204,7 @@ function get_one_sample(
             incoming_mps = outgoing_mps
         end
 
-        i > 2 && delete_interpartition_messages!(norm_bmps_cache, PartitionEdge(parent(partitions[i - 2]) => parent(partitions[i - 1])))
+        i > 2 && delete_interpartition_messages!(norm_bmps_cache, QuotientEdge(parent(partitions[i - 2]) => parent(partitions[i - 1])))
     end
 
     return p_over_q_approx, logq, bit_string
@@ -213,7 +213,7 @@ end
 #Sample along the column/ row specified by pv with the left incoming MPS message input and the right extractable from the cache
 function sample_partition!(
         norm_bmps_cache::BoundaryMPSCache,
-        partition::PartitionVertex,
+        partition::QuotientVertex,
         bit_string::Dictionary;
         kwargs...,
     )
