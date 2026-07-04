@@ -8,15 +8,15 @@ function main()
     g = named_grid((nx, ny))
 
     nqubits = length(vertices(g))
-    #Physical indices represent "Identity, X, Y, Z" in that order
+    #Two indices per site: s[v][1] is the ket leg, s[v][2] is the bra leg of the operator
     vz = first(center(g))
-    #ψ0 = paulitensornetworkstate(ComplexF32, v -> v == vz ? "Z" : "I", g)
     s = siteinds("S=1/2", g; inds_per_site = 2)
+    #Start from the identity operator, then place a single Z on vertex vz
     ψI = identity_tensornetworkstate(ComplexF64, g, s)
     ψ0 = copy(ψI)
     setindex_preserve!(ψ0, noprime(ψ0[vz] * ITensors.op("Z", s[vz][1])), vz)
 
-    maxdim, cutoff =4, 1.0e-14
+    maxdim, cutoff = 4, 1.0e-14
     apply_kwargs = (; maxdim, cutoff, normalize_tensors = false)
     #Parameters for BP, as the graph is not a tree (it has loops), we need to specify these
 

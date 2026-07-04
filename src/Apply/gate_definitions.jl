@@ -1,5 +1,3 @@
-using ITensors: hastags
-
 # --- Gate registry -----------------------------------------------------------
 
 # Internal dispatch record for a circuit-tuple gate name.
@@ -122,10 +120,6 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     verts = collect_vertices(gate[2], g)
     s_inds = [only(siteinds[v]) for v in verts]
 
-    # Heisenberg-picture path (Pauli-tagged site indices)
-    all(map(sind -> hastags(sind, "Pauli"), s_inds)) &&
-        return toitensor_heisenberg(name, gate[3], s_inds), verts
-
     # Multi-letter Pauli-string sugar: "XYZ" → X⊗Y⊗Z applied componentwise.
     # Single-letter "X"/"Y"/"Z" goes through the registry below.
     if _ispaulistring(name) && length(name) > 1
@@ -242,30 +236,6 @@ function unregister_gate!(name::String)
         canonical == name && delete!(ALIASES, alias)
     end
     return name
-end
-
-# --- Heisenberg / PTM path ---------------------------------------------------
-
-"""
-    paulirotationmatrix(generator, θ)
-"""
-function paulirotationmatrix(generator, θ)
-    symbols = [Symbol(s) for s in generator]
-    pauli_rot = PP.PauliRotation(symbols, 1:length(symbols))
-    return PP.tomatrix(pauli_rot, θ)
-end
-
-# Convert a Pauli rotation gate ("R<paulis>", θ) to its PTM ITensor
-function toitensor_heisenberg(generator, θ, indices)
-    @assert first(generator) == 'R'
-    generator = generator[2:length(generator)]
-    @assert _ispaulistring(generator)
-    generator = uppercase.(generator)
-    U = paulirotationmatrix(generator, θ)
-    U = PP.calculateptm(U, heisenberg = true)
-
-    legs = (indices..., [ind' for ind in indices]...)
-    return itensor(transpose(U), legs)
 end
 
 # --- In-house gate definitions ----------------------------------------------

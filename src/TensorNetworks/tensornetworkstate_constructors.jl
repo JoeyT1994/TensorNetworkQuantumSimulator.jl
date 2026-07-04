@@ -14,8 +14,7 @@ zerostate(g::NamedGraph, s::Dictionary = siteinds("S=1/2", g)) = zerostate(Float
 
 Construct a bond-dimension-1 `TensorNetworkState` representing the identity matrix on graph `g`.
 
-For `"Pauli"` site indices this is the identity in the Heisenberg picture (an `"I"` Pauli string on every vertex).
-For other site types it expects an even number `n` of physical indices on each vertex, with the
+It expects an even number `n` of physical indices on each vertex, with the
 first half being the "ket" indices and the second half the "bra" indices; index `i` is paired with
 index `n/2 + i`.
 """
