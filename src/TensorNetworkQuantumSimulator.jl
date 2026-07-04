@@ -71,7 +71,6 @@ export
     symmetric_gauge!,
     messages,
     gauge_and_scale,
-    paulitensornetworkstate,
     identity_tensornetworkstate,
     random_tensornetwork,
     siteinds,

@@ -51,7 +51,4 @@ using ITensors: Index, ITensor, hasqns, noncommonind, combinedind, combiner, rep
 
 using Adapt: adapt
 
-import PauliPropagation
-const PP = PauliPropagation
-
 using TypeParameterAccessors: unspecify_type_parameters

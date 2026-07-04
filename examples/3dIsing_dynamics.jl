@@ -1,7 +1,5 @@
 using TensorNetworkQuantumSimulator
 
-using ITensors
-
 function main()
     nx, ny, nz = 3, 3, 3
     #Build a qubit layout of a 3x3x3 periodic cube
