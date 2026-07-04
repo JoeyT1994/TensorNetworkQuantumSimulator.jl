@@ -87,14 +87,16 @@ The optional first argument sets the element type (`Float64` by default). Use `C
 
 ### Heisenberg Picture
 
-You can also work directly in the Heisenberg picture, representing a many-body operator as a TNS in the `"Pauli"` basis. Each site encodes the coefficients of I, X, Y, Z:
+You can also work directly in the Heisenberg picture, representing a many-body operator as a TNS with two indices per site.
 
 ```julia
-# Start with the Z operator on a single site, identity elsewhere
-ψ = paulitensornetworkstate(ComplexF32, v -> v == v0 ? "Z" : "I", g)
+# Start with the Z operator on a single site vz, identity elsewhere
+s = siteinds("S=1/2", g; inds_per_site = 2)
+ψI = identity_tensornetworkstate(ComplexF64, g, s)
+setindex_preserve!(ψ0, noprime(ψ0[vz] * ITensors.op("Z", s[vz][1])), vz)
 ```
 
-Gates are then applied as conjugation by unitaries, and observables are extracted via traces (see `examples/2dIsing_dynamics_Heisenbergpicture.jl`).
+Gates are then applied as pairs two the bra and ket indices, and observables are extracted via inner products with other pauli-constructed tensor networks (see `examples/2dIsing_dynamics_Heisenbergpicture.jl`).
 
 ### Building Circuits
 

@@ -103,7 +103,8 @@ end
 const _default_bp_update_maxiter = 25
 function default_tolerance(type)
     (type == Float32 || type == ComplexF32) && return 1.0e-5
-    return (type == Float64 || type == ComplexF64) && return 1.0e-8
+    (type == Float64 || type == ComplexF64) && return 1.0e-8
+    return nothing
 end
 
 function default_bp_update_kwargs(tn::AbstractTensorNetwork)

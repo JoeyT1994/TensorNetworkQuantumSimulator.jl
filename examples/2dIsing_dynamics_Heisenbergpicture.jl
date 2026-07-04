@@ -1,7 +1,7 @@
 using TensorNetworkQuantumSimulator
-
-using ITensors
 using Graphs: center
+using TensorNetworkQuantumSimulator: setindex_preserve!, noprime
+using ITensors: ITensors, ITensor
 
 function main()
     nx, ny = 4, 4
@@ -10,12 +10,17 @@ function main()
     nqubits = length(vertices(g))
     #Physical indices represent "Identity, X, Y, Z" in that order
     vz = first(center(g))
-    ψ0 = paulitensornetworkstate(ComplexF32, v -> v == vz ? "Z" : "I", g)
+    #ψ0 = paulitensornetworkstate(ComplexF32, v -> v == vz ? "Z" : "I", g)
+    s = siteinds("S=1/2", g; inds_per_site = 2)
+    ψI = identity_tensornetworkstate(ComplexF64, g, s)
+    ψ0 = copy(ψI)
+    setindex_preserve!(ψ0, noprime(ψ0[vz] * ITensors.op("Z", s[vz][1])), vz)
 
-    maxdim, cutoff = 4, 1.0e-14
+    maxdim, cutoff =4, 1.0e-14
     apply_kwargs = (; maxdim, cutoff, normalize_tensors = false)
     #Parameters for BP, as the graph is not a tree (it has loops), we need to specify these
 
+    ψ0 = normalize(ψ0; alg = "bp")
     ψ = copy(ψ0)
 
     ψ_bpc = BeliefPropagationCache(ψ)
@@ -25,13 +30,15 @@ function main()
     δt = 0.04
 
     #Do a 4-way edge coloring then Trotterise the Hamiltonian into commuting groups. Lets do Ising with the designated parameters
-    layer = []
+    layer = ITensor[]
     ec = edge_color(g, 4)
-    append!(layer, ("Rz", [v], h * δt) for v in vertices(g))
-    for colored_edges in ec
-        append!(layer, ("Rxx", pair, 2 * J * δt) for pair in colored_edges)
+    
+    #Ket leg (s[v][1]) gets U† (angle negated), bra leg (s[v][2]) gets U (angle unchanged) so that O -> U'OU
+    append!(layer, [ITensors.op("Rz", s[v][1];  θ = -h * δt)*ITensors.op("Rz", s[v][2];  θ = h * δt) for v in vertices(g)])
+    for es in ec
+        append!(layer, [ITensors.op("Rxx", s[src(e)][1], s[dst(e)][1], ϕ = -J * δt)*ITensors.op("Rxx", s[src(e)][2], s[dst(e)][2], ϕ = J * δt) for e in es])
     end
-    append!(layer, ("Rz", [v], h * δt) for v in vertices(g))
+    append!(layer, [ITensors.op("Rz", s[v][1];  θ = -h * δt)*ITensors.op("Rz", s[v][2];  θ = h * δt) for v in vertices(g)])
 
     χinit = maxvirtualdim(ψ)
     println("Initial bond dimension of the Heisenberg operator is $χinit")
@@ -47,12 +54,12 @@ function main()
         t = @timed ψ_bpc, errors =
             apply_gates(layer, ψ_bpc; apply_kwargs, verbose = false)
         #Reset the Frobenius norm to unity
-        ψ_bpc = rescale(ψ_bpc)
+        rescale!(ψ_bpc)
         println("Frobenius norm of O(t) is $(partitionfunction(ψ_bpc))")
 
         ψ = network(ψ_bpc)
         #Take traces
-        tr_ψt = inner(ψ, identity_tensornetworkstate(g, siteinds(ψ)); alg = "bp")
+        tr_ψt = inner(ψ, ψI; alg = "bp")
         tr_ψtψ0 = inner(ψ, ψ0; alg = "bp")
         println("Trace(O(t)) is $(tr_ψt)")
         println("Trace(O(t)O(0)) is $(tr_ψtψ0)")
