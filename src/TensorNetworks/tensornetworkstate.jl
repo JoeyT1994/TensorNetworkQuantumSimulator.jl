@@ -67,12 +67,15 @@ bra_tensor(tns::TensorNetworkState, v) = bra_tensor(tns[v], auxinds(tns, v))
 # The dangling non-physical legs of a vertex tensor: dangling legs that are not site indices.
 auxinds(tns::TensorNetworkState, v) = Index[i for i in setdiff(uniqueinds(tns, v), siteinds(tns, v))]
 
-function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I")
+# `auxinds_f` overrides the live aux-leg classification. The loop-correction weights
+# need this: they deliberately relabel a bond so it dangles in the modified network,
+# and the live classification would misread it as a charge leg.
+function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I", auxinds_f::Function = v -> auxinds(tns, v))
     factors = ITensor[]
     for v in verts
         sinds = siteinds(tns, v)
         tnv = tns[v]
-        tnv_dag = bra_tensor(tns, v)
+        tnv_dag = bra_tensor(tnv, auxinds_f(v))
         if op_strings(v) == "ρ" || isempty(sinds)
             append!(factors, ITensor[tnv, tnv_dag])
         elseif op_strings(v) == "I"
@@ -170,7 +173,7 @@ function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dic
         if tnv isa String
             set!(tensors, v, adapt(eltype)(ITensors.state(f(v), only(siteinds[v]))))
         elseif tnv isa Vector{<:Number}
-            set!(tensors, v, adapt(eltype)(ITensors.ITensor(f(v), only(siteinds[v]))))
+            set!(tensors, v, adapt(eltype)(ITensors.state(f(v), only(siteinds[v]))))
         else
             error("Unrecognized local state constructor. Currently supported: Strings and Vectors.")
         end

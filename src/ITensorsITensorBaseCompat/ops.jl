@@ -30,9 +30,14 @@ function state(name::AbstractString, i::Index)
             "unknown single-site state \"$name\" (vendored states: $(sort(collect(keys(_STATE_VECTORS)))))"
         )
     end
+    return state(v, i)
+end
+# Vector form (legacy `ITensor(v, i)` for a state vector): the named state vector as
+# an `ITensor` over `i`, via checked `project` so the index axis selects the backend.
+function state(v::AbstractVector{<:Number}, i::Index)
     length(v) == length(i) ||
         error(
-        "state \"$name\" has dimension $(length(v)) but the site index has dimension $(length(i))"
+        "state vector has dimension $(length(v)) but the site index has dimension $(length(i))"
     )
     ψ = tryproject(v, (i,))
     isnothing(ψ) || return ψ

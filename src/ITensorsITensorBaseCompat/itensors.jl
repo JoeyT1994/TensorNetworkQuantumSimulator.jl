@@ -162,9 +162,17 @@ end
 # Legacy `itensor(array, inds)`: inherit the index spaces. NB: `ITensor(array, inds)`
 # with raw `Index` objects is intentionally NOT supported by ITensorBase (the space
 # is underdefined); use the indexing form, which inherits the indices' spaces, or
-# `ITensor(array, name.(inds))` to take the space from the array.
-itensor(array, is) = array[is...]
-itensor(array, is...) = array[is...]
+# `ITensor(array, name.(inds))` to take the space from the array. Like the legacy
+# constructor, a matching total length is accepted and reshaped to the index
+# dimensions (e.g. a `d^2 × d^2` two-site gate matrix over four site legs).
+function itensor(array, is...)
+    length(array) == prod(length, is) ||
+        error(
+        "array with $(length(array)) elements cannot fill indices of dimensions $(length.(is))"
+    )
+    return reshape(array, map(length, is))[is...]
+end
+itensor(array, is::Union{Tuple, AbstractVector}) = itensor(array, is...)
 
 # TYPE PIRACY (temporary, compat-owned — NOT an upstream candidate): adds a rank-0
 # `ITensor(x::Number)` constructor, which ITensorBase deliberately omits and does not plan to
@@ -254,18 +262,13 @@ function tr(t::AbstractITensor)
     return scalar(out)
 end
 
-# One-hot vector along `i` at position `p` (legacy `onehot(i => p)`), built via checked
-# `project` so it follows the index's backend. When the position's sector is charged
-# under a graded `i` the vector can't live over `i` alone, so carry the charge on a
-# derived length-1 auxiliary leg — the same construction as a charged `state` (`ops.jl`).
+# One-hot vector along `i` at position `p` (legacy `onehot(i => p)`), through the
+# vector-state constructor (`state` in `ops.jl`), which follows the index's backend
+# and carries any charge on a derived auxiliary leg.
 function onehot(eltype::Type, (i, p)::Pair{<:Index})
     v = zeros(eltype, length(i))
     v[p] = one(eltype)
-    ψ = TensorAlgebra.tryproject(v, (i,))
-    isnothing(ψ) || return ψ
-    raw = TensorAlgebra.project(reshape(v, (length(v), 1)), (unnamed(i),), ())
-    aux = Index(TensorAlgebra.axes(raw, 2))
-    return nameddims(raw, (ITensorBase.name(i), ITensorBase.name(aux)))
+    return state(v, i)
 end
 onehot(p::Pair{<:Index}) = onehot(Float64, p)
 
