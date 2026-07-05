@@ -191,11 +191,16 @@ function set_interpartition_messages!(
         end
         for i in 1:(length(es) - 1)
             virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
-            ind = Index(virt_dim, "m$(i)$(i + 1)")
             m1, m2 = message(bmps_cache, es[i]), message(bmps_cache, es[i + 1])
-            t = adapt_like(m1, dense(delta(ind)))
+            # The stitching leg is minted trivial (all weight in the charge-0 sector)
+            # so it follows the messages' backend; the all-ones filling matches the
+            # legacy dense `delta(ind)`.
+            ind = ITensors.settags(Index(trivialrange(unnamed(first(inds(m1))), virt_dim)), "m$(i)$(i + 1)")
+            t = fill!(similar(m1, (ind,)), true)
+            # The two copies of the stitching leg contract against each other along the
+            # message MPS, so one side takes the conjugate.
             setmessage!(bmps_cache, es[i], m1 * t)
-            setmessage!(bmps_cache, es[i + 1], m2 * t)
+            setmessage!(bmps_cache, es[i + 1], m2 * dag(t))
         end
     end
     return bmps_cache

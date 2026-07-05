@@ -55,18 +55,24 @@ function Base.setindex!(tns::TensorNetworkState, value::ITensor, v)
     return tns
 end
 
+# Bra copy of a tensor: `dag` and prime all legs except `auxinds` — dangling
+# non-physical legs (e.g. a charged state's charge leg), which always pair directly
+# between ket and bra rather than through an operator or a message.
+function bra_tensor(t::ITensor, auxinds::Vector{<:Index})
+    tdag = dag(prime(t))
+    return isempty(auxinds) ? tdag : replaceinds(tdag, prime.(auxinds), auxinds)
+end
+bra_tensor(tns::TensorNetworkState, v) = bra_tensor(tns[v], auxinds(tns, v))
+
+# The dangling non-physical legs of a vertex tensor: dangling legs that are not site indices.
+auxinds(tns::TensorNetworkState, v) = Index[i for i in setdiff(uniqueinds(tns, v), siteinds(tns, v))]
+
 function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I")
     factors = ITensor[]
     for v in verts
         sinds = siteinds(tns, v)
         tnv = tns[v]
-        tnv_dag = dag(prime(tnv))
-        # Dangling non-physical legs (e.g. a charged state's charge leg) always
-        # pair between ket and bra, so unprime them on the bra unconditionally.
-        auxinds = Index[i for i in setdiff(uniqueinds(tns, v), sinds)]
-        if !isempty(auxinds)
-            tnv_dag = replaceinds(tnv_dag, Index[prime(i) for i in auxinds], auxinds)
-        end
+        tnv_dag = bra_tensor(tns, v)
         if op_strings(v) == "ρ" || isempty(sinds)
             append!(factors, ITensor[tnv, tnv_dag])
         elseif op_strings(v) == "I"

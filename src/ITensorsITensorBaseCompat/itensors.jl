@@ -18,6 +18,7 @@ using ITensorBase: ITensorBase, AbstractITensor, ITensor, Index, NamedUnitRange,
     nameddims, plev, tags, unnamed
 using LinearAlgebra: LinearAlgebra
 using TensorAlgebra.MatrixAlgebra: MatrixAlgebra
+using TensorAlgebra: TensorAlgebra
 
 # Legacy `inds(t; plev, tags)` accepted index-filtering keywords; the next-gen
 # `ITensorBase.inds` takes none. Own a compat `inds` that forwards to `ITensorBase.inds`
@@ -217,6 +218,20 @@ function diagonaltensor(
 end
 
 delta(eltype::Type, is::Tuple) = diagonaltensor(ones(eltype, minimum(length, is)), is)
+# The order-2 delta is the identity map over the index pair, built via checked
+# `project` so the index axes select the backend (dense, graded, `TensorMap`). The
+# result carries exactly the given indices with their own axes (`project` dualizes
+# domain axes, so `dag(j)` in the domain slot passes `j`'s axis through) — the legacy
+# QN-`delta` convention, where callers arrow the indices themselves. The pair must be
+# arrow-opposite (axis of `j` the dual of axis of `i`, e.g. `(dag(i), prime(i))`); an
+# identity between incompatible gradings throws. Higher-order deltas stay on the dense
+# `diagonaltensor` path above (a super-diagonal generally cannot be embedded while
+# preserving a nontrivial symmetry).
+function delta(eltype::Type, is::Tuple{Index, Index})
+    i, j = is
+    id = Matrix{eltype}(LinearAlgebra.I, length(i), length(j))
+    return TensorAlgebra.project(id, (i,), (dag(j),))
+end
 delta(eltype::Type, is::Index...) = delta(eltype, is)
 delta(eltype::Type, is::AbstractVector{<:Index}) = delta(eltype, Tuple(is))
 delta(is::Tuple) = delta(Float64, is)
@@ -232,16 +247,25 @@ delta(is::AbstractVector{<:Index}) = delta(Float64, Tuple(is))
 function tr(t::AbstractITensor)
     out = copy(t)
     for i in inds(t; plev = 0)
-        out *= Adapt.adapt(datatype(t), delta(i, prime(i)))
+        # The delta legs carry the duals of `t`'s prime pair (`i` and its primed dual),
+        # so each leg contracts its partner on any backend.
+        out *= delta(scalartype(t), dag(i), prime(i))
     end
     return scalar(out)
 end
 
-# One-hot vector along `i` at position `p` (legacy `onehot(i => p)`).
+# One-hot vector along `i` at position `p` (legacy `onehot(i => p)`), built via checked
+# `project` so it follows the index's backend. When the position's sector is charged
+# under a graded `i` the vector can't live over `i` alone, so carry the charge on a
+# derived length-1 auxiliary leg — the same construction as a charged `state` (`ops.jl`).
 function onehot(eltype::Type, (i, p)::Pair{<:Index})
     v = zeros(eltype, length(i))
     v[p] = one(eltype)
-    return v[i]
+    ψ = TensorAlgebra.tryproject(v, (i,))
+    isnothing(ψ) || return ψ
+    raw = TensorAlgebra.project(reshape(v, (length(v), 1)), (unnamed(i),), ())
+    aux = Index(TensorAlgebra.axes(raw, 2))
+    return nameddims(raw, (ITensorBase.name(i), ITensorBase.name(aux)))
 end
 onehot(p::Pair{<:Index}) = onehot(Float64, p)
 
@@ -523,9 +547,12 @@ end
 # Storage / element type accessors.
 #
 # `scalartype` is re-exported above. `datatype` is the underlying storage array type
-# (used by `adapt`); `array` / `data` expose the plain unnamed array.
+# (used by `adapt`); `data` exposes the plain unnamed array. `array` densifies (legacy
+# `array` materialized a dense array from any storage): a no-op on a dense backend,
+# while graded / `TensorMap` storage converts through its canonical flat basis, so
+# positions agree with `onehot` / `project` on the same axes.
 datatype(T::AbstractITensor) = typeof(unnamed(T))
-array(T::AbstractITensor) = unnamed(T)
+array(T::AbstractITensor) = convert(Array, unnamed(T))
 data(T::AbstractITensor) = unnamed(T)
 
 # TYPE PIRACY (temporary, compat-owned — NOT an upstream candidate): extends
@@ -648,7 +675,10 @@ end
 # argument). Kept here for now; the call sites get modernized to the `tags` kwarg later, retiring
 # these methods rather than upstreaming them.
 #
-# Legacy positional tagged-index constructor `Index(dim, "tag")`.
+# Legacy positional tagged-index constructor `Index(dim, "tag")`. Only the dimension
+# form is pirated: a range/space first argument collides with ITensorBase's own
+# two-argument `Index` constructors, so tagging an index minted over a backend axis
+# spells the two steps (`settags(Index(r), "tag")`).
 ITensorBase.Index(dim::Integer, tagstr::AbstractString) = settags(Index(dim), tagstr)
 # Build a fresh index carrying a tag dictionary (legacy `Index(dim, tags(i))`, where
 # the next-gen `tags` returns a `Dict{String, String}`).
