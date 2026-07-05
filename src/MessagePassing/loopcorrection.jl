@@ -50,10 +50,7 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
                     row_inds = vcat(row_inds, dag.(prime.(row_inds)))
                     col_inds = vcat(col_inds, dag.(prime.(col_inds)))
                 end
-                row_combiner, col_combiner = combiner(row_inds), combiner(col_inds)
-                ap =
-                    adapt_like(message(bpc, e), denseblocks(delta(combinedind(col_combiner), dag(combinedind(row_combiner)))))
-                ap = ap * row_combiner * dag(col_combiner)
+                ap = adapt_like(message(bpc, e), identity_tensor(row_inds, col_inds))
                 ap = ap - message(bpc, e) * mer
                 push!(antiprojectors, ap)
             end

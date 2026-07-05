@@ -35,8 +35,11 @@ function simple_update(
         envs_v2 = filter(env -> hascommoninds(env, ψ⃗[2]), envs)
         @assert all(ndims(env) == 2 for env in vcat(envs_v1, envs_v2))
 
-        sqrt_inv_sqrt_envs_v1 = pseudo_sqrt_inv_sqrt.(envs_v1; cutoff = sqrt_cutoff)
-        sqrt_inv_sqrt_envs_v2 = pseudo_sqrt_inv_sqrt.(envs_v2; cutoff = sqrt_cutoff)
+        sqrt_invsqrt = env -> sqrth_invsqrth_safe(
+            env, (inds(env)[1],), (inds(env)[2],); atol = sqrt_cutoff, rtol = 0
+        )
+        sqrt_inv_sqrt_envs_v1 = map(sqrt_invsqrt, envs_v1)
+        sqrt_inv_sqrt_envs_v2 = map(sqrt_invsqrt, envs_v2)
         sqrt_envs_v1, inv_sqrt_envs_v1 = first.(sqrt_inv_sqrt_envs_v1), last.(sqrt_inv_sqrt_envs_v1)
         sqrt_envs_v2, inv_sqrt_envs_v2 = first.(sqrt_inv_sqrt_envs_v2), last.(sqrt_inv_sqrt_envs_v2)
 

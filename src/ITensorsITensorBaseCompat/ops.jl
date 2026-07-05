@@ -10,6 +10,8 @@
 # only ever calls `op(name, sites...; kwargs...)` and `state(name, site)`, so the vendor
 # is a plain name-keyed lookup rather than a reimplementation of that dispatch machinery.
 
+using TensorAlgebra: TensorAlgebra, project, tryproject
+
 #
 # Named single-site states. `state(name, i)` returns the named state vector as an
 # `ITensor` over `i`.
@@ -20,15 +22,28 @@ const _STATE_VECTORS = Dict{String, Vector{ComplexF64}}(
     "X+" => [1, 1] / sqrt(2), "+" => [1, 1] / sqrt(2),
     "X-" => [1, -1] / sqrt(2), "-" => [1, -1] / sqrt(2),
     "Y+" => [1, im] / sqrt(2),
-    "Y-" => [1, -im] / sqrt(2),
+    "Y-" => [1, -im] / sqrt(2)
 )
 function state(name::AbstractString, i::Index)
     v = get(_STATE_VECTORS, name) do
-        error("unknown single-site state \"$name\" (vendored states: $(sort(collect(keys(_STATE_VECTORS)))))")
+        return error(
+            "unknown single-site state \"$name\" (vendored states: $(sort(collect(keys(_STATE_VECTORS)))))"
+        )
     end
     length(v) == length(i) ||
-        error("state \"$name\" has dimension $(length(v)) but the site index has dimension $(length(i))")
-    return collect(v)[i]
+        error(
+        "state \"$name\" has dimension $(length(v)) but the site index has dimension $(length(i))"
+    )
+    ψ = tryproject(v, (i,))
+    isnothing(ψ) || return ψ
+    # The state carries a charge under the site index's grading (e.g. "Dn" on a
+    # U(1) site), so it can't live in the flux-zero space over `i` alone. Carry the
+    # charge on an explicit length-1 auxiliary leg: project with a trailing axis so
+    # the backend derives the leg's sector from the state vector, then wrap the
+    # derived axis in a freshly named `Index`.
+    raw = project(reshape(v, (length(v), 1)), (unnamed(i),), ())
+    aux = Index(TensorAlgebra.axes(raw, 2))
+    return nameddims(raw, (ITensorBase.name(i), ITensorBase.name(aux)))
 end
 
 #
@@ -53,13 +68,15 @@ macro SiteType_str(name)
 end
 
 # Embed a `d^n × d^n` operator matrix (computational basis, first site most
-# significant) into an `ITensor` over `(prime.(sites)..., sites...)`.
+# significant) into an `ITensor` with codomain `prime.(sites)` (outputs) and
+# domain `sites` (inputs). `project` is checked, so on graded sites an operator
+# that is not symmetric under the site index's grading throws an `InexactError`.
 function _op_matrix_to_itensor(M::AbstractMatrix, sites::Tuple)
     ds = length.(sites)
     n = length(sites)
     A = reshape(Matrix{ComplexF64}(M), (reverse(ds)..., reverse(ds)...))
     A = permutedims(A, (reverse(1:n)..., reverse((n + 1):(2n))...))
-    return A[ITensorBase.prime.(sites)..., sites...]
+    return project(A, ITensorBase.prime.(sites), sites)
 end
 
 # Top-level `op(name, sites...; kwargs...)`. The identity is dimension-general (used
@@ -68,7 +85,10 @@ end
 function op(name::AbstractString, sites::Index...; kwargs...)
     if name in ("I", "Id") && length(sites) == 1
         s = only(sites)
-        return Matrix{ComplexF64}(LinearAlgebra.I, length(s), length(s))[ITensorBase.prime(s), s]
+        return project(
+            Matrix{ComplexF64}(LinearAlgebra.I, length(s), length(s)),
+            (ITensorBase.prime(s),), (s,)
+        )
     end
     return op(OpName(name), SiteType("S=1/2"), sites...; kwargs...)
 end
@@ -87,15 +107,17 @@ const _GATE_MATRICES = Dict{String, Matrix{ComplexF64}}(
     "Z" => [1 0; 0 -1],
     "H" => [1 1; 1 -1] / sqrt(2),
     "S" => [1 0; 0 im],
-    "T" => [1 0; 0 cis(π / 4)],
+    "T" => [1 0; 0 cis(π / 4)]
 )
 function _gate_matrix(name::AbstractString; kwargs...)
     name in ("Rx", "Ry", "Rz", "P") || return get(_GATE_MATRICES, name) do
-        error("unknown single-site operator \"$name\" (vendored operators: $(sort(collect(keys(_GATE_MATRICES)))) plus Rx/Ry/Rz/P)")
+        return error(
+            "unknown single-site operator \"$name\" (vendored operators: $(sort(collect(keys(_GATE_MATRICES)))) plus Rx/Ry/Rz/P)"
+        )
     end
     if name == "Rx"
         θ = kwargs[:θ]
-        return ComplexF64[cos(θ / 2) (-im*sin(θ / 2)); (-im*sin(θ / 2)) cos(θ / 2)]
+        return ComplexF64[cos(θ / 2) (-im * sin(θ / 2)); (-im * sin(θ / 2)) cos(θ / 2)]
     elseif name == "Ry"
         θ = kwargs[:θ]
         return ComplexF64[cos(θ / 2) (-sin(θ / 2)); sin(θ / 2) cos(θ / 2)]
@@ -108,7 +130,9 @@ function _gate_matrix(name::AbstractString; kwargs...)
     end
 end
 # Matrix method for any single-qubit name handled by `_gate_matrix`.
-op(::OpName{Name}, ::SiteType"S=1/2"; kwargs...) where {Name} = _gate_matrix(String(Name); kwargs...)
+function op(::OpName{Name}, ::SiteType"S=1/2"; kwargs...) where {Name}
+    return _gate_matrix(String(Name); kwargs...)
+end
 
 # Two-qubit gate matrices (computational basis, first site most significant).
 const _σx = ComplexF64[0 1; 1 0]
@@ -117,25 +141,23 @@ const _σz = ComplexF64[1 0; 0 -1]
 op(::OpName"Rxx", ::SiteType"S=1/2"; ϕ) = exp(-im * ϕ * kron(_σx, _σx))
 op(::OpName"Ryy", ::SiteType"S=1/2"; ϕ) = exp(-im * ϕ * kron(_σy, _σy))
 op(::OpName"Rzz", ::SiteType"S=1/2"; ϕ) = exp(-im * ϕ * kron(_σz, _σz))
-op(::OpName"CPHASE", ::SiteType"S=1/2"; ϕ) = ComplexF64[1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 cis(ϕ)]
+function op(::OpName"CPHASE", ::SiteType"S=1/2"; ϕ)
+    return ComplexF64[1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 cis(ϕ)]
+end
+function op(::OpName"SWAP", ::SiteType"S=1/2")
+    return Float64[1 0 0 0; 0 0 1 0; 0 1 0 0; 0 0 0 1]
+end
 
-# TYPE PIRACY (temporary): extends `Base.exp` for an operator `ITensor` (matricize over the
-# index/prime pairs, exponentiate, rebuild). Legacy ITensors provided `exp(::ITensor)`; gates
-# defined as `exp` of a Hamiltonian operator rely on it (e.g. a user
+# TYPE PIRACY (temporary): extends `Base.exp` for an operator `ITensor`, inferring the
+# prime-pair codomain/domain and forwarding to ITensorBase's matricization
+# `exp(a, dimnames_codomain, dimnames_domain)` (graded-capable). Legacy ITensors provided
+# `exp(::ITensor)`; gates defined as `exp` of a Hamiltonian operator rely on it (e.g. a user
 # `op(::OpName"MyZRot", ...) = exp(-im θ/2 * op("Z", s))`). To de-pirate: make this compat-owned
-# (an `exp` in this module, not a `Base.exp` method), inferring the prime-pair codomain/domain and
-# forwarding to ITensorBase's matricization `exp(a, dimnames_codomain, dimnames_domain)` — which
-# already exists and is graded-capable, so this dense combiner-based version goes away. Not an
-# upstream candidate (the upstream matricization `exp` is the target, not a `Base.exp(::ITensor)`).
+# (an `exp` in this module, not a `Base.exp` method). Not an upstream candidate (the upstream
+# matricization `exp` is the target, not a `Base.exp(::ITensor)`).
 function Base.exp(t::AbstractITensor)
     p0 = filter(i -> ITensorBase.plev(i) == 0, collect(inds(t)))
     isempty(p0) && error("exp(::ITensor) expects indices paired as (i, prime(i))")
     p1 = map(ITensorBase.prime, p0)
-    cr, cc = combiner(Tuple(p1)), combiner(Tuple(p0))
-    tc = (t * cr) * cc
-    rci, cci = combinedind(cr), combinedind(cc)
-    d = length(rci)
-    M = ComplexF64[tc[rci => a, cci => b] for a in 1:d, b in 1:d]
-    E = exp(M)[rci, cci]
-    return (E * dag(cr)) * dag(cc)
+    return exp(t, Tuple(p1), Tuple(p0))
 end

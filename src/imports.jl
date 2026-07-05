@@ -56,7 +56,7 @@ import .ITensorsITensorBaseCompat as ITensors
 using .ITensorsITensorBaseCompat:
     inds, commoninds, commonind, uniqueinds, noncommonind, noncommoninds, unioninds, hascommoninds,
     sim, dag, prime, noprime, replaceind, replaceinds, dim, swapind,
-    itensor, random_itensor, scalar, delta, onehot, combiner, combinedind,
+    itensor, random_itensor, scalar, delta, onehot,
     qr, svd, eigen, factorize, factorize_svd,
     map_diag, map_diag!,
     scalartype, datatype, array, data,
@@ -66,7 +66,9 @@ using .ITensorsITensorBaseCompat:
     Algorithm, @Algorithm_str,
     hastags,
     state, op, OpName, SiteType, @OpName_str, @SiteType_str
-using ITensorBase: ITensorBase, Index, ITensor, name, plev, tags
+using ITensorBase: ITensorBase, Index, ITensor, name, plev, tags, unnamed
+using TensorAlgebra: trivialrange
+using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe, sqrth_safe
 
 using Adapt: adapt
 

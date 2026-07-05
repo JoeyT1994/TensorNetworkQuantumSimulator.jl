@@ -111,11 +111,13 @@ function apply_gate!(
     if length(v⃗) == 2
         v1, v2 = v⃗
         e = NamedEdge(v1 => v2)
-        ind2 = commonind(s_values, first(updated_tensors))
-        δuv = dag(copy(s_values))
-        δuv = replaceind(δuv, ind2, prime(ind2))
-        map_diag!(sign, δuv, δuv)
-        s_values = denseblocks(s_values) * denseblocks(δuv)
+        u = commonind(s_values, first(updated_tensors))
+        v = noncommonind(s_values, first(updated_tensors))
+        # The new messages are the singular values over the bond-and-prime pair.
+        # MatrixAlgebraKit singular values are nonnegative, so the legacy sign fix
+        # (`s * sign(s)` via `map_diag!`) was a no-op and is dropped; fermionic sign
+        # handling for this message construction is future work.
+        s_values = replaceind(s_values, v, prime(u))
         setmessage!(ψ_bpc, e, dag(s_values))
         setmessage!(ψ_bpc, reverse(e), s_values)
     end

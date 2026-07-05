@@ -30,7 +30,7 @@ export
     # Index operations
     sim, dag, prime, noprime, replaceind, replaceinds, dim, swapind,
     # ITensor construction
-    itensor, random_itensor, scalar, delta, onehot, combiner, combinedind,
+    itensor, random_itensor, scalar, delta, onehot,
     # Factorizations
     qr, svd, eigen, factorize, factorize_svd,
     # Diagonal manipulation

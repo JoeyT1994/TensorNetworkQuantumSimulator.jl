@@ -3,9 +3,11 @@
 #
 # Strategy (see ITensorDevelopmentPlans api_migration_map.md):
 #   - Names below are thin wrappers over ITensorBase / TensorAlgebra / MatrixAlgebraKit.
-#   - `combiner`, the factorization return shapes, `map_diag`, the operator/SiteType
-#     system, and the boundary-MPS (ITensorMPS) paths are NOT wrapped here; they need
-#     callsite translation or upstream stack work and are tracked separately.
+#   - The factorization return shapes, `map_diag`, the operator/SiteType system, and
+#     the boundary-MPS (ITensorMPS) paths are NOT wrapped here; they need callsite
+#     translation or upstream stack work and are tracked separately. The legacy
+#     `combiner` is retired rather than wrapped: call sites use the next-gen fusion
+#     primitives (`matricize` below, the fused identity `Base.one`) directly.
 #
 # ITensorBase keeps most of this API internal (unexported), so we reach for the
 # qualified names and re-publish the legacy spellings into the TNQS namespace.
@@ -15,6 +17,7 @@ using Adapt: Adapt
 using ITensorBase: ITensorBase, AbstractITensor, ITensor, Index, NamedUnitRange, name,
     nameddims, plev, tags, unnamed
 using LinearAlgebra: LinearAlgebra
+using TensorAlgebra.MatrixAlgebra: MatrixAlgebra
 
 # Legacy `inds(t; plev, tags)` accepted index-filtering keywords; the next-gen
 # `ITensorBase.inds` takes none. Own a compat `inds` that forwards to `ITensorBase.inds`
@@ -300,10 +303,11 @@ function _hermitian_eigh(
     )
     cod, dom = _astuple(codomain), _astuple(domain)
     # `MAK.eigh_full` rejects a matrix that is hermitian only up to numerical noise, but
-    # the caller asserts `ishermitian = true`. Project onto the hermitian part first
-    # (the conjugate transpose swaps codomain ↔ domain), matching legacy `eigen`'s
-    # treat-as-hermitian behavior.
-    m = (m + replaceinds(conj(m), (cod..., dom...), (dom..., cod...))) / 2
+    # the caller asserts `ishermitian = true`. Project onto the hermitian part first,
+    # matching legacy `eigen`'s treat-as-hermitian behavior. `MAK.project_hermitian`
+    # works at the matricized level, so it stays generic over graded and `TensorMap`
+    # backends (a named-level `m + swap(conj(m))` is not).
+    m = MAK.project_hermitian(m, cod, dom)
     D, U = MAK.eigh_full(m, cod, dom)
     u = only(commoninds(D, U))         # eigenvalue index shared with U
     t = only(uniqueinds(D, U))         # D's other (independent) index
@@ -312,8 +316,8 @@ function _hermitian_eigh(
 end
 
 # Partitioned form `eigen(m, Linds, Rinds)` reproduces legacy ITensors' reconstruction
-# `m = Vt * D * dag(V)` (with `Vt` the relabeling of `V` from `Rinds` to `Linds`), which
-# is what `eigendecomp`/`pseudo_sqrt_inv_sqrt` rely on — no conjugation of `U`.
+# `m = Vt * D * dag(V)` (with `Vt` the relabeling of `V` from `Rinds` to `Linds`) —
+# no conjugation of `U`.
 function eigen(m::AbstractITensor, codomain, domain; kwargs...)
     return _hermitian_eigh(m, codomain, domain; kwargs...)
 end
@@ -349,6 +353,19 @@ function _trunc_spec(cutoff, maxdim)
     return reduce(&, specs)
 end
 
+# Split `a`'s indices into (left, right) by the requested `linds`, matching by name:
+# the caller's `Index` objects may carry the other endpoint's (dual) space on a graded
+# backend, so `Index`-equality filtering silently drops them (see the name-matching
+# note on the index-set algebra above). Both groups are `a`'s own indices, so the
+# spaces handed to the factorization are `a`'s.
+function _bipartition_inds(a::AbstractITensor, linds)
+    lnames = name.(cat_inds(linds...))
+    allinds = collect(inds(a))
+    left = filter(i -> name(i) ∈ lnames, allinds)
+    right = filter(i -> name(i) ∉ lnames, allinds)
+    return left, right
+end
+
 # Legacy `factorize(a, linds...; ortho, cutoff, maxdim, tags)` splits `a` into `L * R`
 # with the new bond between them. `linds` selects `L`'s indices (besides the bond) and
 # may be passed splatted, as a single index, or as one collection. `ortho = "left"`
@@ -363,9 +380,7 @@ function factorize(
         maxdim = nothing,
         tags = nothing
     )
-    allinds = collect(inds(a))
-    left = filter(∈(allinds), cat_inds(linds...))
-    right = setdiff(allinds, left)
+    left, right = _bipartition_inds(a, linds)
     trunc = _trunc_spec(cutoff, maxdim)
     if isnothing(trunc)
         if ortho == "left"
@@ -412,8 +427,10 @@ function _absorb_svd(U, S, Vt, ortho)
         u = only(commoninds(U, S))
         v = only(commoninds(S, Vt))
         up = prime(u)
-        sqrtσ = sqrt.(abs.(diagview(unnamed(S))))
-        return U * diagonaltensor(sqrtσ, (u, up)), Vt * diagonaltensor(sqrtσ, (v, up))
+        # `S` is diagonal, so this hits the diagonal fast path (no eigendecomposition)
+        # on every backend. No clamping: zero singular values stay zero under `^(1//2)`.
+        sqrtS = MatrixAlgebra.sqrth_safe(S, (u,), (v,); atol = 0, rtol = 0)
+        return U * replaceind(sqrtS, v, up), Vt * replaceind(sqrtS, u, up)
     end
     return error(
         "compat `factorize_svd` supports ortho = \"left\" / \"right\" / \"none\" (got $(repr(ortho)))"
@@ -433,9 +450,7 @@ function factorize_svd(
         maxdim = nothing,
         tags = nothing
     )
-    allinds = collect(inds(a))
-    left = filter(∈(allinds), cat_inds(linds...))
-    right = setdiff(allinds, left)
+    left, right = _bipartition_inds(a, linds)
     trunc = _trunc_spec(cutoff, maxdim)
     U, S, Vt = if isnothing(trunc)
         MAK.svd_compact(a, Tuple(left), Tuple(right))
@@ -443,7 +458,7 @@ function factorize_svd(
         MAK.svd_trunc(a, Tuple(left), Tuple(right); trunc)
     end
     total = abs2(LinearAlgebra.norm(a))
-    kept = sum(abs2, diagview(unnamed(S)))
+    kept = abs2(LinearAlgebra.norm(S))
     truncerr = if iszero(total)
         zero(real(scalartype(a)))
     else
@@ -460,53 +475,46 @@ function factorize_svd(
 end
 
 #
-# Combiner / index fusion. Legacy `combiner(is...)` returns a tensor that, when
-# contracted, fuses `is` into one index; `dag(C)` splits it back, and
-# `combinedind(C)` recovers that fused index. Reproduced densely as a reshaped
-# identity (`C[is..., c] = δ(c, flatten(is))`), which the next-gen fusion
-# primitives back via ordinary contraction. The fused index carries a sentinel tag
-# so `combinedind` can find it. Dense only; a graded combiner is a stack gap.
-const _COMBINER_TAG = "combiner"
-function combiner(is::Tuple; eltype::Type = Float64)
-    d = prod(length, is)
-    c = ITensorBase.settag(Index(d), _COMBINER_TAG, "combined")
-    return reshape(Matrix{eltype}(LinearAlgebra.I, d, d), (length.(is)..., d))[is..., c]
-end
-combiner(is::Index...; kwargs...) = combiner(is; kwargs...)
-combiner(is::AbstractVector{<:Index}; kwargs...) = combiner(Tuple(is); kwargs...)
-function combinedind(c::AbstractITensor)
-    return only(
-        filter(i -> get(ITensorBase.tags(i), _COMBINER_TAG, "") == "combined", inds(c))
-    )
-end
+# Index fusion. The legacy `combiner` is retired (no compat shim); call sites fuse
+# index groups with the next-gen `matricize(t, row_inds => row_name, col_inds =>
+# col_name)` (minting each fused name via `name(uniquename(i))`) or build a fused
+# identity with `Base.one`, both of which are graded-capable. `matricize` is the
+# `TensorAlgebra` generic, extended by ITensorBase for named tensors.
+using TensorAlgebra: matricize
 
 #
 # Diagonal manipulation. Legacy `map_diag(f, T)` applies `f` to the diagonal of a
 # (diagonal-like) tensor; used on factorization spectra (singular values /
-# eigenvalues). Reproduced via the same diagonal machinery as `delta`.
-_diagcartesian(arr, k) = CartesianIndex(ntuple(Returns(k), ndims(arr)))
+# eigenvalues). Reproduced via `MAK.diagview`, which aliases the diagonal storage on
+# every backend (a plain view for dense, blockwise for graded, per-sector for a
+# `TensorMap`), so no scalar indexing is needed.
+function _map_diagview!(f, dv)
+    copyto!(dv, map(f, dv))
+    return dv
+end
+# A backend's `diagview` may be a dict of per-block diagonal views (e.g. a plain
+# `TensorMap`, keyed by sector) rather than a single vector view.
+function _map_diagview!(f, dv::AbstractDict)
+    foreach(v -> _map_diagview!(f, v), values(dv))
+    return dv
+end
 function map_diag(f, T::AbstractITensor)
     arr = copy(unnamed(T))
-    for k in 1:minimum(size(arr))
-        idx = _diagcartesian(arr, k)
-        arr[idx] = f(arr[idx])
-    end
-    return arr[inds(T)...]
+    _map_diagview!(f, MAK.diagview(arr))
+    return nameddims(arr, ITensorBase.dimnames(T))
 end
 function map_diag!(f, T::AbstractITensor)
-    arr = unnamed(T)
-    for k in 1:minimum(size(arr))
-        idx = _diagcartesian(arr, k)
-        arr[idx] = f(arr[idx])
-    end
+    _map_diagview!(f, MAK.diagview(unnamed(T)))
     return T
 end
 # Out-of-place-into-`dest` form `map_diag!(f, dest, src)`: write `f` of `src`'s diagonal
 # onto `dest`'s diagonal (TNQS calls it with `dest === src` for an in-place diagonal map).
 function map_diag!(f, dest::AbstractITensor, src::AbstractITensor)
     d, s = unnamed(dest), unnamed(src)
-    for k in 1:minimum(size(s))
-        d[_diagcartesian(d, k)] = f(s[_diagcartesian(s, k)])
+    if d === s
+        map_diag!(f, dest)
+    else
+        copyto!(MAK.diagview(d), map(f, MAK.diagview(s)))
     end
     return dest
 end
@@ -532,6 +540,10 @@ data(T::AbstractITensor) = unnamed(T)
 # alone, so reproduce the eltype conversion for a `Number` target (TNQS uses
 # `adapt(eltype)(state(...))` to build typed product states).
 function Adapt.adapt_structure(::Type{elt}, T::AbstractITensor) where {elt <: Number}
+    # Short-circuit the no-op case: a non-`AbstractArray` backend (e.g. a `TensorMap`)
+    # has no `convert(AbstractArray{elt}, ...)` method, but needs none when the element
+    # type already matches.
+    eltype(T) === elt && return T
     return nameddims(convert(AbstractArray{elt}, unnamed(T)), ITensorBase.dimnames(T))
 end
 
