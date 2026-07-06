@@ -92,12 +92,7 @@ dim(is::Union{Tuple, AbstractVector}) = isempty(is) ? 1 : prod(length, is)
 # Index operations.
 #
 # A fresh index with the same length, tags, and prime level (legacy `sim`).
-# `uniquename` mints bare names, so rebuild the name keeping the decoration.
-function sim(i::Index)
-    n = ITensorBase.name(i)
-    n_sim = ITensorBase.IndexName(; tags = ITensorBase.tags(n), plev = ITensorBase.plev(n))
-    return ITensorBase.named(ITensorBase.unnamed(i), n_sim)
-end
+sim(i::Index) = ITensorBase.uniquename(i)
 sim(is::Union{Tuple, AbstractVector{<:Index}}) = map(sim, is)
 
 # Conjugate (legacy `dag`): `conj` the tensor, and on bare indices flip the sector arrows
@@ -230,20 +225,29 @@ function diagonaltensor(
     return nameddims(diagonaltensor(diag, unnamed.(is)), name.(is))
 end
 
+# The identity map between the codomain and domain index groups (TensorKit's `id`), built
+# via checked `project` on a dense identity so the index axes select the backend (dense,
+# graded, `TensorMap`). The result carries exactly the given indices with their own axes
+# (`project` dualizes the domain axes). Callers arrow the indices, as for `identity_tensor`:
+# the fused codomain and domain must be arrow-opposite (e.g. `id(elt, (i,), (dag(j),))`); an
+# identity between incompatible gradings throws.
+function id(eltype::Type, codomain::Tuple, domain::Tuple)
+    m = Matrix{eltype}(LinearAlgebra.I, prod(length, codomain), prod(length, domain))
+    return TensorAlgebra.project(m, codomain, domain)
+end
+
 delta(eltype::Type, is::Tuple) = diagonaltensor(ones(eltype, minimum(length, is)), is)
-# The order-2 delta is the identity map over the index pair, built via checked
-# `project` so the index axes select the backend (dense, graded, `TensorMap`). The
-# result carries exactly the given indices with their own axes (`project` dualizes
-# domain axes, so `dag(j)` in the domain slot passes `j`'s axis through) — the legacy
-# QN-`delta` convention, where callers arrow the indices themselves. The pair must be
-# arrow-opposite (axis of `j` the dual of axis of `i`, e.g. `(dag(i), prime(i))`); an
-# identity between incompatible gradings throws. Higher-order deltas stay on the dense
-# `diagonaltensor` path above (a super-diagonal generally cannot be embedded while
-# preserving a nontrivial symmetry).
+# The order-2 delta is the identity map over the index pair, built via checked `project` so
+# the index axes select the backend (dense, graded, `TensorMap`). Legacy QN-`delta`
+# convention: the pair is arrow-opposite and the caller passes `(i, j)` with `j` un-dualized.
+# It coincides with `id` at order 2, but stays its own method (its own calling convention,
+# and the count dispatch below routes graded default messages here). Higher-order deltas stay
+# on the dense `diagonaltensor` path above (a super-diagonal generally cannot be embedded
+# while preserving a nontrivial symmetry).
 function delta(eltype::Type, is::Tuple{Index, Index})
     i, j = is
-    id = Matrix{eltype}(LinearAlgebra.I, length(i), length(j))
-    return TensorAlgebra.project(id, (i,), (dag(j),))
+    m = Matrix{eltype}(LinearAlgebra.I, length(i), length(j))
+    return TensorAlgebra.project(m, (i,), (dag(j),))
 end
 delta(eltype::Type, is::Index...) = delta(eltype, is)
 delta(eltype::Type, is::AbstractVector{<:Index}) = delta(eltype, Tuple(is))
@@ -260,20 +264,20 @@ delta(is::AbstractVector{<:Index}) = delta(Float64, Tuple(is))
 function tr(t::AbstractITensor)
     out = copy(t)
     for i in inds(t; plev = 0)
-        # The delta legs carry the duals of `t`'s prime pair (`i` and its primed dual),
-        # so each leg contracts its partner on any backend.
-        out *= delta(scalartype(t), dag(i), prime(i))
+        # The identity-map legs carry the duals of `t`'s prime pair (`i` and its primed
+        # dual), so each leg contracts its partner on any backend.
+        out *= id(scalartype(t), (dag(i),), (dag(prime(i)),))
     end
     return scalar(out)
 end
 
-# One-hot vector along `i` at position `p` (legacy `onehot(i => p)`), through the
-# vector-state constructor (`state` in `ops.jl`), which follows the index's backend
-# and carries any charge on a derived auxiliary leg.
+# One-hot vector along `i` at position `p` (legacy `onehot(i => p)`), through `project_aux`
+# (in `ops.jl`), which follows the index's backend and carries the basis vector's charge on
+# a derived auxiliary leg.
 function onehot(eltype::Type, (i, p)::Pair{<:Index})
     v = zeros(eltype, length(i))
     v[p] = one(eltype)
-    return state(v, i)
+    return project_aux(v, i)
 end
 onehot(p::Pair{<:Index}) = onehot(Float64, p)
 
@@ -509,7 +513,7 @@ end
 #
 # Index fusion. The legacy `combiner` is retired (no compat shim); call sites fuse
 # index groups with the next-gen `matricize(t, row_inds => row_name, col_inds =>
-# col_name)` (minting each fused name via `name(uniquename(i))`) or build a fused
+# col_name)` (minting each fused name via `uniquename(IndexName)`) or build a fused
 # identity with `Base.one`, both of which are graded-capable. `matricize` is the
 # `TensorAlgebra` generic, extended by ITensorBase for named tensors.
 using TensorAlgebra: matricize

@@ -1,7 +1,7 @@
 function normalize_rdm(ρ::ITensor)
     tr_ρ = copy(ρ)
     for i in inds(ρ; plev = 0)
-        tr_ρ *= delta(scalartype(ρ), dag(i), prime(i))
+        tr_ρ *= id(scalartype(ρ), (dag(i),), (dag(prime(i)),))
     end
     return ρ / scalar(tr_ρ)
 end

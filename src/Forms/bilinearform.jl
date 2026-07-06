@@ -18,7 +18,7 @@ function BilinearForm(ket::TensorNetworkState, bra::TensorNetworkState)
     sinds = siteinds(ket)
     verts = collect(vertices(ket))
     bra = TensorNetworkState(Dictionary(verts, [bra_tensor(bra, v) for v in verts]))
-    operator_tensors = [reduce(*, ITensor[delta(scalartype(ket), dag(sind), prime(sind)) for sind in sinds[v]]) for v in verts]
+    operator_tensors = [reduce(*, ITensor[id(scalartype(ket), (dag(sind),), (dag(prime(sind)),)) for sind in sinds[v]]) for v in verts]
     operator = TensorNetworkState(Dictionary(verts, operator_tensors))
     return BilinearForm(ket, operator, bra)
 end

@@ -32,24 +32,28 @@ function state(name::AbstractString, i::Index)
     end
     return state(v, i)
 end
-# Vector form (legacy `ITensor(v, i)` for a state vector): the named state vector as
-# an `ITensor` over `i`, via checked `project` so the index axis selects the backend.
-function state(v::AbstractVector{<:Number}, i::Index)
+# Project a raw vector as a state `ITensor` over `i`, adding an auxiliary leg only when the
+# vector cannot live in the flux-zero space over `i` alone. The index axis selects the
+# backend (dense, graded, `TensorMap`). Shared by the state constructors and `onehot`.
+function project_aux(v::AbstractVector{<:Number}, i::Index)
     length(v) == length(i) ||
         error(
         "state vector has dimension $(length(v)) but the site index has dimension $(length(i))"
     )
     ψ = tryproject(v, (i,))
     isnothing(ψ) || return ψ
-    # The state carries a charge under the site index's grading (e.g. "Dn" on a
-    # U(1) site), so it can't live in the flux-zero space over `i` alone. Carry the
-    # charge on an explicit length-1 auxiliary leg: project with a trailing axis so
-    # the backend derives the leg's sector from the state vector, then wrap the
-    # derived axis in a freshly named `Index`.
+    # The vector carries a charge under `i`'s grading (e.g. "Dn" on a U(1) site, or a
+    # one-hot on a graded link), so it can't live in the flux-zero space over `i` alone.
+    # Carry the charge on an explicit length-1 auxiliary leg: project with a trailing axis
+    # so the backend derives the leg's sector from the vector, then wrap the derived axis
+    # in a freshly named `Index`.
     raw = project(reshape(v, (length(v), 1)), (unnamed(i),), ())
     aux = Index(TensorAlgebra.axes(raw, 2))
     return nameddims(raw, (ITensorBase.name(i), ITensorBase.name(aux)))
 end
+# Vector form (legacy `ITensor(v, i)` for a state vector): the state vector as an `ITensor`
+# over `i`.
+state(v::AbstractVector{<:Number}, i::Index) = project_aux(v, i)
 
 #
 # Operators. Legacy ITensors exposes operators through the `OpName` / `SiteType`

@@ -26,11 +26,12 @@ include("ops.jl")
 
 export
     # Index access and set algebra
-    inds, commoninds, commonind, uniqueinds, noncommonind, noncommoninds, unioninds, hascommoninds,
+    inds, commoninds, commonind, uniqueinds, noncommonind, noncommoninds, unioninds,
+    hascommoninds,
     # Index operations
     sim, dag, prime, noprime, replaceind, replaceinds, dim, swapind,
     # ITensor construction
-    itensor, random_itensor, scalar, delta, onehot,
+    itensor, random_itensor, scalar, delta, id, onehot,
     # Factorizations
     qr, svd, eigen, factorize, factorize_svd,
     # Diagonal manipulation
