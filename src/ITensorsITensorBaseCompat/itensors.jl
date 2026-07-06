@@ -91,8 +91,13 @@ dim(is::Union{Tuple, AbstractVector}) = isempty(is) ? 1 : prod(length, is)
 #
 # Index operations.
 #
-# A fresh index with the same length (legacy `sim`).
-sim(i::Index) = ITensorBase.uniquename(i)
+# A fresh index with the same length, tags, and prime level (legacy `sim`).
+# `uniquename` mints bare names, so rebuild the name keeping the decoration.
+function sim(i::Index)
+    n = ITensorBase.name(i)
+    n_sim = ITensorBase.IndexName(; tags = ITensorBase.tags(n), plev = ITensorBase.plev(n))
+    return ITensorBase.named(ITensorBase.unnamed(i), n_sim)
+end
 sim(is::Union{Tuple, AbstractVector{<:Index}}) = map(sim, is)
 
 # Conjugate (legacy `dag`): `conj` the tensor, and on bare indices flip the sector arrows

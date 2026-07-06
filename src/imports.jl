@@ -69,6 +69,7 @@ using .ITensorsITensorBaseCompat:
 using ITensorBase: ITensorBase, Index, ITensor, name, plev, tags, unnamed
 using TensorAlgebra: trivialrange
 using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe, sqrth_safe
+using MatrixAlgebraKit: project_hermitian
 
 using Adapt: adapt
 

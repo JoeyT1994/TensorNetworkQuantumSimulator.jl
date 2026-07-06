@@ -81,7 +81,8 @@ function renyi_entropy(
     m1, m2 = message(bp_cache, e), message(bp_cache, reverse(e))
     edge_ind = only(virtualinds(bp_cache, e))
     root_m2 = sqrth_safe(
-        m2, (inds(m2)[1],), (inds(m2)[2],);
+        project_hermitian(m2, (inds(m2)[1],), (inds(m2)[2],)),
+        (inds(m2)[1],), (inds(m2)[2],);
         atol = 10 * eps(real(scalartype(m2))), rtol = 0
     )
 

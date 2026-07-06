@@ -35,8 +35,11 @@ function simple_update(
         envs_v2 = filter(env -> hascommoninds(env, ψ⃗[2]), envs)
         @assert all(ndims(env) == 2 for env in vcat(envs_v1, envs_v2))
 
+        # The environments are hermitian only up to numerical noise, so project before
+        # the square roots (which require hermitian input).
         sqrt_invsqrt = env -> sqrth_invsqrth_safe(
-            env, (inds(env)[1],), (inds(env)[2],); atol = sqrt_cutoff, rtol = 0
+            project_hermitian(env, (inds(env)[1],), (inds(env)[2],)),
+            (inds(env)[1],), (inds(env)[2],); atol = sqrt_cutoff, rtol = 0
         )
         sqrt_inv_sqrt_envs_v1 = map(sqrt_invsqrt, envs_v1)
         sqrt_inv_sqrt_envs_v2 = map(sqrt_invsqrt, envs_v2)
