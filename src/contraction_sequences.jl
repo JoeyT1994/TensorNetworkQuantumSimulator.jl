@@ -2,23 +2,23 @@ using .ITensorsITensorBaseCompat: Index, ITensor, @Algorithm_str, inds, noncommo
 using TensorOperations: TensorOperations, optimaltree
 using OMEinsumContractionOrders: OMEinsumContractionOrders, optimize_code, EinCode, NestedEinsum, TreeSA, GreedyMethod, SABipartite, Treewidth, ExactTreewidth, HyperND
 
-function prune_trivial_tensors(tensors::Vector{<:ITensor})
-    pruned_tensors = copy(tensors)
-    for (i, t) in enumerate(pruned_tensors)
-        if all(d -> d == 1, dim.(inds(tensors[i])))
-            pruned_tensors[i] = adapt_like(t, ITensor(1))
-        end
+# `optimaltree` (TensorOperations) bugs on fully-trivial tensors (every leg dimension 1).
+# Such a tensor contributes only unit-cost factors to any contraction, so we drop its
+# indices from the optimization network, leaving an empty index set in its positional slot
+# so the returned sequence still indexes the original tensor list. Only the index sets feed
+# `optimaltree`; the tensors themselves are never contracted here (the caller contracts the
+# untouched originals), so no placeholder tensor is needed.
+is_trivial_tensor(t::ITensor) = all(i -> dim(i) == 1, inds(t))
+
+function contraction_network(tensors::Vector{<:ITensor}; prune_tensors = false)
+    return map(tensors) do t
+        is = collect(inds(t))
+        (prune_tensors && is_trivial_tensor(t)) ? empty(is) : is
     end
-    return pruned_tensors
 end
 
 function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:ITensor}; prune_tensors = false)
-    #Needed because tensor operations bugs on trivial tensors
-    if prune_tensors
-        ITensors.disable_warn_order()
-        tensors = prune_trivial_tensors(tensors)
-    end
-    network = collect.(inds.(tensors))
+    network = contraction_network(tensors; prune_tensors)
     #Converting dims to Float64 to minimize overflow issues
     inds_to_dims = Dict(i => Float64(dim(i)) for i in unique(Iterators.flatten(network)))
     seq, _ = optimaltree(network, inds_to_dims)
