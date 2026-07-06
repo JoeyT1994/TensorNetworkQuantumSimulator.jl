@@ -54,5 +54,5 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 test = ["Test", "Random"]
 
 [sources]
-ITensorBase = {path = "/Users/mfishman/.julia/dev/ITensorBase/.worktrees/mf/tensoralgebra-0.17"}
-TensorAlgebra = {path = "/Users/mfishman/.julia/dev/TensorAlgebra/.worktrees/mf/project-trailing-axes"}
+ITensorBase = {url = "https://github.com/ITensor/ITensorBase.jl", rev = "mf/tensoralgebra-0.17"}
+TensorAlgebra = {url = "https://github.com/ITensor/TensorAlgebra.jl", rev = "mf/project-trailing-axes"}
