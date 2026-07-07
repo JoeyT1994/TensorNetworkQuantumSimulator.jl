@@ -94,8 +94,8 @@ optimise_p_q
 ## Custom Gate Definitions
 
 ```@docs
-op(::OpName"Rxxyy", ::SiteType"S=1/2", ::Index, ::Index)
-op(::OpName"Rxxyyzz", ::SiteType"S=1/2", ::Index, ::Index)
+op(::OpName"Rxxyy", ::SiteType"S=1/2")
+op(::OpName"Rxxyyzz", ::SiteType"S=1/2")
 op(::OpName"xx_plus_yy", ::SiteType"S=1/2")
 ```
 
