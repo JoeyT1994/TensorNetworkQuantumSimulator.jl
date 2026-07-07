@@ -94,10 +94,7 @@ end
 function op(name::AbstractString, sites::Index...; kwargs...)
     if name in ("I", "Id") && length(sites) == 1
         s = only(sites)
-        return project(
-            Matrix{ComplexF64}(LinearAlgebra.I, length(s), length(s)),
-            (ITensorBase.prime(s),), (s,)
-        )
+        return id(ComplexF64, (ITensorBase.prime(s),), (s,))
     end
     return op(OpName(name), SiteType("S=1/2"), sites...; kwargs...)
 end

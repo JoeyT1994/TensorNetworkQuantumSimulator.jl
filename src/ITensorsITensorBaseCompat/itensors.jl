@@ -270,19 +270,19 @@ function similar_map(prototype::AbstractITensor, codomain, domain)
     return similar_map(prototype, scalartype(prototype), codomain, domain)
 end
 
-delta(eltype::Type, is::Tuple) = diagonaltensor(ones(eltype, minimum(length, is)), is)
-# The order-2 delta is the identity map over the index pair, built via checked `project` so
-# the index axes select the backend (dense, graded, `TensorMap`). Legacy QN-`delta`
-# convention: the pair is arrow-opposite and the caller passes `(i, j)` with `j` un-dualized.
-# It coincides with the order-2 identity map, but stays its own method (its own calling
-# convention, and the count dispatch below routes graded default messages here). Higher-order deltas stay
-# on the dense `diagonaltensor` path above (a super-diagonal generally cannot be embedded
-# while preserving a nontrivial symmetry).
-function delta(eltype::Type, is::Tuple{Index, Index})
-    i, j = is
-    m = Matrix{eltype}(LinearAlgebra.I, length(i), length(j))
-    return TensorAlgebra.project(m, (i,), (dag(j),))
+# From-scratch identity map: a dense identity embedded onto the `codomain`/`domain` index
+# partition via checked `project`, so the index axes select the backend (dense, graded,
+# `TensorMap`). Unlike `one(a, codomain, domain)` it needs no prototype tensor, so it is the
+# right primitive when only the indices and an element type are in hand (e.g. `op("I")`).
+function id(eltype::Type, codomain, domain)
+    m = Matrix{eltype}(LinearAlgebra.I, prod(length, codomain), prod(length, domain))
+    return TensorAlgebra.project(m, Tuple(codomain), Tuple(domain))
 end
+
+# Dense Kronecker copy (`delta`) tensor over the index axes. Dense-only: a super-diagonal
+# generally cannot be embedded while preserving a nontrivial symmetry, so graded/`TensorMap`
+# callers that want an order-2 identity build it via `id`/`one` at the callsite instead.
+delta(eltype::Type, is::Tuple) = diagonaltensor(ones(eltype, minimum(length, is)), is)
 delta(eltype::Type, is::Index...) = delta(eltype, is)
 delta(eltype::Type, is::AbstractVector{<:Index}) = delta(eltype, Tuple(is))
 delta(is::Tuple) = delta(Float64, is)

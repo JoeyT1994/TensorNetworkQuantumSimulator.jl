@@ -22,7 +22,9 @@ function virtualinds(form::AbstractForm, edge::NamedEdge)
 end
 
 function default_message(form::AbstractForm, edge::AbstractEdge)
-    return adapt_like(form, denseblocks(delta(virtualinds(form, edge))))
+    cod = virtualinds(ket(form), edge)
+    dom = dag.(bra_virtualinds(form, edge))
+    return one(similar_map(ket(form)[src(edge)], cod, dom), cod, dom)
 end
 
 function bp_factors(form::AbstractForm, verts::Vector)
