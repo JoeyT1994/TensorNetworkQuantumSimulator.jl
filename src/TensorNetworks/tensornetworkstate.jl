@@ -1,4 +1,4 @@
-using .ITensorsITensorBaseCompat: random_itensor
+using .ITensorsITensorBaseCompat: nameisdisjoint, random_itensor
 
 """
     TensorNetworkState{V} <: AbstractTensorNetwork{V}
@@ -220,6 +220,5 @@ function tensornetworkstate(f::Function, args...)
 end
 
 function NamedGraphs.vertices(t::ITensor, tns::TensorNetworkState)
-    t_inds = inds(t)
-    return filter(v -> !isempty(intersect(t_inds, siteinds(tns, v))), collect(vertices(tns)))
+    return filter(v -> !nameisdisjoint(inds(t), siteinds(tns, v)), collect(vertices(tns)))
 end

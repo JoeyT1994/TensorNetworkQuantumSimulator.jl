@@ -59,22 +59,51 @@ _compat_inds(t::AbstractITensor) = inds(t)
 _compat_inds(is) = is
 
 #
-# Index-set algebra. Legacy ITensors provides these as set operations over the
-# indices of its arguments; in the next-gen stack the same falls out of Base set ops
-# on `inds` (index identity/equality is by id).
+# Small-collection set operations, keyed by a transform `by` (like `sort`/`unique`'s `by`):
+# elements compare equal when `by(x) == by(y)`. Base's `intersect`/`union`/`setdiff`/… build
+# `Set`s (hashing); these instead scan `by(x) ∈ Iterators.map(by, b)`, a linear
+# O(length(a)*length(b)) pass over a lazy non-allocating view of the keys, the right tradeoff
+# when the collections are a handful of elements. The intersect/setdiff/union/symdiff forms
+# return elements of the first argument, always as `Vector`s.
 #
-# Matching is by index *name* (`IndexName`), not by full `Index` equality: two indices
-# name the same leg when their names match. On a graded axis a shared bond appears as an
-# index on one tensor and its dual (`conj`) on the other — same name, opposite arrow — so
-# `==` on the full `Index` misses it while the names still match. On the dense backend
-# name-matching and `==` coincide, so this is a strict generalization. The full `Index` is
-# returned, not the bare name: callers take `dim`/`tags` of the result and feed it to
-# `Index`/`qr`/`replaceinds`, which need the space. Results are always `Vector`s.
-_indvec(x) = collect(_compat_inds(x))
-commoninds(a, b) = (nb = name.(_indvec(b)); filter(i -> name(i) ∈ nb, _indvec(a)))
-uniqueinds(a, b) = (nb = name.(_indvec(b)); filter(i -> name(i) ∉ nb, _indvec(a)))
-unioninds(a, b) = vcat(_indvec(a), uniqueinds(b, a))
-hascommoninds(a, b) = !isempty(commoninds(a, b))
+smallintersect(a, b; by = identity) = (kb = Iterators.map(by, b); [x for x in a if by(x) ∈ kb])
+smallsetdiff(a, b; by = identity) = (kb = Iterators.map(by, b); [x for x in a if by(x) ∉ kb])
+smallunion(a, b; by = identity) = vcat(collect(a), smallsetdiff(b, a; by))
+smallsymdiff(a, b; by = identity) = vcat(smallsetdiff(a, b; by), smallsetdiff(b, a; by))
+smallisdisjoint(a, b; by = identity) = (kb = Iterators.map(by, b); !any(x -> by(x) ∈ kb, a))
+smallissubset(a, b; by = identity) = (kb = Iterators.map(by, b); all(x -> by(x) ∈ kb, a))
+smallissetequal(a, b; by = identity) = smallissubset(a, b; by) && smallissubset(b, a; by)
+
+#
+# Name-based index-set algebra: the small-collection ops keyed by `IndexName` (`by = name`)
+# rather than full `Index` equality. On a graded axis a shared bond appears as an index on one
+# tensor and its dual (`conj`) on the other, same name and opposite arrow, so `==` on the full
+# `Index` misses it while the names match; on the dense backend name-matching and `==` coincide,
+# so this is a strict generalization. The `Index`-returning ops give back the full `Index`es
+# (callers need the space to feed `Index`/`qr`/`replaceinds`). This is the shape we want upstream
+# in ITensorBase.
+#
+# Pairwise name equality (two single indices name the same leg).
+nameisequal(i, j) = name(i) == name(j)
+nameintersect(a, b) = smallintersect(a, b; by = name)
+namesetdiff(a, b) = smallsetdiff(a, b; by = name)
+nameunion(a, b) = smallunion(a, b; by = name)
+namesymdiff(a, b) = smallsymdiff(a, b; by = name)
+nameisdisjoint(a, b) = smallisdisjoint(a, b; by = name)
+nameissubset(a, b) = smallissubset(a, b; by = name)
+nameissetequal(a, b) = smallissetequal(a, b; by = name)
+
+#
+# Named-tensor index-set algebra (the `commoninds`/etc. surface). `_compat_inds` coerces a
+# tensor to its indices and passes an index collection through unchanged, so these currently
+# accept either; the `name*` ops take it from there (and always return `Vector`s, so a
+# returned index set can be fed straight back in, as `reduce(noncommoninds, tensors)` does).
+# These are meant to go back upstream to ITensorBase with stricter tensor-only definitions.
+#
+commoninds(a, b) = nameintersect(_compat_inds(a), _compat_inds(b))
+uniqueinds(a, b) = namesetdiff(_compat_inds(a), _compat_inds(b))
+unioninds(a, b) = nameunion(_compat_inds(a), _compat_inds(b))
+hascommoninds(a, b) = !nameisdisjoint(_compat_inds(a), _compat_inds(b))
 
 # Singular forms: the one common / one unique index. `noncommonind` is used in TNQS
 # as "the index of `a` not shared with `b`" (e.g. the non-contracted leg of an
@@ -82,7 +111,7 @@ hascommoninds(a, b) = !isempty(commoninds(a, b))
 commonind(a, b) = (cs = commoninds(a, b); isempty(cs) ? nothing : first(cs))
 noncommonind(a, b) = (us = uniqueinds(a, b); isempty(us) ? nothing : first(us))
 # Plural: indices not shared by both (symmetric difference).
-noncommoninds(a, b) = vcat(uniqueinds(a, b), uniqueinds(b, a))
+noncommoninds(a, b) = namesymdiff(_compat_inds(a), _compat_inds(b))
 
 # Index dimension (legacy `dim`). `dim(i)` is the length; `dim(is)` the product.
 dim(i::Index) = length(i)
