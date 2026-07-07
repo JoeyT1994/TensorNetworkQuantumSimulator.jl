@@ -264,13 +264,15 @@ delta(is::AbstractVector{<:Index}) = delta(Float64, Tuple(is))
 # pairs every unprimed index with its prime, the same construction `normalize_rdm` uses. This
 # is the index-paired definition — independent of storage order — rather than `sum` of the
 # underlying array's storage diagonal, which is only the trace for a rank-2 tensor whose legs
-# happen to be ordered to align. The domain is `prime.(codomain)` (not `inds(t; plev=1)`) so
-# each codomain index pairs with its own prime; `plev` filtering does not preserve that
-# pairing order. Accessed qualified (`ITensors.tr`) so it doesn't shadow `LinearAlgebra.tr`,
-# which TNQS still calls on plain matrices.
+# happen to be ordered to align. The identity carries the duals of `t`'s legs (`dag`) so each
+# leg contracts its partner on a graded backend, and its domain is `dag.(prime.(codomain))`
+# (not `inds(t; plev=1)`) so each codomain index pairs with its own prime; `plev` filtering
+# does not preserve that pairing order. Accessed qualified (`ITensors.tr`) so it doesn't shadow
+# `LinearAlgebra.tr`, which TNQS still calls on plain matrices.
 function tr(t::AbstractITensor)
-    codomain = inds(t; plev = 0)
-    return scalar(t * one(t, codomain, prime.(codomain)))
+    unprimed = inds(t; plev = 0)
+    codomain, domain = dag.(unprimed), dag.(prime.(unprimed))
+    return scalar(t * one(similar_map(t, codomain, domain), codomain, domain))
 end
 
 # One-hot vector along `i` at position `p` (legacy `onehot(i => p)`), through `project_aux`

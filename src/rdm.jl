@@ -1,6 +1,7 @@
 function normalize_rdm(ρ::ITensor)
-    codomain = inds(ρ; plev = 0)
-    tr_ρ = ρ * one(ρ, codomain, prime.(codomain))
+    unprimed = inds(ρ; plev = 0)
+    codomain, domain = dag.(unprimed), dag.(prime.(unprimed))
+    tr_ρ = ρ * one(similar_map(ρ, codomain, domain), codomain, domain)
     return ρ / scalar(tr_ρ)
 end
 
