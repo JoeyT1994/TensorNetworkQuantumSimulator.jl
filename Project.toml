@@ -52,7 +52,3 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
 test = ["Test", "Random"]
-
-[sources]
-ITensorBase = {url = "https://github.com/ITensor/ITensorBase.jl", rev = "mf/tensoralgebra-0.17"}
-TensorAlgebra = {url = "https://github.com/ITensor/TensorAlgebra.jl", rev = "mf/project-trailing-axes"}
