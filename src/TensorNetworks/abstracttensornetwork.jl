@@ -28,13 +28,15 @@ function maxvirtualdim(tn::AbstractTensorNetwork)
     return maximum(maximum.([dim.(virtualinds(tn, e)) for e in edges(tn)]))
 end
 
+# Compare by name, not by `Index` equality: a shared graded link is stored nondual
+# on one endpoint and dual (conjugated) on the other, so the two `Index` objects
+# differ even though they name the same bond.
 function ITensors.uniqueinds(tn::AbstractTensorNetwork, v)
     tv_inds = Index[i for i in inds(tn[v])]
     vns = neighbors(tn, v)
     isempty(vns) && return tv_inds
-    neighbor_inds = reduce(vcat, [Index[i for i in inds(tn[vn])] for vn in vns])
-    is = setdiff(tv_inds, neighbor_inds)
-    return is
+    neighbor_names = reduce(vcat, [[name(i) for i in inds(tn[vn])] for vn in vns])
+    return filter(i -> name(i) ∉ neighbor_names, tv_inds)
 end
 
 function setindex_preserve!(tn::AbstractTensorNetwork, value::ITensor, vertex)
@@ -103,24 +105,6 @@ end
 function map_virtualinds(f::Function, tn::AbstractTensorNetwork)
     tn = copy(tn)
     return map_virtualinds!(f, tn)
-end
-
-function combine_virtualinds!(tn::AbstractTensorNetwork)
-    dtype = datatype(tn)
-    for e in edges(tn)
-        vinds = ITensors.commoninds(tn[src(e)], tn[dst(e)])
-        if length(vinds) > 1
-            C = adapt(dtype)(ITensors.combiner(vinds))
-            setindex_preserve!(tn, tn[src(e)] * C, src(e))
-            setindex_preserve!(tn, tn[dst(e)] * C, dst(e))
-        end
-    end
-    return tn
-end
-
-function combine_virtualinds(tn::AbstractTensorNetwork)
-    tn = copy(tn)
-    return combine_virtualinds!(tn)
 end
 
 """Add two tensornetworks together. The network structures need to be have the same graph structure"""

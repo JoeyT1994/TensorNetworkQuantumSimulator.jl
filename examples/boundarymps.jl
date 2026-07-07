@@ -1,4 +1,5 @@
 using TensorNetworkQuantumSimulator
+using TensorNetworkQuantumSimulator: ITensors
 
 using Random
 Random.seed!(1634)

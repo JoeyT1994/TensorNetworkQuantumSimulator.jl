@@ -35,8 +35,14 @@ function simple_update(
         envs_v2 = filter(env -> hascommoninds(env, ψ⃗[2]), envs)
         @assert all(ndims(env) == 2 for env in vcat(envs_v1, envs_v2))
 
-        sqrt_inv_sqrt_envs_v1 = pseudo_sqrt_inv_sqrt.(envs_v1; cutoff = sqrt_cutoff)
-        sqrt_inv_sqrt_envs_v2 = pseudo_sqrt_inv_sqrt.(envs_v2; cutoff = sqrt_cutoff)
+        # The environments are hermitian only up to numerical noise, so project before
+        # the square roots (which require hermitian input).
+        sqrt_invsqrt = env -> sqrth_invsqrth_safe(
+            project_hermitian(env, (inds(env)[1],), (inds(env)[2],)),
+            (inds(env)[1],), (inds(env)[2],); atol = sqrt_cutoff, rtol = 0
+        )
+        sqrt_inv_sqrt_envs_v1 = map(sqrt_invsqrt, envs_v1)
+        sqrt_inv_sqrt_envs_v2 = map(sqrt_invsqrt, envs_v2)
         sqrt_envs_v1, inv_sqrt_envs_v1 = first.(sqrt_inv_sqrt_envs_v1), last.(sqrt_inv_sqrt_envs_v1)
         sqrt_envs_v2, inv_sqrt_envs_v2 = first.(sqrt_inv_sqrt_envs_v2), last.(sqrt_inv_sqrt_envs_v2)
 
@@ -49,16 +55,22 @@ function simple_update(
         rᵥ₁ = commoninds(Qᵥ₁, Rᵥ₁)
         rᵥ₂ = commoninds(Qᵥ₂, Rᵥ₂)
         oR = ITensors.apply(o, Rᵥ₁ * Rᵥ₂)
-        singular_values! = Ref{ITensor}()
-        Rᵥ₁, Rᵥ₂, spec = factorize_svd(
-            oR,
-            unioninds(rᵥ₁, sᵥ₁);
-            ortho = "none",
-            singular_values!,
-            apply_kwargs...,
-        )
-        err = spec.truncerr
-        s_values = singular_values![]
+        # Balanced SVD: split the singular values symmetrically (√S into each factor) so neither
+        # side is isometric. The bond stays on `prime(u)` (keeping `u`'s name), so once this
+        # function `noprime`s its result the bond becomes `u`, which the returned `s_values` (over
+        # `(u, v)`) still shares for `apply_gate!`'s bond-message construction.
+        U, S, V = svd_trunc(oR, unioninds(rᵥ₁, sᵥ₁); trunc = itensor_trunc(; apply_kwargs...))
+        u = only(commoninds(U, S))
+        v = only(commoninds(S, V))
+        sqrtS = sqrth_safe(S, (u,), (v,); atol = 0, rtol = 0)
+        Rᵥ₁, Rᵥ₂ = U * replaceind(sqrtS, v, prime(u)), replaceind(sqrtS, u, prime(u)) * V
+        s_values = S
+        # Best-effort truncation error from norms (SVD preserves the Frobenius norm); suffers
+        # catastrophic cancellation when little is discarded. TODO: expose MatrixAlgebraKit's `ϵ`
+        # from `ITensorBase.svd_trunc` and use it here instead.
+        total = abs2(norm(oR))
+        err = iszero(total) ? zero(real(scalartype(oR))) :
+            max(zero(real(scalartype(oR))), 1 - abs2(norm(S)) / total)
         Qᵥ₁ = contract([Qᵥ₁; dag.(inv_sqrt_envs_v1)])
         Qᵥ₂ = contract([Qᵥ₂; dag.(inv_sqrt_envs_v2)])
         updated_tensors = [Qᵥ₁ * Rᵥ₁, Qᵥ₂ * Rᵥ₂]

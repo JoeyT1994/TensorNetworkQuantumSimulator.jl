@@ -1,5 +1,5 @@
 @eval module $(gensym())
-using ITensorBase: Index
+using ITensorBase: Index, name
 using Random
 using TensorNetworkQuantumSimulator
 const TNQS = TensorNetworkQuantumSimulator
@@ -18,13 +18,15 @@ collect_leaves!(acc, x) = (for y in x; collect_leaves!(acc, y); end; acc)
 
     # --- to_eincode: ITensors -> (EinCode, size_dict). Tests the omeinsum-specific
     #     input conversion directly, so a silent fallback to another backend can't pass it.
+    #     Labels are index names: a shared leg's `Index` differs between its two tensors
+    #     under a graded backend (nondual vs dual), so names are the backend-stable label.
     i, j, k = Index(2), Index(3), Index(4)
     A = ITensors.random_itensor(i, j)
     B = ITensors.random_itensor(j, k)
     code, size_dict = TNQS.to_eincode([A, B])
-    @test Set(Set.(getixsv(code))) == Set([Set([i, j]), Set([j, k])])  # per-tensor index sets
-    @test Set(getiyv(code)) == Set([i, k])                             # open indices (j is contracted)
-    @test size_dict == Dict(i => 2, j => 3, k => 4)
+    @test Set(Set.(getixsv(code))) == Set([Set(name.([i, j])), Set(name.([j, k]))])  # per-tensor index sets
+    @test Set(getiyv(code)) == Set(name.([i, k]))                    # open indices (j is contracted)
+    @test size_dict == Dict(name(i) => 2, name(j) => 3, name(k) => 4)
 
     # --- to_contraction_sequence: NestedEinsum -> nested tensor-position tree. Tests our
     #     converter on hand-built trees with known shapes (deterministic, exact).

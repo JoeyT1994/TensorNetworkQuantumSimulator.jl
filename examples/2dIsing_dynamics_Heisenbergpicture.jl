@@ -1,7 +1,7 @@
 using TensorNetworkQuantumSimulator
 using Graphs: center
 using TensorNetworkQuantumSimulator: setindex_preserve!, noprime
-using ITensors: ITensors, ITensor
+using TensorNetworkQuantumSimulator: ITensors, ITensor
 
 function main()
     nx, ny = 4, 4

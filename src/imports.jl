@@ -54,11 +54,10 @@ using TensorOperations
 # referenced `ITensors`, so the per-file imports mirror the original ITensors-based code.
 import .ITensorsITensorBaseCompat as ITensors
 using .ITensorsITensorBaseCompat:
-    inds, commoninds, commonind, uniqueinds, noncommonind, noncommoninds, unioninds, hascommoninds,
+    inds, commoninds, commonind, uniqueinds, noncommonind, noncommoninds, unioninds, hascommoninds, cat_inds,
     sim, dag, prime, noprime, replaceind, replaceinds, dim, swapind,
-    itensor, random_itensor, scalar, delta, onehot, combiner, combinedind,
-    qr, svd, eigen, factorize, factorize_svd,
-    map_diag, map_diag!,
+    itensor, random_itensor, scalar, delta, similar_map, onehot,
+    qr, svd, svd_trunc, eigen, factorize, itensor_trunc,
     scalartype, datatype, array, data,
     denseblocks, dense, hasqns,
     contract, inner, apply,
@@ -66,7 +65,10 @@ using .ITensorsITensorBaseCompat:
     Algorithm, @Algorithm_str,
     hastags,
     state, op, OpName, SiteType, @OpName_str, @SiteType_str
-using ITensorBase: ITensorBase, Index, ITensor, name, plev, tags
+using ITensorBase: ITensorBase, Index, ITensor, name, plev, tags, unnamed
+using TensorAlgebra: trivialrange
+using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe, sqrth_safe
+using MatrixAlgebraKit: project_hermitian
 
 using Adapt: adapt
 

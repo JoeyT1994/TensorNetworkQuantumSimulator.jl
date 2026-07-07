@@ -19,6 +19,14 @@ end
 function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
     bpc = copy(bpc)
     vs = collect(vertices(eg))
+    # Aux (dangling non-physical) legs recorded before the bond relabeling below: the
+    # relabeled bond dangles in the modified network, and the live classification in
+    # `norm_factors` would misread it as a charge leg and unprime it on the bra.
+    aux = if network(bpc) isa TensorNetworkState
+        Dictionary(vs, [auxinds(network(bpc), v) for v in vs])
+    else
+        nothing
+    end
     es =
         unique(collect(Iterators.flatten(boundary_edges(bpc, [v]; dir = :out) for v in vs)))
     updated_es = NamedEdge[]
@@ -35,31 +43,37 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
             ms = messages(bpc)
             set!(ms, reverse(e), mer)
             t = network(bpc)[src(e)]
-            t_inds = filter(i -> i ∈ linds, inds(t))
+            # Match by name: on a graded backend the network tensor carries the dual of
+            # the message's axis, so a full `Index` comparison never matches.
+            t_inds = commoninds(t, linds)
             if !isempty(t_inds)
                 t_ind = only(t_inds)
-                t_ind_pos = findfirst(x -> x == t_ind, linds)
+                t_ind_pos = findfirst(x -> name(x) == name(t_ind), linds)
                 t = replaceind(t, t_ind, linds_sim[t_ind_pos])
                 setindex_preserve!(bpc, t, src(e))
             end
             push!(updated_es, e)
 
             if e ∈ edges(eg) || reverse(e) ∈ edges(eg)
-                row_inds, col_inds = linds, linds_sim
+                me = message(bpc, e)
+                # The identity legs take their axes from the actual message legs (`me`
+                # for the rows, the relabeled `mer` for the columns) so `ap - me * mer`
+                # lines up on every backend: the two messages carry mutually dual copies
+                # of the bond axes. The domain of the fused identity comes out dualized
+                # relative to the passed indices, so the columns go in `dag`ed.
+                row_inds = Index[only(commoninds(me, [l])) for l in linds]
+                col_inds = Index[only(commoninds(mer, [l])) for l in linds_sim]
                 if network(bpc) isa TensorNetworkState
-                    row_inds = vcat(row_inds, dag.(prime.(row_inds)))
-                    col_inds = vcat(col_inds, dag.(prime.(col_inds)))
+                    append!(row_inds, Index[only(commoninds(me, [prime(l)])) for l in linds])
+                    append!(col_inds, Index[only(commoninds(mer, [prime(l)])) for l in linds_sim])
                 end
-                row_combiner, col_combiner = combiner(row_inds), combiner(col_inds)
-                ap =
-                    adapt_like(message(bpc, e), denseblocks(delta(combinedind(col_combiner), dag(combinedind(row_combiner)))))
-                ap = ap * row_combiner * dag(col_combiner)
-                ap = ap - message(bpc, e) * mer
+                ap = adapt_like(me, identity_tensor(row_inds, dag.(col_inds)))
+                ap = ap - me * mer
                 push!(antiprojectors, ap)
             end
         end
     end
-    return bpc, antiprojectors
+    return bpc, antiprojectors, aux
 end
 
 #Get the all edges incident to the region specified by the vector of edges passed
@@ -81,10 +95,14 @@ end
 function weight(bpc::BeliefPropagationCache, eg)
     vs = collect(vertices(eg))
     es = collect(edges(eg))
-    bpc, antiprojectors = sim_edgeinduced_subgraph(bpc, eg)
+    bpc, antiprojectors, aux = sim_edgeinduced_subgraph(bpc, eg)
     incoming_ms =
         ITensor[message(bpc, e) for e in boundary_edges(bpc, es)]
-    local_tensors = collect(Iterators.flatten(bp_factors(bpc, v) for v in vs))
+    local_tensors = if isnothing(aux)
+        collect(Iterators.flatten(bp_factors(bpc, v) for v in vs))
+    else
+        collect(Iterators.flatten(norm_factors(network(bpc), [v]; auxinds_f = u -> aux[u]) for v in vs))
+    end
     ts = [incoming_ms; local_tensors; antiprojectors]
     seq = any(hasqns.(ts)) ? contraction_sequence(ts; alg = "optimal") : contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
     return scalar(contract(ts; sequence = seq))

@@ -1,4 +1,6 @@
 using TensorNetworkQuantumSimulator
+using TensorNetworkQuantumSimulator: ITensors
+
 using LinearAlgebra: norm
 
 using Random

@@ -1,6 +1,6 @@
 using TensorNetworkQuantumSimulator
 using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuantumSimulator, freenergy
-using ITensors: ITensors, ITensor
+using TensorNetworkQuantumSimulator: ITensors, ITensor
 
 function main()
     χ = 32

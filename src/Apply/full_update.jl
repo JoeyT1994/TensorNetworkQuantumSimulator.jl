@@ -1,4 +1,5 @@
 using KrylovKit: linsolve
+using .ITensorsITensorBaseCompat: namesetdiff
 
 """
     full_update(o::ITensor, ψ::TensorNetworkState, v⃗; envs, kwargs...)
@@ -37,15 +38,20 @@ function full_update(
         apply_kwargs...,
     )
     if symmetrize
-        singular_values! = Ref{ITensor}()
-        Rᵥ₁, Rᵥ₂, spec = factorize_svd(
-            Rᵥ₁ * Rᵥ₂,
-            inds(Rᵥ₁);
-            ortho = "none",
-            singular_values!,
-            apply_kwargs...,
-        )
-        callback(; singular_values = singular_values![], truncation_error = spec.truncerr)
+        M = Rᵥ₁ * Rᵥ₂
+        codomain = inds(Rᵥ₁)
+        # Balanced SVD: split the singular values symmetrically (√S into each factor).
+        U, S, V = svd_trunc(M, codomain; trunc = itensor_trunc(; apply_kwargs...))
+        u = only(commoninds(U, S))
+        v = only(commoninds(S, V))
+        sqrtS = sqrth_safe(S, (u,), (v,); atol = 0, rtol = 0)
+        Rᵥ₁, Rᵥ₂ = U * replaceind(sqrtS, v, prime(u)), replaceind(sqrtS, u, prime(u)) * V
+        # Best-effort truncation error from norms; suffers catastrophic cancellation when little is
+        # discarded. TODO: expose MatrixAlgebraKit's `ϵ` from `ITensorBase.svd_trunc` and use it here.
+        total = abs2(norm(M))
+        truncation_error = iszero(total) ? zero(real(scalartype(M))) :
+            max(zero(real(scalartype(M))), 1 - abs2(norm(S)) / total)
+        callback(; singular_values = S, truncation_error)
     end
     ψᵥ₁ = Qᵥ₁ * Rᵥ₁
     ψᵥ₂ = Qᵥ₂ * Rᵥ₂
@@ -115,8 +121,8 @@ function optimise_p_q(
 
     fstart = print_fidelity_loss ? fidelity(envs, p_cur, q_cur, p, q, o) : 0
 
-    qs_ind = setdiff(inds(q_cur), collect(Iterators.flatten(inds.(vcat(envs, p_cur)))))
-    ps_ind = setdiff(inds(p_cur), collect(Iterators.flatten(inds.(vcat(envs, q_cur)))))
+    qs_ind = namesetdiff(inds(q_cur), collect(Iterators.flatten(inds.(vcat(envs, p_cur)))))
+    ps_ind = namesetdiff(inds(p_cur), collect(Iterators.flatten(inds.(vcat(envs, q_cur)))))
 
     function b(p::ITensor, q::ITensor, o::ITensor, envs::Vector{ITensor}, r::ITensor)
         ts = vcat(ITensor[p, q, o, dag(prime(r))], envs)

@@ -263,8 +263,13 @@ ITensors.op(o::OpName"xx_plus_yy", ::SiteType"Qubit"; θ::Number, β::Number) =
 
 Gate for rotation by XXYY at a given angle.
 """
-function ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2", s1::Index, s2::Index; θ = 1)
-    h = 0.5 * (op("X", s1) * op("X", s2) + op("Y", s1) * op("Y", s2))
+function ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2"; θ = 1)
+    # Built as one two-site matrix in the manifestly charge-conserving σ± form,
+    # ½(XX + YY) = σ⁺σ⁻ + σ⁻σ⁺, rather than from single-site `op("X", s)` factors:
+    # the gate conserves U(1) charge, but a standalone `X` does not, so the factored
+    # construction has no symmetric representation even though the sum does.
+    σp, σm = [0.0 1.0; 0.0 0.0], [0.0 0.0; 1.0 0.0]
+    h = kron(σp, σm) + kron(σm, σp)
     return exp(-im * θ * h)
 end
 ITensors.op(o::OpName"Rxxyy", ::SiteType"Qubit"; θ::Number) =
@@ -275,8 +280,11 @@ ITensors.op(o::OpName"Rxxyy", ::SiteType"Qubit"; θ::Number) =
 
 Gate for rotation by XXYYZZ at a given angle.
 """
-function ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2", s1::Index, s2::Index; θ = 1)
-    h = 0.5 * (op("X", s1) * op("X", s2) + op("Y", s1) * op("Y", s2) + op("Z", s1) * op("Z", s2))
+function ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2"; θ = 1)
+    # One two-site matrix in the σ± form, for the same reason as `Rxxyy` above:
+    # ½(XX + YY + ZZ) = σ⁺σ⁻ + σ⁻σ⁺ + ½ ZZ.
+    σp, σm, σz = [0.0 1.0; 0.0 0.0], [0.0 0.0; 1.0 0.0], [1.0 0.0; 0.0 -1.0]
+    h = kron(σp, σm) + kron(σm, σp) + 0.5 * kron(σz, σz)
     return exp(-im * θ * h)
 end
 ITensors.op(o::OpName"Rxxyyzz", ::SiteType"Qubit"; θ::Number) =

@@ -170,8 +170,9 @@ function loop_correlation(bpc::BeliefPropagationCache, loop::Vector{<:NamedEdge}
     seq = contraction_sequence(tensors; alg = "omeinsum", optimizer = GreedyMethod())
     t = contract(tensors; sequence = seq)
 
-    row_combiner, col_combiner = ITensors.combiner(e_virtualinds), ITensors.combiner(e_virtualinds_sim)
-    t = t * row_combiner * col_combiner
+    row_name = ITensorBase.uniquename(ITensorBase.IndexName)
+    col_name = ITensorBase.uniquename(ITensorBase.IndexName)
+    t = ITensors.matricize(t, Tuple(e_virtualinds) => row_name, Tuple(e_virtualinds_sim) => col_name)
     t = adapt(Vector{ComplexF64})(t)
     t = ITensors.array(t)
     λs = reverse(sort(LinearAlgebra.eigvals(t); by = abs))
