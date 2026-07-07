@@ -327,7 +327,7 @@ const svd_trunc = MAK.svd_trunc
 # `linds` may be splatted, a single index, or one collection.
 function qr(a::AbstractITensor, linds...)
     left = cat_inds(linds...)
-    right = setdiff(collect(inds(a)), left)
+    right = namesetdiff(inds(a), left)
     return MAK.qr_compact(a, Tuple(left), Tuple(right))
 end
 

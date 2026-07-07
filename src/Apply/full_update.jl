@@ -1,4 +1,5 @@
 using KrylovKit: linsolve
+using .ITensorsITensorBaseCompat: namesetdiff
 
 """
     full_update(o::ITensor, ψ::TensorNetworkState, v⃗; envs, kwargs...)
@@ -115,8 +116,8 @@ function optimise_p_q(
 
     fstart = print_fidelity_loss ? fidelity(envs, p_cur, q_cur, p, q, o) : 0
 
-    qs_ind = setdiff(inds(q_cur), collect(Iterators.flatten(inds.(vcat(envs, p_cur)))))
-    ps_ind = setdiff(inds(p_cur), collect(Iterators.flatten(inds.(vcat(envs, q_cur)))))
+    qs_ind = namesetdiff(inds(q_cur), collect(Iterators.flatten(inds.(vcat(envs, p_cur)))))
+    ps_ind = namesetdiff(inds(p_cur), collect(Iterators.flatten(inds.(vcat(envs, q_cur)))))
 
     function b(p::ITensor, q::ITensor, o::ITensor, envs::Vector{ITensor}, r::ITensor)
         ts = vcat(ITensor[p, q, o, dag(prime(r))], envs)
