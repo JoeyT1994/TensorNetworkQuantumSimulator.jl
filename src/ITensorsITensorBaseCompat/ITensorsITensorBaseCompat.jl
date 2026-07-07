@@ -33,7 +33,7 @@ export
     # ITensor construction
     itensor, random_itensor, scalar, delta, onehot,
     # Factorizations
-    qr, svd, eigen, factorize, factorize_svd,
+    qr, svd, svd_trunc, eigen, factorize, itensor_trunc,
     # Storage / element-type accessors
     scalartype, datatype, array, data,
     # Dense / quantum-number no-ops

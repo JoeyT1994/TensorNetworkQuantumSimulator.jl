@@ -1,14 +1,9 @@
-# Vendored minimal operator / named-state system (legacy `ITensors.op` / `ITensors.state`).
+# Vendored minimal operator / named-state system (legacy `ITensors.op` / `ITensors.state`), scoped to
+# the `S=1/2` single- and two-qubit gate set and the computational/Pauli-basis product states.
 #
-# Round-1 scope is the single-qubit (`S=1/2`) gate set and the computational/Pauli-basis
-# product states — enough for `siteinds` / `tensornetworkstate` state construction and
-# single-site `expect`. The full two-qubit gate set, the parametric and in-house gates,
-# and the Heisenberg/PTM (PauliPropagation) path belong to the gate-application round
-# (`Apply/`), which is still excluded; they are not vendored here.
-#
-# Legacy ITensors exposes these through the `OpName` / `SiteType` dispatch system. TNQS
-# only ever calls `op(name, sites...; kwargs...)` and `state(name, site)`, so the vendor
-# is a plain name-keyed lookup rather than a reimplementation of that dispatch machinery.
+# Legacy ITensors exposes these through the `OpName` / `SiteType` dispatch system. TNQS only ever
+# calls `op(name, sites...; kwargs...)` and `state(name, site)`, so this vendors a name-keyed lookup
+# over that machinery rather than reimplementing it.
 
 using TensorAlgebra: TensorAlgebra, project, tryproject
 
@@ -154,13 +149,10 @@ function op(::OpName"SWAP", ::SiteType"S=1/2")
     return Float64[1 0 0 0; 0 0 1 0; 0 1 0 0; 0 0 0 1]
 end
 
-# TYPE PIRACY (temporary): extends `Base.exp` for an operator `ITensor`, inferring the
-# prime-pair codomain/domain and forwarding to ITensorBase's matricization
-# `exp(a, dimnames_codomain, dimnames_domain)` (graded-capable). Legacy ITensors provided
-# `exp(::ITensor)`; gates defined as `exp` of a Hamiltonian operator rely on it (e.g. a user
-# `op(::OpName"MyZRot", ...) = exp(-im θ/2 * op("Z", s))`). To de-pirate: make this compat-owned
-# (an `exp` in this module, not a `Base.exp` method). Not an upstream candidate (the upstream
-# matricization `exp` is the target, not a `Base.exp(::ITensor)`).
+# TYPE PIRACY (temporary): extends `Base.exp` for an operator `ITensor`, inferring the prime-pair
+# codomain/domain and forwarding to ITensorBase's matricization `exp(a, codomain, domain)`
+# (graded-capable). Gates defined as `exp` of a Hamiltonian operator rely on it (e.g. a user
+# `op(::OpName"MyZRot", ...) = exp(-im θ/2 * op("Z", s))`). De-pirate by making it compat-owned.
 function Base.exp(t::AbstractITensor)
     p0 = filter(i -> ITensorBase.plev(i) == 0, collect(inds(t)))
     isempty(p0) && error("exp(::ITensor) expects indices paired as (i, prime(i))")

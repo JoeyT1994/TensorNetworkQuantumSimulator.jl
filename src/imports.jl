@@ -57,7 +57,7 @@ using .ITensorsITensorBaseCompat:
     inds, commoninds, commonind, uniqueinds, noncommonind, noncommoninds, unioninds, hascommoninds, cat_inds,
     sim, dag, prime, noprime, replaceind, replaceinds, dim, swapind,
     itensor, random_itensor, scalar, delta, similar_map, onehot,
-    qr, svd, eigen, factorize, factorize_svd,
+    qr, svd, svd_trunc, eigen, factorize, itensor_trunc,
     scalartype, datatype, array, data,
     denseblocks, dense, hasqns,
     contract, inner, apply,

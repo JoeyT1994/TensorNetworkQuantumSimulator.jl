@@ -408,7 +408,7 @@ function generic_apply(
         mps::Dictionary{Int, <:ITensor},
         right_inds::Vector{<:Vector{<:Index}};
         cutoff = 0.0,
-        maxdim = typemax(Int),
+        maxdim = nothing,
         normalize = true,
     )
     b = length(mpo)
