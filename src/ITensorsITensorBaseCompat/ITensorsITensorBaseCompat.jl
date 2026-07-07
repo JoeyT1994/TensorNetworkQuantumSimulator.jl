@@ -31,11 +31,9 @@ export
     # Index operations
     sim, dag, prime, noprime, replaceind, replaceinds, dim, swapind,
     # ITensor construction
-    itensor, random_itensor, scalar, delta, id, onehot,
+    itensor, random_itensor, scalar, delta, onehot,
     # Factorizations
     qr, svd, eigen, factorize, factorize_svd,
-    # Diagonal manipulation
-    map_diag, map_diag!,
     # Storage / element-type accessors
     scalartype, datatype, array, data,
     # Dense / quantum-number no-ops

@@ -56,9 +56,8 @@ import .ITensorsITensorBaseCompat as ITensors
 using .ITensorsITensorBaseCompat:
     inds, commoninds, commonind, uniqueinds, noncommonind, noncommoninds, unioninds, hascommoninds, cat_inds,
     sim, dag, prime, noprime, replaceind, replaceinds, dim, swapind,
-    itensor, random_itensor, scalar, delta, id, onehot,
+    itensor, random_itensor, scalar, delta, similar_map, onehot,
     qr, svd, eigen, factorize, factorize_svd,
-    map_diag, map_diag!,
     scalartype, datatype, array, data,
     denseblocks, dense, hasqns,
     contract, inner, apply,

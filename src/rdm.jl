@@ -1,8 +1,6 @@
 function normalize_rdm(ρ::ITensor)
-    tr_ρ = copy(ρ)
-    for i in inds(ρ; plev = 0)
-        tr_ρ *= id(scalartype(ρ), (dag(i),), (dag(prime(i)),))
-    end
+    codomain = inds(ρ; plev = 0)
+    tr_ρ = ρ * one(ρ, codomain, prime.(codomain))
     return ρ / scalar(tr_ρ)
 end
 

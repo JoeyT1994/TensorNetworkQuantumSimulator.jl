@@ -3,7 +3,7 @@
 #
 # Strategy (see ITensorDevelopmentPlans api_migration_map.md):
 #   - Names below are thin wrappers over ITensorBase / TensorAlgebra / MatrixAlgebraKit.
-#   - The factorization return shapes, `map_diag`, the operator/SiteType system, and
+#   - The factorization return shapes, the operator/SiteType system, and
 #     the boundary-MPS (ITensorMPS) paths are NOT wrapped here; they need callsite
 #     translation or upstream stack work and are tracked separately. The legacy
 #     `combiner` is retired rather than wrapped: call sites use the next-gen fusion
@@ -225,23 +225,28 @@ function diagonaltensor(
     return nameddims(diagonaltensor(diag, unnamed.(is)), name.(is))
 end
 
-# The identity map between the codomain and domain index groups (TensorKit's `id`), built
-# via checked `project` on a dense identity so the index axes select the backend (dense,
-# graded, `TensorMap`). The result carries exactly the given indices with their own axes
-# (`project` dualizes the domain axes). Callers arrow the indices, as for `identity_tensor`:
-# the fused codomain and domain must be arrow-opposite (e.g. `id(elt, (i,), (dag(j),))`); an
-# identity between incompatible gradings throws.
-function id(eltype::Type, codomain::Tuple, domain::Tuple)
-    m = Matrix{eltype}(LinearAlgebra.I, prod(length, codomain), prod(length, domain))
-    return TensorAlgebra.project(m, codomain, domain)
+# Allocate an identity-map-shaped tensor with undefined data over the `codomain`/`domain`
+# indices, following `prototype`'s backend and element type with the domain axes dualized in
+# storage (the `similar_map` map convention). `prototype` only donates the backend, so unlike
+# `Base.one(a, codomain, domain)` (which needs `a` to already carry the map's legs) a caller
+# whose prototype lacks a leg still builds a device-following identity via
+# `one(similar_map(prototype, codomain, domain), codomain, domain)`.
+function similar_map(prototype::AbstractITensor, eltype::Type, codomain, domain)
+    raw = TensorAlgebra.similar_map(
+        unnamed(prototype), eltype, unnamed.(codomain), unnamed.(domain)
+    )
+    return nameddims(raw, (name.(codomain)..., name.(domain)...))
+end
+function similar_map(prototype::AbstractITensor, codomain, domain)
+    return similar_map(prototype, scalartype(prototype), codomain, domain)
 end
 
 delta(eltype::Type, is::Tuple) = diagonaltensor(ones(eltype, minimum(length, is)), is)
 # The order-2 delta is the identity map over the index pair, built via checked `project` so
 # the index axes select the backend (dense, graded, `TensorMap`). Legacy QN-`delta`
 # convention: the pair is arrow-opposite and the caller passes `(i, j)` with `j` un-dualized.
-# It coincides with `id` at order 2, but stays its own method (its own calling convention,
-# and the count dispatch below routes graded default messages here). Higher-order deltas stay
+# It coincides with the order-2 identity map, but stays its own method (its own calling
+# convention, and the count dispatch below routes graded default messages here). Higher-order deltas stay
 # on the dense `diagonaltensor` path above (a super-diagonal generally cannot be embedded
 # while preserving a nontrivial symmetry).
 function delta(eltype::Type, is::Tuple{Index, Index})
@@ -255,20 +260,17 @@ delta(is::Tuple) = delta(Float64, is)
 delta(is::Index...) = delta(Float64, is)
 delta(is::AbstractVector{<:Index}) = delta(Float64, Tuple(is))
 
-# Trace of an ITensor over its prime pairs (legacy `tr`): contract each unprimed index
-# with its prime via a `delta`, the same construction `normalize_rdm` uses. This is the
-# index-paired definition — independent of storage order — rather than `sum` of the
-# underlying array's storage diagonal, which is only the trace for a rank-2 tensor whose
-# legs happen to be ordered to align. Accessed qualified (`ITensors.tr`) so it doesn't
-# shadow `LinearAlgebra.tr`, which TNQS still calls on plain matrices.
+# Trace of an ITensor over its prime pairs (legacy `tr`): contract with the identity map that
+# pairs every unprimed index with its prime, the same construction `normalize_rdm` uses. This
+# is the index-paired definition — independent of storage order — rather than `sum` of the
+# underlying array's storage diagonal, which is only the trace for a rank-2 tensor whose legs
+# happen to be ordered to align. The domain is `prime.(codomain)` (not `inds(t; plev=1)`) so
+# each codomain index pairs with its own prime; `plev` filtering does not preserve that
+# pairing order. Accessed qualified (`ITensors.tr`) so it doesn't shadow `LinearAlgebra.tr`,
+# which TNQS still calls on plain matrices.
 function tr(t::AbstractITensor)
-    out = copy(t)
-    for i in inds(t; plev = 0)
-        # The identity-map legs carry the duals of `t`'s prime pair (`i` and its primed
-        # dual), so each leg contracts its partner on any backend.
-        out *= id(scalartype(t), (dag(i),), (dag(prime(i)),))
-    end
-    return scalar(out)
+    codomain = inds(t; plev = 0)
+    return scalar(t * one(t, codomain, prime.(codomain)))
 end
 
 # One-hot vector along `i` at position `p` (legacy `onehot(i => p)`), through `project_aux`
@@ -517,43 +519,6 @@ end
 # identity with `Base.one`, both of which are graded-capable. `matricize` is the
 # `TensorAlgebra` generic, extended by ITensorBase for named tensors.
 using TensorAlgebra: matricize
-
-#
-# Diagonal manipulation. Legacy `map_diag(f, T)` applies `f` to the diagonal of a
-# (diagonal-like) tensor; used on factorization spectra (singular values /
-# eigenvalues). Reproduced via `MAK.diagview`, which aliases the diagonal storage on
-# every backend (a plain view for dense, blockwise for graded, per-sector for a
-# `TensorMap`), so no scalar indexing is needed.
-function _map_diagview!(f, dv)
-    copyto!(dv, map(f, dv))
-    return dv
-end
-# A backend's `diagview` may be a dict of per-block diagonal views (e.g. a plain
-# `TensorMap`, keyed by sector) rather than a single vector view.
-function _map_diagview!(f, dv::AbstractDict)
-    foreach(v -> _map_diagview!(f, v), values(dv))
-    return dv
-end
-function map_diag(f, T::AbstractITensor)
-    arr = copy(unnamed(T))
-    _map_diagview!(f, MAK.diagview(arr))
-    return nameddims(arr, ITensorBase.dimnames(T))
-end
-function map_diag!(f, T::AbstractITensor)
-    _map_diagview!(f, MAK.diagview(unnamed(T)))
-    return T
-end
-# Out-of-place-into-`dest` form `map_diag!(f, dest, src)`: write `f` of `src`'s diagonal
-# onto `dest`'s diagonal (TNQS calls it with `dest === src` for an in-place diagonal map).
-function map_diag!(f, dest::AbstractITensor, src::AbstractITensor)
-    d, s = unnamed(dest), unnamed(src)
-    if d === s
-        map_diag!(f, dest)
-    else
-        copyto!(MAK.diagview(d), map(f, MAK.diagview(s)))
-    end
-    return dest
-end
 
 #
 # Storage / element type accessors.
