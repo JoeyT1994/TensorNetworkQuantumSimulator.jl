@@ -37,7 +37,7 @@ collect_leaves!(acc, x) = (for y in x; collect_leaves!(acc, y); end; acc)
     tn = random_tensornetwork(Float64, g; bond_dimension = 2)
     tensors = [tn[v] for v in vertices(tn)]
     n = length(tensors)
-    for optimizer in (GreedyMethod(), TreeSA())
+    for optimizer in (GreedyMethod(), TreeSA(), ExhaustiveSearch())
         seq = TNQS.contraction_sequence(tensors; alg = "omeinsum", optimizer)
         @test sort(collect_leaves!(Int[], seq)) == collect(1:n)             # every tensor exactly once
         @test seq isa AbstractVector && any(x -> x isa AbstractVector, seq) # nested tree, not a flat list
@@ -46,7 +46,7 @@ collect_leaves!(acc, x) = (for y in x; collect_leaves!(acc, y); end; acc)
     # --- the sequence the backend returns is a *correct* contraction: executing it gives the
     #     same scalar as the independent `optimal` backend.
     ref = scalar(ITensors.contract(tensors; sequence = TNQS.contraction_sequence(tensors; alg = "optimal")))
-    for optimizer in (GreedyMethod(), TreeSA())
+    for optimizer in (GreedyMethod(), TreeSA(), ExhaustiveSearch())
         seq = TNQS.contraction_sequence(tensors; alg = "omeinsum", optimizer)
         @test scalar(ITensors.contract(tensors; sequence = seq)) ≈ ref
     end
