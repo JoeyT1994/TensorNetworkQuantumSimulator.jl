@@ -2,14 +2,6 @@ using TensorNetworkQuantumSimulator
 
 using Statistics
 
-function z2_project(tns::TensorNetworkState)
-    tns = copy(tns)
-    apply_kwargs = (; normalize_tensors = false)
-    gates = [("X", v) for v in vertices(tns)]
-    tnsP, _ = apply_gates(gates, tns; apply_kwargs)
-    return tnsP + tns
-end
-
 function ghz_state(g, s)
     ψ1, ψ2 = tensornetworkstate(Float64, v -> "↑", g, s), tensornetworkstate(Float64, v -> "↓", g, s)
     return ψ1 + ψ2
@@ -44,12 +36,12 @@ function main()
     obs = ("ZZ", [n_mid, n_mid_n])  # right in the middle
 
     # the number of circuit layers
-    nl = 250
+    nl = 10
     s = siteinds("S=1/2", g)
 
     # the initial state (all up, use Float 32 precision)
-    ψ0 = ghz_state(g, s)
-    #ψ0 = tensornetworkstate(Float64, v-> "↓", g, s)
+    init = "GHZ"
+    ψ0 = init == "GHZ" ? ghz_state(g, s) : ψ0 = tensornetworkstate(Float64, v-> "↓", g, s)
 
     println("Init bond dimension: $(maxvirtualdim(ψ0))")
 
@@ -97,7 +89,7 @@ function main()
             push!(szzs_bp, szz_bp)
         end
     end
-    npzwrite("")
+    npzwrite("/Users/jtindall/Files/Data/Pasqal/IsingChi$(chi)n$(n)Init$(Init).npz", times = times,fids = fids, szzs_bmps = szzs_bmps, szzs_bp =szzs_bp)
 end
 
 main()

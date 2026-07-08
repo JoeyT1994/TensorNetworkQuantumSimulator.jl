@@ -1,5 +1,3 @@
-using ITensors: hastags
-
 # --- Gate registry -----------------------------------------------------------
 
 # Internal dispatch record for a circuit-tuple gate name.
@@ -121,10 +119,6 @@ function totensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     name = gate[1]
     verts = collect_vertices(gate[2], g)
     s_inds = [only(siteinds[v]) for v in verts]
-
-    # Heisenberg-picture path (Pauli-tagged site indices)
-    all(has_heisenberg_tag.(s_inds)) &&
-        return toitensor_heisenberg(name, gate[3], s_inds), verts
 
     # Fermionic path (fermion-tagged site indices)
     all(has_fermionic_tag.(s_inds)) &&
@@ -248,30 +242,6 @@ function unregister_gate!(name::String)
     return name
 end
 
-# --- Heisenberg / PTM path ---------------------------------------------------
-
-"""
-    paulirotationmatrix(generator, θ)
-"""
-function paulirotationmatrix(generator, θ)
-    symbols = [Symbol(s) for s in generator]
-    pauli_rot = PP.PauliRotation(symbols, 1:length(symbols))
-    return PP.tomatrix(pauli_rot, θ)
-end
-
-# Convert a Pauli rotation gate ("R<paulis>", θ) to its PTM ITensor
-function toitensor_heisenberg(generator, θ, indices)
-    @assert first(generator) == 'R'
-    generator = generator[2:length(generator)]
-    @assert _ispaulistring(generator)
-    generator = uppercase.(generator)
-    U = paulirotationmatrix(generator, θ)
-    U = PP.calculateptm(U, heisenberg = true)
-
-    legs = (indices..., [ind' for ind in indices]...)
-    return itensor(transpose(U), legs)
-end
-
 # --- In-house gate definitions ----------------------------------------------
 
 """
@@ -288,7 +258,7 @@ function ITensors.op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Nu
     ]
 end
 ITensors.op(o::OpName"xx_plus_yy", ::SiteType"Qubit"; θ::Number, β::Number) =
-    ITensors.op(o, ITensorMPS.SiteType("S=1/2"); θ, β)
+    ITensors.op(o, ITensors.SiteType("S=1/2"); θ, β)
 
 """
     ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Number)
@@ -300,7 +270,7 @@ function ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2", s1::Index, s2::Index; �
     return exp(-im * θ * h)
 end
 ITensors.op(o::OpName"Rxxyy", ::SiteType"Qubit"; θ::Number) =
-    ITensors.op(o, ITensorMPS.SiteType("S=1/2"); θ)
+    ITensors.op(o, ITensors.SiteType("S=1/2"); θ)
 
 """
     ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2"; θ::Number)
@@ -312,4 +282,4 @@ function ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2", s1::Index, s2::Index;
     return exp(-im * θ * h)
 end
 ITensors.op(o::OpName"Rxxyyzz", ::SiteType"Qubit"; θ::Number) =
-    ITensors.op(o, ITensorMPS.SiteType("S=1/2"); θ)
+    ITensors.op(o, ITensors.SiteType("S=1/2"); θ)

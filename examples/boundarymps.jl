@@ -1,14 +1,11 @@
 using TensorNetworkQuantumSimulator
 
-using ITensors
-
 using Random
 Random.seed!(1634)
 
 function main()
     nx, ny = 5, 5
     χ = 2
-    ITensors.disable_warn_order()
 
     gs = [
         (named_grid((nx, 1)), "line"),
@@ -19,7 +16,6 @@ function main()
         println("Testing for $g_str lattice with $(nv(g)) vertices")
         ψ = random_tensornetworkstate(ComplexF32, g, "S=1/2"; bond_dimension = χ)
         v_centre = first(center(g))
-
         sz_bp = expect(ψ, ("Z", v_centre); alg = "bp")
         println("BP value for Z is $sz_bp")
 

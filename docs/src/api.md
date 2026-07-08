@@ -11,7 +11,6 @@ TensorNetworkState
 tensornetworkstate
 random_tensornetworkstate
 zerostate
-paulitensornetworkstate
 identity_tensornetworkstate
 toriccode_groundstate
 ```
@@ -92,7 +91,6 @@ connected_edgeinduced_subgraphs_no_leaves
 ## Utilities
 
 ```@docs
-paulirotationmatrix
 safe_eigen
 add
 fidelity

@@ -1,5 +1,3 @@
-const stringtostatemap = Dict("I" => [1, 0, 0, 0], "X" => [0, 1, 0, 0], "Y" => [0, 0, 1, 0], "Z" => [0, 0, 0, 1])
-
 """
     zerostate(g::NamedGraph)
 
@@ -12,30 +10,15 @@ end
 zerostate(g::NamedGraph, s::Dictionary = siteinds("S=1/2", g)) = zerostate(Float64, g, s)
 
 """
-    paulitensornetworkstate(eltype, f::Function, g::NamedGraph, s::Dictionary = siteinds("Pauli", g))
-
-Construct a tensor network state in the Heisenberg picture (Pauli basis). The function `f` should map each vertex of the graph to a Pauli string (one of `"I"`, `"X"`, `"Y"`, `"Z"`).
-"""
-function paulitensornetworkstate(eltype, f::Function, g::NamedGraph, s::Dictionary = siteinds("Pauli", g))
-    h = v -> stringtostatemap[f(v)]
-    return tensornetworkstate(eltype, h, g, s)
-end
-
-topaulitensornetwork(f::Function, g::NamedGraph, s::Dictionary = siteinds("Pauli", g)) = topaulitensornetwork(Float64, f, g, s)
-
-"""
     identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2))
 
 Construct a bond-dimension-1 `TensorNetworkState` representing the identity matrix on graph `g`.
 
-For `"Pauli"` site indices this is the identity in the Heisenberg picture (an `"I"` Pauli string on every vertex).
-For other site types it expects an even number `n` of physical indices on each vertex, with the
+It expects an even number `n` of physical indices on each vertex, with the
 first half being the "ket" indices and the second half the "bra" indices; index `i` is paired with
 index `n/2 + i`.
 """
 function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2))
-    is_pauli(s) && return paulitensornetworkstate(eltype, v -> "I", g, s)
-
     links = Dictionary(edges(g), [Index(1, "e$(src(e))_$(dst(e))") for e in edges(g)])
     links = merge(links, Dictionary(reverse.(edges(g)), [links[e] for e in edges(g)]))
 

@@ -1,5 +1,7 @@
-using NamedGraphs.PartitionedGraphs: PartitionedGraph, partitions_graph, partitionvertices, PartitionEdge, partitionedges, partitionedge, PartitionVertex, unpartitioned_graph
-using NamedGraphs: add_edges!
+using NamedGraphs.PartitionedGraphs: PartitionedGraph, quotient_graph, quotientvertices, 
+    QuotientEdge, quotientedges, quotientedge, QuotientVertex, unpartitioned_graph, QuotientEdges
+using NamedGraphs: add_edges!, NamedDiGraph
+using NamedGraphs.GraphsExtensions: directed_graph, undirected_graph, forest_cover_edge_sequence, all_edges
 using SplitApplyCombine: group
 
 #TODO: Make this show() nicely.
@@ -7,7 +9,7 @@ struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Fe
     network::N
     messages::Dictionary{NamedEdge, M}
     supergraph::PartitionedGraph
-    sorted_edges::Dictionary{PartitionEdge, Vector{NamedEdge}}
+    sorted_edges::Dictionary{QuotientEdge, Vector{NamedEdge}}
     mps_bond_dimension::Integer
     contraction_sequences::Dictionary{Pair, Vector}
 end
@@ -23,9 +25,9 @@ function set_default_kwargs(alg::Algorithm"bp", bmps_cache::BoundaryMPSCache)
 end
 
 function bp_edge_sequence(bmps_cache::BoundaryMPSCache)
-    return PartitionEdge.(forest_cover_edge_sequence(partitions_graph(supergraph(bmps_cache))))
+    return QuotientEdge.(forest_cover_edge_sequence(quotient_graph(supergraph(bmps_cache))))
 end
-default_bp_maxiter(bmps_cache::BoundaryMPSCache) = is_tree(partitions_graph(supergraph(bmps_cache))) ? 1 : 5
+default_bp_maxiter(bmps_cache::BoundaryMPSCache) = is_tree(quotient_graph(supergraph(bmps_cache))) ? 1 : 5
 function default_bmps_message_update_alg(tn)
     if tn isa TensorNetworkState || tn isa BilinearForm || tn isa QuadraticForm
         return "fitting"
@@ -66,11 +68,11 @@ end
 
 function is_correct_format(bmps_cache::BoundaryMPSCache)
     s = supergraph(bmps_cache)
-    effective_graph = partitions_graph(s)
+    effective_graph = quotient_graph(s)
     if !is_ring_graph(effective_graph) && !is_line_graph(effective_graph)
         error("Upon partitioning, graph does not form a line or ring: can't run boundary MPS")
     end
-    for pv in partitionvertices(s)
+    for pv in quotientvertices(s)
         if !is_line_graph(subgraph(s, pv))
             error("There's a partition that does not form a line: can't run boundary MPS")
         end
@@ -84,14 +86,14 @@ supergraph(bmps_cache::BoundaryMPSCache) = bmps_cache.supergraph
 graph(bmps_cache::BoundaryMPSCache) = unpartitioned_graph(supergraph(bmps_cache))
 mps_bond_dimension(bmps_cache::BoundaryMPSCache) = bmps_cache.mps_bond_dimension
 sorted_edges(bmps_cache::BoundaryMPSCache) = bmps_cache.sorted_edges
-function sorted_edges(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
+function sorted_edges(bmps_cache::BoundaryMPSCache, pe::QuotientEdge)
     return sorted_edges(bmps_cache)[pe]
 end
 
 #Forward onto the supergraph
 for f in [
-        :(NamedGraphs.PartitionedGraphs.partitionvertices),
-        :(NamedGraphs.PartitionedGraphs.partitionedges),
+        :(NamedGraphs.PartitionedGraphs.quotientvertices),
+        :(NamedGraphs.PartitionedGraphs.quotientedges),
     ]
     @eval begin
         function $f(bmps_cache::BoundaryMPSCache, args...; kwargs...)
@@ -120,7 +122,7 @@ function virtual_index_dimension(
         e2::NamedEdge,
     )
     s = supergraph(bmps_cache)
-    es = sorted_edges(bmps_cache, partitionedge(s, e1))
+    es = sorted_edges(bmps_cache, quotientedge(s, e1))
 
     if findfirst(x -> x == e1, es) > findfirst(x -> x == e2, es)
         lower_e, upper_e = e2, e1
@@ -154,13 +156,15 @@ function BoundaryMPSCache(
         tn = gauge_and_scale(tn)
     end
     pseudo_edges = pseudo_planar_edges(tn; grouping_function)
-    planar_graph = copy(graph(tn))
-    planar_graph = add_edges(planar_graph, pseudo_edges)
+
+    planar_graph = add_edges(graph(tn), pseudo_edges)
+
     vertex_groups = group(grouping_function, collect(vertices(planar_graph)))
     vertex_groups = map(x -> sort(x; by = group_sorting_function), vertex_groups)
     supergraph = PartitionedGraph(planar_graph, vertex_groups)
-    pes = vcat(partitionedges(supergraph), reverse.(partitionedges(supergraph)))
-    sorted_es = Dictionary{PartitionEdge, Vector{NamedEdge}}(pes, Vector{NamedEdge}[sorted_edges(supergraph, pe) for pe in pes])
+
+    pes = all_quotientedges(supergraph)
+    sorted_es = Dictionary{QuotientEdge, Vector{NamedEdge}}(pes, Vector{NamedEdge}[sorted_edges(supergraph, pe) for pe in pes])
 
     messages = default_messages()
     bmps_cache = BoundaryMPSCache(tn, messages, supergraph, sorted_es, mps_bond_dimension, Dictionary{Pair, Vector}())
@@ -170,15 +174,15 @@ function BoundaryMPSCache(
     return bmps_cache
 end
 
-all_partitionedges(bmps_cache::BoundaryMPSCache) = vcat(partitionedges(bmps_cache), reverse.(partitionedges(bmps_cache)))
+all_quotientedges(graph) = QuotientEdges(all_edges(quotient_graph(graph)))
 
 #Initialise all the interpartition message tensors
 function set_interpartition_messages!(
         bmps_cache::BoundaryMPSCache,
-        partitionedges::Vector{<:PartitionEdge} = all_partitionedges(bmps_cache),
+        quotientedges = all_quotientedges(bmps_cache),
     )
     m_keys = keys(messages(bmps_cache))
-    for pe in partitionedges
+    for pe in quotientedges
         es = sorted_edges(bmps_cache, pe)
         for e in es
             if e ∉ m_keys
@@ -201,14 +205,14 @@ function set_interpartition_messages!(
     return bmps_cache
 end
 
-function switch_messages!(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
+function switch_messages!(bmps_cache::BoundaryMPSCache, pe::QuotientEdge)
     for pe in sorted_edges(bmps_cache, pe)
         switch_message!(bmps_cache, pe)
     end
     return bmps_cache
 end
 
-function partition_graph(bmps_cache::BoundaryMPSCache, partition::PartitionVertex)
+function partition_graph(bmps_cache::BoundaryMPSCache, partition::QuotientVertex)
     vs = vertices(supergraph(bmps_cache), partition)
     es = filter(e -> src(e) ∈ vs && dst(e) ∈ vs, edges(supergraph(bmps_cache)))
     g = NamedGraph(vs)
@@ -216,7 +220,7 @@ function partition_graph(bmps_cache::BoundaryMPSCache, partition::PartitionVerte
     return g
 end
 
-function update_partition!(bmps_cache::BoundaryMPSCache, partition::PartitionVertex)
+function update_partition!(bmps_cache::BoundaryMPSCache, partition::QuotientVertex)
     g = partition_graph(bmps_cache, partition)
     seq = forest_cover_edge_sequence(g)
     update_partition!(bmps_cache, seq)
@@ -240,7 +244,7 @@ function update_partition(bmps_cache::BoundaryMPSCache, args...)
 end
 
 #Update the messages to be corrected within the given partitions
-function update_partitions!(bmps_cache::BoundaryMPSCache, partitions::Vector{<:PartitionVertex})
+function update_partitions!(bmps_cache::BoundaryMPSCache, partitions::Vector{<:QuotientVertex})
     for p in partitions
         update_partition!(bmps_cache, p)
     end
@@ -248,7 +252,7 @@ function update_partitions!(bmps_cache::BoundaryMPSCache, partitions::Vector{<:P
 end
 
 function update_partitions!(bmps_cache::BoundaryMPSCache, vertices::Vector{<:Any})
-    partitions = unique(partitionvertices(bmps_cache, vertices))
+    partitions = unique(quotientvertices(bmps_cache, vertices))
     return update_partitions!(bmps_cache, partitions)
 end
 
@@ -327,7 +331,7 @@ function updater!(alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache, partiti
 end
 
 function update_message!(
-        alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache, pe::PartitionEdge
+        alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache, pe::QuotientEdge
     )
     delete_partition_messages!(bmps_cache, src(pe))
     switch_messages!(bmps_cache, pe)
@@ -367,17 +371,17 @@ function update_message!(
     return bmps_cache
 end
 
-function prev_partitionedge(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
-    g = partitions_graph(supergraph(bmps_cache))
+function prev_quotientedge(bmps_cache::BoundaryMPSCache, pe::QuotientEdge)
+    g = quotient_graph(supergraph(bmps_cache))
     vns = neighbors(g, parent(src(pe)))
     length(vns) == 1 && return nothing
     @assert length(vns) == 2
     v1, v2 = first(vns), last(vns)
-    parent(dst(pe)) == v1 && return PartitionEdge(v2 => parent(src(pe)))
-    return parent(dst(pe)) == v2 && return PartitionEdge(v1 => parent(src(pe)))
+    parent(dst(pe)) == v1 && return QuotientEdge(v2 => parent(src(pe)))
+    return parent(dst(pe)) == v2 && return QuotientEdge(v1 => parent(src(pe)))
 end
 
-function set_interpartition_message!(bmps_cache::BoundaryMPSCache, M::AbstractVector{<:ITensor}, pe::PartitionEdge)
+function set_interpartition_message!(bmps_cache::BoundaryMPSCache, M::AbstractVector{<:ITensor}, pe::QuotientEdge)
     sorted_es = sorted_edges(bmps_cache, pe)
     for i in 1:length(M)
         setmessage!(bmps_cache, sorted_es[i], M[i])
@@ -457,7 +461,7 @@ end
 # doubled ket/bra but only the ket layer is applied). When the source partition is a line endpoint
 # there is no previous interpartition, so `mps` comes back empty and the call reduces to compressing
 # the MPO chain.
-function _bmps_apply_inputs(bmps_cache::BoundaryMPSCache, pe::PartitionEdge; incoming_mps = nothing)
+function _bmps_apply_inputs(bmps_cache::BoundaryMPSCache, pe::QuotientEdge; incoming_mps = nothing)
     net = network(bmps_cache)
     sorted_vs = sort(vertices(supergraph(bmps_cache), src(pe)))
     pos = Dict(v => i for (i, v) in enumerate(sorted_vs))
@@ -468,7 +472,7 @@ function _bmps_apply_inputs(bmps_cache::BoundaryMPSCache, pe::PartitionEdge; inc
 
     # Incoming MPS, keyed by the site each tensor attaches to.
     mps = Dictionary{Int, ITensor}()
-    prev_pe = prev_partitionedge(bmps_cache, pe)
+    prev_pe = prev_quotientedge(bmps_cache, pe)
     if prev_pe !== nothing
         for (k, e) in enumerate(sorted_edges(bmps_cache, prev_pe))   # e = prev_v => current_v
             t = incoming_mps === nothing ? message(bmps_cache, e) : incoming_mps[k]
@@ -489,7 +493,7 @@ end
 function update_message!(
         alg::Algorithm"zipup",
         bmps_cache::BoundaryMPSCache,
-        pe::PartitionEdge;
+        pe::QuotientEdge;
         maxdim::Integer = mps_bond_dimension(bmps_cache),
     )
     #TODO: call gauge_partition before this.
@@ -501,7 +505,7 @@ function update_message!(
     return set_interpartition_message!(bmps_cache, out, pe)
 end
 
-function vertex_scalar(bmps_cache::BoundaryMPSCache, partition::PartitionVertex)
+function vertex_scalar(bmps_cache::BoundaryMPSCache, partition::QuotientVertex)
     g = partition_graph(bmps_cache, partition)
     v = first(center(g))
     update_seq = post_order_dfs_edges(g, v)
@@ -509,7 +513,7 @@ function vertex_scalar(bmps_cache::BoundaryMPSCache, partition::PartitionVertex)
     return vertex_scalar(bmps_cache, v)
 end
 
-function edge_scalar(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
+function edge_scalar(bmps_cache::BoundaryMPSCache, pe::QuotientEdge)
     es = sorted_edges(bmps_cache, pe)
     out = !is_fermionic(network(bmps_cache)) ? ITensor(one(Bool)) : FermionicITensor(adapt(datatype(bmps_cache))(ITensor(1)), Index[], Bool[], Dictionary{Index, Vector{Bool}}())
     for e in es
@@ -518,19 +522,19 @@ function edge_scalar(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
     return scalar(out)
 end
 
-function delete_partition_messages!(bmps_cache::BoundaryMPSCache, partition::PartitionVertex)
+function delete_partition_messages!(bmps_cache::BoundaryMPSCache, partition::QuotientVertex)
     g = partition_graph(bmps_cache, partition)
     es = edges(g)
     es = vcat(es, reverse.(es))
     return deletemessages!(bmps_cache, filter(e -> e ∈ keys(messages(bmps_cache)), es))
 end
 
-function delete_interpartition_messages!(bmps_cache::BoundaryMPSCache, pe::PartitionEdge)
+function delete_interpartition_messages!(bmps_cache::BoundaryMPSCache, pe::QuotientEdge)
     es = sorted_edges(bmps_cache, pe)
     return deletemessages!(bmps_cache, filter(e -> e ∈ keys(messages(bmps_cache)), es))
 end
 
-function delete_partition_messages!(bmps_cache::BoundaryMPSCache, partitions::Vector{<:PartitionVertex})
+function delete_partition_messages!(bmps_cache::BoundaryMPSCache, partitions::Vector{<:QuotientVertex})
     for p in partitions
         delete_partition_messages!(bmps_cache, p)
     end
@@ -538,19 +542,19 @@ function delete_partition_messages!(bmps_cache::BoundaryMPSCache, partitions::Ve
 end
 
 function delete_partition_messages!(bmps_cache::BoundaryMPSCache, vertices::Vector{<:Any})
-    partitions = unique(partitionvertices(bmps_cache, vertices))
+    partitions = unique(quotientvertices(bmps_cache, vertices))
     return delete_partition_messages!(bmps_cache, partitions)
 end
 
 
 function vertex_scalars(
-        bmps_cache::BoundaryMPSCache, vertices = partitionvertices(supergraph(bmps_cache)); kwargs...
+        bmps_cache::BoundaryMPSCache, vertices = quotientvertices(supergraph(bmps_cache)); kwargs...
     )
     return map(v -> vertex_scalar(bmps_cache, v; kwargs...), vertices)
 end
 
 function edge_scalars(
-        bmps_cache::BoundaryMPSCache, edges = partitionedges(bmps_cache); kwargs...
+        bmps_cache::BoundaryMPSCache, edges = quotientedges(bmps_cache); kwargs...
     )
     return map(e -> edge_scalar(bmps_cache, e; kwargs...), edges)
 end
@@ -577,13 +581,13 @@ end
 
 #Functions to get the parellel edges sitting above and below a edge
 function edges_above(bmps_cache::BoundaryMPSCache, e::NamedEdge)
-    es = sorted_edges(bmps_cache, partitionedge(supergraph(bmps_cache), e))
+    es = sorted_edges(bmps_cache, quotientedge(supergraph(bmps_cache), e))
     e_pos = findfirst(x -> x == e, es)
     return NamedEdge[es[i] for i in (e_pos + 1):length(es)]
 end
 
 function edges_below(bmps_cache::BoundaryMPSCache, e::NamedEdge)
-    es = sorted_edges(bmps_cache, partitionedge(supergraph(bmps_cache), e))
+    es = sorted_edges(bmps_cache, quotientedge(supergraph(bmps_cache), e))
     e_pos = findfirst(x -> x == e, es)
     return NamedEdge[es[i] for i in 1:(e_pos - 1)]
 end
@@ -601,7 +605,7 @@ function edge_below(bmps_cache::BoundaryMPSCache, e::NamedEdge)
 end
 
 #Sort (bottom to top) edges between pair of partitions in the planargraph
-function sorted_edges(pg::PartitionedGraph, pe::PartitionEdge)
+function sorted_edges(pg::PartitionedGraph, pe::QuotientEdge)
     src_vs, dst_vs = vertices(pg, src(pe)), vertices(pg, dst(pe))
     es = reduce(
         vcat,
@@ -631,7 +635,7 @@ function path_contract(
     )
 
     #For boundary MPS, must stay in partition
-    partitions = unique(partitionvertices(cache, vs))
+    partitions = unique(quotientvertices(cache, vs))
     length(partitions) > 1 && error("Observable support must be within a single partition (row/ column) of the graph for now.")
     partition = only(partitions)
     g = partition_graph(cache, partition)

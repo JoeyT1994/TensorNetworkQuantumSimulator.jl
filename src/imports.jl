@@ -31,7 +31,6 @@ using NamedGraphs.GraphsExtensions:
     a_star,
     add_edge!,
     edgetype,
-    edge_subgraph,
     leaf_vertices,
     post_order_dfs_edges,
     decorate_graph_edges,
@@ -48,14 +47,8 @@ using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_grap
 using TensorOperations
 
 using ITensors: ITensors
-using ITensors: Index, ITensor, hasqns, noncommonind, combinedind, combiner, replaceinds, sim, onehot, delta, plev, dense, unioninds, uniqueinds, commonind, commoninds, replaceind, datatype, inds, dag, noprime, factorize_svd, prime, hascommoninds, itensor, map_diag!, @Algorithm_str, scalar, @OpName_str, @SiteType_str, denseblocks, tags
-using ITensorMPS
+using ITensors: Index, ITensor, hasqns, noncommonind, combinedind, combiner, replaceinds, sim, onehot, delta, plev, dense, unioninds, uniqueinds, commonind, commoninds, replaceind, datatype, inds, dag, noprime, factorize_svd, prime, hascommoninds, itensor, map_diag!, @Algorithm_str, scalar, @OpName_str, @SiteType_str, denseblocks, tags, op, apply, contract, inner
 
 using Adapt: adapt
-
-import PauliPropagation
-const PP = PauliPropagation
-
-import ForwardDiff
 
 using TypeParameterAccessors: unspecify_type_parameters
