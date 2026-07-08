@@ -39,7 +39,7 @@ function apply_gates(
 end
 
 function adapt_gate(gate::ITensor, ψ_bpc::BeliefPropagationCache)
-    gate = scalartype(gate) <: Complex ? adapt(complex(scalartype(ψ_bpc)), gate) : adapt(scalartype(ψ_bpc), gate)
+    gate = scalartype(gate) <: Complex ? ITensors.adapt_scalartype(complex(scalartype(ψ_bpc)), gate) : ITensors.adapt_scalartype(scalartype(ψ_bpc), gate)
     return adapt(unspecify_type_parameters(datatype(ψ_bpc)), gate)
 end
 

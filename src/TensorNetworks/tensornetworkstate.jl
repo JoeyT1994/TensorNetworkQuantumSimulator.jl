@@ -171,9 +171,9 @@ function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dic
     for v in vs
         tnv = f(v)
         if tnv isa String
-            set!(tensors, v, adapt(eltype)(ITensors.state(f(v), only(siteinds[v]))))
+            set!(tensors, v, ITensors.adapt_scalartype(eltype)(ITensors.state(f(v), only(siteinds[v]))))
         elseif tnv isa Vector{<:Number}
-            set!(tensors, v, adapt(eltype)(ITensors.state(f(v), only(siteinds[v]))))
+            set!(tensors, v, ITensors.adapt_scalartype(eltype)(ITensors.state(f(v), only(siteinds[v]))))
         else
             error("Unrecognized local state constructor. Currently supported: Strings and Vectors.")
         end

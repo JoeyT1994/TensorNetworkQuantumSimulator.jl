@@ -461,15 +461,17 @@ datatype(T::AbstractITensor) = typeof(unnamed(T))
 array(T::AbstractITensor) = convert(Array, unnamed(T))
 data(T::AbstractITensor) = unnamed(T)
 
-# TYPE PIRACY (temporary, compat-owned — NOT upstream): extends `Adapt.adapt_structure` for
-# `AbstractITensor` with a `Number` eltype target, reproducing legacy `adapt(eltype)(t)` scalar-type
-# conversion (ITensorBase's Adapt integration adapts storage/device but leaves the eltype alone).
-# Using Adapt for eltype conversion is an abuse, so it does not belong upstream; retired once the
-# call sites move to a different pattern.
-function Adapt.adapt_structure(::Type{elt}, T::AbstractITensor) where {elt <: Number}
-    # Short-circuit the no-op case: a non-`AbstractArray` backend (e.g. a `TensorMap`)
-    # has no `convert(AbstractArray{elt}, ...)` method, but needs none when the element
-    # type already matches.
+# Scalar (element) type conversion as an owned `Adapt` adapter. `ScalarTypeAdaptor` is ours, so
+# `adapt(ScalarTypeAdaptor(T), x)` is not piracy, and `adapt_scalartype` mirrors `adapt`'s curried
+# and applied forms. Reproduces legacy `adapt(eltype)(t)` scalar conversion (ITensorBase's Adapt
+# integration adapts storage/device but leaves the element type alone).
+struct ScalarTypeAdaptor{T} end
+ScalarTypeAdaptor(T::Type) = ScalarTypeAdaptor{T}()
+adapt_scalartype(T::Type) = Adapt.adapt(ScalarTypeAdaptor(T))
+adapt_scalartype(T::Type, x) = Adapt.adapt(ScalarTypeAdaptor(T), x)
+function Adapt.adapt_structure(::ScalarTypeAdaptor{elt}, T::AbstractITensor) where {elt}
+    # A non-`AbstractArray` backend (e.g. a `TensorMap`) has no `convert(AbstractArray{elt}, ...)`
+    # method, but needs none when the element type already matches.
     eltype(T) === elt && return T
     return nameddims(convert(AbstractArray{elt}, unnamed(T)), ITensorBase.dimnames(T))
 end
