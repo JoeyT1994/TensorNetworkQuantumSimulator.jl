@@ -188,11 +188,6 @@ function itensor(array, is...)
 end
 itensor(array, is::Union{Tuple, AbstractVector}) = itensor(array, is...)
 
-# TYPE PIRACY (temporary, compat-owned — NOT upstream): rank-0 `ITensor(x::Number)`, which
-# ITensorBase deliberately omits. Legacy ITensors uses it to seed a product accumulator
-# (`out = ITensor(1); out *= t`). Retired once those call sites are rewritten.
-ITensorBase.ITensor(x::Number) = nameddims(fill(x), ())
-
 # Random ITensor over the given indices (legacy `random_itensor`).
 random_itensor(eltype::Type, is::Index...) = randn(eltype, is...)
 random_itensor(eltype::Type, is::Union{Tuple, AbstractVector}) = randn(eltype, is...)
@@ -568,21 +563,6 @@ end
 # factorization is asked to give its new bond the same tags as an existing bond).
 function settags(i::Index, d::AbstractDict)
     for (k, v) in d
-        i = ITensorBase.settag(i, k, v)
-    end
-    return i
-end
-# TYPE PIRACY (temporary, compat-owned — NOT upstream): the two methods below add `Index`
-# constructors taking a tag string / tag dict (legacy positional-tag form; next-gen passes tags via
-# the `tags` kwarg). Retired once the call sites move to the kwarg form. Only the `dim` first-argument
-# form is pirated: a range/space first argument collides with ITensorBase's own two-argument `Index`
-# constructors, so tagging an axis-minted index spells the two steps (`settags(Index(r), "tag")`).
-ITensorBase.Index(dim::Integer, tagstr::AbstractString) = settags(Index(dim), tagstr)
-# Build a fresh index carrying a tag dictionary (legacy `Index(dim, tags(i))`, where
-# the next-gen `tags` returns a `Dict{String, String}`).
-function ITensorBase.Index(dim::Integer, tags::AbstractDict)
-    i = Index(dim)
-    for (k, v) in tags
         i = ITensorBase.settag(i, k, v)
     end
     return i

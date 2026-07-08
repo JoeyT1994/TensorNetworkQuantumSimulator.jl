@@ -516,10 +516,7 @@ end
 
 function edge_scalar(bmps_cache::BoundaryMPSCache, pe::QuotientEdge)
     es = sorted_edges(bmps_cache, pe)
-    out = ITensor(one(Bool))
-    for e in es
-        out = (out * (message(bmps_cache, e))) * message(bmps_cache, reverse(e))
-    end
+    out = prod(e -> message(bmps_cache, e) * message(bmps_cache, reverse(e)), es)
     return scalar(out)
 end
 
