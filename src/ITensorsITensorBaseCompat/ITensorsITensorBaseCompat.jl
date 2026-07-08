@@ -40,8 +40,6 @@ export
     denseblocks, dense, hasqns,
     # Contraction, inner product, gate application
     contract, inner, apply,
-    # Operator exponential
-    exp,
     # Direct sum and misc legacy helpers
     directsum, disable_warn_order,
     # Algorithm dispatch tag

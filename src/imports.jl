@@ -60,7 +60,7 @@ using .ITensorsITensorBaseCompat:
     qr, svd, svd_trunc, eigen, factorize, itensor_trunc,
     scalartype, datatype, array, data,
     denseblocks, dense, hasqns,
-    contract, inner, apply, exp,
+    contract, inner, apply,
     directsum, disable_warn_order,
     Algorithm, @Algorithm_str,
     hastags,

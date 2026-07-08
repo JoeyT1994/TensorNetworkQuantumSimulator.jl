@@ -59,8 +59,8 @@ end
     # Define a custom op: a Z-axis rotation under a non-built-in name.
     # (Same matrix as the built-in "Rz", under a new name, so we can verify
     # the registered gate dispatches correctly.)
-    ITensors.op(::ITensors.OpName"MyZRot", ::ITensors.SiteType"S=1/2", s::Index; θ::Number) =
-        exp(-im * (θ / 2) * op("Z", s))
+    ITensors.op(::ITensors.OpName"MyZRot", ::ITensors.SiteType"S=1/2"; θ::Number) =
+        exp(-im * (θ / 2) * [1 0; 0 -1])
 
     # Register the dispatch info: name "MyZRot" takes a single keyword `θ`.
     register_gate!("MyZRot"; paramkeys = (:θ,))
