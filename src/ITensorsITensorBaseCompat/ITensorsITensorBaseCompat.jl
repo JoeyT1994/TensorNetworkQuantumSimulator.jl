@@ -21,7 +21,7 @@ module ITensorsITensorBaseCompat
 # module and `function ITensors.truncate(...)` extends `Base.truncate`.
 import Base: truncate
 
-include("itensors.jl")
+include("itensor.jl")
 include("ops.jl")
 
 export
@@ -40,6 +40,8 @@ export
     denseblocks, dense, hasqns,
     # Contraction, inner product, gate application
     contract, inner, apply,
+    # Operator exponential
+    exp,
     # Direct sum and misc legacy helpers
     directsum, disable_warn_order,
     # Algorithm dispatch tag

@@ -593,6 +593,20 @@ function hastags(i::Index, tagstr::AbstractString)
     )
 end
 
+#
+# Owned `exp` (avoids type piracy: `AbstractITensor` is not ours, so we do not add a
+# `Base.exp` method for it). Legacy `ITensors.exp(::ITensor)` exponentiates an operator
+# ITensor over its `(i, prime(i))` index pairs by forwarding to ITensorBase's
+# graded-capable matricization `Base.exp(a, codomain, domain)`. Other arguments forward
+# to `Base.exp`.
+exp(x) = Base.exp(x)
+function exp(t::AbstractITensor)
+    p0 = filter(i -> ITensorBase.plev(i) == 0, collect(inds(t)))
+    isempty(p0) && error("exp(::ITensor) expects indices paired as (i, prime(i))")
+    p1 = map(ITensorBase.prime, p0)
+    return Base.exp(t, Tuple(p1), Tuple(p0))
+end
+
 # TODO (small inline residue — can't be a drop-in shim):
 #   - `contract` / `inner` / `truncate`: TNQS *extends* these (method definitions),
 #     so the call sites drop the `ITensors.` qualifier to extend the generics this

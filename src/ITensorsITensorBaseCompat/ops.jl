@@ -148,14 +148,3 @@ end
 function op(::OpName"SWAP", ::SiteType"S=1/2")
     return Float64[1 0 0 0; 0 0 1 0; 0 1 0 0; 0 0 0 1]
 end
-
-# TYPE PIRACY (temporary): extends `Base.exp` for an operator `ITensor`, inferring the prime-pair
-# codomain/domain and forwarding to ITensorBase's matricization `exp(a, codomain, domain)`
-# (graded-capable). Gates defined as `exp` of a Hamiltonian operator rely on it (e.g. a user
-# `op(::OpName"MyZRot", ...) = exp(-im θ/2 * op("Z", s))`). De-pirate by making it compat-owned.
-function Base.exp(t::AbstractITensor)
-    p0 = filter(i -> ITensorBase.plev(i) == 0, collect(inds(t)))
-    isempty(p0) && error("exp(::ITensor) expects indices paired as (i, prime(i))")
-    p1 = map(ITensorBase.prime, p0)
-    return exp(t, Tuple(p1), Tuple(p0))
-end
