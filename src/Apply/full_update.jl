@@ -125,8 +125,14 @@ function optimise_p_q(
     qs_ind = setdiff(inds(q_cur), collect(Iterators.flatten(inds.(vcat(envs, p_cur)))))
     ps_ind = setdiff(inds(p_cur), collect(Iterators.flatten(inds.(vcat(envs, q_cur)))))
 
-    function b(p::ITensor, q::ITensor, o::ITensor, envs::Vector{ITensor}, r::ITensor)
-        ts = vcat(ITensor[p, q, o, conj(prime(r))], envs)
+    function b(p::ITensor, q::ITensor, o::ITensor, envs::Vector{ITensor}, r::ITensor, s_ind)
+        # `r`'s solve indices that the gate `o` does not act on are dangling spectator legs
+        # (e.g. the length-1 auxiliary index that makes a definite-charge site tensor
+        # symmetry-invariant). Un-prime them on the bra so they trace against the ket instead
+        # of surviving as duplicate names under `noprime`.
+        spectator = setdiff(s_ind, inds(o))
+        r_bra = replaceinds(conj(prime(r)), (prime.(spectator) .=> spectator)...)
+        ts = vcat(ITensor[p, q, o, r_bra], envs)
         sequence = contraction_sequence(ts; alg = "optimal")
         return noprime(contract_network(ts; sequence))
     end
@@ -142,14 +148,14 @@ function optimise_p_q(
         return noprime(contract_network(ts; sequence))
     end
     for i in 1:nfullupdatesweeps
-        b_vec = b(p, q, o, envs, q_cur)
+        b_vec = b(p, q, o, envs, q_cur, qs_ind)
         M_p_partial = partial(M_p, envs, q_cur, qs_ind)
 
         p_cur, info = linsolve(
             M_p_partial, b_vec, p_cur; isposdef = envisposdef, ishermitian = false
         )
 
-        b_tilde_vec = b(p, q, o, envs, p_cur)
+        b_tilde_vec = b(p, q, o, envs, p_cur, ps_ind)
         M_p_tilde_partial = partial(M_p, envs, p_cur, ps_ind)
 
         q_cur, info = linsolve(
