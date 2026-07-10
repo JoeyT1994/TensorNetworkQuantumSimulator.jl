@@ -6,9 +6,9 @@ import ITensorBase: scalartype, uniqueinds
 import MatrixAlgebraKit as MAK
 import TensorAlgebra: datatype
 using Adapt: Adapt
-using ITensorBase: ITensorBase, AbstractITensor, ITensor, Index, NamedUnitRange, commoninds,
+using ITensorBase: ITensorBase, AbstractITensor, ITensor, Index, NamedUnitRange, commonind, commoninds,
     dimnames, hascommoninds, id, inds, name, nameddims, noncommoninds, noprime, plev, prime,
-    replaceinds, sim, tags, trycommonind, trynoncommonind, unioninds, unnamed
+    replaceinds, settags, sim, tags, trycommonind, trynoncommonind, unioninds, unnamed
 using LinearAlgebra: LinearAlgebra
 using TensorAlgebra: TensorAlgebra, matricize, project, scalar, tryproject
 
@@ -99,9 +99,6 @@ function Adapt.adapt_structure(::ScalarTypeAdaptor{elt}, T::AbstractITensor) whe
     return nameddims(convert(AbstractArray{elt}, unnamed(T)), ITensorBase.dimnames(T))
 end
 
-hasqns(i::Index) = conj(unnamed(i)) != unnamed(i)
-hasqns(t::AbstractITensor) = any(hasqns, inds(t))
-
 function directsum(out_inds, pairs::Pair...)
     t1, s1 = first(pairs[1]), last(pairs[1])
     shared = setdiff(inds(t1), s1)
@@ -138,12 +135,4 @@ function Base.getproperty(alg::Algorithm, name::Symbol)
 end
 macro Algorithm_str(s)
     return :(Algorithm{$(Expr(:quote, Symbol(s)))})
-end
-
-settags(i::Index, p::Pair) = ITensorBase.settag(i, first(p), last(p))
-function settags(i::Index, tags)
-    for (k, v) in tags
-        i = ITensorBase.settag(i, k, v)
-    end
-    return i
 end

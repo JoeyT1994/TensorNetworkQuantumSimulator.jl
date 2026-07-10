@@ -19,7 +19,7 @@ first half being the "ket" indices and the second half the "bra" indices; index 
 index `n/2 + i`.
 """
 function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2))
-    links = Dictionary(edges(g), [settags(Index(1), "e" => "$(src(e))_$(dst(e))") for e in edges(g)])
+    links = Dictionary(edges(g), [Index(1; tags = "e" => "$(src(e))_$(dst(e))") for e in edges(g)])
     links = merge(links, Dictionary(reverse.(edges(g)), [links[e] for e in edges(g)]))
 
     ts = Dictionary{vertextype(g), ITensor}()
@@ -111,7 +111,7 @@ Returns a `TensorNetwork` (not a `TensorNetworkState`); contract it to obtain
 ``Z(β)``.
 """
 function ising_partitionfunction(g::NamedGraph, β::Real; Js::Dictionary = Dictionary(edges(g), [1.0 for e in edges(g)]))
-    links = Dictionary(edges(g), [settags(Index(2), "e" => "$(src(e))_$(dst(e))") for e in edges(g)])
+    links = Dictionary(edges(g), [Index(2; tags = "e" => "$(src(e))_$(dst(e))") for e in edges(g)])
     links = merge(links, Dictionary(reverse.(edges(g)), [links[e] for e in edges(g)]))
 
     # symmetric sqrt of Boltzmann matrix W = exp(β σσ')

@@ -168,10 +168,7 @@ function loop_correlation(bpc::BeliefPropagationCache, loop::Vector{<:NamedEdge}
     seq = contraction_sequence(tensors; alg = "omeinsum", optimizer = GreedyMethod())
     t = contract_network(tensors; sequence = seq)
 
-    t = matricize(t, e_virtualinds, e_virtualinds_sim)
-    t = adapt(Vector{ComplexF64})(t)
-    t = Array(t)
-    λs = reverse(sort(LinearAlgebra.eigvals(t); by = abs))
+    λs = reverse(sort(MAK.eig_vals(t, e_virtualinds, e_virtualinds_sim); by = abs))
     err = 1 - abs(λs[1]) / sum(abs.(λs))
     return err
 end

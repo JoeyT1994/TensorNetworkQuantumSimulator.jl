@@ -116,11 +116,9 @@ function optimise_p_q(
     )
     pq = apply(o, p * q)
     p_cur, q_cur = MAK.left_orth(
-        pq, intersect(inds(pq), inds(p)); trunc = itensor_trunc(; apply_kwargs...)
+        pq, intersect(inds(pq), inds(p));
+        trunc = itensor_trunc(; apply_kwargs...), name = (; tags = tags(commonind(p, q))),
     )
-    b = only(commoninds(p_cur, q_cur))
-    bnew = settags(b, tags(trycommonind(p, q)))
-    p_cur, q_cur = replaceinds(p_cur, b => bnew), replaceinds(q_cur, b => bnew)
 
     fstart = print_fidelity_loss ? fidelity(envs, p_cur, q_cur, p, q, o) : 0
 

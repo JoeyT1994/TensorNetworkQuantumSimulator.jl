@@ -430,10 +430,7 @@ function generic_apply(
         end
 
         keep = left_link === nothing ? Index[site...] : Index[site..., left_link]
-        L, R = MAK.left_orth(T, keep; trunc = itensor_trunc(; cutoff, maxdim))
-        b = only(commoninds(L, R))
-        bnew = settags(b, "link" => "$i")
-        L, R = replaceinds(L, b => bnew), replaceinds(R, b => bnew)
+        L, R = MAK.left_orth(T, keep; trunc = itensor_trunc(; cutoff, maxdim), name = (; tags = "link" => "$i"))
         push!(out, L)
         carry = R
         left_link = only(commoninds(L, R))
@@ -444,10 +441,7 @@ function generic_apply(
     # Back sweep: right-to-left SVD recompression (optimal truncation of the forward result).
     for i in length(out):-1:2
         bond = only(commoninds(out[i - 1], out[i]))
-        L, R = MAK.right_orth(out[i], [bond]; trunc = itensor_trunc(; cutoff, maxdim))
-        b = only(commoninds(L, R))
-        bnew = settags(b, "link" => "$(i - 1)")
-        L, R = replaceinds(L, b => bnew), replaceinds(R, b => bnew)
+        L, R = MAK.right_orth(out[i], [bond]; trunc = itensor_trunc(; cutoff, maxdim), name = (; tags = "link" => "$(i - 1)"))
         out[i] = R
         out[i - 1] *= L
     end

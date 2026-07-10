@@ -104,7 +104,7 @@ function weight(bpc::BeliefPropagationCache, eg)
         collect(Iterators.flatten(norm_factors(network(bpc), [v]; auxinds_f = u -> aux[u]) for v in vs))
     end
     ts = [incoming_ms; local_tensors; antiprojectors]
-    seq = any(hasqns.(ts)) ? contraction_sequence(ts; alg = "optimal") : contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
+    seq = contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
     return scalar(contract_network(ts; sequence = seq))
 end
 

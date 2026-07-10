@@ -85,13 +85,16 @@ update_iteration!
 ## Utilities
 
 ```@docs
-safe_eigen
 add
 fidelity
 optimise_p_q
 ```
 
 ## Custom Gate Definitions
+
+```@meta
+CurrentModule = TensorNetworkQuantumSimulator.Ops
+```
 
 ```@docs
 op(::OpName"Rxxyy", ::SiteType"S=1/2")
