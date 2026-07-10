@@ -1,4 +1,5 @@
 using Dictionaries: Dictionary
+using ITensors: hastags
 
 function default_siteinds(g::AbstractGraph; kwargs...)
     return siteinds("S=1/2", g; kwargs...)

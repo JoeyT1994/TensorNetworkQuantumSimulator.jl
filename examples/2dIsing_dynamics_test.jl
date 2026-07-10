@@ -1,6 +1,7 @@
 using TensorNetworkQuantumSimulator
 
 using Statistics
+using NPZ
 
 function ghz_state(g, s)
     ψ1, ψ2 = tensornetworkstate(Float64, v -> "↑", g, s), tensornetworkstate(Float64, v -> "↓", g, s)
@@ -9,7 +10,7 @@ end
 
 function main()
     n = 8
-    chi = 4
+    chi = 6
 
     # the graph is your main friend. This will be the geometry of the TN you wull work with
     g = named_grid((n, n))
@@ -36,11 +37,11 @@ function main()
     obs = ("ZZ", [n_mid, n_mid_n])  # right in the middle
 
     # the number of circuit layers
-    nl = 10
+    nl = 300
     s = siteinds("S=1/2", g)
 
     # the initial state (all up, use Float 32 precision)
-    init = "GHZ"
+    init = "Prod"
     ψ0 = init == "GHZ" ? ghz_state(g, s) : ψ0 = tensornetworkstate(Float64, v-> "↓", g, s)
 
     println("Init bond dimension: $(maxvirtualdim(ψ0))")
@@ -69,7 +70,7 @@ function main()
         rescale!(ψ_bpc)
         total_fidelity *= prod(1 .- errors)
 
-        if l % 10 == 0
+        if l % 5 == 0
             #BP expectation (already have an up-to-date BP cache)
             szz_bp = expect(ψ_bpc, obs)
             R = 2*chi
@@ -89,7 +90,7 @@ function main()
             push!(szzs_bp, szz_bp)
         end
     end
-    npzwrite("/Users/jtindall/Files/Data/Pasqal/IsingChi$(chi)n$(n)Init$(Init).npz", times = times,fids = fids, szzs_bmps = szzs_bmps, szzs_bp =szzs_bp)
+    npzwrite("/Users/jtindall/Files/Data/Pasqal/IsingChi$(chi)n$(n)Init$(init).npz", times = times,fids = fids, szzs_bmps = szzs_bmps, szzs_bp =szzs_bp)
 end
 
 main()

@@ -1,3 +1,5 @@
+using NamedGraphs: rem_edge!
+
 # Edge-induced no-leaf subgraph enumeration for the loop / linked-cluster expansion.
 #
 # This file is PURE GRAPH CODE: it never touches a tensor and operates only on a
@@ -81,6 +83,19 @@ function _esu_extend!(
     end
     return nothing
 end
+
+function edge_subgraph_safe(graph, edgelist)
+    vs = unique(vcat(src.(edgelist), dst.(edgelist)))
+    g = subgraph(graph, vs)
+    edgeset = Set(edgelist)
+    for e in edges(g)
+        if !(e ∈ edgeset || reverse(e) ∈ edgeset)
+            rem_edge!(g, e)
+        end
+    end
+    return g
+end
+
 
 """
     connected_edgeinduced_subgraphs_no_leaves(g, max_edges; anchor = nothing) -> Vector
@@ -173,5 +188,5 @@ function connected_edgeinduced_subgraphs_no_leaves(
             marked[u] = false
         end
     end
-    return [edge_subgraph(g, E[S]) for S in out]
+    return [edge_subgraph_safe(g, E[S]) for S in out]
 end
