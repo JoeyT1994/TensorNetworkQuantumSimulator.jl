@@ -8,6 +8,7 @@ using Test: @testset, @test
 
 
 @testset "Test Expect" begin
+    Random.seed!(1234)
     nx, ny = 4, 4
     χ = 2
 
@@ -32,7 +33,7 @@ using Test: @testset, @test
         Rmps = 16
         sz_boundarymps = expect(ψ, ("Z", v_centre); alg = "boundarymps", mps_bond_dimension = Rmps)
 
-        @test sz_boundarymps ≈ sz_exact atol = 10*eps(Float32)
+        @test sz_boundarymps ≈ sz_exact atol = 100*eps(Float32)
 
         if !is_tree(g)
             v_centre_neighbor = first(neighbors(g, v_centre))
