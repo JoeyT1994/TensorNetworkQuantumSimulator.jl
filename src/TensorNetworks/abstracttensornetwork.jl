@@ -1,5 +1,4 @@
 using Graphs: Graphs, has_vertex
-import .ITensorsITensorBaseCompat as ITensors
 using NamedGraphs: NamedGraphs
 using Adapt
 
@@ -21,22 +20,21 @@ NamedGraphs.edgetype(tn::AbstractTensorNetwork) = NamedGraphs.edgetype(graph(tn)
 NamedGraphs.vertextype(tn::AbstractTensorNetwork) = NamedGraphs.vertextype(graph(tn))
 NamedGraphs.steiner_tree(tn::AbstractTensorNetwork, vs) = NamedGraphs.steiner_tree(graph(tn), vs)
 
-virtualinds(tn::AbstractTensorNetwork, e::NamedEdge) = ITensors.commoninds(tn[src(e)], tn[dst(e)])
+virtualinds(tn::AbstractTensorNetwork, e::NamedEdge) = commoninds(tn[src(e)], tn[dst(e)])
 virtualind(tn::AbstractTensorNetwork, e::NamedEdge) = only(virtualinds(tn, e))
 
 function maxvirtualdim(tn::AbstractTensorNetwork)
-    return maximum(maximum.([dim.(virtualinds(tn, e)) for e in edges(tn)]))
+    return maximum(maximum.([length.(virtualinds(tn, e)) for e in edges(tn)]))
 end
 
-# Compare by name, not by `Index` equality: a shared graded link is stored nondual
-# on one endpoint and dual (conjugated) on the other, so the two `Index` objects
-# differ even though they name the same bond.
-function ITensors.uniqueinds(tn::AbstractTensorNetwork, v)
-    tv_inds = Index[i for i in inds(tn[v])]
+# `setdiff` is by-name (dual-insensitive), so a shared graded link, stored nondual on one
+# endpoint and dual on the other, is still excluded here.
+function uniqueinds(tn::AbstractTensorNetwork, v)
+    tv_inds = inds(tn[v])
     vns = neighbors(tn, v)
     isempty(vns) && return tv_inds
-    neighbor_names = reduce(vcat, [[name(i) for i in inds(tn[vn])] for vn in vns])
-    return filter(i -> name(i) ∉ neighbor_names, tv_inds)
+    neighbor_inds = reduce(vcat, [inds(tn[vn]) for vn in vns])
+    return setdiff(tv_inds, neighbor_inds)
 end
 
 function setindex_preserve!(tn::AbstractTensorNetwork, value::ITensor, vertex)
@@ -50,12 +48,12 @@ function Base.setindex!(tn::AbstractTensorNetwork, value::ITensor, vertex)
     return tn
 end
 
-function ITensors.scalartype(tn::AbstractTensorNetwork)
+function scalartype(tn::AbstractTensorNetwork)
     return mapreduce(v -> scalartype(tn[v]), promote_type, vertices(tn))
 end
 
-function ITensors.datatype(tn::AbstractTensorNetwork)
-    return mapreduce(v -> ITensors.datatype(tn[v]), promote_type, vertices(tn))
+function datatype(tn::AbstractTensorNetwork)
+    return mapreduce(v -> datatype(tn[v]), promote_type, vertices(tn))
 end
 
 function map_tensors!(f::Function, tn::AbstractTensorNetwork)
@@ -77,7 +75,7 @@ end
 function insert_virtualinds!(tn::AbstractTensorNetwork; bond_dimension::Integer = 1)
     dtype = datatype(tn)
     for e in edges(tn)
-        if isempty(ITensors.commoninds(tn[src(e)], tn[dst(e)]))
+        if isempty(commoninds(tn[src(e)], tn[dst(e)]))
             l = Index(bond_dimension)
             p = adapt(dtype)(onehot(l => 1))
             setindex_preserve!(tn, tn[src(e)] * p, src(e))
@@ -94,10 +92,10 @@ end
 
 function map_virtualinds!(f::Function, tn::AbstractTensorNetwork)
     for e in edges(tn)
-        vinds = ITensors.commoninds(tn[src(e)], tn[dst(e)])
-        vinds_sim = f(vinds)
-        setindex_preserve!(tn, ITensors.replaceinds(tn[src(e)], vinds, vinds_sim), src(e))
-        setindex_preserve!(tn, ITensors.replaceinds(tn[dst(e)], vinds, vinds_sim), dst(e))
+        vinds = commoninds(tn[src(e)], tn[dst(e)])
+        vinds_sim = f.(vinds)
+        setindex_preserve!(tn, replaceinds(tn[src(e)], (vinds .=> vinds_sim)...), src(e))
+        setindex_preserve!(tn, replaceinds(tn[dst(e)], (vinds .=> vinds_sim)...), dst(e))
     end
     return tn
 end
@@ -124,7 +122,7 @@ function add(tn1::AbstractTensorNetwork, tn2::AbstractTensorNetwork)
             es,
             [
                 Index(
-                        dim(only(virtualinds(tn1, e))) + dim(only(virtualinds(tn2, e))),
+                        length(only(virtualinds(tn1, e))) + length(only(virtualinds(tn2, e))),
                     ) for e in es
             ],
         ),
@@ -139,7 +137,7 @@ function add(tn1::AbstractTensorNetwork, tn2::AbstractTensorNetwork)
         tn12v_linkinds = Index[new_edge_indices[e] for e in es_v]
 
         setindex_preserve!(
-            tn12, ITensors.directsum(
+            tn12, directsum(
                 tn12v_linkinds,
                 tn1[v] => Tuple(tn1v_linkinds),
                 tn2[v] => Tuple(tn2v_linkinds)

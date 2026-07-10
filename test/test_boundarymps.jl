@@ -25,8 +25,8 @@ const TNQS = TensorNetworkQuantumSimulator
         ψ_BMPS = update(ψ_BMPS)
         @test isempty(TNQS.contraction_sequences(ψ_BMPS))
         z_bmps = partitionfunction(ψ_BMPS)
-        @test z_bmps ≈ contract(ψ; alg = "exact")
-        @test z_bmps ≈ contract(ψ; alg = "boundarymps", mps_bond_dimension = 4)
+        @test z_bmps ≈ contract_network(ψ; alg = "exact")
+        @test z_bmps ≈ contract_network(ψ; alg = "boundarymps", mps_bond_dimension = 4)
     end
 
     #BMPS Cache

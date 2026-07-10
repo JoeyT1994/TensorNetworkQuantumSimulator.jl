@@ -7,7 +7,7 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
 
         edge_ind = commoninds(ψvsrc, ψvdst)
         edge_ind_p = prime.(edge_ind)
-        edge_ind_sim = sim(edge_ind)
+        edge_ind_sim = sim.(edge_ind)
 
         # Hermitian square roots (and pseudo-inverse roots) of the two messages, as
         # operators with codomain on the unprimed and domain on the primed copies of the
@@ -27,19 +27,19 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         # Absorb the inverse roots through their domain legs: move the state's bond
         # indices onto the primed names so each pairs with its dual copy, and the
         # result comes back out on the unprimed (codomain) names.
-        ψvsrc = replaceinds(ψvsrc, edge_ind, edge_ind_p) * inv_rootX
-        ψvdst = replaceinds(ψvdst, edge_ind, edge_ind_p) * inv_rootY
+        ψvsrc = replaceinds(ψvsrc, (edge_ind .=> edge_ind_p)...) * inv_rootX
+        ψvdst = replaceinds(ψvdst, (edge_ind .=> edge_ind_p)...) * inv_rootY
 
         # Bond matrix: contract the codomain legs of the two roots (one from each side
         # of the edge, mutually dual). Its open legs are then dual to the state
         # tensors' bond legs, so the SVD factors below absorb without any flips.
-        Ce = rootX * replaceinds(rootY, edge_ind_p, edge_ind_sim)
+        Ce = rootX * replaceinds(rootY, (edge_ind_p .=> edge_ind_sim)...)
 
-        U, S, V = svd(Ce, edge_ind_p; kwargs...)
+        U, S, V = MAK.svd_compact(Ce, edge_ind_p; kwargs...)
         u, v = commoninds(S, U), commoninds(S, V)
 
-        ψvsrc = replaceinds(ψvsrc, edge_ind, edge_ind_p) * U
-        ψvdst = replaceinds(ψvdst, edge_ind, edge_ind_sim) * V
+        ψvsrc = replaceinds(ψvsrc, (edge_ind .=> edge_ind_p)...) * U
+        ψvdst = replaceinds(ψvdst, (edge_ind .=> edge_ind_sim)...) * V
 
         # Split the singular values symmetrically into both endpoints. `S`'s legs are
         # dual to the tensors' new bond legs on both sides, so these contract directly.
@@ -48,16 +48,16 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         ψvsrc = ψvsrc * sqrtS
         ψvdst = ψvdst * sqrtS
 
-        new_edge_ind = Index[ITensors.settags(only(v), tags(first(edge_ind)))]
-        ψvsrc = replaceinds(ψvsrc, v, new_edge_ind)
-        ψvdst = replaceinds(ψvdst, u, new_edge_ind)
+        new_edge_ind = Index[settags(only(v), tags(first(edge_ind)))]
+        ψvsrc = replaceinds(ψvsrc, (v .=> new_edge_ind)...)
+        ψvdst = replaceinds(ψvdst, (u .=> new_edge_ind)...)
         setindex_preserve!(bp_cache, ψvsrc, vsrc)
         setindex_preserve!(bp_cache, ψvdst, vdst)
 
         # The gauged network's messages are the singular values, with the unprimed leg
         # carrying the producing side's bond copy (the message convention).
-        setmessage!(bp_cache, e, replaceinds(S, [only(u), only(v)], [prime(only(new_edge_ind)), only(new_edge_ind)]))
-        setmessage!(bp_cache, reverse(e), replaceinds(S, [only(u), only(v)], [only(new_edge_ind), prime(only(new_edge_ind))]))
+        setmessage!(bp_cache, e, replaceinds(S, only(u) => prime(only(new_edge_ind)), only(v) => only(new_edge_ind)))
+        setmessage!(bp_cache, reverse(e), replaceinds(S, only(u) => only(new_edge_ind), only(v) => prime(only(new_edge_ind))))
     end
 
     return bp_cache

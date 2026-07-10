@@ -1,5 +1,5 @@
 function normalize_rdm(ρ::ITensor)
-    return ρ / ITensors.tr(ρ)
+    return ρ / tr(ρ, operator_inds(ρ)...)
 end
 
 """
@@ -32,11 +32,10 @@ function reduced_density_matrix(
         contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod()),
         normalize = true
     )
-    ITensors.disable_warn_order()
     op_string_f = v -> v ∈ verts ? "ρ" : "I"
     ρ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
     seq = contraction_sequence(ρ_tensors; contraction_sequence_kwargs...)
-    ρ = contract(ρ_tensors; sequence = seq)
+    ρ = contract_network(ρ_tensors; sequence = seq)
     if normalize
         ρ = normalize_rdm(ρ)
     end
@@ -59,7 +58,7 @@ function reduced_density_matrix(
     ρ_tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
     append!(ρ_tensors, incoming_ms)
     seq = contraction_sequence(ρ_tensors; alg = "optimal", prune_tensors = true)
-    ρ = contract(ρ_tensors; sequence = seq)
+    ρ = contract_network(ρ_tensors; sequence = seq)
 
     if normalize
         ρ = normalize_rdm(ρ)

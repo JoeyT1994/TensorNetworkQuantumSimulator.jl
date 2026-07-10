@@ -1,11 +1,16 @@
-# Vendored minimal operator / named-state system (legacy `ITensors.op` / `ITensors.state`), scoped to
-# the `S=1/2` single- and two-qubit gate set and the computational/Pauli-basis product states.
+# Operator / named-state system, scoped to the `S=1/2` single- and two-qubit gate set and the
+# computational/Pauli-basis product states, using the `OpName` / `SiteType` dispatch that gate
+# definitions (`Apply/gate_definitions.jl`) and user-registered gates extend.
 #
-# Legacy ITensors exposes these through the `OpName` / `SiteType` dispatch system. TNQS only ever
-# calls `op(name, sites...; kwargs...)` and `state(name, site)`, so this vendors a name-keyed lookup
-# over that machinery rather than reimplementing it.
+# `state` is called qualified (`Ops.state`) at call sites because ITensorBase also exports an
+# unrelated `state`, and the two do not extend each other.
+module Ops
 
-using TensorAlgebra: TensorAlgebra, project, tryproject
+using ITensorBase: ITensorBase, Index, id
+using TensorAlgebra: project
+using ..TensorNetworkQuantumSimulator: project_aux
+
+export state, op, OpName, SiteType, @OpName_str, @SiteType_str
 
 #
 # Named single-site states. `state(name, i)` returns the named state vector as an
@@ -22,32 +27,13 @@ const _STATE_VECTORS = Dict{String, Vector{ComplexF64}}(
 function state(name::AbstractString, i::Index)
     v = get(_STATE_VECTORS, name) do
         return error(
-            "unknown single-site state \"$name\" (vendored states: $(sort(collect(keys(_STATE_VECTORS)))))"
+            "unknown single-site state \"$name\" (states: $(sort(collect(keys(_STATE_VECTORS)))))"
         )
     end
     return state(v, i)
 end
-# Project a raw vector as a state `ITensor` over `i`, adding an auxiliary leg only when the
-# vector cannot live in the flux-zero space over `i` alone. The index axis selects the
-# backend (dense, graded, `TensorMap`). Shared by the state constructors and `onehot`.
-function project_aux(v::AbstractVector{<:Number}, i::Index)
-    length(v) == length(i) ||
-        error(
-        "state vector has dimension $(length(v)) but the site index has dimension $(length(i))"
-    )
-    ψ = tryproject(v, (i,))
-    isnothing(ψ) || return ψ
-    # The vector carries a charge under `i`'s grading (e.g. "Dn" on a U(1) site, or a
-    # one-hot on a graded link), so it can't live in the flux-zero space over `i` alone.
-    # Carry the charge on an explicit length-1 auxiliary leg: project with a trailing axis
-    # so the backend derives the leg's sector from the vector, then wrap the derived axis
-    # in a freshly named `Index`.
-    raw = project(reshape(v, (length(v), 1)), (unnamed(i),), ())
-    aux = Index(TensorAlgebra.axes(raw, 2))
-    return nameddims(raw, (ITensorBase.name(i), ITensorBase.name(aux)))
-end
 # Vector form (legacy `ITensor(v, i)` for a state vector): the state vector as an `ITensor`
-# over `i`.
+# over `i`, through the `project_aux` utility.
 state(v::AbstractVector{<:Number}, i::Index) = project_aux(v, i)
 
 #
@@ -113,7 +99,7 @@ const _GATE_MATRICES = Dict{String, Matrix{ComplexF64}}(
 function _gate_matrix(name::AbstractString; kwargs...)
     name in ("Rx", "Ry", "Rz", "P") || return get(_GATE_MATRICES, name) do
         return error(
-            "unknown single-site operator \"$name\" (vendored operators: $(sort(collect(keys(_GATE_MATRICES)))) plus Rx/Ry/Rz/P)"
+            "unknown single-site operator \"$name\" (operators: $(sort(collect(keys(_GATE_MATRICES)))) plus Rx/Ry/Rz/P)"
         )
     end
     if name == "Rx"
@@ -147,4 +133,6 @@ function op(::OpName"CPHASE", ::SiteType"S=1/2"; ϕ)
 end
 function op(::OpName"SWAP", ::SiteType"S=1/2")
     return Float64[1 0 0 0; 0 0 1 0; 0 1 0 0; 0 0 0 1]
+end
+
 end

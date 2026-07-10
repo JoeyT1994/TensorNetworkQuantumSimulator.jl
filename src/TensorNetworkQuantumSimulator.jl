@@ -1,9 +1,8 @@
 module TensorNetworkQuantumSimulator
 
 
-# Legacy `ITensors` / `ITensorMPS` API, provided over the ITensorBase backend. Included
-# before `imports.jl`, which aliases it as `ITensors` and imports the legacy names.
-include("ITensorsITensorBaseCompat/ITensorsITensorBaseCompat.jl")
+include("itensors.jl")
+include("Ops.jl")
 include("imports.jl")
 
 include("siteinds.jl")
@@ -93,7 +92,7 @@ export
     TensorNetworkState,
     AbstractTensorNetwork,
     partitionfunction,
-    contract,
+    contract_network,
     TreeSA,
     GreedyMethod,
     SABipartite,

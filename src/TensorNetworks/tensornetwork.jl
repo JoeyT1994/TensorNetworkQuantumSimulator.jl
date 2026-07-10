@@ -1,7 +1,5 @@
 using Dictionaries: Dictionary
 using Graphs: Graphs
-import .ITensorsITensorBaseCompat as ITensors
-using .ITensorsITensorBaseCompat: ITensor
 using NamedGraphs: NamedGraphs, add_edge!, incident_edges
 using NamedGraphs.GraphsExtensions: rem_edges!
 using Adapt
@@ -68,7 +66,7 @@ function add_tensor!(tn::TensorNetwork, tensor::ITensor, v)
 end
 
 function default_message(tn::TensorNetwork, edge::NamedEdge)
-    return adapt_like(tn, denseblocks(delta(virtualinds(tn, edge))))
+    return adapt_like(tn, delta(virtualinds(tn, edge)))
 end
 
 function bp_factors(tn::TensorNetwork, vertex)
@@ -86,7 +84,7 @@ function random_tensornetwork(eltype, g::AbstractGraph; bond_dimension::Integer 
     tensors = Dictionary{vertextype(g), ITensor}()
     for v in vs
         is = [l[NamedEdge(v => vn)] for vn in neighbors(g, v)]
-        set!(tensors, v, random_itensor(eltype, is))
+        set!(tensors, v, randn(eltype, is...))
     end
     return TensorNetwork(tensors, g)
 end

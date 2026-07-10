@@ -6,8 +6,8 @@ abstract type AbstractForm{V} <: AbstractTensorNetwork{V} end
 #Forward onto the ket
 for f in [
         :(graph),
-        :(ITensors.datatype),
-        :(ITensors.scalartype),
+        :(datatype),
+        :(scalartype),
         :(NamedGraphs.edgeinduced_subgraphs_no_leaves),
     ]
     @eval begin
@@ -23,8 +23,8 @@ end
 
 function default_message(form::AbstractForm, edge::AbstractEdge)
     cod = virtualinds(ket(form), edge)
-    dom = dag.(bra_virtualinds(form, edge))
-    return one(similar_map(ket(form)[src(edge)], cod, dom), cod, dom)
+    dom = conj.(bra_virtualinds(form, edge))
+    return one(similar(ket(form)[src(edge)], cod, dom), cod, dom)
 end
 
 function bp_factors(form::AbstractForm, verts::Vector)

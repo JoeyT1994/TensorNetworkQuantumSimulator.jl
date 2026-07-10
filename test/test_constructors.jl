@@ -3,12 +3,10 @@ using Dictionaries: Dictionary
 using ITensorBase: Index, inds
 using Random
 using TensorNetworkQuantumSimulator
-# `random_itensor` / `contract` come from TNQS; alias TNQS as `ITensors` so the
-# `ITensors.`-qualified legacy calls resolve. `dag` and `prime` are TNQS-owned compat
-# (`prime` extends ITensorBase's to whole tensors / index collections, which
-# `map_virtualinds` needs); `inds` is ITensorBase's.
-import TensorNetworkQuantumSimulator as ITensors
-using TensorNetworkQuantumSimulator: dag, prime
+# `contract` is TNQS-owned; reach it via the `TNQS` alias. `prime`, `inds`, and `randn`
+# (over `Index`es) are ITensorBase's; `conj` is `Base`.
+const TNQS = TensorNetworkQuantumSimulator
+using TensorNetworkQuantumSimulator: prime
 using Test: @testset, @test, @test_throws
 
 
@@ -17,7 +15,7 @@ using Test: @testset, @test, @test_throws
 
     #TensorNetwork construction from tensors
     i, j, k, l = Index(2), Index(2), Index(2), Index(2)
-    A, B, C, D = ITensors.random_itensor(i, j), ITensors.random_itensor(j, k), ITensors.random_itensor(k, l), ITensors.random_itensor(l, i)
+    A, B, C, D = randn(i, j), randn(j, k), randn(k, l), randn(l, i)
     t = TensorNetwork([A, B, C, D])
     @test t isa TensorNetwork
     @test scalartype(t) == eltype(A)
@@ -36,9 +34,9 @@ using Test: @testset, @test, @test_throws
         @test maxvirtualdim(ψ) == 3
         @test all([length(inds(ψ[v])) == degree(g, v) for v in vertices(ψ)])
 
-        ψdag = map_virtualinds(prime, map_tensors(dag, ψ))
+        ψdag = map_virtualinds(prime, map_tensors(conj, ψ))
         @test ψdag isa TensorNetwork
-        @test ITensors.contract(ψdag; alg = "exact") ≈ conj(ITensors.contract(ψ; alg = "exact"))
+        @test TNQS.contract_network(ψdag; alg = "exact") ≈ conj(TNQS.contract_network(ψ; alg = "exact"))
 
         v = first(vertices(g))
         rem_vertex!(ψ, v)

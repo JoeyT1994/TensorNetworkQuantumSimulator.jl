@@ -69,26 +69,6 @@ function with_default_maxiter(cache_update_kwargs, cache)
     return (; cache_update_kwargs..., maxiter)
 end
 
-"""
-    safe_eigen(m::ITensor, args...; kwargs...)
-    A wrapper around ITensors.eigen that ensures eigen computations are done in Float64/ComplexF64 precision on CPU for better numerical stability.
-"""
-function safe_eigen(m::ITensor, args...; kwargs...)
-    dtype = datatype(m)
-    e = eltype(m)
-    if e == ComplexF64 || e == Float64
-        return ITensors.eigen(m, args...; kwargs...)
-    elseif e == Float32
-        m = adapt(Vector{Float64}, m)
-        D, U = ITensors.eigen(m, args...; kwargs...)
-        return adapt(dtype)(D), adapt(dtype)(U)
-    elseif e == ComplexF32
-        m = adapt(Vector{ComplexF64}, m)
-        D, U = ITensors.eigen(m, args...; kwargs...)
-        return adapt(dtype)(D), adapt(dtype)(U)
-    end
-end
-
 collect_vertices(e::NamedEdge, g::NamedGraph) = collect_vertices([src(e), dst(e)], g)
 
 collect_vertices(es::Vector{<:NamedEdge}, g::NamedGraph) = reduce(vcat, [collect_vertices(e, g) for e in es])

@@ -1,5 +1,4 @@
 using TensorNetworkQuantumSimulator
-using TensorNetworkQuantumSimulator: ITensors
 
 using LinearAlgebra: norm
 

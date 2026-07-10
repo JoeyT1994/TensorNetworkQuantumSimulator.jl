@@ -1,5 +1,4 @@
 using KrylovKit: linsolve
-using .ITensorsITensorBaseCompat: namesetdiff
 
 """
     full_update(o::ITensor, ψ::TensorNetworkState, v⃗; envs, kwargs...)
@@ -19,14 +18,14 @@ function full_update(
         apply_kwargs...,
     )
 
-    Qᵥ₁, Rᵥ₁ = factorize(
-        ψ[v⃗[1]], uniqueinds(uniqueinds(ψ[v⃗[1]], ψ[v⃗[2]]), uniqueinds(ψ, v⃗[1]))
+    Qᵥ₁, Rᵥ₁ = MAK.left_orth(
+        ψ[v⃗[1]], setdiff(uniqueinds(ψ[v⃗[1]], ψ[v⃗[2]]), uniqueinds(ψ, v⃗[1]))
     )
-    Qᵥ₂, Rᵥ₂ = factorize(
-        ψ[v⃗[2]], uniqueinds(uniqueinds(ψ[v⃗[2]], ψ[v⃗[1]]), uniqueinds(ψ, v⃗[2]))
+    Qᵥ₂, Rᵥ₂ = MAK.left_orth(
+        ψ[v⃗[2]], setdiff(uniqueinds(ψ[v⃗[2]], ψ[v⃗[1]]), uniqueinds(ψ, v⃗[2]))
     )
 
-    extended_envs = vcat(envs, Qᵥ₁, prime(dag(Qᵥ₁)), Qᵥ₂, prime(dag(Qᵥ₂)))
+    extended_envs = vcat(envs, Qᵥ₁, prime(conj(Qᵥ₁)), Qᵥ₂, prime(conj(Qᵥ₂)))
     Rᵥ₁, Rᵥ₂ = optimise_p_q(
         Rᵥ₁,
         Rᵥ₂,
@@ -41,16 +40,16 @@ function full_update(
         M = Rᵥ₁ * Rᵥ₂
         codomain = inds(Rᵥ₁)
         # Balanced SVD: split the singular values symmetrically (√S into each factor).
-        U, S, V = svd_trunc(M, codomain; trunc = itensor_trunc(; apply_kwargs...))
+        U, S, V, ϵ = MAK.svd_trunc(M, codomain; trunc = itensor_trunc(; apply_kwargs...))
         u = only(commoninds(U, S))
         v = only(commoninds(S, V))
         sqrtS = sqrth_safe(S, (u,), (v,); atol = 0, rtol = 0)
-        Rᵥ₁, Rᵥ₂ = U * replaceind(sqrtS, v, prime(u)), replaceind(sqrtS, u, prime(u)) * V
-        # Best-effort truncation error from norms; suffers catastrophic cancellation when little is
-        # discarded. TODO: expose MatrixAlgebraKit's `ϵ` from `ITensorBase.svd_trunc` and use it here.
-        total = abs2(norm(M))
-        truncation_error = iszero(total) ? zero(real(scalartype(M))) :
-            max(zero(real(scalartype(M))), 1 - abs2(norm(S)) / total)
+        Rᵥ₁, Rᵥ₂ = U * replaceinds(sqrtS, v => prime(u)), replaceinds(sqrtS, u => prime(u)) * V
+        # Relative squared truncation error, from MatrixAlgebraKit's exact discarded-weight `ϵ`
+        # (the 2-norm of the discarded singular values) rather than the cancellation-prone
+        # `1 - ‖S‖²/‖M‖²` norm subtraction.
+        total = norm(M)
+        truncation_error = iszero(total) ? zero(real(scalartype(M))) : (ϵ / total)^2
         callback(; singular_values = S, truncation_error)
     end
     ψᵥ₁ = Qᵥ₁ * Rᵥ₁
@@ -67,44 +66,44 @@ function fidelity(
         q_prev::ITensor,
         gate::ITensor,
     )
-    p_sind, q_sind = commonind(p_cur, gate), commonind(q_cur, gate)
+    p_sind, q_sind = trycommonind(p_cur, gate), trycommonind(q_cur, gate)
     p_sind_sim, q_sind_sim = sim(p_sind), sim(q_sind)
     gate_sq =
-        gate * replaceinds(dag(gate), Index[p_sind, q_sind], Index[p_sind_sim, q_sind_sim])
+        gate * replaceinds(conj(gate), p_sind => p_sind_sim, q_sind => q_sind_sim)
     term1_tns = vcat(
         [
             p_prev,
             q_prev,
-            replaceind(prime(dag(p_prev)), prime(p_sind), p_sind_sim),
-            replaceind(prime(dag(q_prev)), prime(q_sind), q_sind_sim),
+            replaceinds(prime(conj(p_prev)), prime(p_sind) => p_sind_sim),
+            replaceinds(prime(conj(q_prev)), prime(q_sind) => q_sind_sim),
             gate_sq,
         ],
         envs,
     )
     sequence = contraction_sequence(term1_tns; alg = "optimal")
-    term1 = ITensors.contract(term1_tns; sequence)
+    term1 = contract_network(term1_tns; sequence)
 
     term2_tns = vcat(
         [
             p_cur,
             q_cur,
-            replaceind(prime(dag(p_cur)), prime(p_sind), p_sind),
-            replaceind(prime(dag(q_cur)), prime(q_sind), q_sind),
+            replaceinds(prime(conj(p_cur)), prime(p_sind) => p_sind),
+            replaceinds(prime(conj(q_cur)), prime(q_sind) => q_sind),
         ],
         envs,
     )
     sequence = contraction_sequence(term2_tns; alg = "optimal")
-    term2 = ITensors.contract(term2_tns; sequence)
-    term3_tns = vcat([p_prev, q_prev, prime(dag(p_cur)), prime(dag(q_cur)), gate], envs)
+    term2 = contract_network(term2_tns; sequence)
+    term3_tns = vcat([p_prev, q_prev, prime(conj(p_cur)), prime(conj(q_cur)), gate], envs)
     sequence = contraction_sequence(term3_tns; alg = "optimal")
-    term3 = ITensors.contract(term3_tns; sequence)
+    term3 = contract_network(term3_tns; sequence)
 
     f = scalar(term3) / sqrt(scalar(term1) * scalar(term2))
     return f * conj(f)
 end
 
 """Do Full Update Sweeping, Optimising the tensors p and q in the presence of the environments envs,
-Specifically this functions find the p_cur and q_cur which optimise envs*gate*p*q*dag(prime(p_cur))*dag(prime(q_cur))"""
+Specifically this functions find the p_cur and q_cur which optimise envs*gate*p*q*conj(prime(p_cur))*conj(prime(q_cur))"""
 function optimise_p_q(
         p::ITensor,
         q::ITensor,
@@ -115,30 +114,34 @@ function optimise_p_q(
         envisposdef = true,
         apply_kwargs...,
     )
-    p_cur, q_cur = factorize(
-        apply(o, p * q), inds(p); tags = tags(commonind(p, q)), apply_kwargs...
+    pq = apply(o, p * q)
+    p_cur, q_cur = MAK.left_orth(
+        pq, intersect(inds(pq), inds(p)); trunc = itensor_trunc(; apply_kwargs...)
     )
+    b = only(commoninds(p_cur, q_cur))
+    bnew = settags(b, tags(trycommonind(p, q)))
+    p_cur, q_cur = replaceinds(p_cur, b => bnew), replaceinds(q_cur, b => bnew)
 
     fstart = print_fidelity_loss ? fidelity(envs, p_cur, q_cur, p, q, o) : 0
 
-    qs_ind = namesetdiff(inds(q_cur), collect(Iterators.flatten(inds.(vcat(envs, p_cur)))))
-    ps_ind = namesetdiff(inds(p_cur), collect(Iterators.flatten(inds.(vcat(envs, q_cur)))))
+    qs_ind = setdiff(inds(q_cur), collect(Iterators.flatten(inds.(vcat(envs, p_cur)))))
+    ps_ind = setdiff(inds(p_cur), collect(Iterators.flatten(inds.(vcat(envs, q_cur)))))
 
     function b(p::ITensor, q::ITensor, o::ITensor, envs::Vector{ITensor}, r::ITensor)
-        ts = vcat(ITensor[p, q, o, dag(prime(r))], envs)
+        ts = vcat(ITensor[p, q, o, conj(prime(r))], envs)
         sequence = contraction_sequence(ts; alg = "optimal")
-        return noprime(ITensors.contract(ts; sequence))
+        return noprime(contract_network(ts; sequence))
     end
 
     function M_p(envs::Vector{ITensor}, p_q_tensor::ITensor, s_ind, apply_tensor::ITensor)
         ts = vcat(
             ITensor[
-                p_q_tensor, replaceinds(prime(dag(p_q_tensor)), prime(s_ind), s_ind), apply_tensor,
+                p_q_tensor, replaceinds(prime(conj(p_q_tensor)), (prime.(s_ind) .=> s_ind)...), apply_tensor,
             ],
             envs,
         )
         sequence = contraction_sequence(ts; alg = "optimal")
-        return noprime(ITensors.contract(ts; sequence))
+        return noprime(contract_network(ts; sequence))
     end
     for i in 1:nfullupdatesweeps
         b_vec = b(p, q, o, envs, q_cur)

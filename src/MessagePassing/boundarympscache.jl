@@ -39,7 +39,7 @@ end
 default_message_update_alg(bmps_cache::BoundaryMPSCache) = default_bmps_message_update_alg(network(bmps_cache))
 
 default_normalize(alg::Algorithm"fitting") = true
-default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(ITensors.scalartype(bmps_cache))
+default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(scalartype(bmps_cache))
 _default_boundarymps_update_niters = 50
 function set_default_kwargs(alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache)
     normalize = get(alg.kwargs, :normalize, default_normalize(alg))
@@ -133,8 +133,8 @@ function virtual_index_dimension(
     inds_above = collect(Iterators.flatten(virtualinds.((bmps_cache,), edges_above(bmps_cache, lower_e))))
     inds_below = collect(Iterators.flatten(virtualinds.((bmps_cache,), edges_below(bmps_cache, upper_e))))
 
-    x1 = prod(Float64.(dim.(inds_above)))
-    x2 = prod(Float64.(dim.(inds_below)))
+    x1 = prod(Float64.(length.(inds_above)))
+    x2 = prod(Float64.(length.(inds_below)))
     if network(bmps_cache) isa TensorNetworkState
         return Int(minimum((x1 * x1, x2 * x2, Float64(mps_bond_dimension(bmps_cache)))))
     else
@@ -195,12 +195,12 @@ function set_interpartition_messages!(
             # The stitching leg is minted trivial (all weight in the charge-0 sector)
             # so it follows the messages' backend; the all-ones filling matches the
             # legacy dense `delta(ind)`.
-            ind = ITensors.settags(Index(trivialrange(unnamed(first(inds(m1))), virt_dim)), "m$(i)$(i + 1)")
+            ind = settags(trivialrange(first(inds(m1)), virt_dim), "m" => "$(i)$(i + 1)")
             t = fill!(similar(m1, (ind,)), true)
             # The two copies of the stitching leg contract against each other along the
             # message MPS, so one side takes the conjugate.
             setmessage!(bmps_cache, es[i], m1 * t)
-            setmessage!(bmps_cache, es[i + 1], m2 * dag(t))
+            setmessage!(bmps_cache, es[i + 1], m2 * conj(t))
         end
     end
     return bmps_cache
@@ -210,8 +210,8 @@ end
 function switch_message!(bmps_cache::BoundaryMPSCache, e::NamedEdge)
     ms = messages(bmps_cache)
     me, mer = message(bmps_cache, e), message(bmps_cache, reverse(e))
-    set!(ms, e, dag(mer))
-    set!(ms, reverse(e), dag(me))
+    set!(ms, e, conj(mer))
+    set!(ms, reverse(e), conj(me))
     return bmps_cache
 end
 
@@ -282,7 +282,7 @@ function gauge_step!(
     m1, m2 = message(bmps_cache, e1), message(bmps_cache, e2)
     @assert !isempty(commoninds(m1, m2))
     left_inds = uniqueinds(m1, m2)
-    m1, Y = factorize(m1, left_inds; ortho = "left", kwargs...)
+    m1, Y = MAK.left_orth(m1, left_inds; trunc = itensor_trunc(; kwargs...))
     m2 = m2 * Y
     setmessage!(bmps_cache, e1, m1)
     setmessage!(bmps_cache, e2, m2)
@@ -308,7 +308,7 @@ function inserter!(
         update_e::NamedEdge,
         m::ITensor
     )
-    setmessage!(bmps_cache, reverse(update_e), dag(m))
+    setmessage!(bmps_cache, reverse(update_e), conj(m))
     return bmps_cache
 end
 
@@ -430,7 +430,10 @@ function generic_apply(
         end
 
         keep = left_link === nothing ? Index[site...] : Index[site..., left_link]
-        L, R = factorize(T, keep...; ortho = "left", cutoff, maxdim, tags = "Link,l=$i")
+        L, R = MAK.left_orth(T, keep; trunc = itensor_trunc(; cutoff, maxdim))
+        b = only(commoninds(L, R))
+        bnew = settags(b, "link" => "$i")
+        L, R = replaceinds(L, b => bnew), replaceinds(R, b => bnew)
         push!(out, L)
         carry = R
         left_link = only(commoninds(L, R))
@@ -441,7 +444,10 @@ function generic_apply(
     # Back sweep: right-to-left SVD recompression (optimal truncation of the forward result).
     for i in length(out):-1:2
         bond = only(commoninds(out[i - 1], out[i]))
-        L, R = factorize(out[i], bond; ortho = "right", cutoff, maxdim, tags = "Link,l=$(i - 1)")
+        L, R = MAK.right_orth(out[i], [bond]; trunc = itensor_trunc(; cutoff, maxdim))
+        b = only(commoninds(L, R))
+        bnew = settags(b, "link" => "$(i - 1)")
+        L, R = replaceinds(L, b => bnew), replaceinds(R, b => bnew)
         out[i] = R
         out[i - 1] *= L
     end
@@ -647,7 +653,7 @@ function path_contract(
             m != nothing && push!(contract_list, m)
 
             sequence = contraction_sequence(contract_list; alg = "optimal")
-            m = contract(contract_list; sequence)
+            m = contract_network(contract_list; sequence)
             prev_edge = e
         end
 
@@ -656,13 +662,13 @@ function path_contract(
         append!(contract_list, incoming_ms)
         push!(contract_list, m)
         sequence = contraction_sequence(contract_list; alg = "optimal")
-        numer = contract(contract_list; sequence)
+        numer = contract_network(contract_list; sequence)
     else
         contract_list = norm_factors(network(cache), vs; op_strings = op_string_f)
         incoming_ms = incoming_messages(cache, only(vs))
         append!(contract_list, incoming_ms)
         sequence = contraction_sequence(contract_list; alg = "optimal")
-        numer = contract(contract_list; sequence)
+        numer = contract_network(contract_list; sequence)
     end
 
     return numer, denom

@@ -24,7 +24,7 @@ function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
     state = bp_factors(bp_cache, vertex)
     contract_list = [state; incoming_ms]
     sequence = contraction_sequence(contract_list; alg = "optimal")
-    return scalar(contract(contract_list; sequence))
+    return scalar(contract_network(contract_list; sequence))
 end
 
 function edge_scalar(
@@ -41,8 +41,8 @@ for f in [
         :(bp_factors),
         :(default_bp_maxiter),
         :(virtualinds),
-        :(ITensors.datatype),
-        :(ITensors.scalartype),
+        :(datatype),
+        :(scalartype),
         :(maxvirtualdim),
         :(default_message),
         :(siteinds),
@@ -177,7 +177,7 @@ function updated_message(
         sequence = contraction_sequence(contract_list; alg = alg.kwargs.sequence_alg)
         seq_changed = true
     end
-    updated_message = contract(contract_list; sequence)
+    updated_message = contract_network(contract_list; sequence)
 
     if alg.kwargs.normalize
         message_norm = sum(updated_message)

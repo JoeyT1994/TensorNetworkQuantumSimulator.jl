@@ -46,26 +46,12 @@ using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_grap
 
 using TensorOperations
 
-# Legacy `ITensors` / `ITensorMPS` API, republished over the ITensorBase backend by the
-# `ITensorsITensorBaseCompat` submodule (included before this file). It is aliased as
-# `ITensors` so existing `ITensors.foo` call sites and `function ITensors.foo`
-# extensions keep working unchanged, and its legacy names are imported for unqualified
-# use. Each source file keeps its own `import`/`using` of this module exactly where it
-# referenced `ITensors`, so the per-file imports mirror the original ITensors-based code.
-import .ITensorsITensorBaseCompat as ITensors
-using .ITensorsITensorBaseCompat:
-    inds, commoninds, commonind, uniqueinds, noncommonind, noncommoninds, unioninds, hascommoninds, cat_inds,
-    sim, dag, prime, noprime, replaceind, replaceinds, dim, swapind,
-    itensor, random_itensor, scalar, delta, similar_map, onehot,
-    qr, svd, svd_trunc, eigen, factorize, itensor_trunc,
-    scalartype, datatype, array, data,
-    denseblocks, dense, hasqns,
-    contract, inner, apply,
-    directsum, disable_warn_order,
-    Algorithm, @Algorithm_str,
-    hastags,
-    state, op, OpName, SiteType, @OpName_str, @SiteType_str
-using ITensorBase: ITensorBase, Index, ITensor, name, plev, tags, unnamed
+# TNQS-owned operator / named-state system. `op`/`state` are called qualified (`Ops.op`,
+# `Ops.state`) so `state` does not clash with the unrelated `ITensorBase.state`, and gates
+# are registered by extending `Ops.op`. The types and string macros are imported for
+# unqualified use (gate definitions dispatch on bare `OpName"…"` / `SiteType"…"`).
+using .Ops: OpName, SiteType, @OpName_str, @SiteType_str
+using ITensorBase: ITensorBase, Index, ITensor, name, noprime, plev, prime, tags, unnamed
 using TensorAlgebra: trivialrange
 using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe, sqrth_safe
 using MatrixAlgebraKit: project_hermitian
