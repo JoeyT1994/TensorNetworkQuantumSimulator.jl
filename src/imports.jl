@@ -51,8 +51,12 @@ using TensorOperations
 # are registered by extending `Ops.op`. The types and string macros are imported for
 # unqualified use (gate definitions dispatch on bare `OpName"…"` / `SiteType"…"`).
 using .Ops: OpName, SiteType, @OpName_str, @SiteType_str
-using ITensorBase: ITensorBase, Index, ITensor, name, noprime, plev, prime, tags, unnamed
-using TensorAlgebra: trivialrange
+using ITensorBase: ITensorBase, Index, ITensor, commonind, commoninds, hascommoninds, name,
+    noprime, plev, prime, replaceinds, settags, sim, tags, trycommonind, trynoncommonind, unnamed
+import ITensorBase: uniqueinds
+using TensorAlgebra: trivialrange, matricize, scalar
+import TensorAlgebra: datatype
+import Base: truncate
 using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe, sqrth_safe
 using MatrixAlgebraKit: project_hermitian
 

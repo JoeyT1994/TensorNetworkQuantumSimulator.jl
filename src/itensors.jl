@@ -1,16 +1,11 @@
 # TNQS-owned tensor utilities and the legacy `ITensors.jl`-style API, implemented over the
 # next-gen `ITensorBase` / `TensorAlgebra` / `MatrixAlgebraKit` stack.
 
-import Base: truncate
-import ITensorBase: scalartype, uniqueinds
 import MatrixAlgebraKit as MAK
-import TensorAlgebra: datatype
 using Adapt: Adapt
-using ITensorBase: ITensorBase, AbstractITensor, ITensor, Index, NamedUnitRange, commonind, commoninds,
-    dimnames, hascommoninds, id, inds, name, nameddims, noncommoninds, noprime, plev, prime,
-    replaceinds, settags, sim, tags, trycommonind, trynoncommonind, unioninds, unnamed
-using LinearAlgebra: LinearAlgebra
-using TensorAlgebra: TensorAlgebra, matricize, project, scalar, tryproject
+using ITensorBase: ITensorBase, AbstractITensor, Index, NamedUnitRange, dimnames, inds, name,
+    nameddims, noprime, plev, prime, unnamed
+using TensorAlgebra: TensorAlgebra, project, tryproject
 
 function project_aux(v::AbstractVector{<:Number}, i::Index)
     length(v) == length(i) ||

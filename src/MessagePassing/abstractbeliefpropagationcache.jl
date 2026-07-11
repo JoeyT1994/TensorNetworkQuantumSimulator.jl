@@ -42,7 +42,7 @@ for f in [
         :(default_bp_maxiter),
         :(virtualinds),
         :(datatype),
-        :(scalartype),
+        :(VectorInterface.scalartype),
         :(maxvirtualdim),
         :(default_message),
         :(siteinds),

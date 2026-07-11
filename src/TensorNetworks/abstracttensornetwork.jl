@@ -1,6 +1,7 @@
 using Graphs: Graphs, has_vertex
 using NamedGraphs: NamedGraphs
 using Adapt
+using VectorInterface: VectorInterface, scalartype
 
 abstract type AbstractTensorNetwork{V} <: AbstractNamedGraph{V} end
 
@@ -48,7 +49,7 @@ function Base.setindex!(tn::AbstractTensorNetwork, value::ITensor, vertex)
     return tn
 end
 
-function scalartype(tn::AbstractTensorNetwork)
+function VectorInterface.scalartype(tn::AbstractTensorNetwork)
     return mapreduce(v -> scalartype(tn[v]), promote_type, vertices(tn))
 end
 
