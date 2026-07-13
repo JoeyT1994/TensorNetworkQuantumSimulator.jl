@@ -13,7 +13,7 @@ function project_aux(v::AbstractVector{<:Number}, i::Index)
     )
     ψ = tryproject(v, (i,))
     isnothing(ψ) || return ψ
-    raw = project(reshape(v, (length(v), 1)), (unnamed(i),), ())
+    raw = project(reshape(v, (length(v), 1)), (space(i),), ())
     aux = Index(TensorAlgebra.axes(raw, 2))
     return ITensor(raw, (i, aux))
 end
@@ -87,7 +87,7 @@ adapt_scalartype(T::Type) = Adapt.adapt(ScalarTypeAdaptor(T))
 adapt_scalartype(T::Type, x) = Adapt.adapt(ScalarTypeAdaptor(T), x)
 function Adapt.adapt_structure(::ScalarTypeAdaptor{elt}, T::ITensor) where {elt}
     eltype(T) === elt && return T
-    return ITensor(convert(AbstractArray{elt}, unnamed(T)), ITensorBase.dimnames(T))
+    return ITensor(convert(AbstractArray{elt}, unnamed(T)), inds(T))
 end
 
 function directsum(out_inds, pairs::Pair...)
