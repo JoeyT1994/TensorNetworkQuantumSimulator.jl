@@ -3,8 +3,7 @@
 
 import MatrixAlgebraKit as MAK
 using Adapt: Adapt
-using ITensorBase: ITensorBase, AbstractITensor, Index, NamedUnitRange, dimnames, inds, name,
-    nameddims, noprime, plev, prime, unnamed
+using ITensorBase: ITensorBase, ITensor, Index, inds, noprime, plev, prime, space, unnamed
 using TensorAlgebra: TensorAlgebra, project, tryproject
 
 function project_aux(v::AbstractVector{<:Number}, i::Index)
@@ -16,7 +15,7 @@ function project_aux(v::AbstractVector{<:Number}, i::Index)
     isnothing(ψ) || return ψ
     raw = project(reshape(v, (length(v), 1)), (unnamed(i),), ())
     aux = Index(TensorAlgebra.axes(raw, 2))
-    return nameddims(raw, (ITensorBase.name(i), ITensorBase.name(aux)))
+    return ITensor(raw, (i, aux))
 end
 
 function onehot(eltype::Type, (i, p)::Pair{<:Index})
@@ -55,11 +54,8 @@ function diagonaltensor(diag::AbstractVector, ax::Tuple{Vararg{AbstractUnitRange
     diagview(a) .= diag
     return a
 end
-function diagonaltensor(
-        diag::AbstractVector,
-        is::Tuple{NamedUnitRange, Vararg{NamedUnitRange}}
-    )
-    return nameddims(diagonaltensor(diag, unnamed.(is)), name.(is))
+function diagonaltensor(diag::AbstractVector, is::Tuple{Index, Vararg{Index}})
+    return ITensor(diagonaltensor(diag, space.(is)), is)
 end
 
 delta(eltype::Type, is::Tuple) = diagonaltensor(ones(eltype, minimum(length, is)), is)
@@ -71,12 +67,12 @@ delta(is::AbstractVector{<:Index}) = delta(Float64, Tuple(is))
 
 # The codomain/domain bipartition of an operator tensor: each plev-0 index paired with its
 # prime. Viewing the operator as this square map is what `tr` factors through.
-function operator_inds(a::AbstractITensor)
+function operator_inds(a::ITensor)
     domain = filter(i -> plev(i) == 0, inds(a))
     return prime.(domain), domain
 end
 
-apply(o::AbstractITensor, ψ::AbstractITensor) = noprime(o * ψ)
+apply(o::ITensor, ψ::ITensor) = noprime(o * ψ)
 
 function itensor_trunc(; maxdim = nothing, cutoff = nothing)
     trunc = MAK.notrunc()
@@ -89,9 +85,9 @@ struct ScalarTypeAdaptor{T} end
 ScalarTypeAdaptor(T::Type) = ScalarTypeAdaptor{T}()
 adapt_scalartype(T::Type) = Adapt.adapt(ScalarTypeAdaptor(T))
 adapt_scalartype(T::Type, x) = Adapt.adapt(ScalarTypeAdaptor(T), x)
-function Adapt.adapt_structure(::ScalarTypeAdaptor{elt}, T::AbstractITensor) where {elt}
+function Adapt.adapt_structure(::ScalarTypeAdaptor{elt}, T::ITensor) where {elt}
     eltype(T) === elt && return T
-    return nameddims(convert(AbstractArray{elt}, unnamed(T)), ITensorBase.dimnames(T))
+    return ITensor(convert(AbstractArray{elt}, unnamed(T)), ITensorBase.dimnames(T))
 end
 
 function directsum(out_inds, pairs::Pair...)
