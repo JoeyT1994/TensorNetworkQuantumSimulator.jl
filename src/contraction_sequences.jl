@@ -1,37 +1,19 @@
-using TensorOperations: TensorOperations, optimaltree
-using OMEinsumContractionOrders: OMEinsumContractionOrders, optimize_code, EinCode, NestedEinsum, TreeSA, GreedyMethod, SABipartite, Treewidth, ExactTreewidth, HyperND
+using OMEinsumContractionOrders: OMEinsumContractionOrders, optimize_code, EinCode, NestedEinsum, TreeSA, GreedyMethod, SABipartite, Treewidth, ExactTreewidth, HyperND, ExhaustiveSearch
 
-# `optimaltree` (TensorOperations) bugs on fully-trivial tensors (every leg dimension 1).
-# Such a tensor contributes only unit-cost factors to any contraction, so we drop its
-# indices from the optimization network, leaving an empty index set in its positional slot
-# so the returned sequence still indexes the original tensor list. Only the index sets feed
-# `optimaltree`; the tensors themselves are never contracted here (the caller contracts the
-# untouched originals), so no placeholder tensor is needed.
-is_trivial_tensor(t::ITensor) = all(i -> length(i) == 1, inds(t))
-
-# The sequence optimizers use indices as opaque labels (plus their dimension). `Index`
-# equality is name-based, so a shared leg matches across its two tensors even when it is
-# stored nondual on one and dual on the other under a graded backend.
-function contraction_network(tensors::Vector{<:ITensor}; prune_tensors = false)
-    return map(tensors) do t
-        is = inds(t)
-        (prune_tensors && is_trivial_tensor(t)) ? empty(is) : is
-    end
-end
-
-function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:ITensor}; prune_tensors = false)
-    network = contraction_network(tensors; prune_tensors)
-    #Converting dims to Float64 to minimize overflow issues
-    inds_to_dims = Dict(i => Float64(length(i)) for t in tensors for i in inds(t))
-    seq, _ = optimaltree(network, inds_to_dims)
-    seq = typeof(seq) <: Int ? [seq] : seq
-    return seq
+# The exact "optimal" contraction order (Pfeifer 2014 netcon) is provided by
+# OMEinsumContractionOrders' `ExhaustiveSearch` optimizer, which ported this routine from
+# TensorOperations. It handles trivial 1-/2-tensor inputs directly, so the previous
+# trivial-tensor pruning and scalar-`Int` workarounds are no longer needed.
+function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:ITensor})
+    return contraction_sequence(Algorithm("omeinsum"), tensors; optimizer = ExhaustiveSearch())
 end
 
 function contraction_sequence(::Algorithm"omeinsum", tensors::Vector{<:ITensor}; optimizer = TreeSA())
     code, size_dict = to_eincode(tensors)
     optcode = optimize_code(code, size_dict, optimizer)
-    return to_contraction_sequence(optcode)
+    seq = to_contraction_sequence(optcode)
+    #A single-tensor network optimizes to a lone leaf; wrap it so a Vector is always returned.
+    return seq isa Integer ? [seq] : seq
 end
 
 function contraction_sequence(tensors::Vector{<:ITensor}; alg = "optimal", kwargs...)

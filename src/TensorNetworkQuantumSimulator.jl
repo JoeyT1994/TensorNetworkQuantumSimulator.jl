@@ -99,6 +99,7 @@ export
     Treewidth,
     ExactTreewidth,
     HyperND,
+    ExhaustiveSearch,
     norm_sqr,
     map_virtualinds,
     map_virtualinds!,

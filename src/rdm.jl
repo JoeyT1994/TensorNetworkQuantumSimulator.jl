@@ -57,7 +57,7 @@ function reduced_density_matrix(
     #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
     ρ_tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
     append!(ρ_tensors, incoming_ms)
-    seq = contraction_sequence(ρ_tensors; alg = "optimal", prune_tensors = true)
+    seq = contraction_sequence(ρ_tensors; alg = "optimal")
     ρ = contract_network(ρ_tensors; sequence = seq)
 
     if normalize

@@ -44,8 +44,6 @@ using NamedGraphs.GraphsExtensions:
 
 using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_graph, named_comb_tree, named_path_graph
 
-using TensorOperations
-
 # TNQS-owned operator / named-state system. `op`/`state` are called qualified (`Ops.op`,
 # `Ops.state`) so `state` does not clash with the unrelated `ITensorBase.state`, and gates
 # are registered by extending `Ops.op`. The types and string macros are imported for
