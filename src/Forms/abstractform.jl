@@ -8,7 +8,7 @@ for f in [
         :(graph),
         :(datatype),
         :(VectorInterface.scalartype),
-        :(NamedGraphs.edgeinduced_subgraphs_no_leaves),
+        :(NamedGraphs.leafless_edge_induced_subgraphs),
     ]
     @eval begin
         function $f(form::AbstractForm, args...; kwargs...)

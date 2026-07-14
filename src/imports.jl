@@ -19,8 +19,7 @@ using NamedGraphs:
     vertextype,
     add_vertex!,
     neighbors,
-    edgeinduced_subgraphs_no_leaves,
-    unique_cyclesubgraphs_limited_length
+    leafless_edge_induced_subgraphs
 using NamedGraphs.GraphsExtensions:
     src,
     dst,
