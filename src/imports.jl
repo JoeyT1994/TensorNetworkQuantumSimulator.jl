@@ -51,7 +51,7 @@ using .Ops: OpName, SiteType, @OpName_str, @SiteType_str
 using ITensorBase: ITensorBase, Index, ITensor, commonind, commoninds, hascommoninds, name,
     noprime, plev, prime, replaceinds, settags, sim, tags, uniqueind, unnamed
 import ITensorBase: uniqueinds
-using TensorAlgebra: trivialrange, matricize, scalar
+using TensorAlgebra: trivialrange, matricize, scalar, directsum
 import TensorAlgebra: datatype
 import Base: truncate
 using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe, sqrth_safe
