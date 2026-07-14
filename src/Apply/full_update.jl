@@ -66,7 +66,7 @@ function fidelity(
         q_prev::ITensor,
         gate::ITensor,
     )
-    p_sind, q_sind = trycommonind(p_cur, gate), trycommonind(q_cur, gate)
+    p_sind, q_sind = commonind(p_cur, gate), commonind(q_cur, gate)
     p_sind_sim, q_sind_sim = sim(p_sind), sim(q_sind)
     gate_sq =
         gate * replaceinds(conj(gate), p_sind => p_sind_sim, q_sind => q_sind_sim)

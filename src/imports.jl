@@ -49,7 +49,7 @@ using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_grap
 # unqualified use (gate definitions dispatch on bare `OpName"…"` / `SiteType"…"`).
 using .Ops: OpName, SiteType, @OpName_str, @SiteType_str
 using ITensorBase: ITensorBase, Index, ITensor, commonind, commoninds, hascommoninds, name,
-    noprime, plev, prime, replaceinds, settags, sim, tags, trycommonind, trynoncommonind, unnamed
+    noprime, plev, prime, replaceinds, settags, sim, tags, uniqueind, unnamed
 import ITensorBase: uniqueinds
 using TensorAlgebra: trivialrange, matricize, scalar
 import TensorAlgebra: datatype
