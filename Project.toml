@@ -1,7 +1,7 @@
 name = "TensorNetworkQuantumSimulator"
 uuid = "4de3b72a-362e-43dd-83ff-3f381eda9f9c"
 license = "MIT"
-version = "0.4.1"
+version = "0.4.2"
 authors = ["JoeyT1994 <jtindall@flatironinstitute.org>", "and contributors"]
 description = "A Julia package for quantum simulation with tensor networks of near-arbitrary topology."
 
@@ -29,7 +29,7 @@ Graphs = "1.8.0"
 ITensors = "0.9"
 KrylovKit = "0.10.2"
 LinearAlgebra = "1.11.0"
-NamedGraphs = "0.12.1"
+NamedGraphs = "0.13"
 OMEinsumContractionOrders = "1.3"
 Revise = "3.8.0"
 SimpleGraphAlgorithms = "0.6.0"
