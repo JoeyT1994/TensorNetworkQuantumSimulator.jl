@@ -7,7 +7,7 @@ function loopcorrected_partitionfunction(
     zbp = partitionfunction(bp_cache)
     bp_cache = rescale(bp_cache)
     egs =
-        connected_edgeinduced_subgraphs_no_leaves(graph(bp_cache), max_configuration_size)
+        leafless_edge_induced_subgraphs(graph(bp_cache), max_configuration_size)
     isempty(egs) && return zbp
     ws = weights(bp_cache, egs)
     return zbp * (1 + sum(ws))
@@ -25,7 +25,7 @@ end
 # cumulant order this is `ln Z_BP + Σ_C w_C` over the connected no-leaf clusters (overlapping-
 # cluster corrections, `−½ Σ_{C∼C'} w_C w_{C'} + …`, are higher order). Both this and
 # `loopcorrected_partitionfunction` enumerate the same generalized loops via
-# `connected_edgeinduced_subgraphs_no_leaves` (so both capture the bridge "dumbbell"
+# `leafless_edge_induced_subgraphs` (so both capture the bridge "dumbbell"
 # diagrams); they differ only in how the cluster weights are resummed.
 #
 # Note `loopcorrected_free_energy` and `log(loopcorrected_partitionfunction)` differ at
@@ -38,7 +38,7 @@ function loopcorrected_free_energy(
     F = log(complex(zbp))
     bp_cache = rescale(bp_cache)
     g = graph(bp_cache)
-    egs = connected_edgeinduced_subgraphs_no_leaves(g, max_configuration_size)
+    egs = leafless_edge_induced_subgraphs(g, max_configuration_size)
     isempty(egs) && return F
     return F + sum(weights(bp_cache, egs))
 end

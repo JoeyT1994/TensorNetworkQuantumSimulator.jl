@@ -100,7 +100,7 @@ function expect(
         tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
         tensors === nothing && return nothing
         append!(tensors, incoming_ms)
-        seq = contraction_sequence(tensors; alg = "optimal", prune_tensors = true)
+        seq = contraction_sequence(tensors; alg = "optimal")
         return scalar(contract(tensors; sequence = seq))
     end
 
