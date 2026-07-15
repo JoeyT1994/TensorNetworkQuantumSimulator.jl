@@ -49,3 +49,5 @@ using ITensors: Index, ITensor, hasqns, noncommonind, combinedind, combiner, rep
 using Adapt: adapt
 
 using TypeParameterAccessors: unspecify_type_parameters
+
+using ForwardDiff: ForwardDiff
