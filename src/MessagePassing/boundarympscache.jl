@@ -205,15 +205,6 @@ function set_interpartition_messages!(
     return bmps_cache
 end
 
-#Switch the message tensors on partition edges with their reverse (and dagger them)
-function switch_message!(bmps_cache::BoundaryMPSCache, e::NamedEdge)
-    ms = messages(bmps_cache)
-    me, mer = message(bmps_cache, e), message(bmps_cache, reverse(e))
-    set!(ms, e, dag(mer))
-    set!(ms, reverse(e), dag(me))
-    return bmps_cache
-end
-
 function switch_messages!(bmps_cache::BoundaryMPSCache, pe::QuotientEdge)
     for pe in sorted_edges(bmps_cache, pe)
         switch_message!(bmps_cache, pe)
