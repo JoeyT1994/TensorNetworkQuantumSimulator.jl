@@ -116,10 +116,10 @@ function messages(bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:Abst
 end
 
 function setmessages!(bp_cache::AbstractBeliefPropagationCache, edges, messages)
-    for (e, m) in zip(edges)
+    for (e, m) in zip(edges, messages)
         setmessage!(bp_cache, e, m)
     end
-    return
+    return bp_cache
 end
 
 function deletemessages!(
