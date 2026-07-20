@@ -80,8 +80,51 @@ ITensors.commonind(ft1::FermionicITensor, ft2::FermionicITensor) = commonind(ft1
 ITensors.scalar(ft::FermionicITensor) = ITensors.scalar(ft.tensor)
 ITensors.ITensor(ft::FermionicITensor) = ft.tensor
 
+# Complete the square of the GF(2) quadratic form whose symmetric coupling is `M` (`M[a,b]=1`
+# for an inverted leg pair) and linear part is `lin`. Returns a list of products `(uset,vset)`
+# meaning `U = ⊕_{a∈uset} x_a`, `V = ⊕_{b∈vset} x_b`, such that the pair sum
+# `⊕_{a<b} M[a,b] x_a x_b  =  ⊕_j U_j V_j`; diagonal remainders generated along the way are
+# folded back into `lin`. Each elimination step consumes two legs, so there are at most
+# `⌊n/2⌋` products — turning an O(n²)-term mask into an O(n)-term one. Mutates `M` and `lin`.
+#
+# Step (standard symplectic/Arf reduction): pick active legs i<j with `M[i,j]=1`. With
+# `A_j = ⊕_{k} M[j,k] x_k` and `B_i = ⊕_{k} M[i,k] x_k` over the OTHER active legs, the GF(2)
+# identity `x_i x_j ⊕ x_i B_i ⊕ x_j A_j = (x_i ⊕ A_j)(x_j ⊕ B_i) ⊕ A_j B_i` peels off one
+# product `U=x_i⊕A_j`, `V=x_j⊕B_i` and leaves `A_j B_i` to fold into the form on the rest.
+function _gf2_complete_square!(M::AbstractMatrix{Bool}, lin::AbstractVector{Bool}, n::Int)
+    active = trues(n)
+    products = Tuple{Vector{Int},Vector{Int}}[]
+    while true
+        i = 0; j = 0; found = false
+        @inbounds for a in 1:n
+            active[a] || continue
+            for b in (a + 1):n
+                (active[b] && M[a, b]) && (i = a; j = b; found = true; break)
+            end
+            found && break
+        end
+        found || break
+        Vp = Int[k for k in 1:n if active[k] && k != i && k != j]
+        uset = Int[i]; @inbounds for k in Vp; M[j, k] && push!(uset, k); end   # x_i ⊕ A_j
+        vset = Int[j]; @inbounds for k in Vp; M[i, k] && push!(vset, k); end   # x_j ⊕ B_i
+        push!(products, (uset, vset))
+        # fold A_j·B_i into the remaining form: diagonal (k==m) -> linear, k<m -> pair coeff.
+        @inbounds for k in Vp
+            (M[j, k] & M[i, k]) && (lin[k] ⊻= true)
+        end
+        @inbounds for ki in 1:length(Vp), mi in (ki + 1):length(Vp)
+            k = Vp[ki]; m = Vp[mi]
+            if (M[j, k] & M[i, m]) ⊻ (M[j, m] & M[i, k])
+                M[k, m] ⊻= true; M[m, k] ⊻= true
+            end
+        end
+        active[i] = false; active[j] = false
+    end
+    return products
+end
+
 # Koszul-reorder sign mask for `from -> to`, PLUS the diagonal bond-parity `g =
-# diag((−1)^p)` on each leg in `parity_legs`, returned as a `BitArray` in `T`'s NATIVE
+# diag((−1)^p)` on each leg in `parity_legs`, returned as an `Array{Bool}` in `T`'s NATIVE
 # storage layout `is` (`true` marks the components that flip sign).
 #
 # The sign of a component is (−1) raised to Σ over (i) leg pairs whose relative order is
@@ -90,8 +133,12 @@ ITensors.ITensor(ft::FermionicITensor) = ft.tensor
 # layout `is` (rather than in `from`) is what lets the caller multiply against the cheap
 # native `array(T)` and skip the ~100× more expensive permuting `array(T, from...)`.
 #
-# The accumulation is a vectorised broadcast of reshaped per-leg parity bit-vectors (one
-# fused `.⊻=` per inverted pair / parity leg), not a scalar component loop.
+# The exponent is a GF(2) quadratic form `⊕_{inverted (a,b)} x_a x_b ⊕ ⊕_{parity k} x_k`
+# (`x_a = bits[a][i_a]`). Rather than materialise one rank-2 broadcast per inverted pair
+# (up to n(n-1)/2 terms), we complete the square over GF(2) into ≤ ⌊n/2⌋ products `U_j V_j`
+# of linear (XOR) forms plus a linear remainder, then XOR them into `E` in ONE fused pass.
+# Each `U`/`V`/linear form is a lazy XOR of reshaped per-leg parity vectors; an `Array{Bool}`
+# (not a `BitArray`) keeps the singleton-reshaped broadcast contiguous.
 function _sign_mask(gr::Dictionary, is::Vector{<:Index}, from::Vector{<:Index}, to::Vector{<:Index}, parity_legs)
     n = length(is)
     dims = ntuple(k -> length(gr[is[k]]), n)
@@ -101,24 +148,28 @@ function _sign_mask(gr::Dictionary, is::Vector{<:Index}, from::Vector{<:Index}, 
     # O(n^3) sweep of `findfirst` over Index vectors inside the pair loop below).
     pf = ntuple(k -> findfirst(==(is[k]), from), n)
     pt = ntuple(k -> findfirst(==(is[k]), to), n)
-    # Collect each sign contribution as a LAZY broadcast (no work yet): an inverted pair
-    # (a,b) contributes `bits[a] & bits[b]`, a parity leg `k` contributes `bits[k]`. We
-    # XOR them all together and materialise into `E` in ONE fused write pass below.
-    # Crucially we do NOT accumulate with `E .⊻= term` per contribution: that
-    # read-modify-write against a singleton-reshaped `Bool` operand misses the fast
-    # `copyto!`/SIMD path and measured ~5× slower per term than a single fused write —
-    # it dominated `contract` at large bond dimension.
-    terms = Any[]
+    # Symmetric GF(2) coupling `M` (inverted pairs) and linear part `lin` (parity legs).
+    M = falses(n, n)
     @inbounds for a in 1:n, b in (a + 1):n
-        # inverted iff the pair's order differs between `from` and `to`
-        inverted = (pf[a] < pf[b]) != (pt[a] < pt[b])
-        inverted && push!(terms, Base.broadcasted(&, rshp(a), rshp(b)))
+        if (pf[a] < pf[b]) != (pt[a] < pt[b])      # inverted iff order differs `from` vs `to`
+            M[a, b] = true; M[b, a] = true
+        end
     end
+    lin = falses(n)
     for k in parity_legs
-        push!(terms, rshp(findfirst(==(k), is)))
+        lin[findfirst(==(k), is)] ⊻= true          # duplicates cancel (mod 2)
     end
-    # Contiguous `Array{Bool}` (not a `BitArray`): the bit-packed broadcast against
-    # singleton-reshaped operands is strided and was a bottleneck at large χ.
+    # Reduce the O(n²)-pair quadratic form to ≤ ⌊n/2⌋ products of linear XOR forms.
+    products = _gf2_complete_square!(M, lin, n)
+    # Each linear XOR form as a lazy broadcast of reshaped per-leg parity vectors.
+    linform(set) = length(set) == 1 ? rshp(set[1]) :
+                   reduce((x, y) -> Base.broadcasted(⊻, x, y), (rshp(k) for k in set))
+    terms = Any[]
+    for (uset, vset) in products
+        push!(terms, Base.broadcasted(&, linform(uset), linform(vset)))
+    end
+    Lset = Int[c for c in 1:n if lin[c]]
+    isempty(Lset) || push!(terms, linform(Lset))
     E = Array{Bool}(undef, dims...)
     if isempty(terms)
         fill!(E, false)                                  # no inverted pairs and no parity

@@ -1,4 +1,5 @@
 using Dictionaries: Dictionary
+using ITensors: hastags
 
 function default_siteinds(g::AbstractGraph; kwargs...)
     return siteinds("S=1/2", g; kwargs...)
@@ -13,6 +14,8 @@ function site_dimension(sitetype::String)
     sitetype = replace(lowercase(sitetype), " " => "")
     sitetype ∈ ["s=1/2", "qubit", "spin1/2", "spinhalf"] && return 2
     sitetype ∈ ["qutrit", "s=1", "spin1"]  && return 3
+    sitetype ∈ ["fermion"] && return 2
+    sitetype ∈ ["spinful_fermion"] && return 4
     error("Don't know what physical space that site type should be")
 end
 
@@ -20,5 +23,9 @@ function site_tag(sitetype::String)
     sitetype = replace(lowercase(sitetype), " " => "")
     sitetype ∈ ["s=1/2", "qubit", "spin1/2", "spinhalf"] && return "S=1/2"
     sitetype ∈ ["qutrit", "s=1", "spin1"] && return "S=1"
-    error("Don't know how to interpret that site type. Supported: S=1/2, S=1.")
+    sitetype ∈ ["fermion"] && return "fermion"
+    sitetype ∈ ["spinful_fermion"] && return "spinful_fermion"
+    error("Don't know how to interpret that site type. Supported: S=1/2, S=1, fermion, spinful_fermion")
 end
+
+has_fermionic_tag(sind::Index) = hastags(sind, "fermion") || hastags(sind, "spinful_fermion")

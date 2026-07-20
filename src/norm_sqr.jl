@@ -55,7 +55,7 @@ nsq_bmps = norm_sqr(ψ; alg = "boundarymps", mps_bond_dimension = 10)
 ```
 """
 
-function norm_sqr(tns::Union{TensorNetworkState, AbstractBeliefPropagationCache}; alg, kwargs...)
+function norm_sqr(tns::Union{TensorNetworkState, BeliefPropagationCache}; alg = default_alg(tns), kwargs...)
     algorithm_check(tns, "norm_sqr", alg)
     return norm_sqr(Algorithm(alg), tns; kwargs...)
 end

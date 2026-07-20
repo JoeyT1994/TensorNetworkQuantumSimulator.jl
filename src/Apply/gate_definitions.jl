@@ -120,7 +120,11 @@ function totensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     verts = collect_vertices(gate[2], g)
     s_inds = [only(siteinds[v]) for v in verts]
 
-    # Multi-letter Pauli-string sugar: "XYZ" → X⊗Y⊗Z applied componentwise.
+    # Fermionic path (fermion-tagged site indices)
+    all(has_fermionic_tag.(s_inds)) &&
+        return tofermionicitensor(name, gate[3], s_inds), verts
+
+    # Multi-letter Pauli-string: "XYZ" → X⊗Y⊗Z applied componentwise.
     # Single-letter "X"/"Y"/"Z" goes through the registry below.
     if _ispaulistring(name) && length(name) > 1
         t = prod(ITensors.op(string(c), sind) for (c, sind) in zip(name, s_inds))

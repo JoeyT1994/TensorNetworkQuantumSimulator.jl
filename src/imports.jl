@@ -30,7 +30,6 @@ using NamedGraphs.GraphsExtensions:
     a_star,
     add_edge!,
     edgetype,
-    edge_subgraph,
     leaf_vertices,
     post_order_dfs_edges,
     decorate_graph_edges,
@@ -50,3 +49,5 @@ using ITensors: Index, ITensor, hasqns, noncommonind, combinedind, combiner, rep
 using Adapt: adapt
 
 using TypeParameterAccessors: unspecify_type_parameters
+
+using ForwardDiff: ForwardDiff
