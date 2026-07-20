@@ -1,7 +1,4 @@
 using TensorNetworkQuantumSimulator
-
-using ITensors
-
 using LinearAlgebra: norm
 
 using Random
@@ -10,7 +7,6 @@ Random.seed!(1634)
 function main()
     nx, ny = 4,4
     χ = 3
-    ITensors.disable_warn_order()
     gs = [
         (named_grid((nx, 1)), "line", 0),
         (named_hexagonal_lattice_graph(nx, ny), "hexagonal", 6),

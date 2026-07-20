@@ -227,14 +227,27 @@ function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
     end
     bpc = copy(bpc)
     invalidate_contraction_sequences!(bpc)
+    converged = false
+    avg_diff = nothing
+    niter = alg.kwargs.maxiter
     for i in 1:alg.kwargs.maxiter
         diff = compute_error ? Ref(0.0) : nothing
         update_iteration!(alg, bpc, alg.kwargs.edge_sequence; (update_diff!) = diff)
-        if compute_error && (diff.x / length(alg.kwargs.edge_sequence)) <= alg.kwargs.tolerance
-            if alg.kwargs.verbose
-                println("BP converged to desired precision after $i iterations.")
+        if compute_error
+            avg_diff = diff.x / length(alg.kwargs.edge_sequence)
+            if avg_diff <= alg.kwargs.tolerance
+                converged = true
+                niter = i
+                break
             end
-            break
+        end
+    end
+    if compute_error
+        if converged
+            alg.kwargs.verbose && println("BP converged to desired precision after $niter iterations.")
+        else
+            msg = "BP did not converge to tolerance $(alg.kwargs.tolerance) after $niter iterations (final average message change: $avg_diff)."
+            alg.kwargs.verbose ? println(msg) : @warn(msg)
         end
     end
     invalidate_contraction_sequences!(bpc)

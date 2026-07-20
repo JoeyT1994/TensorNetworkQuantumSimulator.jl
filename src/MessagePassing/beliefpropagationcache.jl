@@ -1,6 +1,6 @@
 using Dictionaries: Dictionary, set!, delete!
 using Graphs: AbstractGraph, is_tree, connected_components
-using NamedGraphs.GraphsExtensions: default_root_vertex, forest_cover, post_order_dfs_edges
+using NamedGraphs.GraphsExtensions: default_root_vertex, forest_cover, post_order_dfs_edges, forest_cover_edge_sequence, boundary_edges, leaf_vertices, a_star
 using ITensors: dim, ITensor, delta, Algorithm
 using ITensors.NDTensors: scalartype
 using LinearAlgebra: normalize
@@ -83,20 +83,6 @@ function update_message!(
     return setmessage!(bp_cache, edge, m)
 end
 
-#Edge sequence stuff
-function forest_cover_edge_sequence(g::AbstractGraph; root_vertex = default_root_vertex)
-    forests = forest_cover(g)
-    edges = edgetype(g)[]
-    for forest in forests
-        trees = [forest[vs] for vs in connected_components(forest)]
-        for tree in trees
-            tree_edges = post_order_dfs_edges(tree, root_vertex(tree))
-            push!(edges, vcat(tree_edges, reverse(reverse.(tree_edges)))...)
-        end
-    end
-    return edges
-end
-
 function rescale_vertices!(
         bpc::BeliefPropagationCache,
         vertices::Vector
@@ -121,13 +107,16 @@ end
 const _default_bp_update_maxiter = 25
 function default_tolerance(type)
     (type == Float32 || type == ComplexF32) && return 1.0e-5
-    return (type == Float64 || type == ComplexF64) && return 1.0e-8
+    (type == Float64 || type == ComplexF64) && return 1.0e-8
+    return nothing
 end
 
 function default_bp_update_kwargs(tn::AbstractTensorNetwork)
-    maxiter = is_tree(tn) ? 1 : _default_bp_update_maxiter
-    tolerance = default_tolerance(ITensors.NDTensors.scalartype(tn))
-    verbose = false
+    if is_tree(tn)
+        maxiter, tolerance, verbose = 1, nothing, false
+    else
+        maxiter, tolerance, verbose = _default_bp_update_maxiter, default_tolerance(ITensors.NDTensors.scalartype(tn)), false
+    end
     return (; maxiter, tolerance, verbose)
 end
 

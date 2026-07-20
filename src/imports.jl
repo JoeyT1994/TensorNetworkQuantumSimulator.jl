@@ -19,8 +19,7 @@ using NamedGraphs:
     vertextype,
     add_vertex!,
     neighbors,
-    edgeinduced_subgraphs_no_leaves,
-    unique_cyclesubgraphs_limited_length
+    leafless_edge_induced_subgraphs
 using NamedGraphs.GraphsExtensions:
     src,
     dst,
@@ -45,17 +44,9 @@ using NamedGraphs.GraphsExtensions:
 
 using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_graph, named_comb_tree, named_path_graph
 
-using TensorOperations
-
 using ITensors: ITensors
-using ITensors: Index, ITensor, hasqns, noncommonind, combinedind, combiner, replaceinds, sim, onehot, delta, plev, dense, unioninds, uniqueinds, commonind, commoninds, replaceind, datatype, inds, dag, noprime, factorize_svd, prime, hascommoninds, itensor, map_diag!, @Algorithm_str, scalar, @OpName_str, @SiteType_str, denseblocks, tags
-using ITensorMPS
+using ITensors: Index, ITensor, hasqns, noncommonind, combinedind, combiner, replaceinds, sim, onehot, delta, plev, dense, unioninds, uniqueinds, commonind, commoninds, replaceind, datatype, inds, dag, noprime, factorize_svd, prime, hascommoninds, itensor, map_diag!, @Algorithm_str, scalar, @OpName_str, @SiteType_str, denseblocks, tags, op, apply, contract, inner
 
 using Adapt: adapt
-
-import PauliPropagation
-const PP = PauliPropagation
-
-import ForwardDiff
 
 using TypeParameterAccessors: unspecify_type_parameters

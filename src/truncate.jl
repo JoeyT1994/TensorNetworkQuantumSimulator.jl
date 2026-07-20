@@ -42,9 +42,9 @@ function ITensors.truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff
     s = siteinds(network(bmps_cache))
     apply_kwargs = (; maxdim, cutoff)
     dtype = datatype(bmps_cache)
-    ps = sort(partitionvertices(supergraph(bmps_cache)); by = v -> parent(v))
+    ps = sort(parent.(quotientvertices(supergraph(bmps_cache))))
     for (i, p) in enumerate(ps)
-        g = partition_graph(bmps_cache, p)
+        g = partition_graph(bmps_cache, QuotientVertex(p))
         leaves = leaf_vertices(g)
         seq = a_star(g, last(leaves), first(leaves))
         !isempty(seq) && update_partition!(bmps_cache, seq)
@@ -64,7 +64,7 @@ function ITensors.truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff
         end
 
         if i != length(ps)
-            bmps_cache = update(bmps_cache; alg = "bp", edge_sequence = [PartitionEdge(parent(ps[i]) => parent(ps[i + 1]))], maxiter = 1)
+            bmps_cache = update(bmps_cache; alg = "bp", edge_sequence = [QuotientEdge(ps[i] => ps[i + 1])], maxiter = 1)
         end
     end
 
@@ -81,14 +81,14 @@ end
 function ITensors.truncate(alg::Algorithm"boundarymps", tns::TensorNetworkState; mps_bond_dimension::Integer, gauge_state = true, kwargs...)
     tns = copy(tns)
     bmps_cache = BoundaryMPSCache(tns, mps_bond_dimension; partition_by = "row", gauge_state)
-    leaves = leaf_vertices(partitions_graph(supergraph(bmps_cache)))
-    seq = PartitionEdge.(a_star(partitions_graph(supergraph(bmps_cache)), last(leaves), first(leaves)))
+    leaves = leaf_vertices(quotient_graph(supergraph(bmps_cache)))
+    seq = QuotientEdge.(a_star(quotient_graph(supergraph(bmps_cache)), last(leaves), first(leaves)))
     bmps_cache = update(bmps_cache; alg = "bp", edge_sequence = seq, maxiter = 1)
     bmps_cache = truncate(bmps_cache; kwargs...)
 
     bmps_cache = BoundaryMPSCache(network(bmps_cache), mps_bond_dimension; partition_by = "col", gauge_state)
-    leaves = leaf_vertices(partitions_graph(supergraph(bmps_cache)))
-    seq = PartitionEdge.(a_star(partitions_graph(supergraph(bmps_cache)), last(leaves), first(leaves)))
+    leaves = leaf_vertices(quotient_graph(supergraph(bmps_cache)))
+    seq = QuotientEdge.(a_star(quotient_graph(supergraph(bmps_cache)), last(leaves), first(leaves)))
     bmps_cache = update(bmps_cache; alg = "bp", edge_sequence = seq, maxiter = 1)
     bmps_cache = truncate(bmps_cache; kwargs...)
 
