@@ -88,11 +88,12 @@ Draw `nsamples` bitstrings from the probability distribution defined by the squa
 - For `alg = "boundarymps"`:
     - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state ⟨x|ψ⟩.
     - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract ⟨ψ|ψ⟩.
-    - `norm_message_update_kwargs`: Keyword arguments for updating the norm boundary MPS messages.
-    - `projected_message_update_kwargs`: Keyword arguments for updating the projected boundary MPS messages.
+    - `norm_cache_message_update_kwargs`: Keyword arguments for updating the norm boundary MPS messages.
     - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
+    - `gauge_state`: Whether to gauge the state before sampling (default is `true`).
 - For `alg = "bp"`:
     - `bp_update_kwargs`: Keyword arguments for updating the belief propagation cache.
+    - `gauge_state`: Whether to gauge the state before sampling (default is `true`).
 
 # Returns
 - A vector of bitstrings, each a dictionary mapping vertices to configurations (0...d-1).
@@ -118,9 +119,9 @@ Draw `nsamples` bitstrings from a 2D open-boundary tensor network state. Samples
 - For `alg = "boundarymps"`:
     - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state ⟨x|ψ⟩.
     - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract ⟨ψ|ψ⟩.
-    - `norm_message_update_kwargs`: Keyword arguments for updating the norm boundary MPS messages.
-    - `projected_message_update_kwargs`: Keyword arguments for updating the projected boundary MPS messages.
+    - `norm_cache_message_update_kwargs`: Keyword arguments for updating the norm boundary MPS messages.
     - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
+    - `gauge_state`: Whether to gauge the state before sampling (default is `true`).
 
 # Returns
 - A vector of `NamedTuple`s, each containing:
@@ -150,9 +151,10 @@ Draw `nsamples` bitstrings from a 2D open-boundary tensor network state. Samples
     - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state ⟨x|ψ⟩.
     - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract ⟨ψ|ψ⟩.
     - `certification_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract ⟨x|ψ⟩ for certification.
-    - `norm_message_update_kwargs`: Keyword arguments for updating the norm boundary MPS messages.
-    - `projected_message_update_kwargs`: Keyword arguments for updating the projected boundary MPS messages.
+    - `norm_cache_message_update_kwargs`: Keyword arguments for updating the norm boundary MPS messages.
+    - `certification_cache_message_update_kwargs`: Keyword arguments for the independent certification contraction.
     - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
+    - `gauge_state`: Whether to gauge the state before sampling (default is `true`).
 
 # Returns
 - A vector of `NamedTuple`s, each containing:
