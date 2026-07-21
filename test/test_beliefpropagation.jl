@@ -70,4 +70,16 @@ end
     @test isempty(TNQS.contraction_sequences(bpc))
 end
 
+@testset "Test setting multiple messages" begin
+    g = named_path_graph(2)
+    tn = random_tensornetwork(Float64, g; bond_dimension = 2)
+    bpc = BeliefPropagationCache(tn)
+    e = first(edges(g))
+    directed_edges = [e, reverse(e)]
+    new_messages = [TNQS.default_message(bpc, edge) for edge in directed_edges]
+
+    @test TNQS.setmessages!(bpc, directed_edges, new_messages) === bpc
+    @test all(message(bpc, edge) == new_message for (edge, new_message) in zip(directed_edges, new_messages))
+end
+
 end

@@ -85,20 +85,6 @@ A `TensorNetworkState` (TNS) is a tensor network representation of your wavefunc
 
 The optional first argument sets the element type (`Float64` by default). Use `ComplexF32` or `ComplexF64` for complex-valued states.
 
-### Heisenberg Picture
-
-You can also work directly in the Heisenberg picture, representing a many-body operator as a TNS with two indices per site.
-
-```julia
-# Start with the Z operator on a single site vz, identity elsewhere
-s = siteinds("S=1/2", g; inds_per_site = 2)
-ψI = identity_tensornetworkstate(ComplexF64, g, s)
-ψ0 = copy(ψI)
-setindex_preserve!(ψ0, noprime(ψ0[vz] * ITensors.op("Z", s[vz][1])), vz)
-```
-
-Gates are then applied as pairs to the ket (`s[v][1]`) and bra (`s[v][2]`) indices, and observables are extracted via inner products with other operators (e.g. the identity network gives the trace; see `examples/2dIsing_dynamics_Heisenbergpicture.jl`).
-
 ### Building Circuits
 
 A circuit is a `Vector` of gates to be applied sequentially. Each gate is specified as a tuple `(gate_string, vertices, parameter)` or as a raw `ITensor`:
@@ -270,6 +256,20 @@ See the [examples/](examples/) directory for complete worked examples:
 
 We encourage users to read the literature listed below and explore the [tests](test/) and [source code](src/) to learn how the package works in detail.
 
+### Heisenberg Picture
+
+You can also work directly in the Heisenberg picture, representing a many-body operator as a TNS with two indices per site.
+
+```julia
+# Start with the Z operator on a single site vz, identity elsewhere
+s = siteinds("S=1/2", g; inds_per_site = 2)
+ψI = identity_tensornetworkstate(ComplexF64, g, s)
+ψ0 = copy(ψI)
+setindex_preserve!(ψ0, noprime(ψ0[vz] * ITensors.op("Z", s[vz][1])), vz)
+```
+
+Gates are then applied as pairs to the ket (`s[v][1]`) and bra (`s[v][2]`) indices, and observables are extracted via inner products with other operators (e.g. the identity network gives the trace; see `examples/2dIsing_dynamics_Heisenbergpicture.jl`).
+
 ## Relevant Literature
 
 Helpful reading for understanding the algorithms and the kind of simulations the library has been used for:
@@ -286,10 +286,8 @@ or
 - J. Tindall and M. Fishman, "Gauging tensor networks with belief propagation," SciPost Physics **15**, 222 (2023). [Link](https://www.scipost.org/SciPostPhys.15.6.222)
 
 ## Upcoming Features
-
-- Applying gates to distant nodes of the TN via SWAP gates.
+- Fermions
 - Infinite tensor network states 
-- Finite temperature and ground state examples
 
 ## Authors and Acknowledgements
 
