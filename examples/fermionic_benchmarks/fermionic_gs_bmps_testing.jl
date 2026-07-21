@@ -93,7 +93,7 @@ function main_fermions(χ)
     end
 end
 
-χ = 16
+χ = 4
 main_fermions(χ)
 
 

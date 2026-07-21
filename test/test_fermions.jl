@@ -134,6 +134,77 @@ end
         @test abs(s1) > 1e-8   # non-trivial
     end
 
+    @testset "cached contraction sign masks" begin
+        function triangle_fermionic_tensors(bits = [false, true])
+            gr = Dictionary{Index, Vector{Bool}}()
+            mkbond() = (i = Index(2, "b"); set!(gr, i, copy(bits)); i)
+            bab, bbc, bca = mkbond(), mkbond(), mkbond()
+            A = FT(
+                random_even_itensor([bab, bca], gr),
+                [bab, bca],
+                [false, true],
+                gr,
+            )
+            B = FT(
+                random_even_itensor([bab, bbc], gr),
+                [bab, bbc],
+                [true, false],
+                gr,
+            )
+            C = FT(
+                random_even_itensor([bbc, bca], gr),
+                [bbc, bca],
+                [true, false],
+                gr,
+            )
+            return [A, B, C]
+        end
+
+        sequence = [[1, 2], 3]
+        sign_plans = TN.FermionicBinaryContractionPlan[]
+
+        fts = triangle_fermionic_tensors()
+        cached = contract(fts; sequence, sign_plans)
+        @test cached.tensor ≈ contract(fts; sequence).tensor
+        @test length(sign_plans) == 2
+        @test any(
+            p -> (!isnothing(p.plan_a) && !isnothing(p.plan_a.mask)) ||
+                (!isnothing(p.plan_b) && !isnothing(p.plan_b.mask)),
+            sign_plans,
+        )
+
+        old_signatures = [
+            (isnothing(p.plan_a) ? nothing : p.plan_a.signature,
+             isnothing(p.plan_b) ? nothing : p.plan_b.signature) for p in sign_plans
+        ]
+        old_masks = [
+            (isnothing(p.plan_a) ? nothing : p.plan_a.mask,
+             isnothing(p.plan_b) ? nothing : p.plan_b.mask) for p in sign_plans
+        ]
+
+        # Untruncated QR creates fresh Index identities but preserves this structural
+        # information, so an equivalent fresh network should reuse the same mask objects.
+        fresh_fts = triangle_fermionic_tensors()
+        fresh_cached = contract(fresh_fts; sequence, sign_plans)
+        @test fresh_cached.tensor ≈ contract(fresh_fts; sequence).tensor
+        @test all(
+            (isnothing(p.plan_a) ? nothing : p.plan_a.mask) === masks[1] &&
+                (isnothing(p.plan_b) ? nothing : p.plan_b.mask) === masks[2]
+            for (p, masks) in zip(sign_plans, old_masks)
+        )
+
+        # A grading change with identical dimensions and leg orders must invalidate
+        # the plans rather than silently applying masks for the old grading.
+        changed_fts = triangle_fermionic_tensors([true, false])
+        changed_cached = contract(changed_fts; sequence, sign_plans)
+        @test changed_cached.tensor ≈ contract(changed_fts; sequence).tensor
+        @test any(
+            (isnothing(p.plan_a) ? nothing : p.plan_a.signature,
+             isnothing(p.plan_b) ? nothing : p.plan_b.signature) != signatures
+            for (p, signatures) in zip(sign_plans, old_signatures)
+        )
+    end
+
     @testset "loopy network from FTNS with even site caps (square)" begin
         g = named_grid((2, 2))
         s = siteinds("fermion", g)

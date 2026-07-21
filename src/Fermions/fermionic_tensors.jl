@@ -63,6 +63,25 @@ struct FermionicITensor
     grading::Dictionary{Index, Vector{Bool}}
 end
 
+# Sign masks can be reused while a contraction tree keeps the same structural leg
+# ordering and grading. These plans deliberately contain no tensor data.
+struct FermionicReorderPlan
+    signature::UInt
+    mask::Union{Nothing, Array{Bool}}
+end
+
+struct FermionicBinaryContractionPlan
+    plan_a::Union{Nothing, FermionicReorderPlan}
+    plan_b::Union{Nothing, FermionicReorderPlan}
+end
+
+struct FermionicContractionSequence
+    sequence::Vector
+    sign_plans::Vector{FermionicBinaryContractionPlan}
+end
+
+const ContractionCacheEntry = Union{Vector, FermionicContractionSequence}
+
 Base.copy(ft::FermionicITensor) = FermionicITensor(copy(ft.tensor), copy(ft.order), copy(ft.dirs), copy(ft.grading))
 
 # Direction (arrow) of leg `i` in `ft`: true = in/−, false = out/+.
@@ -193,6 +212,50 @@ function _apply_reorder_sign(gr::Dictionary, T::ITensor, from::Vector{<:Index}, 
     # and ran ~4× the memcpy floor at large χ. `ifelse` is branchless and generic (negates
     # both parts for Complex). The fresh array is aliased into the ITensor (AllowAlias).
     return ITensors.itensor(_flip_signs(arr, E), is...)
+end
+
+# Hash the structural information that determines a sign mask. Index identities are
+# intentionally excluded: an untruncated fermionic QR creates fresh bond indices while
+# preserving dimensions, relative orders, and parity grading.
+function _reorder_signature(
+        gr::Dictionary,
+        is::Vector{<:Index},
+        from::Vector{<:Index},
+        to::Vector{<:Index},
+        parity_legs,
+    )
+    h = hash(length(is), UInt(0))
+    for i in is
+        h = hash(dim(i), h)
+        h = hash(findfirst(==(i), from), h)
+        h = hash(findfirst(==(i), to), h)
+        h = hash(i in parity_legs, h)
+        for bit in gr[i]
+            h = hash(bit, h)
+        end
+    end
+    return h
+end
+
+# Apply a cached mask, rebuilding it if the structural signature changed. This is kept
+# separate from `_apply_reorder_sign` so one-off contractions pay no cache bookkeeping.
+function _apply_reorder_sign(
+        gr::Dictionary,
+        T::ITensor,
+        from::Vector{<:Index},
+        to::Vector{<:Index},
+        parity_legs,
+        plan::Union{Nothing, FermionicReorderPlan},
+    )
+    is = collect(inds(T))
+    signature = _reorder_signature(gr, is, from, to, parity_legs)
+    if isnothing(plan) || plan.signature != signature
+        E = _sign_mask(gr, is, from, to, parity_legs)
+        plan = FermionicReorderPlan(signature, any(E) ? E : nothing)
+    end
+    isnothing(plan.mask) && return T, plan
+    arr = ITensors.array(T)
+    return ITensors.itensor(_flip_signs(arr, plan.mask), is...), plan
 end
 
 # Return a copy of `arr` with the sign of every entry flagged in `E` flipped, via a
@@ -331,7 +394,28 @@ one side reproduces the result of contracting the bonds one at a time, and is wh
 makes the contraction associative on loops. The reversal sign is accumulated
 automatically by `_apply_reorder_sign`; for a single shared bond it is a no-op.
 """
-function ITensors.contract(A::FermionicITensor, B::FermionicITensor)
+function _reorder_with_plan(
+        ft::FermionicITensor,
+        to::Vector{<:Index},
+        parity_legs,
+        plan::Union{Nothing, FermionicReorderPlan},
+        cache_signs::Bool,
+    )
+    (ft.order == to && isempty(parity_legs)) && return ft.tensor, nothing
+    if cache_signs
+        return _apply_reorder_sign(
+            ft.grading, ft.tensor, ft.order, to, parity_legs, plan
+        )
+    end
+    return _apply_reorder_sign(ft.grading, ft.tensor, ft.order, to, parity_legs), nothing
+end
+
+function _contract_fermionic(
+        A::FermionicITensor,
+        B::FermionicITensor,
+        plan::Union{Nothing, FermionicBinaryContractionPlan} = nothing;
+        cache_signs::Bool = false,
+    )
     # The grading is a GLOBAL, immutable property (an `Index`'s parity bits never
     # change), so we never need to merge A's and B's dictionaries: A's grading covers
     # all of A's legs, B's covers all of B's, and a shared bond carries identical bits
@@ -369,19 +453,21 @@ function ITensors.contract(A::FermionicITensor, B::FermionicITensor)
     A_reorder = A.order != A_to
     B_reorder = B.order != B_to
 
+    parity_a, parity_b = Index[], Index[]
     if B_reorder
-        TA = _apply_reorder_sign(A.grading, A.tensor, A.order, A_to)
-        TB = _apply_reorder_sign(B.grading, B.tensor, B.order, B_to, parity)
+        parity_b = parity
     elseif A_reorder
-        TA = _apply_reorder_sign(A.grading, A.tensor, A.order, A_to, parity)
-        TB = _apply_reorder_sign(B.grading, B.tensor, B.order, B_to)
+        parity_a = parity
     elseif _nelements(A.tensor) <= _nelements(B.tensor)
-        TA = _apply_reorder_sign(A.grading, A.tensor, A.order, A_to, parity)
-        TB = B.tensor
+        parity_a = parity
     else
-        TA = A.tensor
-        TB = _apply_reorder_sign(B.grading, B.tensor, B.order, B_to, parity)
+        parity_b = parity
     end
+
+    plan_a = isnothing(plan) ? nothing : plan.plan_a
+    plan_b = isnothing(plan) ? nothing : plan.plan_b
+    TA, plan_a = _reorder_with_plan(A, A_to, parity_a, plan_a, cache_signs)
+    TB, plan_b = _reorder_with_plan(B, B_to, parity_b, plan_b, cache_signs)
 
     C = TA * TB
     order_C = Index[A_open; B_open]
@@ -390,7 +476,14 @@ function ITensors.contract(A::FermionicITensor, B::FermionicITensor)
         order_C,
         Vector{Bool}[[A.grading[i] for i in A_open]; [B.grading[i] for i in B_open]],
     )
-    return FermionicITensor(C, order_C, dirs_C, gr_C)
+    result = FermionicITensor(C, order_C, dirs_C, gr_C)
+    new_plan = cache_signs ? FermionicBinaryContractionPlan(plan_a, plan_b) : nothing
+    return result, new_plan
+end
+
+function ITensors.contract(A::FermionicITensor, B::FermionicITensor)
+    result, _ = _contract_fermionic(A, B)
+    return result
 end
 
 Base.:*(ft1::FermionicITensor, ft2::FermionicITensor) = ITensors.contract(ft1, ft2)
@@ -432,12 +525,46 @@ function follow_sequence(seq, fts::Vector{<:FermionicITensor})
     return acc
 end
 
+# Cached variant of `follow_sequence`. Binary contractions are encountered in a stable
+# depth-first order, so each node can reuse its mask plans directly without a dictionary
+# lookup or rebuilding a structural cache key.
+function follow_sequence(
+        seq,
+        fts::Vector{<:FermionicITensor},
+        sign_plans::Vector{FermionicBinaryContractionPlan},
+        cursor::Base.RefValue{Int},
+    )
+    seq isa Integer && return fts[seq]
+    acc = follow_sequence(seq[1], fts, sign_plans, cursor)
+    for k in 2:length(seq)
+        rhs = follow_sequence(seq[k], fts, sign_plans, cursor)
+        slot = cursor[]
+        plan = slot <= length(sign_plans) ? sign_plans[slot] : nothing
+        acc, plan = _contract_fermionic(acc, rhs, plan; cache_signs = true)
+        if slot <= length(sign_plans)
+            sign_plans[slot] = plan
+        else
+            push!(sign_plans, plan)
+        end
+        cursor[] += 1
+    end
+    return acc
+end
+
 # Contract a list of FermionicITensors using the bosonic optimal contraction order
 # (`contraction_sequence(..., alg="optimal")`) on the underlying ITensors, then
 # follow that tree through `contract`.
-function ITensors.contract(fts::Vector{<:FermionicITensor}; sequence = contraction_sequence(fts; alg = "optimal"))
+function ITensors.contract(
+        fts::Vector{<:FermionicITensor};
+        sequence = contraction_sequence(fts; alg = "optimal"),
+        sign_plans::Union{Nothing, Vector{FermionicBinaryContractionPlan}} = nothing,
+    )
     length(fts) == 1 && return only(fts)
-    return follow_sequence(sequence, fts)
+    isnothing(sign_plans) && return follow_sequence(sequence, fts)
+    cursor = Ref(1)
+    result = follow_sequence(sequence, fts, sign_plans, cursor)
+    @assert cursor[] == length(sign_plans) + 1
+    return result
 end
 
 function Adapt.adapt_structure(to, ft::FermionicITensor)

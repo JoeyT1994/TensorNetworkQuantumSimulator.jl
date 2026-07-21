@@ -11,7 +11,7 @@ struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Fe
     supergraph::PartitionedGraph
     sorted_edges::Dictionary{QuotientEdge, Vector{NamedEdge}}
     mps_bond_dimension::Integer
-    contraction_sequences::Dictionary{Pair, Vector}
+    contraction_sequences::Dictionary{Pair, ContractionCacheEntry}
 end
 
 default_update_alg(bmps_cache::BoundaryMPSCache) = "bp"
@@ -167,7 +167,14 @@ function BoundaryMPSCache(
     sorted_es = Dictionary{QuotientEdge, Vector{NamedEdge}}(pes, Vector{NamedEdge}[sorted_edges(supergraph, pe) for pe in pes])
 
     messages = default_messages()
-    bmps_cache = BoundaryMPSCache(tn, messages, supergraph, sorted_es, mps_bond_dimension, Dictionary{Pair, Vector}())
+    bmps_cache = BoundaryMPSCache(
+        tn,
+        messages,
+        supergraph,
+        sorted_es,
+        mps_bond_dimension,
+        Dictionary{Pair, ContractionCacheEntry}(),
+    )
     @assert is_correct_format(bmps_cache)
     set_messages && set_interpartition_messages!(bmps_cache, pes)
 
@@ -231,8 +238,8 @@ function update_partition!(bmps_cache::BoundaryMPSCache, seq::Vector)
     isempty(seq) && return bmps_cache
     alg = set_default_kwargs(Algorithm("contract", normalize = false), bmps_cache)
     for e in seq
-        m, (cache_key, sequence, seq_changed) = updated_message(alg, bmps_cache, e)
-        seq_changed && set!(contraction_sequences(bmps_cache), cache_key, sequence)
+        m, (cache_key, cache_entry, cache_changed) = updated_message(alg, bmps_cache, e)
+        cache_changed && set!(contraction_sequences(bmps_cache), cache_key, cache_entry)
         setmessage!(bmps_cache, e, m)
     end
     return bmps_cache
@@ -317,7 +324,10 @@ function extracter(
         update_e::NamedEdge
     )
     message_update_alg = set_default_kwargs(Algorithm("contract"; normalize = false), bmps_cache)
-    m, _ = updated_message(message_update_alg, bmps_cache, update_e)
+    m, (cache_key, cache_entry, cache_changed) = updated_message(
+        message_update_alg, bmps_cache, update_e
+    )
+    cache_changed && set!(contraction_sequences(bmps_cache), cache_key, cache_entry)
     return m
 end
 
