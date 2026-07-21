@@ -172,12 +172,26 @@ function updated_message(
     seq_cache = contraction_sequences(bp_cache)
     seq_changed = false
     if haskey(seq_cache, cache_key)
-        sequence = seq_cache[cache_key]
+        cache_entry = seq_cache[cache_key]
+        sequence = cache_entry isa FermionicContractionSequence ?
+            cache_entry.sequence : cache_entry
     else
         sequence = contraction_sequence(contract_list; alg = alg.kwargs.sequence_alg)
+        cache_entry = sequence
         seq_changed = true
     end
-    updated_message = contract(contract_list; sequence)
+
+    if eltype(contract_list) <: FermionicITensor
+        if !(cache_entry isa FermionicContractionSequence)
+            cache_entry = FermionicContractionSequence(sequence, FermionicBinaryContractionPlan[])
+            seq_changed = true
+        end
+        updated_message = contract(
+            contract_list; sequence, sign_plans = cache_entry.sign_plans
+        )
+    else
+        updated_message = contract(contract_list; sequence)
+    end
 
     if alg.kwargs.normalize
         message_norm = sum(updated_message)
@@ -186,7 +200,7 @@ function updated_message(
         end
     end
 
-    return updated_message, (cache_key, sequence, seq_changed)
+    return updated_message, (cache_key, cache_entry, seq_changed)
 end
 
 function updated_message(

@@ -104,7 +104,7 @@ function main_fermions(χ)
     serialize("/Users/jtindall/Files/Data/Fermions/HexagonalOBC/U$(U)maxdim$(χ).jld2", ψ_bpc)
 end
 
-χ = 16
+χ = 4
 main_fermions(χ)
 
 
