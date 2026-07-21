@@ -37,7 +37,7 @@ function full_update(
         apply_kwargs...,
     )
     if symmetrize
-        singular_values! = Ref(ITensor())
+        singular_values! = Ref{ITensor}()
         Rᵥ₁, Rᵥ₂, spec = factorize_svd(
             Rᵥ₁ * Rᵥ₂,
             inds(Rᵥ₁);
@@ -76,7 +76,7 @@ function fidelity(
         envs,
     )
     sequence = contraction_sequence(term1_tns; alg = "optimal")
-    term1 = ITensors.contract(term1_tns; sequence)
+    term1 = contract(term1_tns; sequence)
 
     term2_tns = vcat(
         [
@@ -88,10 +88,10 @@ function fidelity(
         envs,
     )
     sequence = contraction_sequence(term2_tns; alg = "optimal")
-    term2 = ITensors.contract(term2_tns; sequence)
+    term2 = contract(term2_tns; sequence)
     term3_tns = vcat([p_prev, q_prev, prime(dag(p_cur)), prime(dag(q_cur)), gate], envs)
     sequence = contraction_sequence(term3_tns; alg = "optimal")
-    term3 = ITensors.contract(term3_tns; sequence)
+    term3 = contract(term3_tns; sequence)
 
     f = scalar(term3) / sqrt(scalar(term1) * scalar(term2))
     return f * conj(f)
@@ -109,8 +109,8 @@ function optimise_p_q(
         envisposdef = true,
         apply_kwargs...,
     )
-    p_cur, q_cur = factorize(
-        apply(o, p * q), inds(p); tags = tags(commonind(p, q)), apply_kwargs...
+    p_cur, q_cur, _ = factorize_svd(
+        apply(o, p * q), inds(p); apply_kwargs...
     )
 
     fstart = print_fidelity_loss ? fidelity(envs, p_cur, q_cur, p, q, o) : 0
@@ -121,7 +121,7 @@ function optimise_p_q(
     function b(p::ITensor, q::ITensor, o::ITensor, envs::Vector{ITensor}, r::ITensor)
         ts = vcat(ITensor[p, q, o, dag(prime(r))], envs)
         sequence = contraction_sequence(ts; alg = "optimal")
-        return noprime(ITensors.contract(ts; sequence))
+        return noprime(contract(ts; sequence))
     end
 
     function M_p(envs::Vector{ITensor}, p_q_tensor::ITensor, s_ind, apply_tensor::ITensor)
@@ -132,7 +132,7 @@ function optimise_p_q(
             envs,
         )
         sequence = contraction_sequence(ts; alg = "optimal")
-        return noprime(ITensors.contract(ts; sequence))
+        return noprime(contract(ts; sequence))
     end
     for i in 1:nfullupdatesweeps
         b_vec = b(p, q, o, envs, q_cur)

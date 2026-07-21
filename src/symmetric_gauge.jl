@@ -9,18 +9,18 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         edge_ind = commoninds(ψvsrc, ψvdst)
         edge_ind_sim = sim(edge_ind)
 
-        X_D, X_U = safe_eigen(message(bp_cache, e); ishermitian = true, cutoff = nothing)
-        Y_D, Y_U = safe_eigen(message(bp_cache, reverse(e)); ishermitian = true, cutoff = nothing)
-        X_D, Y_D = ITensors.map_diag(x -> x + regularization, X_D),
-            ITensors.map_diag(x -> x + regularization, Y_D)
+        me, mer = message(bp_cache, e), message(bp_cache, reverse(e))
+        # Hermitian eigendecomposition of each message (legs split unprimed/primed);
+        # `eigendecomp` returns (U, D, Udag) with `U * D * Udag ≈ message`.
+        X_U, X_D, X_Udag = eigendecomp(me, filter(i -> plev(i) == 0, inds(me)), filter(i -> plev(i) != 0, inds(me)); ishermitian = true)
+        Y_U, Y_D, Y_Udag = eigendecomp(mer, filter(i -> plev(i) == 0, inds(mer)), filter(i -> plev(i) != 0, inds(mer)); ishermitian = true)
+        X_D, Y_D = map_diag(x -> x + regularization, X_D),
+            map_diag(x -> x + regularization, Y_D)
 
-        rootX_D, rootY_D = ITensors.map_diag(x -> sqrt(x), X_D), ITensors.map_diag(x -> sqrt(x), Y_D)
-        inv_rootX_D, inv_rootY_D = ITensors.map_diag(x -> inv(sqrt(x)), X_D),
-            ITensors.map_diag(x -> inv(sqrt(x)), Y_D)
-        rootX = X_U * rootX_D * prime(dag(X_U))
-        rootY = Y_U * rootY_D * prime(dag(Y_U))
-        inv_rootX = X_U * inv_rootX_D * prime(dag(X_U))
-        inv_rootY = Y_U * inv_rootY_D * prime(dag(Y_U))
+        rootX = X_U * map_diag(x -> sqrt(x), X_D) * X_Udag
+        rootY = Y_U * map_diag(x -> sqrt(x), Y_D) * Y_Udag
+        inv_rootX = X_U * map_diag(x -> inv(sqrt(x)), X_D) * X_Udag
+        inv_rootY = Y_U * map_diag(x -> inv(sqrt(x)), Y_D) * Y_Udag
 
         ψvsrc, ψvdst = noprime(ψvsrc * inv_rootX), noprime(ψvdst * inv_rootY)
 
@@ -29,7 +29,7 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
 
         U, S, V = svd(Ce, edge_ind; kwargs...)
 
-        new_edge_ind = Index[Index(dim(commoninds(S, U)), tags(first(edge_ind)))]
+        new_edge_ind = Index[Index(dim(only(commoninds(S, U))))]
 
         ψvsrc = replaceinds(ψvsrc * U, commoninds(S, U), new_edge_ind)
         ψvdst = replaceinds(ψvdst, edge_ind, edge_ind_sim)
@@ -42,7 +42,7 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
                 [new_edge_ind..., prime(new_edge_ind)...],
         )
 
-        sqrtS = ITensors.map_diag(sqrt, S)
+        sqrtS = map_diag(sqrt, S)
         ψvsrc = noprime(ψvsrc * sqrtS)
         ψvdst = noprime(ψvdst * sqrtS)
         setindex_preserve!(bp_cache, ψvsrc, vsrc)
