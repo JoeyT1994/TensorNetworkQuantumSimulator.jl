@@ -104,6 +104,19 @@ function apply_gate!(
         v⃗ = vertices(gate, network(ψ_bpc)),
         apply_kwargs
     )
+    # Simple update of a two-site gate factorizes it across the edge shared by its two
+    # vertices, so those vertices MUST be adjacent in the tensor-network graph. Applying a
+    # two-site gate on non-adjacent vertices would silently manufacture a spurious bond and
+    # corrupt the belief-propagation cache; error out clearly instead.
+    if length(v⃗) == 2
+        has_edge(graph(ψ_bpc), NamedEdge(first(v⃗) => last(v⃗))) || error(
+            "apply_gate!: cannot apply a two-site gate on the non-adjacent vertices " *
+            "$(first(v⃗)) and $(last(v⃗)). Simple update requires the two sites to share an " *
+            "edge of the tensor-network graph. For a longer-range gate, first bring the sites " *
+            "together with a SWAP network, or use a multi-site update.",
+        )
+    end
+
     envs = length(v⃗) == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
 
     ψ⃗ = [network(ψ_bpc)[v] for v in v⃗]
