@@ -59,14 +59,17 @@ end
 
 # Embed a `d^n × d^n` operator matrix (computational basis, first site most
 # significant) into an `ITensor` with codomain `prime.(sites)` (outputs) and
-# domain `sites` (inputs). `project` is checked, so on graded sites an operator
-# that is not symmetric under the site index's grading throws an `InexactError`.
+# domain `sites` (inputs). Routed through `project_aux` (like `state`): a graded
+# operator that is odd under the site grading (e.g. `X`/`Y`, bare `c`/`c†`) has no
+# parity-block-diagonal `(prime.(sites), sites)` map, so it gets a trailing auxiliary
+# charge leg instead of throwing an `InexactError`. Even operators and dense (ungraded)
+# sites project cleanly, so they are unaffected (no aux leg).
 function _op_matrix_to_itensor(M::AbstractMatrix, sites::Tuple)
     ds = length.(sites)
     n = length(sites)
     A = reshape(Matrix{ComplexF64}(M), (reverse(ds)..., reverse(ds)...))
     A = permutedims(A, (reverse(1:n)..., reverse((n + 1):(2n))...))
-    return project(A, ITensorBase.prime.(sites), sites)
+    return project_aux(A, ITensorBase.prime.(sites), sites)
 end
 
 # Top-level `op(name, sites...; kwargs...)`. The identity is dimension-general (used
