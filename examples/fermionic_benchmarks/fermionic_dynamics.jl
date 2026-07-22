@@ -1,13 +1,15 @@
 using TensorNetworkQuantumSimulator
-
+using CUDA
 using LinearAlgebra
+using TensorNetworkQuantumSimulator: update
+using NPZ
 
 # Exact U=0 (free-fermion) dynamics for the spinful quench, via the single-particle
 # correlation matrix. h_{ab}=t on nearest-neighbour edges; up/down sectors are identical and
 # uncorrelated, so <n_v↑>=<n_v↓>=C_vv and the double occupancy factorises: <n_v↑ n_v↓>=C_vv².
 # Returns (nup_density[time], doccs[time][site]) over the requested `times`.
-function exact_free_fermion_dynamics(g, occ_sites, t, times)
-    vs  = collect(vertices(g)); N = length(vs)
+function exact_free_fermion_dynamics(g, t, times, v_measure)
+    vs  = collect(vertices(g)); N = length(vs); Nmeasure = length(v_measure)
     idx = Dict(v => k for (k, v) in enumerate(vs))
 
     h = zeros(Float64, N, N)                       # single-particle hopping (one spin)
@@ -15,36 +17,43 @@ function exact_free_fermion_dynamics(g, occ_sites, t, times)
         a, b = idx[src(e)], idx[dst(e)]
         h[a, b] = t; h[b, a] = t
     end
-    C0 = Diagonal([v in occ_sites ? 1.0 : 0.0 for v in vs])   # occupied on the UpDn sites
+    C0 = Diagonal([isodd(sum(v)) ? 1.0 : 0.0 for v in vs])
+    A_vert_inds = findall(v -> isodd(sum(v)) && v ∈ v_measure, vs)
+    B_vert_inds = findall(v -> iseven(sum(v)) && v ∈ v_measure, vs)
 
-    nup_density = Float64[]; doccs = Vector{Float64}[]
+    cdw_order = Float64[]
     for T in times
         V = exp(-im * T * h)                       # e^{-i h T}
         C = conj(V) * C0 * transpose(V)            # <c†_i↑ c_j↑>(T)
         occ = real.(diag(C))
-        push!(nup_density, sum(occ) / N)
-        push!(doccs, [occ[idx[v]]^2 for v in occ_sites])
+        push!(cdw_order, 2*(sum(occ[A_vert_inds]) - sum(occ[B_vert_inds]))/Nmeasure)
+        
     end
-    return nup_density, doccs
+    return cdw_order
 end
 
-function main()
-    g = named_grid((11,11))
+function main(U, χ)
+    g = named_hexagonal_lattice_graph(6,6)
     s = siteinds("spinful_fermion", g)
-    occ_sites = [(6,6), (6,5),(6,7),(5,6),(7,6)]
-    ψ = fermionic_tensornetworkstate(v -> v ∈ occ_sites ? "UpDn" : "Emp", g, s)
+    ψ = fermionic_tensornetworkstate(v -> isodd(sum(v)) ? "UpDn" : "Emp", g, s)
 
+    println("We have $(length(vertices(g))) sites")
+    v_measure = collect(center(g))
+    n_measure = length(v_measure)
+
+    a_verts, b_verts = filter(v -> isodd(sum(v)), v_measure), filter(v -> iseven(sum(v)), v_measure)
+    @assert length(a_verts) == length(b_verts)
     ψ_bpc = update(BeliefPropagationCache(ψ))
-    χ = 6
-    U = 0
+    R = 2*χ
     dt = 0.01
     t = -1
-    ec = edge_color(g, 4)
+    Δ = maximum([degree(g, v) for v in vertices(g)])
+    ec = edge_color(g, Δ)
 
-    ndts = 100
+    ndts = 1000
     dt = 0.01; t = -1
     times = dt .* collect(1:ndts)
-    nup_exact, doccs_exact = exact_free_fermion_dynamics(g, occ_sites, t, times)
+    cdw_order = exact_free_fermion_dynamics(g, t, times, v_measure)
 
     apply_kwargs= (; maxdim = χ, cutoff = 1e-14, normalize_tensors = true)
     single_site_gates = [("RInt", v, 0.5*U*dt) for v in vertices(g)]
@@ -53,9 +62,11 @@ function main()
         append!(two_site_gates, [("RHop", [src(e), dst(e)], t*dt) for e in es])
     end
 
-    nup_tot = sum([expect(ψ_bpc, (["Nup"], [v])) for v in vertices(g)])
-    println("Init. Nup density is $(nup_tot / length(vertices(g)))")
+    n_tot_a, n_tot_b = sum([expect(ψ_bpc, (["N"], [v])) for v in a_verts]), sum([expect(ψ_bpc, (["N"], [v])) for v in b_verts])
+    println("Init. CDW order is $((n_tot_a - n_tot_b) / (n_measure))")
 
+    bp_cdw, bmps_cdw, exact_cdw = Float64[1.0], Float64[1.0], Float64[1.0]
+    times = Float64[0.0]
     for i in 1:ndts
 
         ψ_bpc, _ = apply_gates(single_site_gates,ψ_bpc;apply_kwargs, update_cache = false)
@@ -65,19 +76,33 @@ function main()
         rescale!(ψ_bpc)
 
         if (i-1) % 10 == 0
-            nup_tot = sum([expect(ψ_bpc, (["Nup"], [v])) for v in vertices(g)])
-            println("Total Nup density is $(nup_tot / length(vertices(g)))")
 
             println("Maximum bond dimension is $(maxvirtualdim(ψ_bpc))")
+            n_tot_a, n_tot_b = sum([expect(ψ_bpc, (["N"], [v])) for v in a_verts]), sum([expect(ψ_bpc, (["N"], [v])) for v in b_verts])
+            println("BP CDW order is $((n_tot_a - n_tot_b) / (n_measure))")
 
-            doccs_bp = real.(expect(ψ_bpc, [(["NupNdn"], [v]) for v in occ_sites]))
-            doccs_bmps = real.(expect(network(ψ_bpc), [(["NupNdn"], [v]) for v in occ_sites]; alg = "boundarymps", mps_bond_dimension = 2*χ))
+            push!(bp_cdw, real((n_tot_a - n_tot_b) / (n_measure)))
 
-            @show abs(doccs_bp[1] - doccs_exact[i][1])
-            @show abs(doccs_bmps[1] - doccs_exact[i][1])
+            ψ_gpu = CUDA.cu(network(ψ_bpc))
+            #ψ_cpu = network(ψ_bpc)
+            ψ_bmps = update(BoundaryMPSCache(ψ_gpu, R))
+            n_tot_a, n_tot_b = sum([expect(ψ_bmps, (["N"], [v])) for v in a_verts]), sum([expect(ψ_bmps, (["N"], [v])) for v in b_verts])
+
+            println("BMPS CDW order is $((n_tot_a - n_tot_b) / (n_measure))")
+
+            println("Exact CDW order is $(cdw_order[i])")
+
+            push!(bmps_cdw, real((n_tot_a - n_tot_b) / (n_measure)))
+
+            push!(exact_cdw, cdw_order[i])
+            push!(times, i * dt)
+
+            npzwrite("/mnt/home/jtindall/ceph/Data/Fermions/FermionDynamics/HexagoanlCDWQUenchU$(U)Chi$(χ).npz", times = times, bp_cdw = bp_cdw, bmps_cdw = bmps_cdw, exact_cdw = exact_cdw)
         end
 
     end
 end
 
-main()
+U, χ = parse(Float64, ARGS[1]), parse(Int64, ARGS[2])
+#U, χ = 10.0, 16
+main(U, χ)
