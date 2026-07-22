@@ -110,11 +110,7 @@ function apply_gate!(
         "apply_gate!: only one- and two-site gates are supported; " *
         "received a gate acting on $nv vertices: $v⃗.",
     )
-    
-    # Simple update of a two-site gate factorizes it across the edge shared by its two
-    # vertices, so those vertices MUST be adjacent in the tensor-network graph. Applying a
-    # two-site gate on non-adjacent vertices would silently manufacture a spurious bond and
-    # corrupt the belief-propagation cache; error out clearly instead.
+
     if nv == 2
         has_edge(graph(ψ_bpc), NamedEdge(first(v⃗) => last(v⃗))) || error(
             "apply_gate!: cannot apply a two-site gate on the non-adjacent vertices " *
