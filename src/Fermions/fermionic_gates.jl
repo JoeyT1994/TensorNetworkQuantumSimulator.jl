@@ -259,8 +259,8 @@ For imaginary-time evolution `exp(-τ H)` pass an imaginary angle `θ = -im · �
 
 Supported gate names (with the required site count):
 - `"RHop"` (2 sites): rotated hopping, `exp(-i·θ·H)`, `H = Σ_σ (c†_{iσ} c_{jσ} + h.c.)`
-- `"RInt"` (1 spinful site): rotated interaction, `exp(-0.5i·θ·H)`, `H = n↑ n↓`. The angle
-  `θ` multiplies the `-0.5·im` half-step exponent (so `θ = U·dt` for a Hubbard half-step).
+- `"RInt"` (1 spinful site): rotated interaction, `exp(-i·θ·H)`, `H = n↑ n↓`. For
+  a Hubbard half-step, pass `θ = 0.5·U·dt`.
 - `"RN"` (1 site): rotated total number, `exp(-i·θ·H)`, `H = N` (spinless `n`; spinful `n↑ + n↓`)
 """
 function tofermionicitensor(name::String, θ, s_inds::Vector{<:Index})

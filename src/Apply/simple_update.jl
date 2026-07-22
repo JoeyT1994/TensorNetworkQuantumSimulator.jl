@@ -40,8 +40,8 @@ function simple_update(
         sqrt_envs_v1, inv_sqrt_envs_v1 = first.(sqrt_inv_sqrt_envs_v1), last.(sqrt_inv_sqrt_envs_v1)
         sqrt_envs_v2, inv_sqrt_envs_v2 = first.(sqrt_inv_sqrt_envs_v2), last.(sqrt_inv_sqrt_envs_v2)
 
-        ψᵥ₁ = contract([ψ⃗[1]; sqrt_envs_v1])
-        ψᵥ₂ = contract([ψ⃗[2]; sqrt_envs_v2])
+        ψᵥ₁ = isempty(sqrt_envs_v1) ? ψ⃗[1] : contract([ψ⃗[1]; sqrt_envs_v1])
+        ψᵥ₂ = isempty(sqrt_envs_v2) ? ψ⃗[2] : contract([ψ⃗[2]; sqrt_envs_v2])
         sᵥ₁ = commoninds(ψ⃗[1], o)
         sᵥ₂ = commoninds(ψ⃗[2], o)
         Qᵥ₁, Rᵥ₁ = qr(ψᵥ₁, uniqueinds(uniqueinds(ψᵥ₁, ψᵥ₂), sᵥ₁))
@@ -82,8 +82,8 @@ function simple_update(
                 oR, collect(unioninds(rᵥ₁, sᵥ₁)); apply_kwargs...
             )
         end
-        Qᵥ₁ = contract([Qᵥ₁; dag.(inv_sqrt_envs_v1)])
-        Qᵥ₂ = contract([Qᵥ₂; dag.(inv_sqrt_envs_v2)])
+        Qᵥ₁ = isempty(inv_sqrt_envs_v1) ? Qᵥ₁ : contract([Qᵥ₁; dag.(inv_sqrt_envs_v1)])
+        Qᵥ₂ = isempty(inv_sqrt_envs_v2) ? Qᵥ₂ : contract([Qᵥ₂; dag.(inv_sqrt_envs_v2)])
         updated_tensors = [Qᵥ₁ * Rᵥ₁, Qᵥ₂ * Rᵥ₂]
         if normalize_tensors
             s_values = normalize(s_values)
