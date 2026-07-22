@@ -104,24 +104,30 @@ function apply_gate!(
         v⃗ = vertices(gate, network(ψ_bpc)),
         apply_kwargs
     )
+    nv = length(v⃗)
+
+    1 <= nv <= 2 || error(
+        "apply_gate!: only one- and two-site gates are supported; " *
+        "received a gate acting on $nv vertices: $v⃗.",
+    )
+    
     # Simple update of a two-site gate factorizes it across the edge shared by its two
     # vertices, so those vertices MUST be adjacent in the tensor-network graph. Applying a
     # two-site gate on non-adjacent vertices would silently manufacture a spurious bond and
     # corrupt the belief-propagation cache; error out clearly instead.
-    if length(v⃗) == 2
+    if nv == 2
         has_edge(graph(ψ_bpc), NamedEdge(first(v⃗) => last(v⃗))) || error(
             "apply_gate!: cannot apply a two-site gate on the non-adjacent vertices " *
             "$(first(v⃗)) and $(last(v⃗)). Simple update requires the two sites to share an " *
-            "edge of the tensor-network graph. For a longer-range gate, first bring the sites " *
-            "together with a SWAP network, or use a multi-site update.",
+            "edge of the tensor-network graph.",
         )
     end
 
-    envs = length(v⃗) == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
+    envs = nv == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
 
     ψ⃗ = ITensor[network(ψ_bpc)[v] for v in v⃗]
     updated_tensors, s_values, err = simple_update(gate, ψ⃗; envs, apply_kwargs...)
-    if length(v⃗) == 2
+    if nv == 2
         v1, v2 = v⃗
         e = NamedEdge(v1 => v2)
         ind2 = commonind(s_values, first(updated_tensors))
