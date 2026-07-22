@@ -14,7 +14,7 @@ using Test: @testset, @test
     g = named_hexagonal_lattice_graph(3, 3)
     ψ = tensornetworkstate(ComplexF64, v -> "↑", g)
     ψ = gauge_and_scale(ψ)
-    bmps_sample = only(sample(ψ, 1; alg = "boundarymps", norm_mps_bond_dimension = 1, projected_mps_bond_dimension = 1, gauge_and_scale = false))
+    bmps_sample = only(sample(ψ, 1; alg = "boundarymps", norm_mps_bond_dimension = 1, projected_mps_bond_dimension = 1, gauge_state = false))
     @test all([bmps_sample[v] == 0 for v in vertices(g)])
 
     bp_sample = only(sample(ψ, 1; alg = "bp", gauge_state = false))
@@ -25,7 +25,7 @@ using Test: @testset, @test
     s = siteinds("S=1/2", g)
     ψ1, ψ2 = tensornetworkstate(Float64, v -> "↑", g, s), tensornetworkstate(Float64, v -> "↓", g, s)
     ψ = ψ1 + ψ2
-    #Set BP norm to 1 (sample will do this automatically unless you state gauge_and_scale = false)
+    #Set BP norm to 1 (sample will do this automatically unless you set gauge_state = false)
     ψ = gauge_and_scale(ψ)
 
     nsamples = 5
@@ -33,7 +33,7 @@ using Test: @testset, @test
     @test bp_samples isa Vector{<:Dictionary{vertextype(g), Int}}
     @test length(bp_samples) == nsamples
     @test all([keys(bp_sample) == vertices(g) for bp_sample in bp_samples])
-    bmps_certified_samples = sample_certified(ψ, nsamples; alg = "boundarymps", norm_mps_bond_dimension = 4, projected_mps_bond_dimension = 4, gauge_and_scale = false)
+    bmps_certified_samples = sample_certified(ψ, nsamples; alg = "boundarymps", norm_mps_bond_dimension = 4, projected_mps_bond_dimension = 4, gauge_state = false)
     p_qs = first.(bmps_certified_samples)
     bitstrings = last.(bmps_certified_samples)
     #GHZ state, so samples should be either all up or all down

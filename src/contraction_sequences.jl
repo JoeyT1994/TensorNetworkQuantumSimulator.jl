@@ -1,35 +1,20 @@
 using ITensors: Index, ITensor, @Algorithm_str, inds, noncommoninds, dim
-using TensorOperations: TensorOperations, optimaltree
-using OMEinsumContractionOrders: OMEinsumContractionOrders, optimize_code, EinCode, NestedEinsum, TreeSA, GreedyMethod, SABipartite, Treewidth, ExactTreewidth, HyperND
+using OMEinsumContractionOrders: OMEinsumContractionOrders, optimize_code, EinCode, NestedEinsum, TreeSA, GreedyMethod, SABipartite, Treewidth, ExactTreewidth, HyperND, ExhaustiveSearch
 
-function prune_trivial_tensors(tensors::Vector{<:ITensor})
-    pruned_tensors = copy(tensors)
-    for (i, t) in enumerate(pruned_tensors)
-        if all(d -> d == 1, dim.(inds(tensors[i])))
-            pruned_tensors[i] = adapt_like(t, ITensor(1))
-        end
-    end
-    return pruned_tensors
-end
-
-function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:ITensor}; prune_tensors = false)
-    #Needed because tensor operations bugs on trivial tensors
-    if prune_tensors
-        ITensors.disable_warn_order()
-        tensors = prune_trivial_tensors(tensors)
-    end
-    network = collect.(inds.(tensors))
-    #Converting dims to Float64 to minimize overflow issues
-    inds_to_dims = Dict(i => Float64(dim(i)) for i in unique(Iterators.flatten(network)))
-    seq, _ = optimaltree(network, inds_to_dims)
-    seq = typeof(seq) <: Int ? [seq] : seq
-    return seq
+# The exact "optimal" contraction order (Pfeifer 2014 netcon) is provided by
+# OMEinsumContractionOrders' `ExhaustiveSearch` optimizer, which ported this routine from
+# TensorOperations. It handles trivial 1-/2-tensor inputs directly, so the previous
+# trivial-tensor pruning and scalar-`Int` workarounds are no longer needed.
+function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:ITensor})
+    return contraction_sequence(Algorithm("omeinsum"), tensors; optimizer = ExhaustiveSearch())
 end
 
 function contraction_sequence(::Algorithm"omeinsum", tensors::Vector{<:ITensor}; optimizer = TreeSA())
     code, size_dict = to_eincode(tensors)
     optcode = optimize_code(code, size_dict, optimizer)
-    return to_contraction_sequence(optcode)
+    seq = to_contraction_sequence(optcode)
+    #A single-tensor network optimizes to a lone leaf; wrap it so a Vector is always returned.
+    return seq isa Integer ? [seq] : seq
 end
 
 function contraction_sequence(tensors::Vector{<:ITensor}; alg = "optimal", kwargs...)
@@ -40,7 +25,9 @@ end
 function to_eincode(tensors::Vector{<:ITensor})
     ixs = map(t -> collect(inds(t)), tensors)
     LT = eltype(eltype(ixs))
-    iy = collect(LT, reduce(noncommoninds, tensors))
+    #`reduce` over a single tensor returns the tensor itself, not its indices; a one-tensor
+    #network is trivial and its open indices are all of that tensor's indices.
+    iy = length(tensors) == 1 ? collect(LT, inds(only(tensors))) : collect(LT, reduce(noncommoninds, tensors))
     size_dict = Dict{LT, Int}(i => dim(i) for ix in ixs for i in ix)
     return EinCode(ixs, iy), size_dict
 end
