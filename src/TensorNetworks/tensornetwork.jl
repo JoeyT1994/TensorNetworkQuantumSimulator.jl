@@ -1,13 +1,17 @@
 using Dictionaries: Dictionary
 using Graphs: Graphs
-using ITensors: ITensors, ITensor
+using .ITensorKit: ITensor, commoninds, random_itensor, delta, denseblocks, datatype, Index, uniqueinds
 using NamedGraphs: NamedGraphs, add_edge!, incident_edges
 using NamedGraphs.GraphsExtensions: rem_edges!
 using Adapt
 
 #TODO: Make this show() nicely.
+# `tensors` holds one `ITensorMap` per vertex. Its value type is left abstract
+# (`Dictionary{V}`) because `ITensorMap` is parametric (rank/spacetype/storage), so
+# tensors of different ranks coexist and a concrete-valued dictionary would not be a
+# subtype of `Dictionary{V, ITensor}` (Dictionaries are invariant in value type).
 struct TensorNetwork{V} <: AbstractTensorNetwork{V}
-    tensors::Dictionary{V, ITensor}
+    tensors::Dictionary{V}
     graph::NamedGraph{V}
 end
 

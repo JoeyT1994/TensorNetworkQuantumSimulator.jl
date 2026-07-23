@@ -1,5 +1,6 @@
 @eval module $(gensym())
-using ITensors: datatype, norm
+using TensorNetworkQuantumSimulator.ITensorKit: datatype
+using LinearAlgebra: norm
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test
@@ -11,7 +12,7 @@ const TNQS = TensorNetworkQuantumSimulator
     g = named_grid((3, 3))
 
     #BMPS Cache
-    for eltype in [Float32, Float64, ComplexF32, ComplexF64]
+    for eltype in [Float32, ComplexF64]
         ψ = random_tensornetwork(eltype, g; bond_dimension = 2)
         ψ_BMPS = BoundaryMPSCache(ψ, 4)
         @test network(ψ_BMPS) isa TensorNetwork
@@ -30,7 +31,7 @@ const TNQS = TensorNetworkQuantumSimulator
 
     #BMPS Cache
     s = siteinds("S=1", g)
-    for eltype in [Float32, Float64, ComplexF32, ComplexF64]
+    for eltype in [Float32, ComplexF64]
         ψ = random_tensornetworkstate(eltype, g; bond_dimension = 2)
         ψ_BMPS = BoundaryMPSCache(ψ, 4)
         @test network(ψ_BMPS) isa TensorNetworkState

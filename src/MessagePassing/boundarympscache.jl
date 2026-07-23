@@ -39,7 +39,7 @@ end
 default_message_update_alg(bmps_cache::BoundaryMPSCache) = default_bmps_message_update_alg(network(bmps_cache))
 
 default_normalize(alg::Algorithm"fitting") = true
-default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(ITensors.NDTensors.scalartype(bmps_cache))
+default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(scalartype(network(bmps_cache)))
 _default_boundarymps_update_niters = 50
 function set_default_kwargs(alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache)
     normalize = get(alg.kwargs, :normalize, default_normalize(alg))
@@ -191,7 +191,7 @@ function set_interpartition_messages!(
         end
         for i in 1:(length(es) - 1)
             virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
-            ind = Index(virt_dim, "m$(i)$(i + 1)")
+            ind = Index(virt_dim)
             m1, m2 = message(bmps_cache, es[i]), message(bmps_cache, es[i + 1])
             t = adapt_like(m1, dense(delta(ind)))
             setmessage!(bmps_cache, es[i], m1 * t)
@@ -425,7 +425,7 @@ function generic_apply(
         end
 
         keep = left_link === nothing ? Index[site...] : Index[site..., left_link]
-        L, R = factorize(T, keep...; ortho = "left", cutoff, maxdim, tags = "Link,l=$i")
+        L, R, _ = factorize_svd(T, keep; ortho = "left", cutoff, maxdim)
         push!(out, L)
         carry = R
         left_link = only(commoninds(L, R))
@@ -436,7 +436,7 @@ function generic_apply(
     # Back sweep: right-to-left SVD recompression (optimal truncation of the forward result).
     for i in length(out):-1:2
         bond = only(commoninds(out[i - 1], out[i]))
-        L, R = factorize(out[i], bond; ortho = "right", cutoff, maxdim, tags = "Link,l=$(i - 1)")
+        L, R, _ = factorize_svd(out[i], [bond]; ortho = "right", cutoff, maxdim)
         out[i] = R
         out[i - 1] *= L
     end

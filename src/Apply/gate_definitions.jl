@@ -123,7 +123,7 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     # Multi-letter Pauli-string sugar: "XYZ" → X⊗Y⊗Z applied componentwise.
     # Single-letter "X"/"Y"/"Z" goes through the registry below.
     if _ispaulistring(name) && length(name) > 1
-        t = prod(ITensors.op(string(c), sind) for (c, sind) in zip(name, s_inds))
+        t = prod(op(string(c), sind) for (c, sind) in zip(name, s_inds))
         return t, verts
     end
 
@@ -140,7 +140,7 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     end
 
     if isempty(spec.paramkeys)
-        return ITensors.op(spec.opname, s_inds...), verts
+        return op(spec.opname, s_inds...), verts
     end
 
     raw = spec.rescale(gate[3])
@@ -149,7 +149,7 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
         "Gate \"$name\" expects $(length(spec.paramkeys)) parameter(s), got $(length(pvals))."
     ))
     kwargs = NamedTuple{spec.paramkeys}(pvals)
-    return ITensors.op(spec.opname, s_inds...; kwargs...), verts
+    return op(spec.opname, s_inds...; kwargs...), verts
 end
 
 # --- Public registration API ------------------------------------------------
@@ -254,28 +254,28 @@ function ITensors.op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Nu
     ]
 end
 ITensors.op(o::OpName"xx_plus_yy", ::SiteType"Qubit"; θ::Number, β::Number) =
-    ITensors.op(o, ITensors.SiteType("S=1/2"); θ, β)
+    ITensors.op(o, SiteType("S=1/2"); θ, β)
 
 """
     ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Number)
 
 Gate for rotation by XXYY at a given angle.
 """
-function ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2", s1::Index, s2::Index; θ = 1)
-    h = 0.5 * (op("X", s1) * op("X", s2) + op("Y", s1) * op("Y", s2))
+function ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2", s1::ITensors.Index, s2::ITensors.Index; θ = 1)
+    h = 0.5 * (ITensors.op("X", s1) * ITensors.op("X", s2) + ITensors.op("Y", s1) * ITensors.op("Y", s2))
     return exp(-im * θ * h)
 end
 ITensors.op(o::OpName"Rxxyy", ::SiteType"Qubit"; θ::Number) =
-    ITensors.op(o, ITensors.SiteType("S=1/2"); θ)
+    ITensors.op(o, SiteType("S=1/2"); θ)
 
 """
     ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2"; θ::Number)
 
 Gate for rotation by XXYYZZ at a given angle.
 """
-function ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2", s1::Index, s2::Index; θ = 1)
-    h = 0.5 * (op("X", s1) * op("X", s2) + op("Y", s1) * op("Y", s2) + op("Z", s1) * op("Z", s2))
+function ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2", s1::ITensors.Index, s2::ITensors.Index; θ = 1)
+    h = 0.5 * (ITensors.op("X", s1) * ITensors.op("X", s2) + ITensors.op("Y", s1) * ITensors.op("Y", s2) + ITensors.op("Z", s1) * ITensors.op("Z", s2))
     return exp(-im * θ * h)
 end
 ITensors.op(o::OpName"Rxxyyzz", ::SiteType"Qubit"; θ::Number) =
-    ITensors.op(o, ITensors.SiteType("S=1/2"); θ)
+    ITensors.op(o, SiteType("S=1/2"); θ)
