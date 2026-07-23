@@ -15,6 +15,7 @@ include("Forms/bilinearform.jl")
 include("Forms/quadraticform.jl")
 include("MessagePassing/abstractbeliefpropagationcache.jl")
 include("MessagePassing/beliefpropagationcache.jl")
+include("MessagePassing/multigpubeliefpropagationcache.jl")
 include("MessagePassing/boundarympscache.jl")
 include("MessagePassing/loopcorrection.jl")
 include("graph_ops.jl")
@@ -24,6 +25,7 @@ include("Apply/apply_gates.jl")
 include("Apply/simple_update.jl")
 include("Apply/full_update.jl")
 include("Apply/gate_definitions.jl")
+include("MessagePassing/multigpu_cuda.jl")
 include("expect.jl")
 include("norm_sqr.jl")
 include("inner.jl")
@@ -60,6 +62,8 @@ export
     random_tensornetworkstate,
     BeliefPropagationCache,
     rescale!,
+    MultiGPUBeliefPropagationCache,
+    partition_graph,
     message,
     network,
     update,

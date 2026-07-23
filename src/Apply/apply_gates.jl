@@ -28,7 +28,7 @@ end
 
 function apply_gates(
         circuit::Vector,
-        ψ_bpc::BeliefPropagationCache;
+        ψ_bpc::Union{BeliefPropagationCache, MultiGPUBeliefPropagationCache};
         kwargs...,
     )
     g = graph(ψ_bpc)
@@ -38,14 +38,14 @@ function apply_gates(
     return apply_gates(itensors, ψ_bpc; gate_vertices, kwargs...)
 end
 
-function adapt_gate(gate::ITensor, ψ_bpc::BeliefPropagationCache)
+function adapt_gate(gate::ITensor, ψ_bpc::AbstractBeliefPropagationCache)
     gate = scalartype(gate) <: Complex ? adapt(complex(scalartype(ψ_bpc)), gate) : adapt(scalartype(ψ_bpc), gate)
     return adapt(unspecify_type_parameters(datatype(ψ_bpc)), gate)
 end
 
 function apply_gates(
         circuit::Vector{<:ITensor},
-        ψ_bpc::BeliefPropagationCache;
+        ψ_bpc::Union{BeliefPropagationCache, MultiGPUBeliefPropagationCache};
         gate_vertices::Vector = vertices.(circuit, (network(ψ_bpc),)),
         apply_kwargs = (;),
         bp_update_kwargs = default_bp_update_kwargs(ψ_bpc),
