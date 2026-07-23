@@ -24,7 +24,7 @@ function simple_update(
     )
 
     if length(ψ⃗) == 1
-        updated_tensors = ITensor[ITensors.apply(o, only(ψ⃗))]
+        updated_tensors = ITensor[apply(o, only(ψ⃗))]
         s_values, err = nothing, 0
     else
         # When envs is empty no gauging happens and the cutoff is unused, so fall back to
@@ -35,32 +35,48 @@ function simple_update(
         envs_v2 = filter(env -> hascommoninds(env, ψ⃗[2]), envs)
         @assert all(ndims(env) == 2 for env in vcat(envs_v1, envs_v2))
 
-        sqrt_inv_sqrt_envs_v1 = pseudo_sqrt_inv_sqrt.(envs_v1; cutoff = sqrt_cutoff)
-        sqrt_inv_sqrt_envs_v2 = pseudo_sqrt_inv_sqrt.(envs_v2; cutoff = sqrt_cutoff)
+        # The environments are hermitian only up to numerical noise, so project before
+        # the square roots (which require hermitian input).
+        sqrt_invsqrt = function (env, ψᵥ)
+            ket_ind, bra_ind = commonind(env, ψᵥ), uniqueind(env, ψᵥ)
+            # Factorize from bra to ket (codomain = bra), the bipartition in which the
+            # fermionic message is PSD.
+            return sqrth_invsqrth_safe(
+                project_hermitian(env, (ket_ind,), (bra_ind,)),
+                (bra_ind,), (ket_ind,); atol = sqrt_cutoff, rtol = 0
+            )
+        end
+        sqrt_inv_sqrt_envs_v1 = map(env -> sqrt_invsqrt(env, ψ⃗[1]), envs_v1)
+        sqrt_inv_sqrt_envs_v2 = map(env -> sqrt_invsqrt(env, ψ⃗[2]), envs_v2)
         sqrt_envs_v1, inv_sqrt_envs_v1 = first.(sqrt_inv_sqrt_envs_v1), last.(sqrt_inv_sqrt_envs_v1)
         sqrt_envs_v2, inv_sqrt_envs_v2 = first.(sqrt_inv_sqrt_envs_v2), last.(sqrt_inv_sqrt_envs_v2)
 
-        ψᵥ₁ = contract([ψ⃗[1]; sqrt_envs_v1])
-        ψᵥ₂ = contract([ψ⃗[2]; sqrt_envs_v2])
+        ψᵥ₁ = contract_network([ψ⃗[1]; sqrt_envs_v1])
+        ψᵥ₂ = contract_network([ψ⃗[2]; sqrt_envs_v2])
         sᵥ₁ = commoninds(ψ⃗[1], o)
         sᵥ₂ = commoninds(ψ⃗[2], o)
-        Qᵥ₁, Rᵥ₁ = qr(ψᵥ₁, uniqueinds(uniqueinds(ψᵥ₁, ψᵥ₂), sᵥ₁))
-        Qᵥ₂, Rᵥ₂ = qr(ψᵥ₂, uniqueinds(uniqueinds(ψᵥ₂, ψᵥ₁), sᵥ₂))
+        Qᵥ₁, Rᵥ₁ = MAK.qr_compact(ψᵥ₁, setdiff(uniqueinds(ψᵥ₁, ψᵥ₂), sᵥ₁))
+        Qᵥ₂, Rᵥ₂ = MAK.qr_compact(ψᵥ₂, setdiff(uniqueinds(ψᵥ₂, ψᵥ₁), sᵥ₂))
         rᵥ₁ = commoninds(Qᵥ₁, Rᵥ₁)
         rᵥ₂ = commoninds(Qᵥ₂, Rᵥ₂)
-        oR = ITensors.apply(o, Rᵥ₁ * Rᵥ₂)
-        singular_values! = Ref(ITensor())
-        Rᵥ₁, Rᵥ₂, spec = factorize_svd(
-            oR,
-            unioninds(rᵥ₁, sᵥ₁);
-            ortho = "none",
-            singular_values!,
-            apply_kwargs...,
-        )
-        err = spec.truncerr
-        s_values = singular_values![]
-        Qᵥ₁ = contract([Qᵥ₁; dag.(inv_sqrt_envs_v1)])
-        Qᵥ₂ = contract([Qᵥ₂; dag.(inv_sqrt_envs_v2)])
+        oR = apply(o, Rᵥ₁ * Rᵥ₂)
+        # Balanced SVD: split the singular values symmetrically (√S into each factor) so neither
+        # side is isometric. The bond stays on `prime(u)` (keeping `u`'s name), so once this
+        # function `noprime`s its result the bond becomes `u`, which the returned `s_values` (over
+        # `(u, v)`) still shares for `apply_gate!`'s bond-message construction.
+        U, S, V, ϵ = MAK.svd_trunc(oR, union(rᵥ₁, sᵥ₁); trunc = itensor_trunc(; apply_kwargs...))
+        u = only(commoninds(U, S))
+        v = only(commoninds(S, V))
+        sqrtS = sqrth_safe(S, (u,), (v,); atol = 0, rtol = 0)
+        Rᵥ₁, Rᵥ₂ = U * replaceinds(sqrtS, v => prime(u)), replaceinds(sqrtS, u => prime(u)) * V
+        s_values = S
+        # Relative squared truncation error, from MatrixAlgebraKit's exact discarded-weight `ϵ`
+        # (the 2-norm of the discarded singular values) rather than the cancellation-prone
+        # `1 - ‖S‖²/‖oR‖²` norm subtraction.
+        total = norm(oR)
+        err = iszero(total) ? zero(real(scalartype(oR))) : (ϵ / total)^2
+        Qᵥ₁ = contract_network([Qᵥ₁; conj.(inv_sqrt_envs_v1)])
+        Qᵥ₂ = contract_network([Qᵥ₂; conj.(inv_sqrt_envs_v2)])
         updated_tensors = [Qᵥ₁ * Rᵥ₁, Qᵥ₂ * Rᵥ₂]
         if normalize_tensors
             s_values = normalize(s_values)
@@ -69,7 +85,7 @@ function simple_update(
 
     if normalize_tensors
         for ψᵥ in updated_tensors
-            rmul!(ITensors.data(ψᵥ), inv(norm(ψᵥ)))
+            rmul!(ψᵥ, inv(norm(ψᵥ)))
         end
     end
 

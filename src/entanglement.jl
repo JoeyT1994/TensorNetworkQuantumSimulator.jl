@@ -28,11 +28,6 @@ function renyi_entropy(ρ::AbstractMatrix, α::Real; normalize = true)
     return log(sum(λs .^ α)) / (1 - α)
 end
 
-function matricize(a::ITensor, row_inds = filter(i -> plev(i) ==0, inds(a)))
-    col_inds = prime.(row_inds)
-    return ITensors.array(a * ITensors.combiner(row_inds) * ITensors.combiner(col_inds))
-end
-
 """
     renyi_entropy(a::ITensor, row_inds = ...; normalize = true, α = 1)
 
@@ -50,7 +45,7 @@ and primed indices are column indices.
 - `α`: Rényi index (default `1`, i.e. von Neumann entropy).
 """
 function renyi_entropy(a::ITensor, row_inds = filter(i -> plev(i) ==0, inds(a)); normalize = true, α = 1)
-    return renyi_entropy(matricize(a, row_inds), α)
+    return renyi_entropy(Array(matricize(a, row_inds, prime.(row_inds))), α)
 end
 
 """
@@ -78,10 +73,15 @@ function renyi_entropy(
     ee = 0
     m1, m2 = message(bp_cache, e), message(bp_cache, reverse(e))
     edge_ind = only(virtualinds(bp_cache, e))
-    root_m2 = first(pseudo_sqrt_inv_sqrt(m2))
+    root_m2 = sqrth_safe(
+        project_hermitian(m2, (inds(m2)[1],), (inds(m2)[2],)),
+        (inds(m2)[1],), (inds(m2)[2],);
+        atol = 10 * eps(real(scalartype(m2))), rtol = 0
+    )
 
-    ρ =(m1 * replaceind(root_m2, edge_ind', edge_ind''))* root_m2
-    ρ= replaceind(ρ, edge_ind'', edge_ind')
+    edge_ind_p, edge_ind_pp = prime(edge_ind), prime(prime(edge_ind))
+    ρ = (m1 * replaceinds(root_m2, edge_ind_p => edge_ind_pp)) * root_m2
+    ρ = replaceinds(ρ, edge_ind_pp => edge_ind_p)
     return renyi_entropy(ρ; α)
 end
 

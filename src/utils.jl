@@ -15,32 +15,14 @@ function is_ring_graph(g::AbstractGraph)
     return is_line_graph(g_mod)
 end
 
-function pseudo_sqrt_inv_sqrt(M::ITensor; cutoff = 10 * eps(real(scalartype(M))))
-    @assert length(inds(M)) == 2
-    Q, D, Qdag = eigendecomp(M, inds(M)[1], inds(M)[2]; ishermitian = true)
-    D_sqrt = ITensors.map_diag(x -> iszero(x) || abs(x) < cutoff ? 0 : sqrt(x), D)
-    D_inv_sqrt = ITensors.map_diag(x -> iszero(x) || abs(x) < cutoff ? 0 : inv(sqrt(x)), D)
-    M_sqrt = Q * D_sqrt * Qdag
-    M_inv_sqrt = Q * D_inv_sqrt * Qdag
-    return M_sqrt, M_inv_sqrt
-end
-
-#TODO: Make this work for non-hermitian A
-function eigendecomp(A::ITensor, linds, rinds; ishermitian = false, kwargs...)
-    @assert ishermitian
-    D, U = safe_eigen(A, linds, rinds; ishermitian, kwargs...)
-    ul, ur = noncommonind(D, U), commonind(D, U)
-    Ul = replaceinds(U, vcat(rinds, ur), vcat(linds, ul))
-    return Ul, D, dag(U)
-end
-
 # Adapt `t` to the storage datatype (eltype + device) of `ref`.
 adapt_like(ref, t) = adapt(datatype(ref))(t)
 
+# The fused identity between the two index groups, via `Base.one` (graded-capable);
+# `one` takes a prototype tensor for the names/eltype/spaces, which `zeros` supplies.
 function identity_tensor(eltype, row_inds::Vector{<:Index}, col_inds::Vector{<:Index})
-    c_row, c_col = ITensors.combiner(row_inds),ITensors.combiner(col_inds)
-    t= ITensors.denseblocks(ITensors.delta(eltype, ITensors.combinedind(c_row), ITensors.combinedind(c_col)))
-    return (t * c_row)*c_col
+    row_is, col_is = Tuple(row_inds), Tuple(col_inds)
+    return one(zeros(eltype, row_is, col_is), row_is, col_is)
 end
 
 identity_tensor(row_inds::Vector{<:Index}, col_inds::Vector{<:Index}) = identity_tensor(Float64, row_inds, col_inds)
@@ -85,26 +67,6 @@ default_alg(any) = error("You must specify a contraction algorithm. Currently su
 function with_default_maxiter(cache_update_kwargs, cache)
     maxiter = get(cache_update_kwargs, :maxiter, default_bp_maxiter(cache))
     return (; cache_update_kwargs..., maxiter)
-end
-
-"""
-    safe_eigen(m::ITensor, args...; kwargs...)
-    A wrapper around ITensors.eigen that ensures eigen computations are done in Float64/ComplexF64 precision on CPU for better numerical stability.
-"""
-function safe_eigen(m::ITensor, args...; kwargs...)
-    dtype = datatype(m)
-    e = eltype(m)
-    if e == ComplexF64 || e == Float64
-        return ITensors.eigen(m, args...; kwargs...)
-    elseif e == Float32
-        m = adapt(Vector{Float64}, m)
-        D, U = ITensors.eigen(m, args...; kwargs...)
-        return adapt(dtype)(D), adapt(dtype)(U)
-    elseif e == ComplexF32
-        m = adapt(Vector{ComplexF64}, m)
-        D, U = ITensors.eigen(m, args...; kwargs...)
-        return adapt(dtype)(D), adapt(dtype)(U)
-    end
 end
 
 collect_vertices(e::NamedEdge, g::NamedGraph) = collect_vertices([src(e), dst(e)], g)

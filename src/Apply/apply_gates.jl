@@ -39,7 +39,7 @@ function apply_gates(
 end
 
 function adapt_gate(gate::ITensor, ψ_bpc::BeliefPropagationCache)
-    gate = scalartype(gate) <: Complex ? adapt(complex(scalartype(ψ_bpc)), gate) : adapt(scalartype(ψ_bpc), gate)
+    gate = scalartype(gate) <: Complex ? adapt_scalartype(complex(scalartype(ψ_bpc)), gate) : adapt_scalartype(scalartype(ψ_bpc), gate)
     return adapt(unspecify_type_parameters(datatype(ψ_bpc)), gate)
 end
 
@@ -126,12 +126,14 @@ function apply_gate!(
     if nv == 2
         v1, v2 = v⃗
         e = NamedEdge(v1 => v2)
-        ind2 = commonind(s_values, first(updated_tensors))
-        δuv = dag(copy(s_values))
-        δuv = replaceind(δuv, ind2, ind2')
-        map_diag!(sign, δuv, δuv)
-        s_values = denseblocks(s_values) * denseblocks(δuv)
-        setmessage!(ψ_bpc, e, dag(s_values))
+        u = commonind(s_values, first(updated_tensors))
+        v = uniqueind(s_values, first(updated_tensors))
+        # The new messages are the singular values over the bond-and-prime pair.
+        # MatrixAlgebraKit singular values are nonnegative, so the legacy sign fix
+        # (`s * sign(s)` via `map_diag!`) was a no-op and is dropped; fermionic sign
+        # handling for this message construction is future work.
+        s_values = replaceinds(s_values, v => prime(u))
+        setmessage!(ψ_bpc, e, conj(s_values))
         setmessage!(ψ_bpc, reverse(e), s_values)
     end
 

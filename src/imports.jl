@@ -43,8 +43,19 @@ using NamedGraphs.GraphsExtensions:
 
 using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_graph, named_comb_tree, named_path_graph
 
-using ITensors: ITensors
-using ITensors: Index, ITensor, hasqns, noncommonind, combinedind, combiner, replaceinds, sim, onehot, delta, plev, dense, unioninds, uniqueinds, commonind, commoninds, replaceind, datatype, inds, dag, noprime, factorize_svd, prime, hascommoninds, itensor, map_diag!, @Algorithm_str, scalar, @OpName_str, @SiteType_str, denseblocks, tags, op, apply, contract, inner
+# TNQS-owned operator / named-state system. `op`/`state` are called qualified (`Ops.op`,
+# `Ops.state`) so `state` does not clash with the unrelated `ITensorBase.state`, and gates
+# are registered by extending `Ops.op`. The types and string macros are imported for
+# unqualified use (gate definitions dispatch on bare `OpName"…"` / `SiteType"…"`).
+using .Ops: OpName, SiteType, @OpName_str, @SiteType_str
+using ITensorBase: ITensorBase, Index, ITensor, commonind, commoninds, hascommoninds, name,
+    noprime, plev, prime, replaceinds, settags, sim, tags, uniqueind, unnamed
+import ITensorBase: uniqueinds
+using TensorAlgebra: trivialrange, matricize, scalar, directsum
+import TensorAlgebra: datatype
+import Base: truncate
+using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe, sqrth_safe
+using MatrixAlgebraKit: project_hermitian
 
 using Adapt: adapt
 

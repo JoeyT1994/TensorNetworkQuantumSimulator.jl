@@ -1,6 +1,8 @@
 module TensorNetworkQuantumSimulator
 
 
+include("itensors.jl")
+include("Ops.jl")
 include("imports.jl")
 
 include("siteinds.jl")
@@ -83,7 +85,7 @@ export
     TensorNetwork,
     AbstractTensorNetwork,
     partitionfunction,
-    contract,
+    contract_network,
     TreeSA,
     GreedyMethod,
     SABipartite,

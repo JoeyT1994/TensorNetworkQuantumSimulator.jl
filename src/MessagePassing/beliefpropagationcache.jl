@@ -1,8 +1,6 @@
 using Dictionaries: Dictionary, set!, delete!
 using Graphs: AbstractGraph, is_tree, connected_components
 using NamedGraphs.GraphsExtensions: default_root_vertex, forest_cover, post_order_dfs_edges, forest_cover_edge_sequence, boundary_edges, leaf_vertices, a_star
-using ITensors: dim, ITensor, delta, Algorithm
-using ITensors.NDTensors: scalartype
 using LinearAlgebra: normalize
 
 #TODO: Make this show() nicely.
@@ -111,7 +109,7 @@ function default_bp_update_kwargs(tn::AbstractTensorNetwork)
     if is_tree(tn)
         maxiter, tolerance, verbose = 1, nothing, false
     else
-        maxiter, tolerance, verbose = _default_bp_update_maxiter, default_tolerance(ITensors.NDTensors.scalartype(tn)), false
+        maxiter, tolerance, verbose = _default_bp_update_maxiter, default_tolerance(scalartype(tn)), false
     end
     return (; maxiter, tolerance, verbose)
 end
@@ -119,9 +117,9 @@ end
 default_bp_update_kwargs(bp_cache::BeliefPropagationCache) = default_bp_update_kwargs(network(bp_cache))
 
 function make_hermitian(A::ITensor)
-    A_inds = ITensors.inds(A)
+    A_inds = inds(A)
     @assert length(A_inds) == 2
-    return (A + ITensors.swapind(dag(A), first(A_inds), last(A_inds))) / 2
+    return (A + replaceinds(conj(A), first(A_inds) => last(A_inds), last(A_inds) => first(A_inds))) / 2
 end
 
 function rescale_messages!(bp_cache::BeliefPropagationCache, edges::Vector{<:AbstractEdge})
@@ -161,20 +159,16 @@ function loop_correlation(bpc::BeliefPropagationCache, loop::Vector{<:NamedEdge}
         if !isempty(t_inds)
             t_ind = only(t_inds)
             t_ind_pos = findfirst(x -> x == t_ind, e_virtualinds)
-            t = replaceind(t, t_ind, e_virtualinds_sim[t_ind_pos])
+            t = replaceinds(t, t_ind => e_virtualinds_sim[t_ind_pos])
         end
         push!(local_tensors, t)
     end
 
     tensors = ITensor[local_tensors; reduce(vcat, [bp_factors(bpc, v) for v in setdiff(vs, [src_vertex])]); incoming_messages]
     seq = contraction_sequence(tensors; alg = "omeinsum", optimizer = GreedyMethod())
-    t = contract(tensors; sequence = seq)
+    t = contract_network(tensors; sequence = seq)
 
-    row_combiner, col_combiner = ITensors.combiner(e_virtualinds), ITensors.combiner(e_virtualinds_sim)
-    t = t * row_combiner * col_combiner
-    t = adapt(Vector{ComplexF64})(t)
-    t = ITensors.NDTensors.array(t)
-    λs = reverse(sort(LinearAlgebra.eigvals(t); by = abs))
+    λs = reverse(sort(MAK.eig_vals(t, e_virtualinds, e_virtualinds_sim); by = abs))
     err = 1 - abs(λs[1]) / sum(abs.(λs))
     return err
 end

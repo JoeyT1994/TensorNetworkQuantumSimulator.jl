@@ -85,7 +85,6 @@ update_iteration!
 ## Utilities
 
 ```@docs
-safe_eigen
 add
 fidelity
 optimise_p_q
@@ -93,10 +92,14 @@ optimise_p_q
 
 ## Custom Gate Definitions
 
+```@meta
+CurrentModule = TensorNetworkQuantumSimulator.Ops
+```
+
 ```@docs
-ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"Rxxyy", ::ITensors.SiteTypes.SiteType"S=1/2", ::ITensors.Index, ::ITensors.Index)
-ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"Rxxyyzz", ::ITensors.SiteTypes.SiteType"S=1/2", ::ITensors.Index, ::ITensors.Index)
-ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"xx_plus_yy", ::ITensors.SiteTypes.SiteType"S=1/2")
+op(::OpName"Rxxyy", ::SiteType"S=1/2")
+op(::OpName"Rxxyyzz", ::SiteType"S=1/2")
+op(::OpName"xx_plus_yy", ::SiteType"S=1/2")
 ```
 
 ## Index

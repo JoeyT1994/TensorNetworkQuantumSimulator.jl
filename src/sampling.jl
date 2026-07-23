@@ -20,19 +20,19 @@ function sample(
         bit_string = Dictionary{keytype(vertices(ψ)), Int}()
         for v in vertices(ψ)
             tensors = incoming_messages(projected_bp_cache, v)
-            ψv, ψv_dag = network(projected_bp_cache)[v], dag(prime(network(projected_bp_cache)[v]))
+            ψv, ψv_dag = network(projected_bp_cache)[v], bra_tensor(network(projected_bp_cache), v)
             push!(tensors, ψv, ψv_dag)
             seq = contraction_sequence(tensors; alg = "optimal")
-            ρ = ITensors.contract(tensors; sequence = seq)
+            ρ = contract_network(tensors; sequence = seq)
 
-            ρ_tr = tr(ρ)
+            ρ_tr = tr(ρ, operator_inds(ρ)...)
             ρ *= inv(ρ_tr)
-            ρ_diag = collect(real.(diag(ITensors.array(ρ))))
+            ρ_diag = collect(real.(diag(Array(ρ))))
             config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
             # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
             set!(bit_string, v, config - 1)
             s_ind = inds(ρ)[findfirst(i -> plev(i) == 0, inds(ρ))]
-            P = adapt_like(ρ, onehot(s_ind => config))
+            P = adapt_like(ρ, conj(onehot(s_ind => config)))
             setindex_preserve!(projected_bp_cache, ψv * P, v)
 
             if v != last(vertices(ψ))
@@ -200,7 +200,13 @@ function get_one_sample(
             es = sorted_edges(norm_bmps_cache, pe)
 
             for (i, e) in enumerate(es)
-                setmessage!(norm_bmps_cache, e, ITensor[outgoing_mps[i], prime(dag(outgoing_mps[i]))])
+                mt = outgoing_mps[i]
+                # Legs unique to `mt` (not facing the network, not MPS chain bonds) are
+                # dangling non-physical legs the applied row carried into the message
+                # (e.g. charge legs of projected sites); the bra copy pairs them.
+                net_inds = virtualinds(network(norm_bmps_cache), e)
+                aux = setdiff(inds(mt), net_inds, (inds(m) for m in outgoing_mps if m !== mt)...)
+                setmessage!(norm_bmps_cache, e, ITensor[mt, bra_tensor(mt, aux)])
             end
 
             incoming_mps = outgoing_mps
@@ -230,19 +236,19 @@ function sample_partition!(
         !isnothing(prev_v) && update_partition!(norm_bmps_cache, [NamedEdge(prev_v => v)])
         incoming_ms = incoming_messages(norm_bmps_cache, [v])
         ψv = network(norm_bmps_cache)[v]
-        ψvdag = dag(prime(ψv))
+        ψvdag = bra_tensor(network(norm_bmps_cache), v)
         ts = [incoming_ms; [ψv, ψvdag]]
         seq = contraction_sequence(ts; alg = "optimal")
-        ρ = contract(ts; sequence = seq)
-        ρ_tr = tr(ρ)
+        ρ = contract_network(ts; sequence = seq)
+        ρ_tr = tr(ρ, operator_inds(ρ)...)
         push!(traces, ρ_tr)
         ρ *= inv(ρ_tr)
-        ρ_diag = collect(real.(diag(ITensors.array(ρ))))
+        ρ_diag = collect(real.(diag(Array(ρ))))
         config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
         # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
         set!(bit_string, v, config - 1)
         s_ind = inds(ρ)[findfirst(i -> plev(i) == 0, inds(ρ))]
-        P = adapt_like(ρ, onehot(s_ind => config))
+        P = adapt_like(ρ, conj(onehot(s_ind => config)))
         q = ρ_diag[config]
         logq += log(q)
         Pψv = copy(network(norm_bmps_cache)[v]) * inv(sqrt(q)) * P
@@ -270,7 +276,7 @@ function certify_sample(
     s = siteinds(ψ)
     qv = sqrt(exp(inv(oftype(logq, length(vertices(ψ)))) * logq))
     for v in vertices(ψ)
-        P = adapt_like(ψproj[v], onehot(only(s[v]) => bitstring[v] + 1))
+        P = adapt_like(ψproj[v], conj(onehot(only(s[v]) => bitstring[v] + 1)))
         setindex_preserve!(ψproj, ψproj[v] * P * inv(qv), v)
     end
 
