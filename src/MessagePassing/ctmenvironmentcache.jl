@@ -292,6 +292,239 @@ end
 
 freenergy(cache::CTMEnvironmentCache) = log(partitionfunction(cache))
 
+# =================================================================================
+# Per-vertex CVM environments: a 4C+4T ring on EVERY vertex.
+#
+#   C[:NW,x,y] = all vertices with col<x, row<y      (likewise :NE :SW :SE)
+#   T[:N,x,y]  = column x, rows<y                    T[:S,x,y] = column x, rows≥y
+#   T[:W,x,y]  = cols<x, row y                       T[:E,x,y] = cols≥x, row y
+#
+# Corners are GROWN with their two adjoining edge tensors and the vertex tensor,
+#   C̃_NW(x+1,y+1) = C_NW(x,y) · T_N(x,y) · T_W(x,y) · a(x,y),
+# and the two open interfaces of C̃ are then PROJECTED. Each interface is shared by
+# several blocks, so its projector must be a single object — derived once, consumed
+# elsewhere. Interface families, each a nested chain of isometries:
+#
+#   PH[:N,x,y] : horizontal links at column x, rows<y   (C_NW.right, C_NE.left, T_N sides)
+#   PH[:S,x,y] : horizontal links at column x, rows≥y   (C_SW.right, C_SE.left, T_S sides)
+#   PV[:W,x,y] : vertical links at row y, cols<x        (C_NW.down, C_SW.up, T_W sides)
+#   PV[:E,x,y] : vertical links at row y, cols≥x        (C_NE.down, C_SE.up, T_E sides)
+#
+# See docs/finite_ctmrg_design.md.
+struct CTMVertexEnvironments
+    C::Dict{Tuple{Symbol, Int, Int}, Any}
+    T::Dict{Tuple{Symbol, Int, Int}, Any}
+    PH::Dict{Tuple{Symbol, Int, Int}, Any}
+    PV::Dict{Tuple{Symbol, Int, Int}, Any}
+    Lx::Int
+    Ly::Int
+end
+
+_ctm_nn(d, k) = get(d, k, nothing)
+_ctm_mul(a, b) = isnothing(a) ? b : (isnothing(b) ? a : _ctm_contract(ITensor[a, b]))
+_ctm_widx(d, k) = (t = get(d, k, nothing); isnothing(t) ? nothing : t[2])
+
+# Isometry truncating index set `ins` of block `B` to `maxdim`, from the eigendecomposition
+# of B's reduced density matrix on those indices. Returns (P, w) with P legs (ins…, w).
+function _ctm_interface_proj(B, ins::Vector{<:Index}, maxdim::Integer)
+    (isnothing(B) || isempty(ins)) && return nothing
+    co = combiner(ins...); io = combinedind(co)
+    d = ITensors.dim(io); k = min(Int(maxdim), d)
+    if k == d                              # nothing to truncate: keep the basis intact
+        w = Index(d)
+        return ITensor(Matrix{Float64}(I, d, d), io, w) * co, w
+    end
+    Bc = B * co
+    ρ = Bc * prime(dag(Bc), io)
+    P, w, _ = _ctm_eig_projector(ρ, io, k)
+    return P * co, w
+end
+
+# Grid geometry / lazy factors ----------------------------------------------------
+_ctm_dims(cache::CTMEnvironmentCache) = (length(first(cache.rows)), length(cache.rows))
+_ctm_vertex(cache::CTMEnvironmentCache, x::Int, y::Int) = cache.rows[y][x]
+
+function _ctm_factor_table(cache::CTMEnvironmentCache)
+    Lx, Ly = _ctm_dims(cache)
+    tbl = Dict{Tuple{Int, Int}, Vector{ITensor}}()
+    for y in 1:Ly, x in 1:Lx
+        tbl[(x, y)] = Vector{ITensor}(bp_factors(network(cache), _ctm_vertex(cache, x, y)))
+    end
+    return tbl
+end
+
+# Links between neighbouring vertices: ONE index for a single layer, TWO (ket+bra) for a
+# double layer — discovered from the tensors, never fused.
+function _ctm_links(tbl, a::Tuple{Int, Int}, b::Tuple{Int, Int})
+    is = Index[]
+    for t1 in tbl[a], t2 in tbl[b]
+        append!(is, commoninds(t1, t2))
+    end
+    return unique(is)
+end
+
+"""
+    vertex_environments(cache::CTMEnvironmentCache)
+
+Build the position-resolved corner/edge environments (a 4C+4T ring on every vertex) by
+growing corners with their adjoining edge tensors and projecting each shared interface.
+Feeds [`region_lnZ`](@ref) and the CVM free energy.
+"""
+function vertex_environments(cache::CTMEnvironmentCache)
+    Lx, Ly = _ctm_dims(cache)
+    χ = cache.maxdim
+    tbl = _ctm_factor_table(cache)
+    hl(x, y) = _ctm_links(tbl, (x, y), (x + 1, y))      # horizontal link cols x|x+1 at row y
+    vl(x, y) = _ctm_links(tbl, (x, y), (x, y + 1))      # vertical link rows y|y+1 at col x
+    a(x, y) = tbl[(x, y)]
+
+    C = Dict{Tuple{Symbol, Int, Int}, Any}()
+    T = Dict{Tuple{Symbol, Int, Int}, Any}()
+    PH = Dict{Tuple{Symbol, Int, Int}, Any}()
+    PV = Dict{Tuple{Symbol, Int, Int}, Any}()
+
+    # ---- W strips (y increasing, x increasing): derives PV[:W] ----
+    for y in 1:Ly, x in 1:(Lx - 1)
+        raw = _ctm_mul(_ctm_nn(T, (:W, x, y)), _ctm_contract(a(x, y)))
+        if y > 1
+            P = _ctm_nn(PV, (:W, x + 1, y - 1))
+            !isnothing(P) && (raw = raw * P[1])
+        end
+        if y < Ly
+            ins = Index[]
+            w = _ctm_widx(PV, (:W, x, y)); !isnothing(w) && push!(ins, w)
+            append!(ins, vl(x, y))
+            pr = _ctm_interface_proj(raw, ins, χ)
+            if !isnothing(pr)
+                PV[(:W, x + 1, y)] = pr
+                raw = raw * pr[1]
+            end
+        end
+        T[(:W, x + 1, y)] = raw
+    end
+    # ---- E strips (x decreasing): derives PV[:E] ----
+    for y in 1:Ly, x in Lx:-1:2
+        raw = _ctm_mul(_ctm_contract(a(x, y)), _ctm_nn(T, (:E, x + 1, y)))
+        if y > 1
+            P = _ctm_nn(PV, (:E, x, y - 1))
+            !isnothing(P) && (raw = raw * P[1])
+        end
+        if y < Ly
+            ins = Index[]
+            append!(ins, vl(x, y))
+            w = _ctm_widx(PV, (:E, x + 1, y)); !isnothing(w) && push!(ins, w)
+            pr = _ctm_interface_proj(raw, ins, χ)
+            if !isnothing(pr)
+                PV[(:E, x, y)] = pr
+                raw = raw * pr[1]
+            end
+        end
+        T[(:E, x, y)] = raw
+    end
+    # ---- C[:NW] (y increasing): derives PH[:N] ----
+    for x in 2:Lx, y in 1:(Ly - 1)
+        raw = _ctm_mul(_ctm_nn(C, (:NW, x, y)), _ctm_nn(T, (:W, x, y)))
+        ins = Index[]
+        w = _ctm_widx(PH, (:N, x - 1, y)); !isnothing(w) && push!(ins, w)
+        append!(ins, hl(x - 1, y))
+        pr = _ctm_interface_proj(raw, ins, χ)
+        if !isnothing(pr)
+            PH[(:N, x - 1, y + 1)] = pr
+            raw = raw * pr[1]
+        end
+        C[(:NW, x, y + 1)] = raw
+    end
+    # ---- C[:SW] (y decreasing): derives PH[:S] ----
+    for x in 2:Lx, y in Ly:-1:2
+        raw = _ctm_mul(_ctm_nn(C, (:SW, x, y + 1)), _ctm_nn(T, (:W, x, y)))
+        ins = Index[]
+        append!(ins, hl(x - 1, y))
+        w = _ctm_widx(PH, (:S, x - 1, y + 1)); !isnothing(w) && push!(ins, w)
+        pr = _ctm_interface_proj(raw, ins, χ)
+        if !isnothing(pr)
+            PH[(:S, x - 1, y)] = pr
+            raw = raw * pr[1]
+        end
+        C[(:SW, x, y)] = raw
+    end
+    # ---- C[:NE] / C[:SE]: consume PH ----
+    for x in 2:Lx
+        for y in 1:(Ly - 1)
+            raw = _ctm_mul(_ctm_nn(C, (:NE, x, y)), _ctm_nn(T, (:E, x, y)))
+            P = _ctm_nn(PH, (:N, x - 1, y + 1))
+            !isnothing(P) && (raw = raw * dag(P[1]))
+            C[(:NE, x, y + 1)] = raw
+        end
+        for y in Ly:-1:2
+            raw = _ctm_mul(_ctm_nn(C, (:SE, x, y + 1)), _ctm_nn(T, (:E, x, y)))
+            P = _ctm_nn(PH, (:S, x - 1, y))
+            !isnothing(P) && (raw = raw * dag(P[1]))
+            C[(:SE, x, y)] = raw
+        end
+    end
+    # ---- N / S column strips: consume PH ----
+    for x in 1:Lx
+        for y in 1:(Ly - 1)
+            raw = _ctm_mul(_ctm_nn(T, (:N, x, y)), _ctm_contract(a(x, y)))
+            P = _ctm_nn(PH, (:N, x - 1, y + 1)); !isnothing(P) && (raw = raw * dag(P[1]))
+            Q = _ctm_nn(PH, (:N, x, y + 1));     !isnothing(Q) && (raw = raw * Q[1])
+            T[(:N, x, y + 1)] = raw
+        end
+        for y in Ly:-1:2
+            raw = _ctm_mul(_ctm_contract(a(x, y)), _ctm_nn(T, (:S, x, y + 1)))
+            P = _ctm_nn(PH, (:S, x - 1, y)); !isnothing(P) && (raw = raw * dag(P[1]))
+            Q = _ctm_nn(PH, (:S, x, y));     !isnothing(Q) && (raw = raw * Q[1])
+            T[(:S, x, y)] = raw
+        end
+    end
+    return CTMVertexEnvironments(C, T, PH, PV, Lx, Ly)
+end
+
+"""
+    region_lnZ(env::CTMVertexEnvironments, cache, cx, cy)
+
+Region free energy `ln Z_R`. Integer `(cx,cy)` → vertex ring (4C+4T+a); half-integer in one
+axis → edge strip (4C+2T); both half-integer → plaquette loop (4C).
+"""
+function region_lnZ(env::CTMVertexEnvironments, cache::CTMEnvironmentCache, cx::Real, cy::Real)
+    Lx, Ly = env.Lx, env.Ly
+    rL = ceil(Int, cx); rR = floor(Int, cx) + 1
+    tT = ceil(Int, cy); tB = floor(Int, cy) + 1
+    xint = rL < rR; yint = tT < tB
+    ts = Any[_ctm_nn(env.C, (:NW, rL, tT)), _ctm_nn(env.C, (:NE, rR, tT)),
+             _ctm_nn(env.C, (:SW, rL, tB)), _ctm_nn(env.C, (:SE, rR, tB))]
+    if xint
+        push!(ts, _ctm_nn(env.T, (:N, Int(cx), tT)))
+        push!(ts, _ctm_nn(env.T, (:S, Int(cx), tB)))
+    end
+    if yint
+        push!(ts, _ctm_nn(env.T, (:W, rL, Int(cy))))
+        push!(ts, _ctm_nn(env.T, (:E, rR, Int(cy))))
+    end
+    if xint && yint
+        append!(ts, bp_factors(network(cache), _ctm_vertex(cache, Int(cx), Int(cy))))
+    end
+    keep = ITensor[t for t in ts if !isnothing(t)]
+    isempty(keep) && return 0.0
+    return log(abs(real(scalar(_ctm_contract(keep)))))
+end
+
+"""
+    cvm_freenergy(cache::CTMEnvironmentCache)
+
+Region-graph (CVM) free energy `F = Σ_v ln Z_v − Σ_e ln Z_e + Σ_p ln Z_p`. Exact when the
+environments are lossless, since `V − E + P = 1` for a disk.
+"""
+function cvm_freenergy(cache::CTMEnvironmentCache; env = vertex_environments(cache))
+    Lx, Ly = env.Lx, env.Ly
+    F = 0.0
+    for x in 1:Lx, y in 1:Ly;           F += region_lnZ(env, cache, x, y);             end
+    for x in 1:(Lx - 1), y in 1:Ly;     F -= region_lnZ(env, cache, x + 0.5, y);       end
+    for x in 1:Lx, y in 1:(Ly - 1);     F -= region_lnZ(env, cache, x, y + 0.5);       end
+    for x in 1:(Lx - 1), y in 1:(Ly - 1); F += region_lnZ(env, cache, x + 0.5, y + 0.5); end
+    return F
+end
+
 # --- row-local observables -------------------------------------------------------
 # Top / bottom environments around row `y` (each `nothing` at the boundary).
 function row_environments(cache::CTMEnvironmentCache, y::Integer)
