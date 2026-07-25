@@ -401,6 +401,49 @@ fixed points are its stationary points.
 project(grow(C))` is a non-symmetric eigenproblem, so Krylov–Schur replaces fixed-point iteration
 and should cut the 8–12 sweeps. That is a convergence-rate win, not an accuracy win, given (2).
 
+### Gauge fixing — LANDED, `CTM_GAUGE` default ON
+
+The pair has an exact gauge freedom `P_A → P_A R`, `P_B → R⁻¹ P_B`, leaving `Π = P_A P_B` and so
+every region value untouched. The sweep used to pick that gauge — and a fresh `Index` — arbitrarily
+each iteration, so `S` and `sweep(S)` sat in different bases. That is what blocked every
+accelerator and left `|ΔF|` as the only convergence signal.
+
+**The gauge must be UNITARY — measured, this is not optional.** Canonicalising by QR (pushing the
+triangular factor into `P_B`) changes `F`: 1.1e-2 at χ=4, 2.6e-3 at χ=6, 8.7e-6 at χ=8, invariant
+only at lossless χ=12. A triangular `R` is not unitary, so it changes the metric on the interface
+and the *next* level's SVD truncation then picks a different subspace. **Truncation is not gauge
+invariant**; only inner-product-preserving changes of basis are safe.
+
+So `_ctm_align` uses orthogonal **Procrustes**: with `M = P_A_newᵀ P_A_old = U S Vᵀ`, take
+`R = U Vᵀ`, the nearest unitary. Reusing the old `Index` then makes successive blocks comparable.
+`F` comes out invariant to 1e-14 at χ = 4/6/8/12, and identical to all printed digits against the
+pre-gauge default at χ = 4/6/8/12/16.
+
+**Payoff, χ=6:**
+
+| | comparable blocks | state distance |
+|---|---|---|
+| gauge off | **0 / 84** every sweep | never available |
+| gauge on | 0 → 20 → 48 → **84 / 84** | 2.8e-2 → 9.3e-3 → 2.9e-3 → 1.4e-3 → 6.4e-4 → 9.7e-5 → 2.6e-5 |
+
+It bootstraps over ~3 sweeps — `ins` contains the lower level's kept index, so index stability
+propagates upward — then every block is comparable and the distance decays cleanly at ≈0.35/sweep.
+
+**Unexpected bonus: `|ΔF|` is an unreliable stopping criterion.** Over sweeps 8–10 it *rises*:
+1.2e-7 → 3.4e-7 → 5.4e-7, oscillating at the roundoff floor of a signed log-sum. The state distance
+decays monotonically throughout. `update` now converges on `max(|ΔF|, statedist)` via
+`_ctm_statedist`, which both stops later when it should and actually certifies convergence.
+
+**What this unlocks.** Anderson/JFNK/Krylov acceleration is now well-posed — iterates share a
+vector space, so they can be linearly combined. At ≈0.35/sweep the current Picard rate needs ~8–12
+sweeps; acceleration should cut that materially. Continuation in χ (warm-starting a large-χ run
+from a converged small-χ one) also becomes possible. Neither is implemented yet.
+
+Caveat: `_ctm_statedist` returns `nothing` while bases bootstrap, and `_ctm_align` falls through to
+the unaligned pair whenever the previous projector does not live on the current `ins` (first
+gauge-fixed sweep) or the rank changed. Both are silent by design; a rank change resets that
+interface's basis.
+
 ### No convergence headroom at fixed χ — and why `schursolve` has no home here
 
 Tracking both `|F − ln Z|` and `mean(1 − cos)` out to 22 sweeps, 4×4 D=3:

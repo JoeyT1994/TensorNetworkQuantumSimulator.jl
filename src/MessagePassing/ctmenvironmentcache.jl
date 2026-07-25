@@ -490,6 +490,74 @@ function _ctm_interface_proj2(Bw, Be, ins::Vector{<:Index}, maxdim::Integer)
     return PA * co, PB * co, w
 end
 
+
+# --- gauge fixing --------------------------------------------------------------------
+# The pair (P_A, P_B) has an exact gauge freedom  P_A -> P_A R,  P_B -> R⁻¹ P_B: it leaves
+# Π = P_A P_B, hence every region value and `F`, untouched. But the sweep picks that gauge
+# arbitrarily (and a fresh `Index`) every iteration, so `S` and `sweep(S)` sit in DIFFERENT bases.
+# That is what blocks every accelerator — Anderson, JFNK and Krylov all need to linearly combine
+# iterates — and it leaves `|ΔF|` as the only convergence signal instead of a state distance.
+#
+# THE GAUGE MUST BE UNITARY. Measured: canonicalising by QR (pushing the triangular factor into
+# `P_B`) changes `F` at finite χ — 1.1e-2 at χ=4, 2.6e-3 at χ=6, invariant only at lossless χ=12.
+# A triangular R is not unitary, so it changes the metric on the interface, and the NEXT level's
+# SVD truncation then selects a different subspace. Truncation is not gauge invariant; only
+# inner-product-preserving changes of basis are safe.
+#
+# So align to the previous sweep with the nearest UNITARY (orthogonal Procrustes): with
+# M = P_A_newᵀ P_A_old = U S Vᵀ, take R = U Vᵀ. This preserves Π and every inner product, so `F`
+# is exactly invariant, while rotating the new basis as close to the old one as a unitary can.
+# Reusing the old `Index` then makes successive blocks directly comparable.
+#
+# Bootstrapping note: `ins` itself contains the previous level's kept index, so alignment only
+# becomes possible once the lower levels are already index-stable. The guard below falls through
+# to the unaligned pair whenever the old projector does not live on the current `ins`, which is
+# what happens on the first gauge-fixed sweep.
+# DEFAULT ON: `F` is exactly invariant (verified to 1e-14 at χ = 4/6/8/12), the cost is one k×k
+# SVD per interface per sweep, and it turns `|ΔF|` — which oscillates at the roundoff floor of a
+# signed log-sum, measured rising 1.2e-7 -> 3.4e-7 -> 5.4e-7 over sweeps 8..10 — into a monotone
+# state distance. It is also the prerequisite for any accelerator.
+const CTM_GAUGE = Ref(true)
+
+function _ctm_align(pr, ins, prev)
+    (isnothing(prev) || length(prev) < 3) && return pr
+    PA, PB, w = pr
+    PAo, _, wo = prev
+    k = ITensors.dim(w)
+    ITensors.dim(wo) == k || return pr
+    issetequal(collect(inds(PAo)), vcat(collect(ins), [wo])) || return pr   # same raw space?
+    co = combiner(ins...); io = combinedind(co)
+    Am = try Array(PA * co, io, w) catch; return pr end
+    Ao = try Array(PAo * co, io, wo) catch; return pr end
+    Bm = try Array(PB * co, w, io) catch; return pr end
+    (all(isfinite, Am) && all(isfinite, Ao) && all(isfinite, Bm)) || return pr
+    F = try svd(Am' * Ao) catch; return pr end
+    R = F.U * F.Vt                                    # nearest unitary
+    all(isfinite, R) || return pr
+    return (ITensor(Am * R, io, wo) * co, ITensor(R' * Bm, wo, io) * co, wo)
+end
+
+# Previous sweep's projector pair for an interface, or `nothing`.
+_ctm_prevpr(d, k) = _ctm_nn(d, k)
+
+# Largest relative change of any block between two states, over blocks that share an index set.
+# Meaningful only with `CTM_GAUGE[]` on; returns `nothing` while the bases are still bootstrapping
+# (the first ~3 sweeps), since `ins` carries the lower level's index and stability propagates up.
+function _ctm_statedist(a::CTMVertexEnvironments, b::CTMVertexEnvironments)
+    n = 0; worst = 0.0
+    for (d1, d2) in ((a.C, b.C), (a.T, b.T)), (k, ta) in d1
+        tb = _ctm_nn(d2, k)
+        (isnothing(ta) || isnothing(tb)) && continue
+        Set(inds(ta)) == Set(inds(tb)) || continue
+        is = inds(ta)
+        A = Array(ta, is...); B = Array(tb, is...)   # same index order for both
+        na = norm(A)
+        na > 0 && (worst = max(worst, norm(A - B) / na))
+        n += 1
+    end
+    return n == 0 ? nothing : worst
+end
+
 # Enlarged corner: the quadrant cut at (x,y), grown one vertex out of the PREVIOUS state's
 # blocks (so all indices are in a consistent basis) with its two adjoining edges and vertex.
 function _ctm_enlarged(S::CTMVertexEnvironments, tbl, sym::Symbol, x::Int, y::Int)
@@ -720,6 +788,7 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         (isnothing(Bw) || isnothing(Be)) && continue
         ins = commoninds(Bw, Be)
         pr = _ctm_interface_proj2(Bw, Be, ins, χ)
+        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_prevpr(S.PH, (:N, x, y))))
         !isnothing(pr) && (PH[(:N, x, y)] = pr; INS[(true, :N, x, y)] = ins)
     end
     # Every `:S` block is keyed by its FIRST included row (`T_S[x,y] = rows ≥ y`), so the
@@ -731,6 +800,7 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         (isnothing(Bw) || isnothing(Be)) && continue
         ins = commoninds(Bw, Be)
         pr = _ctm_interface_proj2(Bw, Be, ins, χ)
+        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_prevpr(S.PH, (:S, x, y))))
         !isnothing(pr) && (PH[(:S, x, y)] = pr; INS[(true, :S, x, y)] = ins)
     end
     for x in 2:Lx, y in 1:(Ly - 1)            # PV[:W,x,y]: C_NW(x,y+1) | C_SW(x,y+1)
@@ -738,6 +808,7 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         (isnothing(Bn) || isnothing(Bs)) && continue
         ins = commoninds(Bn, Bs)
         pr = _ctm_interface_proj2(Bn, Bs, ins, χ)
+        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_prevpr(S.PV, (:W, x, y))))
         !isnothing(pr) && (PV[(:W, x, y)] = pr; INS[(false, :W, x, y)] = ins)
     end
     for x in 1:(Lx - 1), y in 1:(Ly - 1)      # PV[:E,x,y]: C_NE(x,y+1) | C_SE(x,y+1)
@@ -745,6 +816,7 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         (isnothing(Bn) || isnothing(Bs)) && continue
         ins = commoninds(Bn, Bs)
         pr = _ctm_interface_proj2(Bn, Bs, ins, χ)
+        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_prevpr(S.PV, (:E, x + 1, y))))
         !isnothing(pr) && (PV[(:E, x + 1, y)] = pr; INS[(false, :E, x + 1, y)] = ins)
     end
     # --- optional phase two: swap in the Mobius-weighted STATIONARY pair --------------
@@ -945,12 +1017,18 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30, tol::Real = 1
     F = cvm_freenergy(env, cache)
     converged, Δ = false, Inf
     for it in 1:maxiter
+        prev = env
         env = sweep_vertex_environments(cache, env)
         Fnew = cvm_freenergy(env, cache)
         Δ = abs(Fnew - F)
         F = Fnew
-        verbose && @info "CVM sweep $it: F = $F, |ΔF| = $Δ"
-        if Δ ≤ tol * max(one(Δ), abs(F))
+        # Prefer the state distance where it is available: `|ΔF|` oscillates at the roundoff
+        # floor of a signed log-sum and can rise late in the iteration, so on its own it both
+        # stops early and fails to certify convergence. See `_ctm_statedist`.
+        sd = CTM_GAUGE[] ? _ctm_statedist(env, prev) : nothing
+        crit = isnothing(sd) ? Δ : max(Δ, sd)
+        verbose && @info "CVM sweep $it: F = $F, |ΔF| = $Δ, state Δ = $(something(sd, NaN))"
+        if crit ≤ tol * max(one(crit), abs(F))
             converged = true
             verbose && @info "CVM sweep converged after $it sweeps."
             break
