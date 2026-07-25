@@ -255,6 +255,46 @@ on `ln Z` and loses on `⟨O⟩`.
 Not added to the engine: it is not better, and a second observable path that is sometimes worse is
 worse than none. Recover from this commit if a future region graph changes the trade-off.
 
+### Speed vs boundary MPS at matched χ (measured)
+
+`update` + `cvm_freenergy` against `contract(...; alg="boundarymps")` / `norm_sqr(...;
+alg="boundarymps")`. **Each configuration is timed twice and the second reported** — the netcon
+sequence cache is keyed on shape, so the first call at a new lattice size pays all the
+optimisation and JIT. Getting this wrong made two earlier benchmarks in this document misleading.
+
+| case | χ | CTM s / err | bMPS s / err | faster | more accurate |
+|---|---|---|---|---|---|
+| single 6×6 Ising K=.44 | 4 | 0.082 / 1.5e-11 | 0.012 / 2.5e-9 | bMPS 7.0× | CTM 166× |
+| | 8 | 0.018 / 1.1e-14 | 0.020 / 0 | CTM 1.1× | bMPS |
+| | 16 | 0.020 / 3.6e-15 | 0.012 / 0 | bMPS 1.8× | bMPS |
+| single 5×5 random D=3 | 4 | 0.310 / 4.6e-1 | 0.008 / 1.4e0 | bMPS 38× | CTM 3× |
+| | 8 | 0.212 / 8.1e-4 | 0.008 / 4.2e-1 | bMPS 25× | **CTM 510×** |
+| | 16 | 0.025 / 7.1e-15 | 0.009 / 3.6e-15 | bMPS 2.9× | bMPS |
+| double 4×4 PEPS D=2 | 4 | 0.131 / 3.4e-4 | 0.067 / 2.3e-4 | bMPS 2.0× | bMPS |
+| | 8 | 0.091 / 6.6e-6 | 0.077 / 3.8e-6 | bMPS 1.2× | bMPS |
+| | 16 | 0.015 / 0 | 0.047 / 0 | CTM 3.1× | — |
+| double 4×4 PEPS D=3 | 4 | 0.318 / 4.8e-2 | 0.420 / 3.7e-2 | CTM 1.3× | bMPS |
+| | 8 | 0.423 / 1.1e-3 | 0.624 / 1.8e-3 | **CTM 1.5×** | **CTM** |
+| | 16 | 0.517 / 2.6e-5 | 0.696 / 5.5e-5 | **CTM 1.3×** | **CTM** |
+
+**Single layer: boundary MPS wins on speed, decisively at small χ** — up to 38×, because CTM pays
+8–30 sweeps regardless of χ while boundary MPS does essentially one pass. CTM's cost barely falls
+as χ drops, so its floor is the sweep count, not the linear algebra.
+
+**Double layer at D=3: CTM is faster (1.3–1.5×) AND more accurate at χ ≥ 8.** This is the regime
+the method is actually for — the crossover is with `D_layer = D²`, where CTM's corner tier starts
+paying for itself.
+
+**But on time-to-target-accuracy, boundary MPS still usually wins.** The most CTM-favourable cell
+is single 5×5 D=3 at χ=8, where CTM is 510× more accurate — yet boundary MPS reaches machine
+precision at χ=16 in 0.009 s, faster than CTM's 0.025 s. Matched-χ accuracy is the wrong headline
+unless χ is the binding constraint (memory, or an observable that needs a specific environment).
+
+**Actionable:** the single-layer gap is the sweep count, not arithmetic. That is exactly what
+gauge fixing unlocked and nobody has spent yet — Anderson acceleration on the now-well-posed
+fixed point is the highest-value remaining performance work, and it attacks the one axis where
+boundary MPS is 25–38× ahead.
+
 ### Current state of the engine (the clean slate)
 
 | piece | state |
