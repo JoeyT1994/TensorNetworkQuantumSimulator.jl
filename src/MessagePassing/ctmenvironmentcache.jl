@@ -618,7 +618,13 @@ end
 # blocks (so all indices are in a consistent basis) with its two adjoining edges and vertex.
 function _ctm_enlarged(S::CTMVertexEnvironments, tbl, sym::Symbol, x::Int, y::Int)
     A(i, j) = (haskey(tbl, (i, j)) ? _ctm_contract(tbl[(i, j)]) : nothing)
-    m4(a, b, c, d) = _ctm_mul(_ctm_mul(_ctm_mul(a, b), c), d)
+    # ONE netcon over all four rather than the hardcoded left fold `((C·T)·T)·a`. Measured: at
+    # these sizes netcon PICKS THAT SAME ORDER, so this buys no speed (within noise on four
+    # benchmarks) — it is here so the order stops being an unverified assumption, which matters
+    # because the enlarged corner is the hottest object in the sweep. Free, given the sequence
+    # cache. Boundary blocks arrive as `nothing` and drop out.
+    m4(args...) = (ts = ITensor[t for t in args if !isnothing(t)];
+                   isempty(ts) ? nothing : _ctm_contract(ts))
     if sym === :NW          # cols<x, rows<y  — grown from vertex (x-1, y-1)
         return m4(_ctm_nn(S.C, (:NW, x - 1, y - 1)), _ctm_nn(S.T, (:N, x - 1, y - 1)),
                   _ctm_nn(S.T, (:W, x - 1, y - 1)), A(x - 1, y - 1))
@@ -991,11 +997,16 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30,
         Fnew = cvm_freenergy(env, cache)
         Δ = abs(Fnew - F)
         F = Fnew
-        # Prefer the state distance where it is available: `|ΔF|` oscillates at the roundoff
-        # floor of a signed log-sum and can rise late in the iteration, so on its own it both
-        # stops early and fails to certify convergence. See `_ctm_statedist`.
+        # Use the state distance alongside `|ΔF|`: the latter oscillates at the roundoff floor
+        # of a signed log-sum and can RISE late in the iteration, so on its own it both stops
+        # early and fails to certify convergence. See `_ctm_statedist`.
+        #
+        # Compare `sd²`, not `sd`. `F` is stationary in the state at the fixed point, so
+        # `|ΔF| ~ sd²` — holding both to the same tolerance is dimensionally inconsistent and
+        # measured ~3x the sweeps for no accuracy (5×5 D=2 χ=8: 30 sweeps / 21 s against 11
+        # sweeps / 2.2 s, same `F` to 12 digits). This is equivalent to `sd ≤ √tolerance`.
         sd = CTM_GAUGE[] ? _ctm_statedist(env, prev) : nothing
-        crit = isnothing(sd) ? Δ : max(Δ, sd)
+        crit = isnothing(sd) ? Δ : max(Δ, sd^2)
         verbose && @info "CVM sweep $it: F = $F, |ΔF| = $Δ, state Δ = $(something(sd, NaN))"
         if crit ≤ tolerance * max(one(crit), abs(F))
             converged = true
