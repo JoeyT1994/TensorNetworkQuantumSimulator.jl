@@ -170,6 +170,47 @@ the batching above (iterative, data-dependent iteration counts, a `randn` per ca
 as a no-op on single layer and marginal on double layer.
 
 
+### Lanczos warnings at larger D, continuation in χ, and why observables lag
+
+**The KrylovKit warnings are diagnostic, not corruption.** `Invariant subspace of dimension 6 …
+howmany == 10` says the interface's *effective rank* is 6 while χ=10 was requested — routine once
+D grows. `_ctm_eigsolve` already falls through to dense whenever `converged < k`, and the dense
+result is **bit-identical and deterministic** (three runs with different RNG streams: spread
+~1e-14; `CTM_ARNOLDI` on vs off: identical). Now silenced with `verbosity = 0`, since warning on
+every such call buries real problems.
+
+**Continuation in χ buys nothing — the fixed point is unique.** Warm-starting a χ run from the
+converged environments of the previous χ (`_ctm_setenv`) gives results **bit-identical** to
+starting from the greedy seed, at every χ on three networks. The sweep's fixed point is
+seed-independent. Good robustness property; not an accuracy lever. It can only ever save sweeps.
+
+**`marginal_inconsistency` is monotone in χ where `|F − ln Z|` is not.** Double 3×3 D=4:
+
+| χ | 4 | 6 | 8 | 10 | 12 |
+|---|---|---|---|---|---|
+| `\|F − ln Z\|` | 4.6e-2 | 5.9e-3 | **1.0e-2** | 3.0e-3 | 1.7e-4 |
+| `marginal_inconsistency` | 1.13e-2 | 7.5e-3 | 4.9e-3 | 3.3e-3 | 1.9e-3 |
+
+The bump at χ=8 is cancellation noise in `F`; the diagnostic decays smoothly throughout. Use it.
+
+**Why single-site observables lag boundary MPS — a structural limit, not a tuning problem.**
+Möbius cancellation requires a quantity to appear in several regions with opposite signs. Every
+`C` and `T` does (4 regions `+1−1−1+1`, or 2 with `+1−1`), which is exactly why `F` is so accurate.
+A **site** does not:
+
+| region | weight | contains a site? |
+|---|---|---|
+| vertex | +1 | **yes** |
+| h-edge | −1 | no |
+| v-edge | −1 | no |
+| plaquette | +1 | no |
+
+Only the vertex region holds a site, so a single-site observable is read off **one** region with
+weight `+1` and gets **no cancellation at all** — it inherits the raw per-region error while `F`
+gets the cancelled one. That is the whole gap. Closing it needs a **finer region graph** whose
+child regions also contain the site (so the site's marginal is over-counted and then corrected),
+not a better projector or more sweeps.
+
 ### Current state of the engine (the clean slate)
 
 | piece | state |

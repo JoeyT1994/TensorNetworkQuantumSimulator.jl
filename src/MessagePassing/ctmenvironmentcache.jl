@@ -151,8 +151,14 @@ function _ctm_eigsolve(ρs::Hermitian, k::Integer)
     if CTM_ARNOLDI[] && n > 4k
         try
             v0 = randn(eltype(ρs), n)
+            # `verbosity = 0`: when the interface's effective rank is below `k` — routine at
+            # larger D — KrylovKit reports "invariant subspace of dimension r < howmany" and
+            # "stopped without convergence". Both are expected here, not errors: we fall through
+            # to dense below, and the dense result is bit-identical (verified) and deterministic.
+            # Warning on every such call buries real problems in noise.
             vals, vecs, info = eigsolve(x -> ρs * x, v0, k, :LR;
-                                        ishermitian = true, krylovdim = max(2k + 8, 20))
+                                        ishermitian = true, verbosity = 0,
+                                        krylovdim = max(2k + 8, 20))
             if info.converged >= k && length(vecs) >= k
                 V = reduce(hcat, @view(vecs[1:k]))
                 eltype(ρs) <: Real && (V = real.(V))
