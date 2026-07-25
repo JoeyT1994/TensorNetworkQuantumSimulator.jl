@@ -28,7 +28,7 @@
 # See docs/finite_ctmrg_design.md for the derivations and the measured comparisons.
 
 using LinearAlgebra: eigen, Hermitian, norm, dot, I, Diagonal, qr, svd
-using KrylovKit: eigsolve
+using KrylovKit: eigsolve, svdsolve
 
 """
     CTMEnvironmentCache(tn::AbstractTensorNetwork, maxdim::Integer)
@@ -143,6 +143,10 @@ const CTM_QR = Ref(true)
 # is no longer read off a squared object.
 const CTM_QR_CUTOFF = Ref(1.0e-13)
 
+# Smallest interface at which the Krylov SVD beats a dense one; see `_ctm_svd_topk` for the
+# measured crossover. Below this, dense LAPACK wins even when only `k` of `n` triplets are used.
+const CTM_KRYLOV_MIN = Ref(128)
+
 # Top-`k` eigenpairs of a Hermitian matrix: Krylov when it pays off, else dense.
 function _ctm_eigsolve(ρs::Hermitian, k::Integer)
     n = size(ρs, 1)
@@ -194,9 +198,33 @@ end
 # Contract a small flat list in a good order (netcon). This is what keeps the double layer
 # lazy: the list is [environment; ket; (operator;) bra] and the optimizer interleaves them,
 # so the fat ket⊗bra site tensor (legs of dimension D²) is never formed.
+# Netcon (`alg = "optimal"`) is expensive, and the lattice geometry is fixed — so the SAME
+# einsum recurs once per sweep for 8–12 sweeps. Measured 4000–9000 `_ctm_contract` calls per
+# `update()` with a 97–99% repeat rate, netcon accounting for 17–31% of contraction time on
+# double-layer runs and 89% on a lossless single-layer one.
+#
+# Cache the sequence on a STRUCTURAL key: each tensor's indices relabelled by order of first
+# appearance across the list, paired with their dimensions. For a fixed tensor ordering that is a
+# canonical form, and `contract(ts; sequence)` addresses tensors by POSITION, so a cached sequence
+# is exactly what netcon would have returned. Keys are shape-only, so different networks of the
+# same geometry share entries and the cache is bounded by the number of distinct shapes.
+#
+# NOT thread-safe (plain `Dict`); this engine is single-threaded.
+const CTM_SEQ_CACHE = Dict{Any, Any}()
+
+function _ctm_seq_key(ts::Vector{ITensor})
+    seen = Dict{Any, Int}()
+    label(i) = (get!(seen, i, length(seen) + 1), ITensors.dim(i))
+    return Tuple(Tuple(label(i) for i in inds(t)) for t in ts)
+end
+
 function _ctm_contract(ts::Vector{ITensor})
     length(ts) == 1 && return only(ts)
-    return contract(ts; sequence = contraction_sequence(ts; alg = "optimal"))
+    length(ts) == 2 && return ts[1] * ts[2]          # no sequence to choose
+    seq = get!(CTM_SEQ_CACHE, _ctm_seq_key(ts)) do
+        contraction_sequence(ts; alg = "optimal")
+    end
+    return contract(ts; sequence = seq)
 end
 
 
@@ -215,10 +243,35 @@ _ctm_tri_factor(B::ITensor, io::Index) = Matrix(qr(_ctm_block_matrix(B, io)).R)
 
 # Biorthogonal pair from the TRIANGULAR factors of the two bounding blocks — no squaring
 # anywhere. See `CTM_QR` for the derivation.
+# Top-`k` singular triplets of `W`, by Golub–Kahan–Lanczos when it pays. `W` is `n×n` with
+# `n = χ·D_layer` and only `k = maxdim` triplets are ever used, so a full dense SVD discards
+# everything past column `k` — measured 45% of wall at 5×5 D=4 χ=12.
+#
+# GATE: `n ≥ CTM_KRYLOV_MIN` **and** `n > 4k`. The ratio test alone is not enough — measured
+# crossover (dense vs `svdsolve`, ms per solve): n=72 0.62/0.50, n=96 1.06/3.31, n=128 2.13/1.11,
+# n=192 5.70/2.49, n=256 12.22/3.95. So Krylov wins 1.9–3.1× from n≈128 and *loses* below it;
+# gating on the ratio alone made 4×4 D=3 χ=8 (n≤72) 1.2× SLOWER. Falls back to dense on
+# non-convergence; agreement with dense measured to 1.4e-15 on matrices captured from a real run.
+function _ctm_svd_topk(W::AbstractMatrix, k::Integer)
+    try
+        vals, lvecs, rvecs, info = svdsolve(W, k, :LR)
+        (info.converged >= k && length(lvecs) >= k && length(rvecs) >= k) || return nothing
+        U = reduce(hcat, @view(lvecs[1:k])); V = reduce(hcat, @view(rvecs[1:k]))
+        eltype(W) <: Real && (U = real.(U); V = real.(V))
+        return (; S = real.(vals[1:k]), U, V)
+    catch
+        return nothing                                # fall through to dense
+    end
+end
+
 function _ctm_twosided_projector_qr(Bw::ITensor, Be::ITensor, io::Index, maxdim::Integer)
     RA = _ctm_tri_factor(Bw, io)
     RB = _ctm_tri_factor(Be, io)
-    F = svd(RA * RB')                       # ONE decomposition → consistent U, S, V
+    W = RA * RB'
+    kw = min(Int(maxdim), min(size(W)...))
+    nW = min(size(W)...)
+    F = (CTM_ARNOLDI[] && nW >= CTM_KRYLOV_MIN[] && nW > 4kw) ? _ctm_svd_topk(W, kw) : nothing
+    isnothing(F) && (F = svd(W))            # ONE decomposition → consistent U, S, V
     S = F.S
     k = min(Int(maxdim), length(S))
     while k > 1 && S[k] ≤ CTM_QR_CUTOFF[] * S[1]
