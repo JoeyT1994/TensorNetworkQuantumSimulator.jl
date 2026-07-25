@@ -232,6 +232,76 @@ the fixed point is reached in one sweep. **Small χ is the expensive regime as w
 inaccurate one** — the usual accuracy/cost tradeoff is inverted here, so do not reach for small
 χ to save time.
 
+### The stationary (partial-Schur) projector — derived, prototyped, VALIDATED, not yet landed
+
+Prototype: `examples/ctm_stationary_projector_prototype.jl` (runs, self-checking). It covers one
+interface family on a 4×4; what remains is the other three families and plumbing into the sweep.
+
+**Stationarity condition.** Variations that preserve rank-`k` projector structure are
+`δΠ = (I−Π) X Π + Π Y (I−Π)`, so `δF = Tr[GᵀδΠ]` vanishes for all `X, Y` iff
+
+```
+Π Gᵀ (I−Π) = 0   and   (I−Π) Gᵀ Π = 0      ⟺   [Π, Gᵀ] = 0
+```
+
+i.e. **the kept subspace is a `Gᵀ`-invariant subspace** — the partial Schur problem.
+
+**Construction.** Schur-decompose `Gᵀ = Z T Zᵀ`, `ordschur` the `k` dominant eigenvalues to the
+front, partition `T = [[T11,T12],[0,T22]]`, and solve one Sylvester equation. Then
+
+```
+Π = Z · [[I, X],[0, 0]] · Zᵀ            P_A = Z[:,1:k]     P_B = [I  X] Zᵀ
+```
+
+**SIGN TRAP — this cost a debug cycle.** The commutator vanishes iff `T11 X − X T22 = T12`, and
+Julia's `sylvester(A,B,C)` solves `A X + X B + C = 0`, so the call is
+
+```julia
+X = sylvester(T11, -T22, -T12)      # NOT +T12
+```
+
+With `+T12` the "stationary" projector comes out with a residual **2× worse** than the current
+one — it looks like the whole idea has failed rather than like a sign error.
+
+**Assembling `G` — the fiddly part.** `E_R` is region `R` contracted with the projector pair
+removed and the raw interface legs left open (prime the east copy). The trap is that the two
+blocks *carrying* the interface are **not always two corners**. For `PH[:N,x,y]`:
+
+| region | west carrier | east carrier |
+|---|---|---|
+| plaquette `(x+½,y−½)` | `C_NW(x+1,y)` | `C_NE(x+1,y)` |
+| h-edge `(x+½,y)` | `C_NW(x+1,y)` | `C_NE(x+1,y)` |
+| vertex `(x,y)` | `T_N(x,y)` | `C_NE(x+1,y)` |
+| vertex `(x+1,y)` | `C_NW(x+1,y)` | `T_N(x+1,y)` |
+| v-edge `(x,y−½)` | `T_N(x,y)` | `C_NE(x+1,y)` |
+| v-edge `(x+1,y−½)` | `C_NW(x+1,y)` | `T_N(x+1,y)` |
+
+Swapping west/east silently pairs `P_B` with `P_B`. Also: build **every** block in the region
+from the enlarged pieces plus the *same* projector set, and use the **fresh** pair for the target
+interface in `Z_R` too — mixing the stored `S.PH` pair with freshly-enlarged corners mismatches
+the previous level's `w` index and gives silently wrong numbers.
+
+**Two validations, both passing.** Per region, `Tr[E_Rᵀ Π] == Z_R` exactly (2e-16). And a
+finite-difference check on the weighted log-sum: `ΔF/predicted` = 0.999873, 0.999987, 0.999999 at
+`ε` = 1e-5, 1e-6, 1e-7.
+
+**Measured on the central interface `PH[:N,2,3]` (4×4 D=3, χ=6, n=9, k=6):**
+
+| | residual `(‖ΠGᵀQ‖+‖QGᵀΠ‖)/‖G‖` |
+|---|---|
+| current two-sided projector | **0.443** |
+| partial-Schur projector | **6.3e-15** |
+
+The current projector is far from stationary, the Schur one is exactly stationary by
+construction, and the subspaces genuinely differ — principal angles `0°, 0°, 0°, 7.2°, 8.5°,
+40.5°`. `Π` is confirmed a true idempotent (`‖Π²−Π‖ = 1.2e-15`, rank 6).
+
+**Remaining work, and one caution.** Generalise the carrier table to `PH[:S]`, `PV[:W]`, `PV[:E]`;
+plumb into `sweep_vertex_environments` as a nested fixed point (`G` depends on the projectors it
+sets, so evaluate `G` at the previous state and iterate); handle real-Schur 2×2 conjugate blocks
+so selecting `k` cannot split a complex pair. Per Finding 1 above, judge the result by the
+residual and by observables, **never** by `|F − ln Z|`.
+
 ### Two-sided projectors inside the per-vertex DP
 
 Each interface is bounded by exactly two corners, which are its two half-environments:
