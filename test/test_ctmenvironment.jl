@@ -131,6 +131,16 @@ end
     @test errs[2] < errs[1]
     @test errs[2] < abs(expect(ψ, ("Z", [(2, 2)]); alg = "bp") - ex[(2, 2)])
 
+    # `marginal_inconsistency`: the only lnZ-free quality measure. Must be exactly 0 where the
+    # contraction is lossless (the marginals are then genuinely parallel) and must shrink with χ.
+    Random.seed!(99)
+    tn2 = random_tensornetwork(Float64, named_grid((4, 4)); bond_dimension = 3)
+    mi = [marginal_inconsistency(update(CTMEnvironmentCache(tn2, χ); maxiter = 30, tol = 1.0e-11))
+          for χ in (4, 8, 16)]
+    @test all(>=(0.0), mi)                  # it is a distance
+    @test mi[3] < 1.0e-10                   # lossless χ: marginals exactly parallel
+    @test mi[1] > mi[3]                     # and it shrinks with χ
+
     # Multi-site is not supported: the ring encloses exactly one vertex.
     @test_throws ErrorException expect(cache, ("ZZ", [(1, 1), (2, 1)]))
     @test_throws ErrorException rdm(cache, [(1, 1), (2, 1)])

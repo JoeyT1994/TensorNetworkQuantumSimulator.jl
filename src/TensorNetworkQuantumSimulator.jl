@@ -83,6 +83,7 @@ export
     BoundaryMPSCache,
     CTMEnvironmentCache,
     cvm_freenergy,
+    marginal_inconsistency,
     region_lnZ,
     environments,
     vertex_ring,

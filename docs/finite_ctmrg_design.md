@@ -169,6 +169,26 @@ the batching above (iterative, data-dependent iteration counts, a `randn` per ca
 `CTM_DEGTOL[] = 0.0`, i.e. **eigenvalue pair-keeping is off**, consistent with it having measured
 as a no-op on single layer and marginal on double layer.
 
+
+### Current state of the engine (the clean slate)
+
+| piece | state |
+|---|---|
+| two-sided biorthogonal projector | **on** — the default path, measured optimal (see the headroom re-run) |
+| `CTM_QR` triangular/QR route | **on by default** — accuracy-neutral, chosen for GPU batching |
+| `CTM_GAUGE` unitary gauge fixing | **on by default** — `F` invariant to 1e-14, gives the state distance |
+| `marginal_inconsistency` | **live diagnostic** — the only `ln Z`-free quality measure |
+| Möbius-stationary projector | **deleted** — made results worse |
+| row-absorption contractor | **deleted** — wrong object |
+| `CTM_DEGTOL` pair-keeping | present, `0.0` (off) — measured a no-op on single layer, marginal on double |
+| `CTM_ARNOLDI` | present, on, but dormant unless `D_layer > 4` |
+
+Verified unchanged by the deletions, 4×4 D=3: `|F − ln Z|` = 5.203e-3 / 1.556e-3 / 6.455e-6 /
+5.33e-15 at χ = 4 / 6 / 8 / 12, with `marginal_inconsistency` 8.02e-3 / 3.88e-4 / 1.14e-5 / 6e-17.
+
+**Next step, now well-posed:** Anderson acceleration of the sweep. The gauge makes iterates
+linearly combinable, and the Picard rate is ≈0.35/sweep over 8–12 sweeps, so there is real room.
+
 ### Toward a stationary projector — measured findings and the derivation
 
 The current projector maximises the fidelity of **one** local interface contraction (the two
@@ -301,11 +321,14 @@ The current projector is far from stationary, the Schur one is exactly stationar
 construction, and the subspaces genuinely differ — principal angles `0°, 0°, 0°, 7.2°, 8.5°,
 40.5°`. `Π` is confirmed a true idempotent (`‖Π²−Π‖ = 1.2e-15`, rank 6).
 
-### LANDED, and the result is a NEGATIVE one: free stationarity of `F` is the wrong target
+### REMOVED: the Möbius-stationary projector (kept here as a record of why)
 
-Generalised to all four families and wired into `sweep_vertex_environments` behind
-`CTM_STATIONARY[]` (**default `false`**). The pieces are `_ctm_carriers`, `_ctm_region_desc`,
-`_ctm_block`, `_ctm_gradient`, `_ctm_schur_projector`. The region set per interface is found by
+Was generalised to all four families and wired in behind `CTM_STATIONARY[]`; **the code has
+since been deleted** (`CTM_STATIONARY`, `_ctm_carriers`, `_ctm_gradient`, `_ctm_schur_projector`)
+because it measurably made results worse. `_ctm_region_desc` and `_ctm_block` were kept — they now
+serve [`marginal_inconsistency`](#), the one trustworthy diagnostic. Recover the deleted pieces
+from git (`783fb28`) rather than rewriting; the prototype in
+`examples/ctm_stationary_projector_prototype.jl` also remains. The region set per interface is found by
 *enumerating candidate centres and keeping those holding one carrier from each side*, rather than
 hand-coding 24 cases — which also handles boundaries (fewer than six regions) with no special
 case.
