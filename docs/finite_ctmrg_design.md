@@ -117,6 +117,58 @@ Hard-won numerical points (all measured, see `ctmenvironmentcache.jl`):
 * **One-sided truncation is not a valid variational choice** and makes the error non-monotonic
   in χ. This was the root cause of a long chain of confusing results.
 
+### Triangular/QR projector — implemented, accuracy-NEUTRAL, kept for GPU (`CTM_QR`, default off)
+
+Take a thin QR of each bounding block instead of forming `ρ` and eigendecomposing it back into a
+square root: `Bw = Q_A R_A`, `Be = Q_B R_B`, so `R_A† R_A = ρ_L` and `R_B† R_B = ρ_R` *exactly*,
+with no squaring. The `Q`s are isometries, so the whole problem reduces to the small triangular
+product `W = R_A R_B†`, and with `W = U S V†`:
+
+```
+P_A = R_B† V S^(-1/2)          P_B = S^(-1/2) U† R_A
+```
+
+`A (P_A P_B) B† = A B†` exactly at full rank (verified to 1e-15), and the `S^(-3/2)` on `P_B`
+collapses to a symmetric `S^(-1/2)`. Still one decomposition, so `U` and `V` stay in a consistent
+basis — the reason the ρ route avoided separate eigen-solves.
+
+**Do not expect an accuracy win — measured, it is a wash.** It matches the ρ route to 3
+significant figures on 18 moderate-χ configurations and 10 near-lossless ones, at cutoffs
+1e-8/1e-11/1e-13/1e-15 alike, and passes the CTM suite 100/100 as a drop-in default.
+
+**Why, and this is the useful part:** *precision is not the binding constraint — χ is.* The
+retained spectrum has median `S_k/S_1` of 1e-1…1e-2 (measured over the 200–384 solves in a
+sweep) and **0%** of retained directions fall below 1e-8. In the ρ route a direction at
+`S_k/S_1 = 1e-8` carries relative error `~eps·(S_1/S_k)² ≈ 50%`, which is exactly why
+`CTM_PINV_CUTOFF` sits at √eps: **the cutoff and the squaring are two faces of one constraint.**
+QR makes directions down to ~1e-15 usable, but they carry no weight. So accuracy per χ cannot be
+bought with better arithmetic — only by changing *which subspace is kept*.
+
+The reason to keep it is GPU: `geqrf`/`gesvd` have batched GPU implementations where batched
+Hermitian eig support is thin, and a sweep is 200–384 **independent tiny** factorizations
+(`n ≤ 128`) — a batching problem, not a big-linear-algebra one. Note the remaining blocker in
+*both* routes: `Array(ρ, b, bp)` and `_ctm_block_matrix` materialise host `Array`s, so every
+projector currently round-trips through the CPU. QR alone does not deliver GPU.
+
+### Arnoldi is dormant on the CVM path at small D (measured)
+
+`CTM_ARNOLDI[] = true`, but the `n > 4k` gate almost never fires here, because a CVM interface is
+only `χ · D_layer` (`D_layer` = D single-layer, D² double) so `n > 4χ` needs `D_layer > 4`:
+
+| network | interface `n` | Arnoldi fired |
+|---|---|---|
+| single-layer D=3, χ=8 / χ=16 | ≤ 24 / ≤ 27 | **0%** |
+| double-layer D=2, χ=8 | ≤ 32 | **0%** (misses by one — the test is strict `>`) |
+| double-layer D=3, χ=8 | ≤ 72 | 66% |
+| double-layer D=4, χ=8 | ≤ 128 | 67% |
+
+The `4k` heuristic was tuned for the deleted row engine, where `n` was the whole chain bond and
+could be huge. Retuning it for CVM interface sizes is open work — and note Arnoldi is hostile to
+the batching above (iterative, data-dependent iteration counts, a `randn` per call).
+
+`CTM_DEGTOL[] = 0.0`, i.e. **eigenvalue pair-keeping is off**, consistent with it having measured
+as a no-op on single layer and marginal on double layer.
+
 ### Two-sided projectors inside the per-vertex DP
 
 Each interface is bounded by exactly two corners, which are its two half-environments:

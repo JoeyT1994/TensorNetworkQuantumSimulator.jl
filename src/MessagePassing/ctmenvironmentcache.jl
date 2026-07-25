@@ -10,10 +10,11 @@
 #   F = Σ_v ln Z_v − Σ_e ln Z_e + Σ_p ln Z_p     (Möbius numbers +1 / −1 / +1)
 #
 # Each shared interface is truncated to `maxdim` by a biorthogonal projector PAIR built from
-# BOTH bounding corners — always via a Hermitian EIGENDECOMPOSITION (Arnoldi/Lanczos where it
-# pays), never an SVD. The pair needs the complement environment, so the build is a fixed-point
-# iteration: `update` sweeps it to stationarity. Works for anisotropic / non-square grids and
-# free boundaries.
+# BOTH bounding corners. The default route uses a Hermitian EIGENDECOMPOSITION (Arnoldi/Lanczos
+# where it pays) of the corner density matrices; `CTM_QR` selects an equivalent triangular/QR
+# route that never squares and batches better on GPU (accuracy-neutral — see its comment). The
+# pair needs the complement environment, so the build is a fixed-point iteration: `update` sweeps
+# it to stationarity. Works for anisotropic / non-square grids and free boundaries.
 #
 # Entry points: `update` (run it), `cvm_freenergy` (ln Z), `vertex_ring` / `expect` / `rdm`
 # (single-site observables from a vertex's own ring).
@@ -26,7 +27,7 @@
 #
 # See docs/finite_ctmrg_design.md for the derivations and the measured comparisons.
 
-using LinearAlgebra: eigen, Hermitian, diagm, norm, I, Diagonal
+using LinearAlgebra: eigen, Hermitian, diagm, norm, I, Diagonal, qr, svd
 using KrylovKit: eigsolve
 
 """
@@ -98,6 +99,52 @@ const CTM_ARNOLDI = Ref(true)
 # Measured optimum — 6×6 Ising: 5.1e-13 here vs 3.1e-10 at 1e-12 and 3.4e-9 at 1e-4.
 const CTM_PINV_CUTOFF = Ref(1.0e-8)
 
+# TRIANGULAR (QR) route for the interface projector. Instead of forming ρ_L = A†A and
+# ρ_R = B†B and then eigendecomposing ρ_R back into a square-root factor — squaring the
+# condition number and undoing it — take a thin QR of each block directly:
+#
+#   Bw = Q_A R_A,  Be = Q_B R_B      ⇒  R_A† R_A = ρ_L,  R_B† R_B = ρ_R    (exactly)
+#
+# The R's ARE the square-root factors, obtained without ever squaring. Both Q's are isometries,
+# so the singular values of the full cross-interface object `Bw Be†` are those of the small
+# triangular product `W = R_A R_B†`, and with `W = U S V†`:
+#
+#   P_A = R_B† V S^(-1/2)            P_B = S^(-1/2) U† R_A
+#
+# which is A(P_A P_B)B† = A B† exactly at full rank (verified to 1e-15). The `S^(-3/2)` on
+# `P_B` also collapses to a symmetric `S^(-1/2)`, so the worst inverse power is gone.
+#
+# It uses ONE svd of a small triangular product, so U and V come from a single decomposition in
+# a consistent basis — the reason the ρ route avoided separate eigen-solves for U and V. It is
+# NOT an svd of a squared object.
+#
+# WHY IT IS HERE — GPU / BATCHING, NOT ACCURACY. Measured: this is accuracy-NEUTRAL. On 18
+# moderate-χ configurations (3 seeds single-layer D=3, 2 double-layer D=2, 1 double-layer D=3;
+# χ = 4/6/8) and 10 near-lossless ones it matches the ρ route to 3 significant figures, and at
+# cutoffs 1e-8/1e-11/1e-13/1e-15 alike. The reason is that precision is not the binding
+# constraint: the RETAINED spectrum has median `S_k/S_1` of 1e-1…1e-2 (measured over 200–384
+# solves per sweep) and 0% of retained directions fall below 1e-8. In the ρ route a direction at
+# `S_k/S_1 = 1e-8` carries relative error `~eps·(S_1/S_k)² ≈ 50%`, which is exactly why
+# `CTM_PINV_CUTOFF` sits at √eps — the cutoff and the squaring are two faces of one constraint.
+# QR makes directions down to ~1e-15 usable, but they carry no weight. **χ is the binding
+# constraint, not arithmetic.** Do not expect an accuracy win from this; the win is that
+# geqrf/gesvd have batched GPU implementations where batched Hermitian eig support is thin, and
+# a sweep is 200–384 INDEPENDENT tiny factorizations (n ≤ 128) — a batching problem, not a
+# big-linear-algebra one.
+#
+# Remaining GPU blocker, in BOTH routes: `Array(ρ, b, bp)` / `_ctm_block_matrix` materialise a
+# host `Array`, so every projector round-trips through the CPU. Fixing that is separate work.
+#
+# DEFAULT since the GPU rationale landed. The eig route is kept reachable (`CTM_QR[] = false`)
+# because it is the long-standing reference path and the two are numerically interchangeable;
+# the general preference for eig-over-SVD elsewhere in this file still stands, and the reason
+# behind it — one decomposition, one consistent basis for U and V — is satisfied here.
+const CTM_QR = Ref(true)
+
+# Relative cutoff for the QR route. Can sit far below `CTM_PINV_CUTOFF` precisely because `S`
+# is no longer read off a squared object.
+const CTM_QR_CUTOFF = Ref(1.0e-13)
+
 # Top-`k` eigenpairs of a Hermitian matrix: Krylov when it pays off, else dense.
 function _ctm_eigsolve(ρs::Hermitian, k::Integer)
     n = size(ρs, 1)
@@ -150,6 +197,39 @@ function _ctm_contract(ts::Vector{ITensor})
 end
 
 
+
+# A block as a plain (rest × interface) matrix, CONJUGATED so that the triangular factor `R`
+# from its QR satisfies `R†R = ρ` under this file's ρ convention
+# (`ρ[i,j] = Σ_r B[r,i] conj(B[r,j])`, i.e. ρ = conj(B†B)). A no-op for real tensors.
+function _ctm_block_matrix(B::ITensor, io::Index)
+    rest = collect(uniqueinds(B, io))
+    isempty(rest) && return reshape(conj(Array(B, io)), 1, ITensors.dim(io))
+    return reshape(conj(Array(B, rest..., io)), :, ITensors.dim(io))
+end
+
+# Triangular factor of a block: R with R†R = ρ, never forming ρ. See `CTM_QR`.
+_ctm_tri_factor(B::ITensor, io::Index) = Matrix(qr(_ctm_block_matrix(B, io)).R)
+
+# Biorthogonal pair from the TRIANGULAR factors of the two bounding blocks — no squaring
+# anywhere. See `CTM_QR` for the derivation.
+function _ctm_twosided_projector_qr(Bw::ITensor, Be::ITensor, io::Index, maxdim::Integer)
+    RA = _ctm_tri_factor(Bw, io)
+    RB = _ctm_tri_factor(Be, io)
+    F = svd(RA * RB')                       # ONE decomposition → consistent U, S, V
+    S = F.S
+    k = min(Int(maxdim), length(S))
+    while k > 1 && S[k] ≤ CTM_QR_CUTOFF[] * S[1]
+        k -= 1
+    end
+    while k > 1 && k < length(S) && abs(S[k] - S[k + 1]) ≤ CTM_DEGTOL[] * abs(S[k])
+        k -= 1                                      # don't split a degenerate multiplet
+    end
+    Sk = S[1:k]; isk = Diagonal(1 ./ sqrt.(Sk))
+    PAm = RB' * F.V[:, 1:k] * isk           # (bond × kept)
+    PBm = isk * F.U[:, 1:k]' * RA           # (kept × bond)
+    w = Index(k)
+    return ITensor(PAm, io, w), ITensor(PBm, w, io), w
+end
 
 # PSD square-root factor: returns A with A†A = ρ (rows = rank, cols = bond).
 function _ctm_psd_factor(ρm::AbstractMatrix)
@@ -400,9 +480,13 @@ function _ctm_interface_proj2(Bw, Be, ins::Vector{<:Index}, maxdim::Integer)
     (isnothing(Bw) || isnothing(Be) || isempty(ins)) && return nothing
     co = combiner(ins...); io = combinedind(co)
     Bwc = Bw * co; Bec = Be * co
-    ρL = Bwc * prime(dag(Bwc), io)
-    ρR = Bec * prime(dag(Bec), io)
-    PA, PB, w = _ctm_twosided_projector(ρL, ρR, io, maxdim)
+    if CTM_QR[]
+        PA, PB, w = _ctm_twosided_projector_qr(Bwc, Bec, io, maxdim)
+    else
+        ρL = Bwc * prime(dag(Bwc), io)
+        ρR = Bec * prime(dag(Bec), io)
+        PA, PB, w = _ctm_twosided_projector(ρL, ρR, io, maxdim)
+    end
     return PA * co, PB * co, w
 end
 
