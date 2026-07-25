@@ -8,3 +8,8 @@
 Manifest.toml
 .vscode/
 .DS_Store
+
+# Per-user Claude Code state. `.claude/settings.json` IS shared (see it for what);
+# settings.local.json is a personal permission allowlist and must not be.
+.claude/settings.local.json
+.CondaPkg/
