@@ -75,7 +75,7 @@ end
     swept = Float64[]
     for χ in (6, 8)
         fresh = CTMEnvironmentCache(tn, χ)
-        cache = update(fresh; maxiter = 30, tol = 1.0e-11)
+        cache = update(fresh; maxiter = 30, tolerance = 1.0e-11)
         F = cvm_freenergy(cache)
         push!(swept, abs(F - lnZ))
         # Stationary: sweeping the converged cache again barely moves F.
@@ -135,7 +135,7 @@ end
     # contraction is lossless (the marginals are then genuinely parallel) and must shrink with χ.
     Random.seed!(99)
     tn2 = random_tensornetwork(Float64, named_grid((4, 4)); bond_dimension = 3)
-    mi = [marginal_inconsistency(update(CTMEnvironmentCache(tn2, χ); maxiter = 30, tol = 1.0e-11))
+    mi = [marginal_inconsistency(update(CTMEnvironmentCache(tn2, χ); maxiter = 30, tolerance = 1.0e-11))
           for χ in (4, 8, 16)]
     @test all(>=(0.0), mi)                  # it is a distance
     @test mi[3] < 1.0e-10                   # lossless χ: marginals exactly parallel

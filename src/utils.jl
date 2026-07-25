@@ -45,6 +45,11 @@ end
 
 identity_tensor(row_inds::Vector{<:Index}, col_inds::Vector{<:Index}) = identity_tensor(Float64, row_inds, col_inds)
 
+# Every network-or-cache type that the contraction algorithms dispatch on. One alias so a fifth
+# cache type is a single edit rather than three widely-separated Unions.
+const ContractableNetwork = Union{TensorNetworkState, BeliefPropagationCache,
+                                 BoundaryMPSCache, CTMEnvironmentCache}
+
 #Function for checking the correct algorithm is being used for the given cache type and functionality
 function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState, CTMEnvironmentCache}, f::String, alg)
     if alg == "bp"

@@ -38,7 +38,7 @@ end
 Compute the expectation value of one or more observables on a tensor network state.
 
 # Arguments
-- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}`: The tensor network state or cache wrapping the state to measure the observable(s) on.
+- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMEnvironmentCache}`: The tensor network state or cache wrapping the state to measure the observable(s) on.
 - `observable::Union{Tuple, Vector{<:Tuple}}`: The observable(s) to measure. Should be a tuple or vector of tuples of the form `(ops, vertices, coeff=1)`.
 
 # Keyword Arguments
@@ -46,12 +46,13 @@ Compute the expectation value of one or more observables on a tensor network sta
     - `"exact"`: Exact contraction of the tensor network.
     - `"bp"`: Belief propagation approximation.
     - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
+    - `"ctmrg"`: Finite CTMRG / CVM environments (requires `maxdim`; single-site observables only).
 - `cache_update_kwargs...`: Keyword arguments passed to the `update` function when using `"bp"` or `"boundarymps"` algorithms.
 
 # Returns
 - A single number if measuring one observable, or a vector of numbers if measuring multiple observables.
 """
-function expect(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMEnvironmentCache}, observable; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
+function expect(ψ::ContractableNetwork, observable; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "expect", alg)
     return expect(Algorithm(alg), ψ, observable; kwargs...)
 end

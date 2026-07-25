@@ -27,7 +27,7 @@
 #
 # See docs/finite_ctmrg_design.md for the derivations and the measured comparisons.
 
-using LinearAlgebra: eigen, Hermitian, diagm, norm, dot, I, Diagonal, qr, svd
+using LinearAlgebra: eigen, Hermitian, norm, dot, I, Diagonal, qr, svd
 using KrylovKit: eigsolve
 
 """
@@ -84,8 +84,6 @@ _ctm_setenv(cache::CTMEnvironmentCache, env) =
 # whose corner spectra carry systematic 2-fold degeneracies from ket↔bra exchange
 # (λ_ij = λ_ji). 0 disables it.
 const CTM_DEGTOL = Ref(0.0)
-# Spectrum of the last/largest corner solved, for diagnostics (relative to λ₁).
-const CTM_SPECTRUM = Ref(Float64[])
 
 # Only the top `maxdim` eigenpairs are needed, so for a corner much larger than `maxdim`
 # an Arnoldi/Lanczos solve (KrylovKit) costs O(maxdim·n²) instead of dense eigen's O(n³).
@@ -184,14 +182,13 @@ function _ctm_eig_projector(ρ::ITensor, bnd::Index, maxdim::Integer)
     vals, vecs = _ctm_eigsolve(ρs, Int(maxdim))
     order = sortperm(vals; rev = true)
     sv = vals[order]
-    length(sv) > length(CTM_SPECTRUM[]) && (CTM_SPECTRUM[] = abs.(sv) ./ abs(sv[1]))
     k = min(Int(maxdim), length(sv), size(vecs, 2))
     while k > 1 && k < length(sv) && abs(sv[k] - sv[k + 1]) ≤ CTM_DEGTOL[] * abs(sv[k])
         k -= 1                              # don't split a degenerate multiplet
     end
     keep = order[1:k]
     w = Index(k)
-    return ITensor(vecs[:, keep], bnd, w), w, vals[keep]
+    return ITensor(vecs[:, keep], bnd, w), w
 end
 
 # Contract a small flat list in a good order (netcon). This is what keeps the double layer
@@ -306,8 +303,10 @@ struct CTMVertexEnvironments
 end
 
 _ctm_nn(d, k) = get(d, k, nothing)
-_ctm_mul(a, b) = isnothing(a) ? b : (isnothing(b) ? a : _ctm_contract(ITensor[a, b]))
-_ctm_widx(d, k) = (t = get(d, k, nothing); isnothing(t) ? nothing : t[2])
+_ctm_mul(a, b) = isnothing(a) ? b : (isnothing(b) ? a : a * b)   # 2 tensors: no netcon needed
+# Kept index of a stored projector. The greedy pass stores `(P, w)` and the sweep stores
+# `(P_A, P_B, w)`, so index from the END — `t[2]` would silently mean `P_B` on a swept dict.
+_ctm_widx(d, k) = (t = get(d, k, nothing); isnothing(t) ? nothing : t[end])
 
 # Every C and T is renormalized as it is built, as in standard CTMRG — blocks span O(L²)
 # vertices, so their raw magnitude grows like exp(c·L²) and would otherwise overflow.
@@ -335,7 +334,7 @@ function _ctm_interface_proj(B, ins::Vector{<:Index}, maxdim::Integer)
     end
     Bc = B * co
     ρ = Bc * prime(dag(Bc), io)
-    P, w, _ = _ctm_eig_projector(ρ, io, k)
+    P, w = _ctm_eig_projector(ρ, io, k)
     return P * co, w
 end
 
@@ -533,18 +532,18 @@ function _ctm_align(pr, ins, prev)
     ITensors.dim(wo) == k || return pr
     issetequal(collect(inds(PAo)), vcat(collect(ins), [wo])) || return pr   # same raw space?
     co = combiner(ins...); io = combinedind(co)
-    Am = try Array(PA * co, io, w) catch; return pr end
-    Ao = try Array(PAo * co, io, wo) catch; return pr end
-    Bm = try Array(PB * co, w, io) catch; return pr end
-    (all(isfinite, Am) && all(isfinite, Ao) && all(isfinite, Bm)) || return pr
-    F = try svd(Am' * Ao) catch; return pr end
-    R = F.U * F.Vt                                    # nearest unitary
-    all(isfinite, R) || return pr
+    Am, Ao, Bm, R = try
+        a  = Array(PA * co, io, w)
+        ao = Array(PAo * co, io, wo)
+        b  = Array(PB * co, w, io)
+        F  = svd(a' * ao)
+        a, ao, b, F.U * F.Vt                          # nearest unitary
+    catch
+        return pr                                     # any trouble: keep the unaligned pair
+    end
+    (all(isfinite, Am) && all(isfinite, Ao) && all(isfinite, Bm) && all(isfinite, R)) || return pr
     return (ITensor(Am * R, io, wo) * co, ITensor(R' * Bm, wo, io) * co, wo)
 end
-
-# Previous sweep's projector pair for an interface, or `nothing`.
-_ctm_prevpr(d, k) = _ctm_nn(d, k)
 
 # Largest relative change of any block between two states, over blocks that share an index set.
 # Meaningful only with `CTM_GAUGE[]` on; returns `nothing` while the bases are still bootstrapping
@@ -555,10 +554,8 @@ function _ctm_statedist(a::CTMVertexEnvironments, b::CTMVertexEnvironments)
         tb = _ctm_nn(d2, k)
         (isnothing(ta) || isnothing(tb)) && continue
         Set(inds(ta)) == Set(inds(tb)) || continue
-        is = inds(ta)
-        A = Array(ta, is...); B = Array(tb, is...)   # same index order for both
-        na = norm(A)
-        na > 0 && (worst = max(worst, norm(A - B) / na))
+        na = norm(ta)
+        na > 0 && (worst = max(worst, norm(ta - tb) / na))
         n += 1
     end
     return n == 0 ? nothing : worst
@@ -612,10 +609,11 @@ function _ctm_region_desc(cx::Real, cy::Real)
     return ds, (iseven(nhalf) ? 1 : -1), (xint && yint ? (Int(cx), Int(cy)) : nothing)
 end
 
-# One block, rebuilt from the enlarged pieces plus the supplied projector getters — mirrors
-# `sweep_vertex_environments` exactly. A getter returning `nothing` leaves that interface
-# UNPROJECTED, which is how the gradient opens the target interface.
-function _ctm_block(S::CTMVertexEnvironments, tbl, phg, pvg, d)
+# One block, rebuilt from `S`'s enlarged pieces plus the projector set `P` — mirrors
+# `sweep_vertex_environments` exactly, which is the correctness argument for it.
+function _ctm_block(S::CTMVertexEnvironments, tbl, P::CTMVertexEnvironments, d)
+    phg(k) = _ctm_nn(P.PH, k)
+    pvg(k) = _ctm_nn(P.PV, k)
     kind, sym, i, j = d
     aA(t, p) = (isnothing(p) || isnothing(t)) ? t : t * p[1]
     aB(t, p) = (isnothing(p) || isnothing(t)) ? t : t * p[2]
@@ -670,7 +668,7 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         (isnothing(Bw) || isnothing(Be)) && continue
         ins = commoninds(Bw, Be)
         pr = _ctm_interface_proj2(Bw, Be, ins, χ)
-        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_prevpr(S.PH, (:N, x, y))))
+        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_nn(S.PH, (:N, x, y))))
         !isnothing(pr) && (PH[(:N, x, y)] = pr)
     end
     # Every `:S` block is keyed by its FIRST included row (`T_S[x,y] = rows ≥ y`), so the
@@ -682,7 +680,7 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         (isnothing(Bw) || isnothing(Be)) && continue
         ins = commoninds(Bw, Be)
         pr = _ctm_interface_proj2(Bw, Be, ins, χ)
-        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_prevpr(S.PH, (:S, x, y))))
+        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_nn(S.PH, (:S, x, y))))
         !isnothing(pr) && (PH[(:S, x, y)] = pr)
     end
     for x in 2:Lx, y in 1:(Ly - 1)            # PV[:W,x,y]: C_NW(x,y+1) | C_SW(x,y+1)
@@ -690,7 +688,7 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         (isnothing(Bn) || isnothing(Bs)) && continue
         ins = commoninds(Bn, Bs)
         pr = _ctm_interface_proj2(Bn, Bs, ins, χ)
-        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_prevpr(S.PV, (:W, x, y))))
+        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_nn(S.PV, (:W, x, y))))
         !isnothing(pr) && (PV[(:W, x, y)] = pr)
     end
     for x in 1:(Lx - 1), y in 1:(Ly - 1)      # PV[:E,x,y]: C_NE(x,y+1) | C_SE(x,y+1)
@@ -698,27 +696,20 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         (isnothing(Bn) || isnothing(Bs)) && continue
         ins = commoninds(Bn, Bs)
         pr = _ctm_interface_proj2(Bn, Bs, ins, χ)
-        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_prevpr(S.PV, (:E, x + 1, y))))
+        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_nn(S.PV, (:E, x + 1, y))))
         !isnothing(pr) && (PV[(:E, x + 1, y)] = pr)
     end
     # --- rebuild corners: P_A on the west/north side, P_B on the east/south side ----
     apA(t, pr) = isnothing(pr) || isnothing(t) ? t : t * pr[1]
     apB(t, pr) = isnothing(pr) || isnothing(t) ? t : t * pr[2]
-    for x in 2:Lx, y in 2:Ly
-        C[(:NW, x, y)] = _ctm_rescale(apA(apA(E(:NW, x, y), _ctm_nn(PH, (:N, x - 1, y))),
-                                          _ctm_nn(PV, (:W, x, y - 1))))
-    end
-    for x in 1:(Lx - 1), y in 2:Ly
-        C[(:NE, x + 1, y)] = _ctm_rescale(apA(apB(E(:NE, x + 1, y), _ctm_nn(PH, (:N, x, y))),
-                                              _ctm_nn(PV, (:E, x + 1, y - 1))))
-    end
-    for x in 2:Lx, y in 2:Ly
-        C[(:SW, x, y)] = _ctm_rescale(apB(apA(E(:SW, x, y), _ctm_nn(PH, (:S, x - 1, y))),
-                                          _ctm_nn(PV, (:W, x, y - 1))))
-    end
-    for x in 1:(Lx - 1), y in 2:Ly
-        C[(:SE, x + 1, y)] = _ctm_rescale(apB(apB(E(:SE, x + 1, y), _ctm_nn(PH, (:S, x, y))),
-                                              _ctm_nn(PV, (:E, x + 1, y - 1))))
+    # Horizontal projector takes P_A on the west corners and P_B on the east; vertical takes
+    # P_A on the north and P_B on the south. Keys are uniformly (fam, x−1, y) and (fam, x, y−1).
+    for (sym, hfam, hA, vfam, vA) in ((:NW, :N, true,  :W, true), (:NE, :N, false, :E, true),
+                                      (:SW, :S, true,  :W, false), (:SE, :S, false, :E, false))
+        for x in 2:Lx, y in 2:Ly
+            t = (hA ? apA : apB)(E(sym, x, y), _ctm_nn(PH, (hfam, x - 1, y)))
+            C[(sym, x, y)] = _ctm_rescale((vA ? apA : apB)(t, _ctm_nn(PV, (vfam, x, y - 1))))
+        end
     end
     # --- rebuild edges from the previous state, projected on both sides -------------
     for x in 1:Lx, y in 2:Ly                  # T_N: left = east side, right = west side
@@ -762,21 +753,13 @@ region_lnZ(cache::CTMEnvironmentCache, cx::Real, cy::Real) =
 
 # The C/T blocks bounding a region, with boundary `nothing`s dropped. No vertex factors — the
 # caller supplies those, which is what lets an observable be inserted (see `vertex_ring`).
+# One block by descriptor, or `nothing` at the boundary.
+_ctm_fetch(env::CTMVertexEnvironments, d) =
+    (kind = d[1]; _ctm_nn(kind === :C ? env.C : env.T, (d[2], d[3], d[4])))
+
 function _ctm_region_blocks(env::CTMVertexEnvironments, cx::Real, cy::Real)
-    rL = ceil(Int, cx); rR = floor(Int, cx) + 1
-    tT = ceil(Int, cy); tB = floor(Int, cy) + 1
-    xint = rL < rR; yint = tT < tB
-    ts = Any[_ctm_nn(env.C, (:NW, rL, tT)), _ctm_nn(env.C, (:NE, rR, tT)),
-             _ctm_nn(env.C, (:SW, rL, tB)), _ctm_nn(env.C, (:SE, rR, tB))]
-    if xint
-        push!(ts, _ctm_nn(env.T, (:N, Int(cx), tT)))
-        push!(ts, _ctm_nn(env.T, (:S, Int(cx), tB)))
-    end
-    if yint
-        push!(ts, _ctm_nn(env.T, (:W, rL, Int(cy))))
-        push!(ts, _ctm_nn(env.T, (:E, rR, Int(cy))))
-    end
-    return ITensor[t for t in ts if !isnothing(t)]
+    ds, _, _ = _ctm_region_desc(cx, cy)
+    return ITensor[t for t in (_ctm_fetch(env, d) for d in ds) if !isnothing(t)]
 end
 
 function region_lnZ(env::CTMVertexEnvironments, cache::CTMEnvironmentCache, cx::Real, cy::Real)
@@ -847,11 +830,13 @@ cvm_freenergy(cache::CTMEnvironmentCache) = cvm_freenergy(_ctm_env(cache), cache
 
 function cvm_freenergy(env::CTMVertexEnvironments, cache::CTMEnvironmentCache)
     Lx, Ly = env.Lx, env.Ly
+    # The half-integer grid enumerates every region exactly once — integer/integer is a vertex
+    # (+1), one half-integer an edge (−1), both a plaquette (+1) — and `_ctm_region_desc`
+    # already knows the Möbius weight, so it is not spelled out a second time here.
     F = 0.0
-    for x in 1:Lx, y in 1:Ly;           F += region_lnZ(env, cache, x, y);             end
-    for x in 1:(Lx - 1), y in 1:Ly;     F -= region_lnZ(env, cache, x + 0.5, y);       end
-    for x in 1:Lx, y in 1:(Ly - 1);     F -= region_lnZ(env, cache, x, y + 0.5);       end
-    for x in 1:(Lx - 1), y in 1:(Ly - 1); F += region_lnZ(env, cache, x + 0.5, y + 0.5); end
+    for cx in 1.0:0.5:Lx, cy in 1.0:0.5:Ly
+        F += _ctm_region_desc(cx, cy)[2] * region_lnZ(env, cache, cx, cy)
+    end
     return F
 end
 
@@ -883,17 +868,19 @@ function marginal_inconsistency(cache::CTMEnvironmentCache)
     Lx, Ly = _ctm_dims(cache)
     memo = Dict{Any, Any}()
     blk(d) = get!(memo, d) do
-        _ctm_block(env, tbl, k -> _ctm_nn(nxt.PH, k), k -> _ctm_nn(nxt.PV, k), d)
+        _ctm_block(env, tbl, nxt, d)
     end
-    regs = [(cx, cy, _ctm_region_desc(cx, cy)...) for cx in 1.0:0.5:Lx for cy in 1.0:0.5:Ly]
+    # descriptors only: this diagnostic is weight-free, it just needs the two regions a block
+    # sits in and whether they carry a centre site
+    regs = [_ctm_region_desc(cx, cy) for cx in 1.0:0.5:Lx for cy in 1.0:0.5:Ly]
     gaps = Float64[]
     for sym in (:N, :S, :W, :E), i in 1:(Lx + 1), j in 1:(Ly + 1)
         d = (:T, sym, i, j)
         isnothing(blk(d)) && continue
-        rs = filter(r -> d in r[3], regs)
+        rs = filter(r -> d in r[1], regs)
         length(rs) == 2 || continue
         Ms = ITensor[]
-        for (cx, cy, ds, wt, ctr) in rs
+        for (ds, _, ctr) in rs
             full = ITensor[]; minus = ITensor[]
             for e in ds
                 t = blk(e); isnothing(t) && continue
@@ -921,7 +908,7 @@ function marginal_inconsistency(cache::CTMEnvironmentCache)
 end
 
 """
-    update(cache::CTMEnvironmentCache; maxiter = 30, tol = 1e-10, verbose = false)
+    update(cache::CTMEnvironmentCache; maxiter = 30, tolerance = 1e-10, verbose = false)
 
 Run the two-sided CVM sweep on `cache` to stationarity and return a cache carrying the
 converged per-vertex environments. Extract numbers from it with [`cvm_freenergy`](@ref) or
@@ -940,8 +927,8 @@ what replaces the greedy pass's one-sided cuts), but the tail is slow: `|ΔF|` t
 ~8–12 sweeps to reach 1e-8. Stopping at 2–3, as an earlier iteration did, lands mid-transient
 and reads as a limit cycle. Warns if `tol` is not met within `maxiter`.
 """
-function update(cache::CTMEnvironmentCache; maxiter::Integer = 30, tol::Real = 1.0e-10,
-                verbose::Bool = false)
+function update(cache::CTMEnvironmentCache; maxiter::Integer = 30,
+                tolerance::Real = 1.0e-10, verbose::Bool = false)
     env = _ctm_env(cache)
     F = cvm_freenergy(env, cache)
     converged, Δ = false, Inf
@@ -957,14 +944,14 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30, tol::Real = 1
         sd = CTM_GAUGE[] ? _ctm_statedist(env, prev) : nothing
         crit = isnothing(sd) ? Δ : max(Δ, sd)
         verbose && @info "CVM sweep $it: F = $F, |ΔF| = $Δ, state Δ = $(something(sd, NaN))"
-        if crit ≤ tol * max(one(crit), abs(F))
+        if crit ≤ tolerance * max(one(crit), abs(F))
             converged = true
             verbose && @info "CVM sweep converged after $it sweeps."
             break
         end
     end
     if !converged
-        msg = "CVM sweep did not converge to tolerance $tol after $maxiter sweeps " *
+        msg = "CVM sweep did not converge to tolerance $tolerance after $maxiter sweeps " *
               "(final |ΔF| = $Δ)."
         verbose ? println(msg) : @warn(msg)
     end

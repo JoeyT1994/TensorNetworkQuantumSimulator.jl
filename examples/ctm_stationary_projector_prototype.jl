@@ -37,7 +37,7 @@ const T = TensorNetworkQuantumSimulator
 Random.seed!(7)
 L, D, χ = 4, 3, 6
 tn = random_tensornetwork(Float64, named_grid((L,L)); bond_dimension=D)
-conv = update(CTMEnvironmentCache(tn, χ); maxiter=25, tol=1e-12)
+conv = update(CTMEnvironmentCache(tn, χ); maxiter=25, tolerance=1e-12)
 S, tbl = environments(conv), T._ctm_factor_table(conv)
 x, y = 2, 3
 KEY = (:N, x, y)

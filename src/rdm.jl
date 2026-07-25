@@ -13,18 +13,18 @@ end
 Compute the reduced density matrix on the vertices `verts` of the tensor network state `ψ`.
 
 # Arguments
-- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}`: The tensor network state or its associated cache.
+- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMEnvironmentCache}`: The tensor network state or its associated cache.
 - `verts`: The vertices over which to compute the reduced density matrix. Can be a single vertex or a collection of vertices.
 
 # Keyword Arguments
-- `alg::Union{String, Nothing}`: The contraction algorithm to use. If not provided, defaults based on the type of `ψ`. Supported algorithms are `"exact"`, `"bp"`, and `"boundarymps"`.
+- `alg::Union{String, Nothing}`: The contraction algorithm to use. If not provided, defaults based on the type of `ψ`. Supported algorithms are `"exact"`, `"bp"`, `"boundarymps"` and `"ctmrg"` (single vertex only, requires `maxdim`).
 - `normalize::Bool = true`: Whether to normalize the reduced density matrix so that its trace is 1.
 - `kwargs...`: Additional keyword arguments specific to the chosen algorithm.
 
 # Returns
 - An `ITensor` representing the reduced density matrix on the specified vertices.
 """
-function reduced_density_matrix(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMEnvironmentCache}, verts; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
+function reduced_density_matrix(ψ::ContractableNetwork, verts; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "rdm", alg)
     verts = collect_vertices(verts, graph(ψ))
     return reduced_density_matrix(Algorithm(alg), ψ, verts; kwargs...)

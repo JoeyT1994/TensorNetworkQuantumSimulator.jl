@@ -117,7 +117,7 @@ Hard-won numerical points (all measured, see `ctmenvironmentcache.jl`):
 * **One-sided truncation is not a valid variational choice** and makes the error non-monotonic
   in χ. This was the root cause of a long chain of confusing results.
 
-### Triangular/QR projector — implemented, accuracy-NEUTRAL, kept for GPU (`CTM_QR`, default off)
+### Triangular/QR projector — implemented, accuracy-NEUTRAL, kept for GPU (`CTM_QR`, default ON)
 
 Take a thin QR of each bounding block instead of forming `ρ` and eigendecomposing it back into a
 square root: `Bw = Q_A R_A`, `Be = Q_B R_B`, so `R_A† R_A = ρ_L` and `R_B† R_B = ρ_R` *exactly*,
