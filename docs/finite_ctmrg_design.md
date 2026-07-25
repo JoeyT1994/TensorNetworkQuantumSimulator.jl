@@ -169,6 +169,69 @@ the batching above (iterative, data-dependent iteration counts, a `randn` per ca
 `CTM_DEGTOL[] = 0.0`, i.e. **eigenvalue pair-keeping is off**, consistent with it having measured
 as a no-op on single layer and marginal on double layer.
 
+### Toward a stationary projector — measured findings and the derivation
+
+The current projector maximises the fidelity of **one** local interface contraction (the two
+bounding corners closing directly, i.e. the plaquette-like pairing). But each interface actually
+appears in **six** regions. For `PH[:N,x,y]`:
+
+| region | weight |
+|---|---|
+| plaquette `(x+½, y−½)` | +1 |
+| h-edge `(x+½, y)` | −1 |
+| vertex `(x, y)` / vertex `(x+1, y)` | +1 / +1 |
+| v-edge `(x, y−½)` / v-edge `(x+1, y−½)` | −1 / −1 |
+
+The weights sum to zero (this is the scale-cancellation above). Each `Z_R` is *linear* in
+`Π = P_A P_B`, so `Z_R = Tr[E_R Π]` and
+
+```
+∂F/∂Π  =  Σ_R c_R E_R / Z_R  ≡  G
+```
+
+Stationarity over rank-`k` `Π`: writing `Π = Σ_j a_j b_j†` biorthogonally, `δF = Tr[G δΠ]`
+vanishes for all variations mixing kept with discarded directions iff **the kept subspace is an
+invariant subspace of `G`**. That is the target condition — note `G` is *signed and
+non-symmetric*, so it is a partial Schur/invariant-subspace problem, not a top-eigenvector one.
+
+**Finding 1 — `|F − ln Z|` is an INVALID objective. Do not tune against it.** Overriding which
+SVD directions one interface keeps, the best single swap improved `|F − ln Z|` by **18×** — and
+made single-site observables *worse* (`⟨Z⟩` at `(3,2)`: 4.6e-3 → 1.1e-2). A different interface
+gave a 2.9× gain that *did* improve 2 of 3 observables. So some apparent gains are cancellation
+artifacts of the signed Möbius sum, and optimising `F` against the exact answer chases them. Any
+criterion must be `ln Z`-free; stationarity is.
+
+**Finding 2 — the converged point is far from stationary (`ln Z`-free measurement).** Swapping
+the marginal kept direction (`k` ↔ `k+1`) on a *single* interface moves `F` by **2–23× more than
+`F`'s own error**: on 4×4 D=3, χ=4 → error 5.2e-3 but max `|ΔF|` 1.2e-1; χ=8 → error 6.5e-6, max
+`|ΔF|` 2.9e-5. Where the contraction is lossless (3×3 at χ≥3) `ΔF` is exactly 0, so the
+diagnostic correctly reports stationarity when there is nothing to truncate.
+
+**Finding 3 — the non-stationarity is concentrated in a handful of interfaces.** Median `|ΔF|`
+over interfaces is **exactly 0**: on a 4×4 only **4 of 36** interfaces are sensitive, and they
+are always the same ones — `PH[:N,2,3]`, `PH[:S,2,3]`, `PV[:W,3,2]`, `PV[:E,3,2]`, the
+**maximally balanced central cuts**, which carry the most rank. The other 32 are not truncating
+at all. This is the lever: a smarter (even brute-force) projector confined to the few
+maximally-balanced interfaces would cost almost nothing.
+
+**Finding 4 (negative) — explicit non-uniform χ buys nothing.** Since `k = min(maxdim, rank)`,
+low-rank interfaces *already* use less than χ; per-interface χ allocation is already implicit.
+Raising χ on only the 4 central interfaces gives **bit-identical** `F` to raising it everywhere.
+
+**Finding 5 — sweep count collapses with χ, so large χ is cheaper AND better.** 4×4 D=3, warmed:
+
+| χ | sweeps to converge | \|F − exact\| | total time |
+|---|---|---|---|
+| 4 | 24 | 5.2e-3 | 0.46 s |
+| 6 | 18 | 1.6e-3 | 0.16 s |
+| 8 | 16 | 6.5e-6 | 0.13 s |
+| 12 | **1** | 5.3e-15 | 0.02 s |
+
+χ=8 is 3.5× faster *and* 800× more accurate than χ=4. At lossless χ the projectors are exact so
+the fixed point is reached in one sweep. **Small χ is the expensive regime as well as the
+inaccurate one** — the usual accuracy/cost tradeoff is inverted here, so do not reach for small
+χ to save time.
+
 ### Two-sided projectors inside the per-vertex DP
 
 Each interface is bounded by exactly two corners, which are its two half-environments:
