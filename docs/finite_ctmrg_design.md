@@ -211,6 +211,50 @@ gets the cancelled one. That is the whole gap. Closing it needs a **finer region
 child regions also contain the site (so the site's marginal is over-counted and then corrected),
 not a better projector or more sweeps.
 
+### Strip estimator for observables — TESTED, no gain. The deficit is truncation, not geometry.
+
+Boundary MPS gets local observables right by taking the whole strip containing the site *exactly*
+and putting compressed messages only above and below. CTMRG can build the same object out of
+pieces it already has: `T_N[x,y]` is column `x`, rows `< y`, so `{T_N(x,y)}_{x=1..Lx}` tiles
+everything above row `y` and the `PH[:N,x,y]` interfaces chain them into **exactly an MPS**;
+likewise `{T_S(x,y+1)}` below. The strip is then
+
+```
+{T_N(x,y)}ₓ  ·  {a(x,y)}ₓ  ·  {T_S(x,y+1)}ₓ          (row y kept EXACT)
+```
+
+versus the ring, which compresses the within-row context into `T_W(x,y)` and `T_E(x+1,y)`. It is
+~10 lines and validated: observables from it are exact at lossless χ. (Its absolute value is *not*
+`Z` — block renormalisation again, so only ratios are meaningful, same caveat as `region_lnZ`.)
+
+**Measured, it does not help.** 4×4 D=2, error in `⟨Z⟩`:
+
+| χ | vertex | ring | strip | bMPS | best |
+|---|---|---|---|---|---|
+| 4 | (2,2) | 1.03e-3 | 1.72e-3 | **2.27e-4** | bMPS |
+| 4 | (3,2) | 6.07e-4 | 3.11e-4 | **2.28e-5** | bMPS |
+| 8 | (2,2) | 1.034e-4 | 1.032e-4 | **4.78e-5** | bMPS |
+| 8 | (3,2) | 1.25e-4 | 1.10e-4 | **3.90e-6** | bMPS |
+
+**strip ≈ ring ≪ bMPS.** Adopting boundary MPS's geometry does not recover its accuracy, so the
+gap is **not** the ring-vs-strip shape. It is *how the `T`s were truncated*: `PH[:N,x,y]` is
+derived from the two enlarged **corners** `C̃_NW(x+1,y) | C̃_NE(x+1,y)`, i.e. optimised for the
+corner–corner contraction, whereas boundary MPS **variationally fits** its row MPS to the very
+contraction it will be used for.
+
+**The tension this exposes is structural.** Each interface must carry *one* projector — deriving
+it twice from different sides gives inconsistent bases and corrupts the contraction (see the top
+of this document). But the projector that makes the CVM regions mutually consistent (corner-derived)
+is *not* the projector that makes the strip accurate (fit-derived). **One projector set cannot be
+optimal for both.** Any real fix has to choose: either fit the `T`-chain for the strip and give up
+region consistency, or keep the corner-derived projectors and accept that local observables inherit
+the raw per-region error. This — together with the fact that only the vertex region contains a site,
+so observables get no Möbius cancellation — is the complete account of why CVM beats boundary MPS
+on `ln Z` and loses on `⟨O⟩`.
+
+Not added to the engine: it is not better, and a second observable path that is sometimes worse is
+worse than none. Recover from this commit if a future region graph changes the trade-off.
+
 ### Current state of the engine (the clean slate)
 
 | piece | state |
