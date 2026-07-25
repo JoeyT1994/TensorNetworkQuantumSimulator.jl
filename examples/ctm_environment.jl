@@ -3,8 +3,8 @@
 # There is ONE engine (src/MessagePassing/ctmenvironmentcache.jl); everything here is a
 # call into it, so there is no duplicated truncation machinery to drift out of sync.
 # It handles single-layer partition functions (isotropic or anisotropic, square or not),
-# double-layer state norms ⟨ψ|ψ⟩ and forms ⟨ψ|O|ψ⟩, and exposes row environments for
-# row-local observables.
+# double-layer state norms ⟨ψ|ψ⟩ and forms ⟨ψ|O|ψ⟩, exposes row environments for row-local
+# observables, and builds the per-vertex CVM regions whose Möbius sum gives the free energy.
 #
 # Run: julia --project=. --startup-file=no examples/ctm_environment.jl
 
@@ -58,14 +58,37 @@ function row_environment_check(; L = 5, K = 0.4, χ = 16)
     end
 end
 
+# --- 4. per-vertex CVM regions: F = Σ_v ln Z_v − Σ_e ln Z_e + Σ_p ln Z_p ---------
+# A 4C+4T ring on every vertex, with each interface truncated by a two-sided
+# (biorthogonal) projector. The projector needs the complement environment, so the build is a
+# fixed-point iteration: `update(cache)` sweeps it to stationarity and returns a cache you
+# read `cvm_freenergy` off. An UN-updated cache falls back to the greedy one-sided pass —
+# 3-4 orders worse and non-monotone in χ — which is the "greedy" column here. Compared
+# against boundary MPS at matched χ on a random NON-SYMMETRIC network, since a symmetric
+# Ising model can be passed by accident via symmetry crutches.
+function cvm_free_energy(; L = 4, D = 3, seed = 5, χs = (4, 6, 8, 12))
+    Random.seed!(seed)
+    tn = random_tensornetwork(Float64, named_grid((L, L)); bond_dimension = D)
+    ref = contract(tn; alg = "exact")
+    lnZ = log(abs(real(ref)))
+    @printf("\nCVM regions vs boundary MPS (random %dx%d D=%d, ln|Z| = %.10f)\n", L, L, D, lnZ)
+    @printf("   %-4s %-11s %-11s %-11s\n", "χ", "greedy", "swept", "boundaryMPS")
+    for χ in χs
+        cache = CTMEnvironmentCache(tn, χ)
+        greedy = abs(cvm_freenergy(cache) - lnZ)                  # un-updated: greedy pass
+        swept = abs(cvm_freenergy(update(cache)) - lnZ)           # two-sided, to stationarity
+        bmps = lnerr(contract(tn; alg = "boundarymps", mps_bond_dimension = χ), ref)
+        @printf("   %-4d %-11.3e %-11.3e %-11.3e\n", χ, greedy, swept, bmps)
+    end
+end
+
 function main()
     ising_free_energy()
     ising_free_energy(; aniso = true)
     peps_norm()
     peps_norm(; D = 3)
     row_environment_check()
+    cvm_free_energy()
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
-    main()
-end
+main()

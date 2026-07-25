@@ -154,8 +154,32 @@ the other corners — genuinely circular. So it must be iterated (Jacobi): withi
 **every** tensor is built from the *previous* sweep's state, and the new projectors are derived
 from the enlarged corners. Mixing new corners with old edges produces index/basis mismatch
 ("not a valid combiner contraction"). Store the projector dicts in the state so the nested
-interfaces can reference the previous level's indices. Iterate until `F` stops changing;
-previously this converged in 2–3 sweeps.
+interfaces can reference the previous level's indices. Iterate until `F` stops changing.
+
+The API follows the `BeliefPropagationCache` convention — the cache *carries* its environments
+and `update` returns a cache with converged ones:
+
+```julia
+cache = update(CTMEnvironmentCache(ψ, χ))     # runs the two-sided sweep to stationarity
+F     = cvm_freenergy(cache)                  # read the number off
+lnZ_v = region_lnZ(cache, x, y)               # or a single region
+```
+
+`cvm_freenergy` on an **un-updated** cache falls back to the greedy one-sided pass. That is
+deliberate (same as evaluating an un-updated BP cache) but it is a trap worth knowing: the two
+numbers differ by 3–4 orders and the greedy one is non-monotone in χ. An earlier API returned
+`(env, F, iters)` from a `cvm_environments` function, which conflated running the algorithm with
+reporting the answer and made exactly this difference look like a bug.
+
+**The tail is slow — do not stop at 2–3 sweeps.** Sweep 1 does nearly all the work (it is what
+replaces the greedy pass's one-sided cuts, worth 3–4 orders on its own), but `|ΔF|` then decays
+over roughly **8–12** sweeps before reaching 1e-8. Truncating the iteration at 2–4 lands
+mid-transient, where `|F − ln Z|` bounces by an order of magnitude and reads convincingly like
+a limit cycle. It is not one: run it out and `|ΔF|` reaches 1e-10/1e-11 monotonically.
+
+Block *scale* is not part of the fixed point and does not need fixing: every corner appears in
+exactly four regions with Möbius weights `+1 −1 −1 +1` (vertex, h-edge, v-edge, plaquette) and
+every edge tensor in two with `+1 −1`, so any per-block rescaling cancels from `F` identically.
 
 This is what "make `Z_v` stationary" means operationally, and it lands *together with* the
 two-sided projector rather than as a separate feature.
@@ -195,46 +219,67 @@ Reference values: `contract(tn; alg="exact")`, `norm_sqr(ψ; alg="exact")`, and
 | row-absorption contractor | done, committed — **wrong object**, keep only as a reference contractor |
 | per-vertex C/T DP (grow + project) | **done** — `vertex_environments`, single-pass greedy, generic over `bp_factors` |
 | region contraction + Möbius sum | **done** — `region_lnZ`, `cvm_freenergy` |
-| stationary sweep with two-sided projectors | **written, BUGGY** — `sweep_vertex_environments`, see below |
-| re-measure vs boundary MPS | greedy pass measured; **redo after the sweep lands** |
+| stationary sweep with two-sided projectors | **done, validated** — `sweep_vertex_environments`, driven to convergence by `update(cache)` |
+| re-measure vs boundary MPS | **done** — now competitive-to-better, see below |
 
-### Measured with the single-pass (greedy, one-sided) DP
+Test coverage: `test/test_ctmenvironment.jl`, testset "CVM per-vertex environments" — every
+region type on a square *and* a non-square grid, the Möbius identity, sweep convergence,
+beats-greedy, and monotonicity in χ.
+
+### Fixed: the `:S`-family off-by-one in `sweep_vertex_environments`
+
+The symptom was two leftover dim-2 indices out of `region_lnZ` (an interface projected on one
+side but not the other). The cause was an index-key off-by-one, but not in a single key: the
+**whole `:S` family** was shifted. `:S` and `:E` blocks are keyed by their *first included*
+row/column (`T_S[x,y] = rows ≥ y`), so the `:S` family lives at `y ∈ 2:Ly`, with `y = Ly+1` the
+empty block. All four `:S` rebuild loops (`PH[:S]`, `C[:SW]`, `C[:SE]`, `T[:S]`) ran over
+`y ∈ 1:(Ly-1)` instead: they built a useless `y = 1` and **never built `y = Ly`**. The loop
+*bodies* were correct throughout, as were the `P_A`/`P_B` side assignments and both `PV`
+families (the `:E` ranges were already right). Fix = the four ranges.
+
+This predicts the observed symptom exactly: on a 3×3, region `(1,2)` needs `C_SE(2,3)` and
+`T_S(1,3)`, so `vl(1,2)` and the `PV[:E,2,2]` interface are left unconsumed — two dim-2 indices.
+
+**The diff-against-the-greedy-oracle diagnosis worked and is worth reusing.** Compare, per
+block key, a *signature* of the index set — sorted dims, each tagged as a raw lattice link or a
+projector index — between `vertex_environments` and the rebuild. Two notes on reading it:
+
+* Filter to **present/absent** mismatches (`nothing` vs a tensor). Those are the bug.
+* **Differing dimensions are expected and are not bugs.** The two-sided projector legitimately
+  truncates below the greedy one-sided cut when the *complement* is low rank — e.g. on a 3×3,
+  `C̃_NE(3,3)` reduces to `T_N(3,2)·a(3,2)`, rank ≤ 2 across a dim-4 interface, so `k = 2` is
+  lossless where greedy keeps 4.
+
+### Measured
 
 All regions contract to exact `Z` at large χ — interior, edge and corner vertices, boundary
-edges, corner plaquettes (0 – 1.8e-15) — and the Möbius sum returns `ln Z` exactly, confirming
-`V − E + P = 1`. The cancellation is real: random positive 4×4, D=3, χ=8 → single region
-1.20e-4, CVM sum **8.67e-7** (~140×). Monotone in χ apart from a small bump at χ=4.
+edges, corner plaquettes (0 – 2.0e-14) — and the Möbius sum returns `ln Z`, confirming
+`V − E + P = 1`. Cancellation is real: random 4×4, D=3, χ=8 → single region 2.6e-2, CVM sum
+**6.5e-6** (~4000×).
 
-### Open bug in `sweep_vertex_environments` — START HERE
+Two-sided sweep vs greedy one-sided pass, and vs boundary MPS at matched χ and D. Random
+**non-symmetric** networks (`random_itensor`, so signed — a symmetric Ising model can be passed
+by accident via symmetry crutches):
 
-The sweep is written (Gauss-Seidel, vertex to vertex round the lattice; enlarged corners grown
-from the previous state; two-sided projector per interface, read off as
-`commoninds(C̃_west, C̃_east)` since complementary halves share exactly the interface). It does
-**not** work yet:
+| case | χ | CVM greedy | CVM swept | boundary MPS |
+|---|---|---|---|---|
+| positive 4×4 D=3 | 4 | 2.7e-5 | **1.2e-8** | 6.9e-8 |
+| | 6 | 2.9e-6 | **5.0e-10** | 1.1e-9 |
+| | 8 | 1.2e-7 | **5.7e-13** | 1.7e-10 |
+| signed 4×4 D=3 | 6 | **1.1e-2** | 3.8e-2 | 6.5e-2 |
+| | 8 | 5.7e-3 | **1.1e-5** | 1.0e-3 |
+| signed 5×5 D=3 | 6 | 2.1e0 | 2.3e-2 | **7.6e-3** |
+| | 8 | 2.8e-1 | **1.7e-4** | 2.1e-2 |
+| PEPS norm 4×4 D=2 | 8 | 3.0e-3 | **6.6e-6** | 1.2e-3 (row-CTM) |
+| | 12 | 2.3e-3 | **8.0e-8** | 5.0e-5 (row-CTM) |
 
-```
-greedy   F |Δ| = 0.0            (unchanged, still correct)
-sweep 1  ERROR: DimensionMismatch: ITensor is not a scalar
-                (leftover indices (dim=2), (dim=2))
-```
+So the doc's earlier verdict is **reversed**: on the recorded comparison point (random positive
+4×4, D=3, χ=8) CVM now reads 5.7e-13 against boundary MPS's 1.7e-10 — a ~300× win, where the
+greedy pass lost by ~4 orders. The sweep is worth 3–4 orders over greedy across the board. CVM
+wins at most χ and loses occasionally (5×5 D=3 at χ=6, and at χ=2 where nothing is converged);
+call it competitive-to-better rather than uniformly better.
 
-Two dim-2 indices survive the region contraction — i.e. **an interface is projected on one side
-but not the other**, so the raw links never get consumed. Likely causes, in order of suspicion:
-
-1. A boundary interface where one bounding corner is `nothing`, so `_ctm_interface_proj2`
-   returns `nothing` and *neither* side is projected — but the block on the other side still
-   carries its raw link. Boundary rows/columns (`x=1`, `y=1`, `x=Lx`, `y=Ly`) are where the
-   greedy builder needed its careful `nothing` handling.
-2. An off-by-one between the key a projector is *stored* under and the key the rebuild *reads*
-   — particularly `PV[:E]`, which is derived in a loop over `x` but stored at `x+1`.
-3. The `P_A`/`P_B` side assignment being consistent for corners but wrong for one edge family,
-   so two `P_A`s meet across an interface.
-
-Suggested diagnosis: for a 3×3 with χ large, print `inds` of each rebuilt `C`/`T` next to the
-greedy build's, and diff. The greedy builder is the oracle — its blocks have the correct index
-structure, so the first block whose index set differs localises the bug immediately.
-
-Against boundary MPS on the greedy pass it currently **loses** (D=3 χ=8: 8.7e-7 vs 1.9e-10).
-Expected for a one-sided greedy pass — in the row engine the two-sided projector was worth
-4–13 orders of magnitude. That is the next thing to build, and the comparison should be redone
-only after it lands.
+Monotonicity in χ (validation step 4, the projector canary) now holds for the swept result —
+`5.2e-3, 1.6e-3, 6.5e-6, ~1e-14` on 4×4 D=3 at χ = 4, 6, 8, 12 — while the greedy pass is still
+visibly non-monotone (`1.4e0, 2.5e-1, 6.1e-2` with a bump at χ=4, and on the PEPS norm a flat
+~2.5e-3 floor at every χ that the sweep breaks straight through).

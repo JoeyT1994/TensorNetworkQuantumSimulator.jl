@@ -26,15 +26,29 @@ using KrylovKit: eigsolve
 Directional-CTMRG environment for a 2D grid `TensorNetwork` (vertices `(x, y)`).
 Contract it with [`partitionfunction`](@ref); bond truncation to `maxdim` uses the
 eigendecomposition of the accumulated corner density matrix.
+
+A freshly built cache carries **no** per-vertex CVM environments. [`update`](@ref) runs the
+two-sided stationary sweep and returns a cache holding the converged ones; [`cvm_freenergy`](@ref)
+and [`region_lnZ`](@ref) then read them off. As with `BeliefPropagationCache`, evaluating an
+un-updated cache gives you the un-converged answer (here the greedy single pass) rather than an
+error, so `update` before you trust the number.
 """
-struct CTMEnvironmentCache{V, N}
+struct CTMEnvironmentCache{V, N, E}
     network::N
     rows::Vector{Vector{V}}     # grid vertices grouped into rows, sorted within each row
     maxdim::Int
+    environments::E             # `nothing`, or the CVM blocks from `update`
 end
 
 network(cache::CTMEnvironmentCache) = cache.network
 graph(cache::CTMEnvironmentCache) = graph(network(cache))
+
+"""
+    environments(cache::CTMEnvironmentCache)
+
+The cache's per-vertex CVM environments, or `nothing` if it has not been [`update`](@ref)d.
+"""
+environments(cache::CTMEnvironmentCache) = cache.environments
 
 # Works for a single-layer `TensorNetwork`, a `TensorNetworkState` (⟨ψ|ψ⟩) or an
 # `AbstractForm` (⟨ψ|O|ψ⟩) — all of them expose their per-vertex tensors through
@@ -46,8 +60,12 @@ function CTMEnvironmentCache(net, maxdim::Integer)
     ys = sort(unique(last.(vs)))
     rows = [sort(filter(v -> last(v) == y, vs); by = first) for y in ys]
     allequal(length.(rows)) || error("CTMEnvironmentCache requires a rectangular grid.")
-    return CTMEnvironmentCache(net, rows, Int(maxdim))
+    return CTMEnvironmentCache(net, rows, Int(maxdim), nothing)
 end
+
+# Same network/grid/maxdim, different CVM environments.
+_ctm_setenv(cache::CTMEnvironmentCache, env) =
+    CTMEnvironmentCache(cache.network, cache.rows, cache.maxdim, env)
 
 # --- the move --------------------------------------------------------------------
 # eig projector from a density matrix ρ(bnd, bnd'): the top-`maxdim` eigenvectors.
@@ -516,18 +534,12 @@ end
 """
     sweep_vertex_environments(cache, S) -> CTMVertexEnvironments
 
-!!! warning "Work in progress — does not yet produce closable regions"
-    An interface is being projected on one side but not the other, so raw links survive and
-    `region_lnZ` fails with leftover indices. `vertex_environments` (the greedy single pass)
-    is unaffected. See the "Open bug" section of `docs/finite_ctmrg_design.md` for the
-    symptom, the three suspected causes and the suggested diff-against-the-greedy-builder
-    diagnosis.
-
 One pass round the lattice, vertex to vertex: at each cut, grow the four enlarged corners out
 of `S`, take a TWO-SIDED (biorthogonal) projector for each interface from the two corners that
 bound it, and rebuild the corners and edges with it. Interfaces must be projected at growth,
 when they are χ·D dimensional — re-projecting an already-truncated interface is a no-op — so a
-sweep regrows rather than refines. Iterate until [`cvm_freenergy`](@ref) stops moving.
+sweep regrows rather than refines. Call [`update`](@ref) rather than this directly — it iterates
+until [`cvm_freenergy`](@ref) stops moving.
 """
 function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvironments)
     Lx, Ly = S.Lx, S.Ly
@@ -548,7 +560,11 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         pr = _ctm_interface_proj2(Bw, Be, commoninds(Bw, Be), χ)
         !isnothing(pr) && (PH[(:N, x, y)] = pr)
     end
-    for x in 1:(Lx - 1), y in 1:(Ly - 1)      # PH[:S,x,y]: C_SW(x+1,y) | C_SE(x+1,y)
+    # Every `:S` block is keyed by its FIRST included row (`T_S[x,y] = rows ≥ y`), so the
+    # family lives at `y ∈ 2:Ly` — `y = Ly+1` is the empty block. All four `:S` loops below
+    # (this one, C_SW, C_SE, T_S) must use that range: `1:(Ly-1)` builds a useless `y = 1` and
+    # never builds `y = Ly`, leaving the bottom interface of every region unconsumed.
+    for x in 1:(Lx - 1), y in 2:Ly            # PH[:S,x,y]: C_SW(x+1,y) | C_SE(x+1,y)
         Bw = E(:SW, x + 1, y); Be = E(:SE, x + 1, y)
         (isnothing(Bw) || isnothing(Be)) && continue
         pr = _ctm_interface_proj2(Bw, Be, commoninds(Bw, Be), χ)
@@ -577,11 +593,11 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         C[(:NE, x + 1, y)] = apA(apB(E(:NE, x + 1, y), _ctm_nn(PH, (:N, x, y))),
                                  _ctm_nn(PV, (:E, x + 1, y - 1)))
     end
-    for x in 2:Lx, y in 1:(Ly - 1)
+    for x in 2:Lx, y in 2:Ly
         C[(:SW, x, y)] = apB(apA(E(:SW, x, y), _ctm_nn(PH, (:S, x - 1, y))),
                              _ctm_nn(PV, (:W, x, y - 1)))
     end
-    for x in 1:(Lx - 1), y in 1:(Ly - 1)
+    for x in 1:(Lx - 1), y in 2:Ly
         C[(:SE, x + 1, y)] = apB(apB(E(:SE, x + 1, y), _ctm_nn(PH, (:S, x, y))),
                                  _ctm_nn(PV, (:E, x + 1, y - 1)))
     end
@@ -590,7 +606,7 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         raw = _ctm_mul(_ctm_nn(S.T, (:N, x, y - 1)), _ctm_contract(tbl[(x, y - 1)]))
         T[(:N, x, y)] = apA(apB(raw, _ctm_nn(PH, (:N, x - 1, y))), _ctm_nn(PH, (:N, x, y)))
     end
-    for x in 1:Lx, y in 1:(Ly - 1)            # T_S
+    for x in 1:Lx, y in 2:Ly                  # T_S
         raw = _ctm_mul(_ctm_contract(tbl[(x, y)]), _ctm_nn(S.T, (:S, x, y + 1)))
         T[(:S, x, y)] = apA(apB(raw, _ctm_nn(PH, (:S, x - 1, y))), _ctm_nn(PH, (:S, x, y)))
     end
@@ -607,11 +623,17 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
 end
 
 """
+    region_lnZ(cache::CTMEnvironmentCache, cx, cy)
     region_lnZ(env::CTMVertexEnvironments, cache, cx, cy)
 
 Region free energy `ln Z_R`. Integer `(cx,cy)` → vertex ring (4C+4T+a); half-integer in one
 axis → edge strip (4C+2T); both half-integer → plaquette loop (4C).
+
+The cache form uses the cache's own environments, so [`update`](@ref) it first.
 """
+region_lnZ(cache::CTMEnvironmentCache, cx::Real, cy::Real) =
+    region_lnZ(_ctm_env(cache), cache, cx, cy)
+
 function region_lnZ(env::CTMVertexEnvironments, cache::CTMEnvironmentCache, cx::Real, cy::Real)
     Lx, Ly = env.Lx, env.Ly
     rL = ceil(Int, cx); rR = floor(Int, cx) + 1
@@ -635,13 +657,24 @@ function region_lnZ(env::CTMVertexEnvironments, cache::CTMEnvironmentCache, cx::
     return log(abs(real(scalar(_ctm_contract(keep)))))
 end
 
+# The cache's environments, falling back to the greedy single pass when it has not been
+# `update`d. Matches the BP convention: an un-updated cache evaluates, it just is not converged.
+_ctm_env(cache::CTMEnvironmentCache) =
+    isnothing(environments(cache)) ? vertex_environments(cache) : environments(cache)
+
 """
     cvm_freenergy(cache::CTMEnvironmentCache)
 
-Region-graph (CVM) free energy `F = Σ_v ln Z_v − Σ_e ln Z_e + Σ_p ln Z_p`. Exact when the
-environments are lossless, since `V − E + P = 1` for a disk.
+Region-graph (CVM) free energy `F = Σ_v ln Z_v − Σ_e ln Z_e + Σ_p ln Z_p`, read off the cache's
+environments. Exact when they are lossless, since `V − E + P = 1` for a disk.
+
+[`update`](@ref) the cache first. On an un-updated cache this falls back to the greedy single
+pass ([`vertex_environments`](@ref)), whose one-sided cuts are 3–4 orders worse and
+**non-monotone in `maxdim`** — the two numbers differing is that, not a bug.
 """
-function cvm_freenergy(cache::CTMEnvironmentCache; env = vertex_environments(cache))
+cvm_freenergy(cache::CTMEnvironmentCache) = cvm_freenergy(_ctm_env(cache), cache)
+
+function cvm_freenergy(env::CTMVertexEnvironments, cache::CTMEnvironmentCache)
     Lx, Ly = env.Lx, env.Ly
     F = 0.0
     for x in 1:Lx, y in 1:Ly;           F += region_lnZ(env, cache, x, y);             end
@@ -649,6 +682,51 @@ function cvm_freenergy(cache::CTMEnvironmentCache; env = vertex_environments(cac
     for x in 1:Lx, y in 1:(Ly - 1);     F -= region_lnZ(env, cache, x, y + 0.5);       end
     for x in 1:(Lx - 1), y in 1:(Ly - 1); F += region_lnZ(env, cache, x + 0.5, y + 0.5); end
     return F
+end
+
+"""
+    update(cache::CTMEnvironmentCache; maxiter = 30, tol = 1e-10, verbose = false)
+
+Run the two-sided CVM sweep on `cache` to stationarity and return a cache carrying the
+converged per-vertex environments. Extract numbers from it with [`cvm_freenergy`](@ref) or
+[`region_lnZ`](@ref):
+
+```julia
+cache = update(CTMEnvironmentCache(ψ, χ))
+F = cvm_freenergy(cache)
+```
+
+Seeds from the greedy single pass ([`vertex_environments`](@ref)), then applies
+[`sweep_vertex_environments`](@ref) until `cvm_freenergy` stops moving. The two-sided projector
+needs the complement environment, which needs the other corners, so this is a genuine
+fixed-point map rather than a one-shot build. The first sweep does almost all the work (it is
+what replaces the greedy pass's one-sided cuts), but the tail is slow: `|ΔF|` typically needs
+~8–12 sweeps to reach 1e-8. Stopping at 2–3, as an earlier iteration did, lands mid-transient
+and reads as a limit cycle. Warns if `tol` is not met within `maxiter`.
+"""
+function update(cache::CTMEnvironmentCache; maxiter::Integer = 30, tol::Real = 1.0e-10,
+                verbose::Bool = false)
+    env = _ctm_env(cache)
+    F = cvm_freenergy(env, cache)
+    converged, Δ = false, Inf
+    for it in 1:maxiter
+        env = sweep_vertex_environments(cache, env)
+        Fnew = cvm_freenergy(env, cache)
+        Δ = abs(Fnew - F)
+        F = Fnew
+        verbose && @info "CVM sweep $it: F = $F, |ΔF| = $Δ"
+        if Δ ≤ tol * max(one(Δ), abs(F))
+            converged = true
+            verbose && @info "CVM sweep converged after $it sweeps."
+            break
+        end
+    end
+    if !converged
+        msg = "CVM sweep did not converge to tolerance $tol after $maxiter sweeps " *
+              "(final |ΔF| = $Δ)."
+        verbose ? println(msg) : @warn(msg)
+    end
+    return _ctm_setenv(cache, env)
 end
 
 # --- row-local observables -------------------------------------------------------
