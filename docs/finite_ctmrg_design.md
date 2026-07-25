@@ -401,6 +401,49 @@ fixed points are its stationary points.
 project(grow(C))` is a non-symmetric eigenproblem, so Krylov–Schur replaces fixed-point iteration
 and should cut the 8–12 sweeps. That is a convergence-rate win, not an accuracy win, given (2).
 
+### No convergence headroom at fixed χ — and why `schursolve` has no home here
+
+Tracking both `|F − ln Z|` and `mean(1 − cos)` out to 22 sweeps, 4×4 D=3:
+
+| χ | `mean(1−cos)` @ sweep 8 | @ sweep 22 | `\|ΔF\|` @ 22 |
+|---|---|---|---|
+| 4 | 8.0217e-3 | 8.0230e-3 | 7.5e-11 |
+| 6 | 3.8825e-4 | 3.8825e-4 | 1.1e-14 |
+| 8 | 1.1387e-5 | 1.1387e-5 | 1.1e-14 |
+
+**Both measures plateau at the same sweep (~8)**, while `|ΔF|` keeps falling to 1e-14 with no
+further gain in either. So the residual marginal inconsistency is a **truncation floor, not
+incomplete convergence**, and its size tracks `F`'s own error (χ=4: 8.0e-3 vs 5.2e-3; χ=8: 1.1e-5
+vs 6.5e-6). There is **no accuracy headroom at fixed χ from converging harder** — the fixed point
+is the best state available at that χ.
+
+Confirming the artifact story once more: at χ=8, sweep 1 gives `|F − ln Z| = 2.2e-6`, *better* than
+the converged 6.5e-6 — but its cosine is worse. Early stopping "wins" on `F` are cancellation, not
+accuracy. Converge properly.
+
+**Why `schursolve` does not apply to this engine.** Every Krylov/Anderson/JFNK accelerator needs
+the iterates to live in a common vector space so they can be linearly combined. They do not here:
+each sweep calls `Index(k)` afresh and re-derives the kept *subspace*, so `S` and `sweep(S)` are
+expressed in different bases. Linear mixing of successive states is ill-defined without a
+gauge-fixing step that pins the interface bases across sweeps — that gauge fixing is the real
+prerequisite, not the eigensolver.
+
+Nor is there a non-symmetric eigenproblem to hand it. On a **finite, position-resolved** lattice
+each `C_NW(x,y)` is a *different* object, so corner growth is a recursion (a DP), not a
+`C ∝ project(grow(C))` eigenproblem — that form only appears with translation invariance, i.e. in
+*infinite* CTMRG, which is exactly what this engine deliberately is not. The one non-symmetric
+eigenproblem in the pipeline is `Gᵀ` in `_ctm_schur_projector`, and that path is disproven. In the
+QR route the small object `W = R_A R_B†` needs its **SVD** (Eckart–Young) for optimal rank-`k`
+truncation, not a Schur form; if that ever becomes a bottleneck the right tool is
+`KrylovKit.svdsolve`, and at the current sizes (`n ≤ 128`) dense is faster anyway.
+
+**Given all of the above, the levers that remain for fixed-BD accuracy are:** a bulk/infinite
+variant (where the corner fixed point *is* an eigenproblem and Krylov–Schur genuinely belongs);
+gauge-fixing the interface bases across sweeps, which would unlock acceleration and cut the ~8
+sweeps; and non-uniform χ driven by *effective* rank rather than `maxdim` (see the gate caveat
+below). Accuracy per χ is truncation-limited — three independent attempts at the projector all
+came back negative.
+
 ### Re-run headroom against the trusted objective: THE CURRENT PROJECTOR IS ALREADY OPTIMAL
 
 Repeating the projector-headroom experiment with `mean(1 − cos)` as the objective instead of
