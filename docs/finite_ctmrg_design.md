@@ -349,7 +349,59 @@ problem. The natural next attempt is to impose parent/child consistency directly
 is the one `ln Z`-free diagnostic available. Any constrained scheme will need it. Rip it out if it
 proves dead weight.
 
-### THE KEY STRUCTURAL FACT: `F = Σ c_R ln Z_R` is an ESTIMATOR, not a variational functional
+### ⚠️ RETRACTED — the section below was wrong. `F` IS the Bethe/Kikuchi functional.
+
+**The claim that follows ("`F` is an estimator, not a variational functional", based on
+`cos(M_v,M_e) ≈ 0.845` at lossless χ) was an artifact of an index bug and is FALSE.** Kept only
+because the bug is instructive.
+
+**The bug.** The diagnostic rebuilt blocks with `_ctm_block(S, tbl, k->S.PH[k], k->S.PV[k], …)`.
+But `S.PH`/`S.PV` are the projectors derived during the sweep that *produced* `S`, so their legs
+reference the **pre-`S`** indices, whereas `_ctm_enlarged(S,…)` produces `S`'s indices:
+
+```
+enlarged C_NW(3,3) open inds: (3, 3, 3, 3)
+stored PH[:N,2,3] P_A inds:   (3, 3, 9)     → only ONE index in common
+```
+
+So the projector contracted over one leg instead of two and left danglers. The earlier
+`Tr[E_Rᵀ Π] == Z_R` check did not catch it because both sides were built the same wrong way — it
+verified *internal consistency*, not correctness. **Lesson: a self-consistency check between two
+objects you built with the same helper proves nothing about that helper.** Always tie the check to
+an independent reference (here: the Möbius sum against `ln Z`).
+
+**Corrected measurement**, using the freshly-derived (index-consistent) projector set — the same
+ones `sweep_vertex_environments` applies:
+
+| χ | Möbius sum of rebuilt regions vs `ln Z` | `cos(M_v,M_e)` min / median |
+|---|---|---|
+| 6 | 11.9235029 vs 11.9219469 (= the known χ=6 error) | 0.993098 / 1.000000 |
+| 8 | agrees to 6.5e-6 (= the known χ=8 error) | 0.999837 / 1.000000 |
+| 12 | **exact** | **1.000000 / 1.000000** |
+| 16 | **exact** | **1.000000 / 1.000000** |
+
+**So the exact solution IS a stationary point: the marginals are exactly parallel.** The BP
+analogy holds precisely — at bond dimension 1 this *is* BP, `M_e` is the reverse message, `M_v` is
+the vertex factor times the other incoming messages, and `M_v ∥ M_e` is the BP fixed-point
+equation. `F = Σ_v ln Z_v − Σ_e ln Z_e + Σ_p ln Z_p` is the Bethe/Kikuchi free energy and BP/GBP
+fixed points are its stationary points.
+
+**Two things this gives us.**
+
+1. **A validated `ln Z`-free convergence diagnostic.** `1 − cos(M_v, M_e)` over the edge-like
+   blocks is 7e-3 at χ=6, 1.6e-4 at χ=8, and exactly 0 at lossless χ. It needs no reference value,
+   so unlike `|F − ln Z|` it is safe to optimise against.
+2. **A recalibration of the headroom.** The current algorithm is *already nearly stationary*
+   (`1 − cos ≲ 1e-3`). The remaining finite-χ error is therefore mostly **truncation**, not
+   non-stationarity — consistent with Finding 5, where sweep count collapses and accuracy jumps as
+   soon as χ reaches the lossless range. Do not expect a large win from enforcing stationarity
+   harder; expect it from spending χ where the rank actually is.
+
+`schursolve` (KrylovKit) remains the natural tool for the *block fixed point* — `C ∝
+project(grow(C))` is a non-symmetric eigenproblem, so Krylov–Schur replaces fixed-point iteration
+and should cut the 8–12 sweeps. That is a convergence-rate win, not an accuracy win, given (2).
+
+### SUPERSEDED (wrong, see above): `F = Σ c_R ln Z_R` is an ESTIMATOR, not a variational functional
 
 Stationarity w.r.t. the **blocks** (the `C`s and `T`s) rather than w.r.t. a projector is the right
 instinct — it is what "self-consistency among marginals" means. `Z_R` is *linear* in every block
