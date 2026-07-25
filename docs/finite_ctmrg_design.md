@@ -401,6 +401,40 @@ fixed points are its stationary points.
 project(grow(C))` is a non-symmetric eigenproblem, so Krylov–Schur replaces fixed-point iteration
 and should cut the 8–12 sweeps. That is a convergence-rate win, not an accuracy win, given (2).
 
+### Re-run headroom against the trusted objective: THE CURRENT PROJECTOR IS ALREADY OPTIMAL
+
+Repeating the projector-headroom experiment with `mean(1 − cos)` as the objective instead of
+`|F − ln Z|`. 4×4 D=3, χ=6; baseline `mean(1−cos) = 3.88e-4`, `|F − ln Z| = 1.56e-3`. Swapping the
+marginal kept direction on each genuinely truncating interface:
+
+| interface | mean(1−cos) | cos gain | F gain |
+|---|---|---|---|
+| `(:W,4,2)` | 4.19e-4 | 0.93 | 1.00 |
+| `(:S,2,3)` | 5.32e-4 | 0.73 | 2.39 |
+| `(:S,2,2)` | 5.38e-4 | 0.72 | 1.00 |
+| `(:W,3,2)` | 6.06e-4 | 0.64 | **4.34** |
+| `(:E,2,2)` | 9.41e-4 | 0.41 | 1.00 |
+| `(:E,3,2)` | 1.34e-3 | 0.29 | 0.41 |
+
+**Every swap makes marginal consistency worse** — the top-`k` two-sided/QR projector is already
+optimal by the criterion we trust. There is no headroom in the projector.
+
+**And the cross-check that settles the earlier confusion:** the `|F − ln Z|`-optimal swap
+`(:W,3,2)`, worth 4.34× on `F`, is simultaneously **0.64× worse** on the cosine. Rank correlation
+between the two objectives across swaps is only 0.49 and the extrema disagree. This is the third
+independent confirmation that `|F − ln Z|` gains are cancellation artifacts (the first two: they
+degrade single-site observables, and they degrade the stationarity residual).
+
+**Conclusion for where effort should go.** The projector is not the bottleneck; the remaining
+finite-χ error is truncation. Accuracy per χ cannot be bought with a better subspace choice, a
+better arithmetic route (the QR result), or harder stationarity enforcement. It has to come from
+spending χ where the rank is — and per Finding 5 large χ is *cheaper* anyway, since sweep count
+collapses. `schursolve` on the block fixed point remains worthwhile purely to cut the 8–12 sweeps.
+
+Gate caveat for anyone re-running this: `k >= prod(dim.(ins))` does **not** identify the
+truncating interfaces. Many have *effective* rank below χ, so the swap is a silent no-op (20 of 32
+here). Gate on the number of non-negligible singular values instead.
+
 ### SUPERSEDED (wrong, see above): `F = Σ c_R ln Z_R` is an ESTIMATOR, not a variational functional
 
 Stationarity w.r.t. the **blocks** (the `C`s and `T`s) rather than w.r.t. a projector is the right
