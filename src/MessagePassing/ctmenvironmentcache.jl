@@ -480,6 +480,132 @@ function vertex_environments(cache::CTMEnvironmentCache)
     return CTMVertexEnvironments(C, T, PH, PV, Lx, Ly)
 end
 
+# Biorthogonal (two-sided) projector pair for the interface shared by two complementary
+# enlarged corners. Returns (P_A, P_B, w): P_A goes on the west/north block, P_B on the
+# east/south one, so every contraction across the interface pairs one with the other.
+function _ctm_interface_proj2(Bw, Be, ins::Vector{<:Index}, maxdim::Integer)
+    (isnothing(Bw) || isnothing(Be) || isempty(ins)) && return nothing
+    co = combiner(ins...); io = combinedind(co)
+    Bwc = Bw * co; Bec = Be * co
+    ρL = Bwc * prime(dag(Bwc), io)
+    ρR = Bec * prime(dag(Bec), io)
+    PA, PB, w = _ctm_twosided_projector(ρL, ρR, io, maxdim)
+    return PA * co, PB * co, w
+end
+
+# Enlarged corner: the quadrant cut at (x,y), grown one vertex out of the PREVIOUS state's
+# blocks (so all indices are in a consistent basis) with its two adjoining edges and vertex.
+function _ctm_enlarged(S::CTMVertexEnvironments, tbl, sym::Symbol, x::Int, y::Int)
+    A(i, j) = (haskey(tbl, (i, j)) ? _ctm_contract(tbl[(i, j)]) : nothing)
+    m4(a, b, c, d) = _ctm_mul(_ctm_mul(_ctm_mul(a, b), c), d)
+    if sym === :NW          # cols<x, rows<y  — grown from vertex (x-1, y-1)
+        return m4(_ctm_nn(S.C, (:NW, x - 1, y - 1)), _ctm_nn(S.T, (:N, x - 1, y - 1)),
+                  _ctm_nn(S.T, (:W, x - 1, y - 1)), A(x - 1, y - 1))
+    elseif sym === :NE      # cols≥x, rows<y  — grown from vertex (x, y-1)
+        return m4(_ctm_nn(S.C, (:NE, x + 1, y - 1)), _ctm_nn(S.T, (:N, x, y - 1)),
+                  _ctm_nn(S.T, (:E, x + 1, y - 1)), A(x, y - 1))
+    elseif sym === :SW      # cols<x, rows≥y  — grown from vertex (x-1, y)
+        return m4(_ctm_nn(S.C, (:SW, x - 1, y + 1)), _ctm_nn(S.T, (:S, x - 1, y + 1)),
+                  _ctm_nn(S.T, (:W, x - 1, y)), A(x - 1, y))
+    else                    # :SE  cols≥x, rows≥y — grown from vertex (x, y)
+        return m4(_ctm_nn(S.C, (:SE, x + 1, y + 1)), _ctm_nn(S.T, (:S, x, y + 1)),
+                  _ctm_nn(S.T, (:E, x + 1, y)), A(x, y))
+    end
+end
+
+"""
+    sweep_vertex_environments(cache, S) -> CTMVertexEnvironments
+
+!!! warning "Work in progress — does not yet produce closable regions"
+    An interface is being projected on one side but not the other, so raw links survive and
+    `region_lnZ` fails with leftover indices. `vertex_environments` (the greedy single pass)
+    is unaffected. See the "Open bug" section of `docs/finite_ctmrg_design.md` for the
+    symptom, the three suspected causes and the suggested diff-against-the-greedy-builder
+    diagnosis.
+
+One pass round the lattice, vertex to vertex: at each cut, grow the four enlarged corners out
+of `S`, take a TWO-SIDED (biorthogonal) projector for each interface from the two corners that
+bound it, and rebuild the corners and edges with it. Interfaces must be projected at growth,
+when they are χ·D dimensional — re-projecting an already-truncated interface is a no-op — so a
+sweep regrows rather than refines. Iterate until [`cvm_freenergy`](@ref) stops moving.
+"""
+function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvironments)
+    Lx, Ly = S.Lx, S.Ly
+    χ = cache.maxdim
+    tbl = _ctm_factor_table(cache)
+    C = Dict{Tuple{Symbol, Int, Int}, Any}()
+    T = Dict{Tuple{Symbol, Int, Int}, Any}()
+    PH = Dict{Tuple{Symbol, Int, Int}, Any}()
+    PV = Dict{Tuple{Symbol, Int, Int}, Any}()
+    enl = Dict{Tuple{Symbol, Int, Int}, Any}()
+    E(sym, x, y) = get!(enl, (sym, x, y)) do
+        _ctm_enlarged(S, tbl, sym, x, y)
+    end
+    # --- derive every interface projector pair from its two bounding corners -------
+    for x in 1:(Lx - 1), y in 2:Ly            # PH[:N,x,y]: C_NW(x+1,y) | C_NE(x+1,y)
+        Bw = E(:NW, x + 1, y); Be = E(:NE, x + 1, y)
+        (isnothing(Bw) || isnothing(Be)) && continue
+        pr = _ctm_interface_proj2(Bw, Be, commoninds(Bw, Be), χ)
+        !isnothing(pr) && (PH[(:N, x, y)] = pr)
+    end
+    for x in 1:(Lx - 1), y in 1:(Ly - 1)      # PH[:S,x,y]: C_SW(x+1,y) | C_SE(x+1,y)
+        Bw = E(:SW, x + 1, y); Be = E(:SE, x + 1, y)
+        (isnothing(Bw) || isnothing(Be)) && continue
+        pr = _ctm_interface_proj2(Bw, Be, commoninds(Bw, Be), χ)
+        !isnothing(pr) && (PH[(:S, x, y)] = pr)
+    end
+    for x in 2:Lx, y in 1:(Ly - 1)            # PV[:W,x,y]: C_NW(x,y+1) | C_SW(x,y+1)
+        Bn = E(:NW, x, y + 1); Bs = E(:SW, x, y + 1)
+        (isnothing(Bn) || isnothing(Bs)) && continue
+        pr = _ctm_interface_proj2(Bn, Bs, commoninds(Bn, Bs), χ)
+        !isnothing(pr) && (PV[(:W, x, y)] = pr)
+    end
+    for x in 1:(Lx - 1), y in 1:(Ly - 1)      # PV[:E,x,y]: C_NE(x,y+1) | C_SE(x,y+1)
+        Bn = E(:NE, x + 1, y + 1); Bs = E(:SE, x + 1, y + 1)
+        (isnothing(Bn) || isnothing(Bs)) && continue
+        pr = _ctm_interface_proj2(Bn, Bs, commoninds(Bn, Bs), χ)
+        !isnothing(pr) && (PV[(:E, x + 1, y)] = pr)
+    end
+    # --- rebuild corners: P_A on the west/north side, P_B on the east/south side ----
+    apA(t, pr) = isnothing(pr) || isnothing(t) ? t : t * pr[1]
+    apB(t, pr) = isnothing(pr) || isnothing(t) ? t : t * pr[2]
+    for x in 2:Lx, y in 2:Ly
+        C[(:NW, x, y)] = apA(apA(E(:NW, x, y), _ctm_nn(PH, (:N, x - 1, y))),
+                             _ctm_nn(PV, (:W, x, y - 1)))
+    end
+    for x in 1:(Lx - 1), y in 2:Ly
+        C[(:NE, x + 1, y)] = apA(apB(E(:NE, x + 1, y), _ctm_nn(PH, (:N, x, y))),
+                                 _ctm_nn(PV, (:E, x + 1, y - 1)))
+    end
+    for x in 2:Lx, y in 1:(Ly - 1)
+        C[(:SW, x, y)] = apB(apA(E(:SW, x, y), _ctm_nn(PH, (:S, x - 1, y))),
+                             _ctm_nn(PV, (:W, x, y - 1)))
+    end
+    for x in 1:(Lx - 1), y in 1:(Ly - 1)
+        C[(:SE, x + 1, y)] = apB(apB(E(:SE, x + 1, y), _ctm_nn(PH, (:S, x, y))),
+                                 _ctm_nn(PV, (:E, x + 1, y - 1)))
+    end
+    # --- rebuild edges from the previous state, projected on both sides -------------
+    for x in 1:Lx, y in 2:Ly                  # T_N: left = east side, right = west side
+        raw = _ctm_mul(_ctm_nn(S.T, (:N, x, y - 1)), _ctm_contract(tbl[(x, y - 1)]))
+        T[(:N, x, y)] = apA(apB(raw, _ctm_nn(PH, (:N, x - 1, y))), _ctm_nn(PH, (:N, x, y)))
+    end
+    for x in 1:Lx, y in 1:(Ly - 1)            # T_S
+        raw = _ctm_mul(_ctm_contract(tbl[(x, y)]), _ctm_nn(S.T, (:S, x, y + 1)))
+        T[(:S, x, y)] = apA(apB(raw, _ctm_nn(PH, (:S, x - 1, y))), _ctm_nn(PH, (:S, x, y)))
+    end
+    for x in 2:Lx, y in 1:Ly                  # T_W: up = south side, down = north side
+        raw = _ctm_mul(_ctm_nn(S.T, (:W, x - 1, y)), _ctm_contract(tbl[(x - 1, y)]))
+        T[(:W, x, y)] = apA(apB(raw, _ctm_nn(PV, (:W, x, y - 1))), _ctm_nn(PV, (:W, x, y)))
+    end
+    for x in 1:(Lx - 1), y in 1:Ly            # T_E
+        raw = _ctm_mul(_ctm_contract(tbl[(x + 1, y)]), _ctm_nn(S.T, (:E, x + 2, y)))
+        T[(:E, x + 1, y)] = apA(apB(raw, _ctm_nn(PV, (:E, x + 1, y - 1))),
+                                _ctm_nn(PV, (:E, x + 1, y)))
+    end
+    return CTMVertexEnvironments(C, T, PH, PV, Lx, Ly)
+end
+
 """
     region_lnZ(env::CTMVertexEnvironments, cache, cx, cy)
 

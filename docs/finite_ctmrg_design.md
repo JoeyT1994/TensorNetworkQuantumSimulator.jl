@@ -195,7 +195,7 @@ Reference values: `contract(tn; alg="exact")`, `norm_sqr(ψ; alg="exact")`, and
 | row-absorption contractor | done, committed — **wrong object**, keep only as a reference contractor |
 | per-vertex C/T DP (grow + project) | **done** — `vertex_environments`, single-pass greedy, generic over `bp_factors` |
 | region contraction + Möbius sum | **done** — `region_lnZ`, `cvm_freenergy` |
-| stationary sweep with two-sided projectors | **to build** — needs regrowth per sweep (see above) |
+| stationary sweep with two-sided projectors | **written, BUGGY** — `sweep_vertex_environments`, see below |
 | re-measure vs boundary MPS | greedy pass measured; **redo after the sweep lands** |
 
 ### Measured with the single-pass (greedy, one-sided) DP
@@ -205,7 +205,36 @@ edges, corner plaquettes (0 – 1.8e-15) — and the Möbius sum returns `ln Z` 
 `V − E + P = 1`. The cancellation is real: random positive 4×4, D=3, χ=8 → single region
 1.20e-4, CVM sum **8.67e-7** (~140×). Monotone in χ apart from a small bump at χ=4.
 
-Against boundary MPS on the same network it currently **loses** (D=3 χ=8: 8.7e-7 vs 1.9e-10).
+### Open bug in `sweep_vertex_environments` — START HERE
+
+The sweep is written (Gauss-Seidel, vertex to vertex round the lattice; enlarged corners grown
+from the previous state; two-sided projector per interface, read off as
+`commoninds(C̃_west, C̃_east)` since complementary halves share exactly the interface). It does
+**not** work yet:
+
+```
+greedy   F |Δ| = 0.0            (unchanged, still correct)
+sweep 1  ERROR: DimensionMismatch: ITensor is not a scalar
+                (leftover indices (dim=2), (dim=2))
+```
+
+Two dim-2 indices survive the region contraction — i.e. **an interface is projected on one side
+but not the other**, so the raw links never get consumed. Likely causes, in order of suspicion:
+
+1. A boundary interface where one bounding corner is `nothing`, so `_ctm_interface_proj2`
+   returns `nothing` and *neither* side is projected — but the block on the other side still
+   carries its raw link. Boundary rows/columns (`x=1`, `y=1`, `x=Lx`, `y=Ly`) are where the
+   greedy builder needed its careful `nothing` handling.
+2. An off-by-one between the key a projector is *stored* under and the key the rebuild *reads*
+   — particularly `PV[:E]`, which is derived in a loop over `x` but stored at `x+1`.
+3. The `P_A`/`P_B` side assignment being consistent for corners but wrong for one edge family,
+   so two `P_A`s meet across an interface.
+
+Suggested diagnosis: for a 3×3 with χ large, print `inds` of each rebuilt `C`/`T` next to the
+greedy build's, and diff. The greedy builder is the oracle — its blocks have the correct index
+structure, so the first block whose index set differs localises the bug immediately.
+
+Against boundary MPS on the greedy pass it currently **loses** (D=3 χ=8: 8.7e-7 vs 1.9e-10).
 Expected for a one-sided greedy pass — in the row engine the two-sided projector was worth
 4–13 orders of magnitude. That is the next thing to build, and the comparison should be redone
 only after it lands.
