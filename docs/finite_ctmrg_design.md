@@ -349,6 +349,72 @@ problem. The natural next attempt is to impose parent/child consistency directly
 is the one `ln Z`-free diagnostic available. Any constrained scheme will need it. Rip it out if it
 proves dead weight.
 
+### THE KEY STRUCTURAL FACT: `F = Σ c_R ln Z_R` is an ESTIMATOR, not a variational functional
+
+Stationarity w.r.t. the **blocks** (the `C`s and `T`s) rather than w.r.t. a projector is the right
+instinct — it is what "self-consistency among marginals" means. `Z_R` is *linear* in every block
+(each region contains a given block once), so `Z_R = Tr[M_R B]` with `M_R` = region minus `B`, and
+
+```
+∂F/∂B = Σ_{R∋B} c_R M_R / Z_R = 0
+```
+
+For an **edge tensor** — exactly two regions, weights `+1, −1` — this collapses beautifully:
+
+```
+M_v / Z_v = M_e / Z_e     ⟺     M_v ∥ M_e
+```
+
+(parallelism is *equivalent*, not merely necessary: the constant is forced to `Z_v/Z_e` because
+`Tr[M_R B] = Z_R`.) The parent (vertex) and child (edge) environments must be parallel — literally
+marginal consistency. Note `B` itself drops out, so block-stationarity is a condition on
+*everything else*; this is why it cannot be met by choosing a subspace for one projector, and why
+the `∂F/∂Π` route was structurally wrong rather than merely ill-conditioned.
+
+**But measured, the exact solution does NOT satisfy it.** Cosines `cos(M_v, M_e)` over 48 edges,
+4×4 D=3:
+
+| χ | \|F − ln Z\| | min | median | max |
+|---|---|---|---|---|
+| 8 | 6.5e-6 | 0.083 | 0.857 | 1.000 |
+| **12** | **5.3e-15** | 0.019 | **0.845** | 1.000 |
+| 16 | 5.3e-15 | 0.019 | 0.845 | 1.000 |
+
+At lossless χ, `F` is exact to machine precision while the marginals remain badly inconsistent,
+and the residual is **flat in χ**. So:
+
+* `F = Σ c_R ln Z_R` has **no entropy terms and its variables are tensors, not normalised
+  beliefs** — it is not the CVM variational functional. It is an estimator that returns `ln Z`
+  whenever every region is *individually* exact, courtesy of `V − E + P = 1`.
+* Therefore **"make `F` stationary" is not a valid target in any form** — w.r.t. projectors or
+  w.r.t. blocks. Both attempts degraded the answer, and this is why.
+* Getting each region's *scalar* right is far weaker than getting its *marginals* consistent.
+
+**This is the same phenomenon as the observable gap.** CVM beats boundary MPS on `ln Z` but loses
+on single-site observables. Both follow from the above: the Möbius cancellation fixes the scalar
+sum, but nothing enforces marginal consistency, and an observable read off a single vertex ring
+gets no cancellation. **Marginal consistency is the stronger and more useful target**, and
+enforcing it should fix observables — not just `ln Z`.
+
+### Proposed next algorithm: the block fixed point, solved by partial Schur
+
+The correct reading of "stationarity w.r.t. `C`" is not `∂F/∂C = 0` for the estimator above, but
+the genuine **fixed-point condition** that CTMRG is built on:
+
+```
+C  ∝  project( grow(C) )          i.e.   C is an eigenvector of grow-then-project
+```
+
+with the projector taken as the **invariant subspace of that (non-symmetric) growth map**, rather
+than from a density matrix. That is exactly where a **partial Schur** decomposition is the right
+tool — a symmetric eigendecomposition does not apply because the four corners are distinct and
+non-symmetric — and it is almost certainly what the collaborator means. `KrylovKit.schursolve`
+provides Krylov–Schur directly, and `CTM_ARNOLDI` already pulls KrylovKit in.
+
+This is a different algorithm from the current biorthogonal/density-matrix projector, not a tweak
+to it. Enforce parent/child consistency directly (GBP-style) rather than deriving it from the
+estimator, and judge by the marginal cosines above plus observables — never by `|F − ln Z|`.
+
 ### Two-sided projectors inside the per-vertex DP
 
 Each interface is bounded by exactly two corners, which are its two half-environments:
