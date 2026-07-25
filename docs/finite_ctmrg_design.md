@@ -23,11 +23,15 @@ every region contracts to the exact `Z` the weighted sum returns `ln Z`. At fini
 region errors cancel to a large degree — that cancellation is the point of the method
 (measured earlier: per-region ~1e-5 collapsing to ~1e-9 in the sum).
 
-## What is WRONG with the current committed engine
+## Removed: the row-absorption contractor (do not bring it back)
 
-`src/MessagePassing/ctmenvironmentcache.jl` (commits `97f4092`, `9542756`) absorbs the lattice
-**row by row** and exposes **row** environments. That is a boundary-MPS-shaped contraction, not
-per-vertex CTMRG. It is accurate and useful as a contractor, but it is the wrong object:
+An earlier version of `ctmenvironmentcache.jl` (commits `97f4092`, `9542756`) absorbed the
+lattice **row by row** and exposed **row** environments, via `partitionfunction`, `freenergy`,
+`row_environments` and `contract_row`. That is a boundary-MPS-shaped contraction, not per-vertex
+CTMRG. It was accurate as a contractor but it was the wrong object, and having it sitting in the
+same file made the engine read as boundary MPS. **It has been deleted.**
+
+Why it could never support this method:
 
 * environments are rows, not per-vertex 4C+4T rings;
 * there are no corner tensors at all, so no CVM regions and no `Σ_v/Σ_e/Σ_p` sum;
@@ -37,15 +41,14 @@ per-vertex CTMRG. It is accurate and useful as a contractor, but it is the wrong
 Genuine regions require each corner to be an **independently truncated, few-leg object**,
 closing into a small ring (~χ⁴), *not* a slice of a whole-lattice contraction.
 
-The per-vertex DP that does this **was built and validated, then deleted**. Recover it from
-git rather than rewriting:
+What survived the deletion, because the CVM path uses it: `_ctm_eigsolve`,
+`_ctm_eig_projector`, `_ctm_psd_factor`, `_ctm_twosided_projector`, `_ctm_contract` and the
+`CTM_*` tuning knobs. The `CTM_TWOSIDED` flag went with it — it only ever switched the chain
+sweep, and the CVM path is unconditionally two-sided.
 
-```
-git show 97f4092:examples/ctm_cvm_stationary.jl
-```
-
-Everything it reported numerically is **superseded** — it used the one-sided projector that we
-later proved defective.
+If you need an independent reference number, use `contract(tn; alg="boundarymps",
+mps_bond_dimension=χ)` or `alg="exact"`, not a resurrected row engine. The cache's `grid` field
+is grid *geometry* (`grid[y][x]`), not a row decomposition.
 
 ## Target design
 
@@ -216,7 +219,9 @@ Reference values: `contract(tn; alg="exact")`, `norm_sqr(ψ; alg="exact")`, and
 |---|---|
 | two-sided eig projector + Arnoldi + cutoff discipline | done, committed, validated |
 | lazy double-layer factors | done, committed |
-| row-absorption contractor | done, committed — **wrong object**, keep only as a reference contractor |
+| row-absorption contractor | **DELETED** — it was the wrong object (see below) and kept reading as boundary MPS. `contract(tn; alg="boundarymps")` is the reference contractor. |
+| single-site observables | **done** — `vertex_ring`, plus `expect`/`rdm` with `alg="ctmrg"` |
+| block renormalization | **done** — every C/T rescaled at build; gauge cancels from the Möbius sum |
 | per-vertex C/T DP (grow + project) | **done** — `vertex_environments`, single-pass greedy, generic over `bp_factors` |
 | region contraction + Möbius sum | **done** — `region_lnZ`, `cvm_freenergy` |
 | stationary sweep with two-sided projectors | **done, validated** — `sweep_vertex_environments`, driven to convergence by `update(cache)` |

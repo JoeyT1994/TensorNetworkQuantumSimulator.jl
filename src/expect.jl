@@ -51,7 +51,7 @@ Compute the expectation value of one or more observables on a tensor network sta
 # Returns
 - A single number if measuring one observable, or a vector of numbers if measuring multiple observables.
 """
-function expect(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, observable; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
+function expect(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMEnvironmentCache}, observable; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "expect", alg)
     return expect(Algorithm(alg), ψ, observable; kwargs...)
 end
@@ -132,6 +132,56 @@ function expect(
     ψ_bpc = update(ψ_bpc; cache_update_kwargs...)
 
     return expect(alg, ψ_bpc, observable; kwargs...)
+end
+
+# CTMRG: the observable's vertex is enclosed by its own 4C+4T ring, which IS its environment
+# (`vertex_ring`), so this is the same shape as the BP branch with the ring in place of the
+# incoming messages. Single-site only for now: the ring surrounds exactly one vertex, and the
+# CVM edge/plaquette regions are the region-graph OVERLAPS, which contain no vertex at all —
+# a two-site observable needs a genuine two-vertex region that does not exist yet.
+function expect(
+        alg::Algorithm"ctmrg",
+        cache::CTMEnvironmentCache,
+        obs::Tuple
+    )
+    op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
+    iszero(coeff) && return zero(coeff)
+    length(obs_vs) == 1 ||
+        error("alg=\"ctmrg\" supports single-site observables only; got $(length(obs_vs)) " *
+              "vertices $(obs_vs). The 4C+4T ring encloses one vertex.")
+    v = only(obs_vs)
+    ring = vertex_ring(cache, v)
+
+    function contract_region(op_string_f)
+        tensors = norm_factors(network(cache), [v]; op_strings = op_string_f)
+        append!(tensors, ring)
+        return scalar(contract(tensors; sequence = contraction_sequence(tensors; alg = "optimal")))
+    end
+
+    denom = contract_region(v -> "I")
+    numer = contract_region(op_string_function(op_strings, obs_vs))
+    return coeff * numer / denom
+end
+
+function expect(
+        alg::Algorithm"ctmrg",
+        cache::CTMEnvironmentCache,
+        observables::Vector{<:Tuple};
+        kwargs...,
+    )
+    return map(obs -> expect(alg, cache, obs; kwargs...), observables)
+end
+
+function expect(
+        alg::Algorithm"ctmrg",
+        ψ::TensorNetworkState,
+        observable::Union{Tuple, Vector{<:Tuple}};
+        maxdim::Integer,
+        cache_update_kwargs = (;),
+        kwargs...,
+    )
+    cache = update(CTMEnvironmentCache(ψ, maxdim); cache_update_kwargs...)
+    return expect(alg, cache, observable; kwargs...)
 end
 
 function expect(

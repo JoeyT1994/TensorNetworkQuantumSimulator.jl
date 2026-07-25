@@ -24,7 +24,7 @@ Compute the reduced density matrix on the vertices `verts` of the tensor network
 # Returns
 - An `ITensor` representing the reduced density matrix on the specified vertices.
 """
-function reduced_density_matrix(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, verts; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
+function reduced_density_matrix(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMEnvironmentCache}, verts; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "rdm", alg)
     verts = collect_vertices(verts, graph(ψ))
     return reduced_density_matrix(Algorithm(alg), ψ, verts; kwargs...)
@@ -70,6 +70,35 @@ function reduced_density_matrix(
         ρ = normalize_rdm(ρ)
     end
     return ρ
+end
+
+# CTMRG: single vertex only — its 4C+4T ring is its exact environment. See the `expect`
+# counterpart for why edge/plaquette regions do not give a two-site version.
+function reduced_density_matrix(
+        alg::Algorithm"ctmrg",
+        cache::CTMEnvironmentCache,
+        vs::Vector;
+        normalize = true
+    )
+    length(vs) == 1 ||
+        error("alg=\"ctmrg\" supports a single-vertex rdm only; got $(length(vs)) vertices $vs.")
+    v = only(vs)
+    ρ_tensors = norm_factors(network(cache), [v]; op_strings = _ -> "ρ")
+    append!(ρ_tensors, vertex_ring(cache, v))
+    ρ = contract(ρ_tensors; sequence = contraction_sequence(ρ_tensors; alg = "optimal"))
+    return normalize ? normalize_rdm(ρ) : ρ
+end
+
+function reduced_density_matrix(
+        alg::Algorithm"ctmrg",
+        ψ::TensorNetworkState,
+        verts::Vector;
+        maxdim::Integer,
+        cache_update_kwargs = (;),
+        kwargs...,
+    )
+    cache = update(CTMEnvironmentCache(ψ, maxdim); cache_update_kwargs...)
+    return reduced_density_matrix(alg, cache, verts; kwargs...)
 end
 
 function reduced_density_matrix(

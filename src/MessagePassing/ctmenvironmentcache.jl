@@ -1,21 +1,30 @@
-# Finite directional CTMRG over a grid-structured TensorNetwork.
+# Finite, position-resolved CTMRG over a grid-structured TensorNetwork, framed as a
+# region-graph (CVM) free energy. This is NOT boundary MPS and is intended to supersede it:
+# every vertex carries its own 4C+4T environment ring, grown and projected by LOCAL corner
+# moves. There is no row absorption and no whole-lattice chain anywhere in here.
 #
-# Rows of the grid are absorbed one at a time; each horizontal bond is truncated to
-# `maxdim` by a biorthogonal projector pair built from BOTH half-environment ("corner")
-# density matrices — always via a Hermitian EIGENDECOMPOSITION (Arnoldi/Lanczos where it
-# pays), never an SVD. Works for anisotropic / non-square grids and free boundaries.
-# `partitionfunction` / `freenergy` contract the whole network; `row_environments` +
-# `contract_row` expose the top/bottom environments for row-local observables.
+#   C[:NW,x,y] = all vertices with col<x, row<y      (likewise :NE :SW :SE)
+#   T[:N,x,y]  = column x, rows<y                    T[:S,x,y] = column x, rows≥y
+#   T[:W,x,y]  = cols<x, row y                       T[:E,x,y] = cols≥x, row y
 #
-# Double-layer networks (⟨ψ|ψ⟩, ⟨ψ|O|ψ⟩) are handled LAZILY, as in the boundary-MPS
-# backend: a vertex's factors stay a `Vector{ITensor}` ([ket, bra], or [ket, op, bra]) and
-# the environment tensors keep their inward ket and bra legs separate (dimension D each,
-# never fused to D²). Each absorption contracts the flat list [environment; factors…] in a
-# netcon-optimal order, so the fat ket⊗bra site tensor is never materialised.
+#   F = Σ_v ln Z_v − Σ_e ln Z_e + Σ_p ln Z_p     (Möbius numbers +1 / −1 / +1)
 #
-# Validated against exact contraction and brute force in examples/ctm_finite_aniso.jl
-# (free energy: exact + χ-convergent) and examples/ctm_observable.jl (⟨sᵢsⱼ⟩ incl.
-# boundary bonds, ~1e-11).
+# Each shared interface is truncated to `maxdim` by a biorthogonal projector PAIR built from
+# BOTH bounding corners — always via a Hermitian EIGENDECOMPOSITION (Arnoldi/Lanczos where it
+# pays), never an SVD. The pair needs the complement environment, so the build is a fixed-point
+# iteration: `update` sweeps it to stationarity. Works for anisotropic / non-square grids and
+# free boundaries.
+#
+# Entry points: `update` (run it), `cvm_freenergy` (ln Z), `vertex_ring` / `expect` / `rdm`
+# (single-site observables from a vertex's own ring).
+#
+# Double-layer networks (⟨ψ|ψ⟩, ⟨ψ|O|ψ⟩) are handled LAZILY: a vertex's factors stay a
+# `Vector{ITensor}` ([ket, bra], or [ket, op, bra]) and the environment tensors keep their
+# inward ket and bra legs separate (dimension D each, never fused to D²). Each absorption
+# contracts the flat list [environment; factors…] in a netcon-optimal order, so the fat
+# ket⊗bra site tensor is never materialised.
+#
+# See docs/finite_ctmrg_design.md for the derivations and the measured comparisons.
 
 using LinearAlgebra: eigen, Hermitian, diagm, norm, I, Diagonal
 using KrylovKit: eigsolve
@@ -23,9 +32,9 @@ using KrylovKit: eigsolve
 """
     CTMEnvironmentCache(tn::AbstractTensorNetwork, maxdim::Integer)
 
-Directional-CTMRG environment for a 2D grid `TensorNetwork` (vertices `(x, y)`).
-Contract it with [`partitionfunction`](@ref); bond truncation to `maxdim` uses the
-eigendecomposition of the accumulated corner density matrix.
+Position-resolved CTMRG environment for a 2D grid `TensorNetwork` (vertices `(x, y)`): a
+`4C + 4T` ring on every vertex, with each shared interface truncated to `maxdim` by a two-sided
+(biorthogonal) projector pair.
 
 A freshly built cache carries **no** per-vertex CVM environments. [`update`](@ref) runs the
 two-sided stationary sweep and returns a cache holding the converged ones; [`cvm_freenergy`](@ref)
@@ -35,7 +44,7 @@ error, so `update` before you trust the number.
 """
 struct CTMEnvironmentCache{V, N, E}
     network::N
-    rows::Vector{Vector{V}}     # grid vertices grouped into rows, sorted within each row
+    grid::Vector{Vector{V}}     # vertices by grid position: grid[y][x]. Geometry only.
     maxdim::Int
     environments::E             # `nothing`, or the CVM blocks from `update`
 end
@@ -52,7 +61,7 @@ environments(cache::CTMEnvironmentCache) = cache.environments
 
 # Works for a single-layer `TensorNetwork`, a `TensorNetworkState` (⟨ψ|ψ⟩) or an
 # `AbstractForm` (⟨ψ|O|ψ⟩) — all of them expose their per-vertex tensors through
-# `bp_factors`, which is how the double layer is kept LAZY (see `_ctm_row`).
+# `bp_factors`, which is how the double layer is kept LAZY.
 function CTMEnvironmentCache(net, maxdim::Integer)
     vs = collect(vertices(graph(net)))
     all(v -> (v isa Tuple || v isa CartesianIndex) && length(v) == 2, vs) ||
@@ -65,7 +74,7 @@ end
 
 # Same network/grid/maxdim, different CVM environments.
 _ctm_setenv(cache::CTMEnvironmentCache, env) =
-    CTMEnvironmentCache(cache.network, cache.rows, cache.maxdim, env)
+    CTMEnvironmentCache(cache.network, cache.grid, cache.maxdim, env)
 
 # --- the move --------------------------------------------------------------------
 # eig projector from a density matrix ρ(bnd, bnd'): the top-`maxdim` eigenvectors.
@@ -81,12 +90,6 @@ const CTM_SPECTRUM = Ref(Float64[])
 # an Arnoldi/Lanczos solve (KrylovKit) costs O(maxdim·n²) instead of dense eigen's O(n³).
 # Set to `false` to force dense. Falls back to dense if Krylov does not converge.
 const CTM_ARNOLDI = Ref(true)
-
-# Build each bond's projector from BOTH half-environments (biorthogonal pair) rather than
-# from the accumulated left block alone. See `_ctm_sweep_twosided!`. A one-sided cut is not
-# a well-defined variational choice and makes the error non-monotonic in `maxdim`; set this
-# to `false` only to reproduce that older behaviour for comparison.
-const CTM_TWOSIDED = Ref(true)
 
 # Relative cutoff on the S values inverted by the biorthogonal projector. Those inverse
 # powers amplify roundoff, so tiny directions must be dropped or they impose a hard,
@@ -146,84 +149,7 @@ function _ctm_contract(ts::Vector{ITensor})
     return contract(ts; sequence = contraction_sequence(ts; alg = "optimal"))
 end
 
-# Absorb `top` row into `nxt` (contract vertical bonds), combine the doubled horizontal
-# bonds, then truncate each to `maxdim` via the accumulated corner density matrix (eig).
-# `nxt` holds one *group* of factors per column (2 tensors for a state norm, 3 for a form,
-# 1 for a single-layer network); the environment tensors in `top` keep their downward ket
-# and bra legs SEPARATE (dimension D each), exactly like a boundary-MPS message.
-function _ctm_absorb_row(top::Union{Nothing, Vector{ITensor}}, nxt::Vector{Vector{ITensor}},
-                         maxdim::Integer)
-    n = length(nxt)
-    merged = ITensor[_ctm_contract(isnothing(top) ? nxt[x] : ITensor[top[x]; nxt[x]])
-                     for x in 1:n]
-    return _ctm_truncate_chain!(merged, maxdim)
-end
 
-# Combine the doubled horizontal bonds, then truncate each bond left-to-right to `maxdim`.
-#
-# The accumulated corner ("left block") is carried as an UPPER-TRIANGULAR factor `Rc` with
-# Rc†Rc = the corner density matrix, rather than as the density matrix itself. The
-# projector is then the leading right singular vectors of the triangular factor — the same
-# subspace the density matrix's top eigenvectors would give, but obtained without ever
-# forming ρ = M†ρM, which squares the condition number and loses half the available
-# precision. This is what fixes the non-monotonic-in-χ error of the ρ-based sweep.
-function _ctm_truncate_chain!(merged::Vector{ITensor}, maxdim::Integer)
-    n = length(merged)
-    for x in 1:(n - 1)
-        shared = commoninds(merged[x], merged[x + 1])
-        if length(shared) > 1
-            C = combiner(shared...)
-            merged[x] = merged[x] * C
-            merged[x + 1] = merged[x + 1] * C
-        end
-    end
-    CTM_TWOSIDED[] && return _ctm_sweep_twosided!(merged, maxdim)
-    return _ctm_sweep_density!(merged, maxdim)
-end
-
-# --- two-sided (biorthogonal) truncation ------------------------------------------
-# A one-sided cut (keep the top eigenvectors of the LEFT block alone) is not a well-defined
-# variational choice and makes the error non-monotonic in χ. The proper CTMRG projector uses
-# BOTH half-environments: with ρ_L = A†A and ρ_R = B†B (PSD square-root factors) and
-# A·Bᵀ = U S V†, the pair
-#     P_A = Bᵀ V S^{-1/2}   (bond → kept),   P_B = S^{-1/2} U† A   (kept → bond)
-# satisfies A (P_A P_B) Bᵀ = A Bᵀ exactly at full rank, and truncating S is the optimal
-# rank-χ choice for the whole contraction rather than for the left block only.
-function _ctm_sweep_twosided!(merged::Vector{ITensor}, maxdim::Integer)
-    n = length(merged)
-    n < 2 && return merged
-    bonds = Index[]
-    for x in 1:(n - 1)
-        b = commonind(merged[x], merged[x + 1])
-        isnothing(b) && return _ctm_sweep_density!(merged, maxdim)   # not a simple chain
-        push!(bonds, b)
-    end
-    # Right half-environment density matrices, from the still-untouched right part.
-    ρR = Vector{ITensor}(undef, n - 1)
-    accR = nothing
-    for x in (n - 1):-1:1
-        M = merged[x + 1]
-        pr = x + 1 <= n - 1 ? Index[bonds[x], bonds[x + 1]] : Index[bonds[x]]
-        Mp = prime(dag(M), pr...)
-        accR = isnothing(accR) ? M * Mp : accR * M * Mp
-        ρR[x] = accR
-    end
-    ρL = nothing
-    for x in 1:(n - 1)
-        b = bonds[x]
-        M = merged[x]
-        isnothing(ρL) && (ρL = M * prime(dag(M), b))
-        PA, PB, w = _ctm_twosided_projector(ρL, ρR[x], b, maxdim)
-        merged[x] = M * PA
-        merged[x + 1] = merged[x + 1] * PB
-        if x < n - 1                                   # advance the left environment
-            ρLp = ρL * PA * prime(dag(PA))
-            Mn = merged[x + 1]
-            ρL = ρLp * Mn * prime(dag(Mn), bonds[x + 1], w)
-        end
-    end
-    return merged
-end
 
 # PSD square-root factor: returns A with A†A = ρ (rows = rank, cols = bond).
 function _ctm_psd_factor(ρm::AbstractMatrix)
@@ -265,51 +191,6 @@ function _ctm_twosided_projector(ρL::ITensor, ρR::ITensor, b::Index, maxdim::I
     return ITensor(PAm, b, w), ITensor(PBm, w, b), w
 end
 
-# Truncate via the upper-triangular corner factor (default — numerically stable).
-
-# Top-`maxdim` eigenvectors of ρ = R†R for an upper-triangular factor R with legs
-# (qlink, bnd), returned as a projector on `bnd`. Same index convention as
-# `_ctm_eig_projector`, so it is interchangeable with the density-matrix sweep.
-
-# Eigenpairs of R†R without forming it: Arnoldi on x ↦ R†(R x), else a dense SVD of R
-# (whose right singular vectors are exactly those eigenvectors — still no squaring).
-
-# Truncate via the accumulated corner DENSITY MATRIX and its eigendecomposition (which may
-# use Arnoldi, see `_ctm_eigsolve`). Kept for comparison: forming ρ squares the condition
-# number, which makes the error non-monotonic in `maxdim` on double-layer networks.
-function _ctm_sweep_density!(merged::Vector{ITensor}, maxdim::Integer)
-    n = length(merged)
-    ρL = ITensor(one(ITensors.NDTensors.scalartype(merged[1])))
-    for x in 1:(n - 1)
-        bnd = commonind(merged[x], merged[x + 1])
-        isnothing(bnd) && continue
-        M = merged[x]
-        lb = commonind(M, ρL)
-        Mp = isnothing(lb) ? prime(dag(M), bnd) : prime(dag(M), bnd, lb)
-        ρext = ρL * M * Mp
-        P, w, λ = _ctm_eig_projector(ρext, bnd, maxdim)
-        merged[x] = M * P
-        merged[x + 1] = merged[x + 1] * dag(P)
-        ρL = ITensor(diagm(λ), w, prime(w))
-    end
-    return merged
-end
-
-# Row `y` as one *group* of factors per column — unfolded, so the double layer stays lazy.
-_ctm_row(cache::CTMEnvironmentCache, y::Integer) =
-    Vector{ITensor}[Vector{ITensor}(bp_factors(network(cache), v)) for v in cache.rows[y]]
-
-# --- partition function / free energy --------------------------------------------
-function partitionfunction(cache::CTMEnvironmentCache)
-    cur = _ctm_absorb_row(nothing, _ctm_row(cache, 1), cache.maxdim)
-    for y in 2:length(cache.rows)
-        cur = _ctm_absorb_row(cur, _ctm_row(cache, y), cache.maxdim)
-    end
-    return scalar(reduce(*, cur))
-end
-
-freenergy(cache::CTMEnvironmentCache) = log(partitionfunction(cache))
-
 # =================================================================================
 # Per-vertex CVM environments: a 4C+4T ring on EVERY vertex.
 #
@@ -342,6 +223,20 @@ _ctm_nn(d, k) = get(d, k, nothing)
 _ctm_mul(a, b) = isnothing(a) ? b : (isnothing(b) ? a : _ctm_contract(ITensor[a, b]))
 _ctm_widx(d, k) = (t = get(d, k, nothing); isnothing(t) ? nothing : t[2])
 
+# Every C and T is renormalized as it is built, as in standard CTMRG — blocks span O(L²)
+# vertices, so their raw magnitude grows like exp(c·L²) and would otherwise overflow.
+#
+# The CVM functional is INVARIANT under this. Each corner occurs in exactly four regions with
+# Möbius weights +1 −1 −1 +1 (vertex, h-edge, v-edge, plaquette) and each edge tensor in two
+# with +1 −1, so per-block scale cancels from `F` identically; every block for which that count
+# would fail at the boundary is `nothing` and absent anyway. Single-site observables are ratios
+# over one shared ring, so it cancels there too.
+#
+# CONSEQUENCE: an individual `region_lnZ` no longer equals `ln Z` — its scale is arbitrary.
+# Only the Möbius-weighted SUM (`cvm_freenergy`) is meaningful.
+_ctm_rescale(t) = isnothing(t) ? t :
+    (n = norm(t); (iszero(n) || !isfinite(n)) ? t : t / n)
+
 # Isometry truncating index set `ins` of block `B` to `maxdim`, from the eigendecomposition
 # of B's reduced density matrix on those indices. Returns (P, w) with P legs (ins…, w).
 function _ctm_interface_proj(B, ins::Vector{<:Index}, maxdim::Integer)
@@ -359,8 +254,8 @@ function _ctm_interface_proj(B, ins::Vector{<:Index}, maxdim::Integer)
 end
 
 # Grid geometry / lazy factors ----------------------------------------------------
-_ctm_dims(cache::CTMEnvironmentCache) = (length(first(cache.rows)), length(cache.rows))
-_ctm_vertex(cache::CTMEnvironmentCache, x::Int, y::Int) = cache.rows[y][x]
+_ctm_dims(cache::CTMEnvironmentCache) = (length(first(cache.grid)), length(cache.grid))
+_ctm_vertex(cache::CTMEnvironmentCache, x::Int, y::Int) = cache.grid[y][x]
 
 function _ctm_factor_table(cache::CTMEnvironmentCache)
     Lx, Ly = _ctm_dims(cache)
@@ -418,7 +313,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
                 raw = raw * pr[1]
             end
         end
-        T[(:W, x + 1, y)] = raw
+        T[(:W, x + 1, y)] = _ctm_rescale(raw)
     end
     # ---- E strips (x decreasing): derives PV[:E] ----
     for y in 1:Ly, x in Lx:-1:2
@@ -437,7 +332,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
                 raw = raw * pr[1]
             end
         end
-        T[(:E, x, y)] = raw
+        T[(:E, x, y)] = _ctm_rescale(raw)
     end
     # ---- C[:NW] (y increasing): derives PH[:N] ----
     for x in 2:Lx, y in 1:(Ly - 1)
@@ -450,7 +345,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
             PH[(:N, x - 1, y + 1)] = pr
             raw = raw * pr[1]
         end
-        C[(:NW, x, y + 1)] = raw
+        C[(:NW, x, y + 1)] = _ctm_rescale(raw)
     end
     # ---- C[:SW] (y decreasing): derives PH[:S] ----
     for x in 2:Lx, y in Ly:-1:2
@@ -463,7 +358,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
             PH[(:S, x - 1, y)] = pr
             raw = raw * pr[1]
         end
-        C[(:SW, x, y)] = raw
+        C[(:SW, x, y)] = _ctm_rescale(raw)
     end
     # ---- C[:NE] / C[:SE]: consume PH ----
     for x in 2:Lx
@@ -471,13 +366,13 @@ function vertex_environments(cache::CTMEnvironmentCache)
             raw = _ctm_mul(_ctm_nn(C, (:NE, x, y)), _ctm_nn(T, (:E, x, y)))
             P = _ctm_nn(PH, (:N, x - 1, y + 1))
             !isnothing(P) && (raw = raw * dag(P[1]))
-            C[(:NE, x, y + 1)] = raw
+            C[(:NE, x, y + 1)] = _ctm_rescale(raw)
         end
         for y in Ly:-1:2
             raw = _ctm_mul(_ctm_nn(C, (:SE, x, y + 1)), _ctm_nn(T, (:E, x, y)))
             P = _ctm_nn(PH, (:S, x - 1, y))
             !isnothing(P) && (raw = raw * dag(P[1]))
-            C[(:SE, x, y)] = raw
+            C[(:SE, x, y)] = _ctm_rescale(raw)
         end
     end
     # ---- N / S column strips: consume PH ----
@@ -486,13 +381,13 @@ function vertex_environments(cache::CTMEnvironmentCache)
             raw = _ctm_mul(_ctm_nn(T, (:N, x, y)), _ctm_contract(a(x, y)))
             P = _ctm_nn(PH, (:N, x - 1, y + 1)); !isnothing(P) && (raw = raw * dag(P[1]))
             Q = _ctm_nn(PH, (:N, x, y + 1));     !isnothing(Q) && (raw = raw * Q[1])
-            T[(:N, x, y + 1)] = raw
+            T[(:N, x, y + 1)] = _ctm_rescale(raw)
         end
         for y in Ly:-1:2
             raw = _ctm_mul(_ctm_contract(a(x, y)), _ctm_nn(T, (:S, x, y + 1)))
             P = _ctm_nn(PH, (:S, x - 1, y)); !isnothing(P) && (raw = raw * dag(P[1]))
             Q = _ctm_nn(PH, (:S, x, y));     !isnothing(Q) && (raw = raw * Q[1])
-            T[(:S, x, y)] = raw
+            T[(:S, x, y)] = _ctm_rescale(raw)
         end
     end
     return CTMVertexEnvironments(C, T, PH, PV, Lx, Ly)
@@ -586,38 +481,38 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
     apA(t, pr) = isnothing(pr) || isnothing(t) ? t : t * pr[1]
     apB(t, pr) = isnothing(pr) || isnothing(t) ? t : t * pr[2]
     for x in 2:Lx, y in 2:Ly
-        C[(:NW, x, y)] = apA(apA(E(:NW, x, y), _ctm_nn(PH, (:N, x - 1, y))),
-                             _ctm_nn(PV, (:W, x, y - 1)))
+        C[(:NW, x, y)] = _ctm_rescale(apA(apA(E(:NW, x, y), _ctm_nn(PH, (:N, x - 1, y))),
+                                          _ctm_nn(PV, (:W, x, y - 1))))
     end
     for x in 1:(Lx - 1), y in 2:Ly
-        C[(:NE, x + 1, y)] = apA(apB(E(:NE, x + 1, y), _ctm_nn(PH, (:N, x, y))),
-                                 _ctm_nn(PV, (:E, x + 1, y - 1)))
+        C[(:NE, x + 1, y)] = _ctm_rescale(apA(apB(E(:NE, x + 1, y), _ctm_nn(PH, (:N, x, y))),
+                                              _ctm_nn(PV, (:E, x + 1, y - 1))))
     end
     for x in 2:Lx, y in 2:Ly
-        C[(:SW, x, y)] = apB(apA(E(:SW, x, y), _ctm_nn(PH, (:S, x - 1, y))),
-                             _ctm_nn(PV, (:W, x, y - 1)))
+        C[(:SW, x, y)] = _ctm_rescale(apB(apA(E(:SW, x, y), _ctm_nn(PH, (:S, x - 1, y))),
+                                          _ctm_nn(PV, (:W, x, y - 1))))
     end
     for x in 1:(Lx - 1), y in 2:Ly
-        C[(:SE, x + 1, y)] = apB(apB(E(:SE, x + 1, y), _ctm_nn(PH, (:S, x, y))),
-                                 _ctm_nn(PV, (:E, x + 1, y - 1)))
+        C[(:SE, x + 1, y)] = _ctm_rescale(apB(apB(E(:SE, x + 1, y), _ctm_nn(PH, (:S, x, y))),
+                                              _ctm_nn(PV, (:E, x + 1, y - 1))))
     end
     # --- rebuild edges from the previous state, projected on both sides -------------
     for x in 1:Lx, y in 2:Ly                  # T_N: left = east side, right = west side
         raw = _ctm_mul(_ctm_nn(S.T, (:N, x, y - 1)), _ctm_contract(tbl[(x, y - 1)]))
-        T[(:N, x, y)] = apA(apB(raw, _ctm_nn(PH, (:N, x - 1, y))), _ctm_nn(PH, (:N, x, y)))
+        T[(:N, x, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PH, (:N, x - 1, y))), _ctm_nn(PH, (:N, x, y))))
     end
     for x in 1:Lx, y in 2:Ly                  # T_S
         raw = _ctm_mul(_ctm_contract(tbl[(x, y)]), _ctm_nn(S.T, (:S, x, y + 1)))
-        T[(:S, x, y)] = apA(apB(raw, _ctm_nn(PH, (:S, x - 1, y))), _ctm_nn(PH, (:S, x, y)))
+        T[(:S, x, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PH, (:S, x - 1, y))), _ctm_nn(PH, (:S, x, y))))
     end
     for x in 2:Lx, y in 1:Ly                  # T_W: up = south side, down = north side
         raw = _ctm_mul(_ctm_nn(S.T, (:W, x - 1, y)), _ctm_contract(tbl[(x - 1, y)]))
-        T[(:W, x, y)] = apA(apB(raw, _ctm_nn(PV, (:W, x, y - 1))), _ctm_nn(PV, (:W, x, y)))
+        T[(:W, x, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PV, (:W, x, y - 1))), _ctm_nn(PV, (:W, x, y))))
     end
     for x in 1:(Lx - 1), y in 1:Ly            # T_E
         raw = _ctm_mul(_ctm_contract(tbl[(x + 1, y)]), _ctm_nn(S.T, (:E, x + 2, y)))
-        T[(:E, x + 1, y)] = apA(apB(raw, _ctm_nn(PV, (:E, x + 1, y - 1))),
-                                _ctm_nn(PV, (:E, x + 1, y)))
+        T[(:E, x + 1, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PV, (:E, x + 1, y - 1))),
+                                             _ctm_nn(PV, (:E, x + 1, y))))
     end
     return CTMVertexEnvironments(C, T, PH, PV, Lx, Ly)
 end
@@ -629,13 +524,21 @@ end
 Region free energy `ln Z_R`. Integer `(cx,cy)` → vertex ring (4C+4T+a); half-integer in one
 axis → edge strip (4C+2T); both half-integer → plaquette loop (4C).
 
+!!! note "Scale is arbitrary"
+    The C/T blocks are renormalized as they are built, so a single `region_lnZ` is offset from
+    `ln Z` by a per-block gauge and is **not** meaningful on its own — even at lossless `maxdim`.
+    Only the Möbius-weighted sum, [`cvm_freenergy`](@ref), is: the offsets cancel there exactly
+    (`+1 −1 −1 +1` per corner, `+1 −1` per edge). Ratios over a single fixed region — a
+    single-site observable, say — are also well defined.
+
 The cache form uses the cache's own environments, so [`update`](@ref) it first.
 """
 region_lnZ(cache::CTMEnvironmentCache, cx::Real, cy::Real) =
     region_lnZ(_ctm_env(cache), cache, cx, cy)
 
-function region_lnZ(env::CTMVertexEnvironments, cache::CTMEnvironmentCache, cx::Real, cy::Real)
-    Lx, Ly = env.Lx, env.Ly
+# The C/T blocks bounding a region, with boundary `nothing`s dropped. No vertex factors — the
+# caller supplies those, which is what lets an observable be inserted (see `vertex_ring`).
+function _ctm_region_blocks(env::CTMVertexEnvironments, cx::Real, cy::Real)
     rL = ceil(Int, cx); rR = floor(Int, cx) + 1
     tT = ceil(Int, cy); tB = floor(Int, cy) + 1
     xint = rL < rR; yint = tT < tB
@@ -649,18 +552,62 @@ function region_lnZ(env::CTMVertexEnvironments, cache::CTMEnvironmentCache, cx::
         push!(ts, _ctm_nn(env.T, (:W, rL, Int(cy))))
         push!(ts, _ctm_nn(env.T, (:E, rR, Int(cy))))
     end
-    if xint && yint
+    return ITensor[t for t in ts if !isnothing(t)]
+end
+
+function region_lnZ(env::CTMVertexEnvironments, cache::CTMEnvironmentCache, cx::Real, cy::Real)
+    ts = _ctm_region_blocks(env, cx, cy)
+    if isinteger(cx) && isinteger(cy)     # vertex ring: close it with the vertex's own factors
         append!(ts, bp_factors(network(cache), _ctm_vertex(cache, Int(cx), Int(cy))))
     end
-    keep = ITensor[t for t in ts if !isnothing(t)]
-    isempty(keep) && return 0.0
-    return log(abs(real(scalar(_ctm_contract(keep)))))
+    isempty(ts) && return 0.0
+    return log(abs(real(scalar(_ctm_contract(ts)))))
 end
 
 # The cache's environments, falling back to the greedy single pass when it has not been
 # `update`d. Matches the BP convention: an un-updated cache evaluates, it just is not converged.
 _ctm_env(cache::CTMEnvironmentCache) =
     isnothing(environments(cache)) ? vertex_environments(cache) : environments(cache)
+
+"""
+    vertex_ring(cache::CTMEnvironmentCache, v) -> Vector{ITensor}
+
+The `4C + 4T` ring enclosing vertex `v = (x, y)` — the corners `C_NW(x,y)`, `C_NE(x+1,y)`,
+`C_SW(x,y+1)`, `C_SE(x+1,y+1)` and the edges `T_N(x,y)`, `T_S(x,y+1)`, `T_W(x,y)`,
+`T_E(x+1,y)`, with blocks that fall off the lattice omitted. This is the CTMRG analogue of
+`incoming_messages` for a BP cache: it is `v`'s environment, and it contains **no** factor from
+`v` itself, so the caller closes it with whatever they want at the site.
+
+Its open legs are exactly the ket and bra virtual indices of `v`'s own tensors (kept separate at
+dimension `D`, never fused), so it pairs directly with `norm_factors(ψ, v; op_strings)`:
+
+```julia
+cache = update(CTMEnvironmentCache(ψ, χ))
+ring  = vertex_ring(cache, v)
+num   = scalar(contract([norm_factors(ψ, v; op_strings = _ -> "Z"); ring]))
+den   = scalar(contract([norm_factors(ψ, v; op_strings = _ -> "I"); ring]))
+Zexp  = num / den
+```
+
+[`expect`](@ref) with `alg = "ctmrg"` does exactly this. [`update`](@ref) the cache first —
+otherwise the ring comes from the greedy single pass.
+"""
+vertex_ring(cache::CTMEnvironmentCache, v) = vertex_ring(_ctm_env(cache), cache, v)
+
+function vertex_ring(env::CTMVertexEnvironments, cache::CTMEnvironmentCache, v)
+    x, y = _ctm_coords(cache, v)
+    return _ctm_region_blocks(env, x, y)
+end
+
+# Grid position of a vertex, by lookup rather than by trusting `v == (x, y)` — the cache sorts
+# its rows, and a network's vertices need not be 1-based or contiguous.
+function _ctm_coords(cache::CTMEnvironmentCache, v)
+    for (y, row) in enumerate(cache.grid)
+        x = findfirst(==(v), row)
+        isnothing(x) || return (x, y)
+    end
+    return error("vertex $v is not in the CTMEnvironmentCache's grid.")
+end
 
 """
     cvm_freenergy(cache::CTMEnvironmentCache)
@@ -727,30 +674,4 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30, tol::Real = 1
         verbose ? println(msg) : @warn(msg)
     end
     return _ctm_setenv(cache, env)
-end
-
-# --- row-local observables -------------------------------------------------------
-# Top / bottom environments around row `y` (each `nothing` at the boundary).
-function row_environments(cache::CTMEnvironmentCache, y::Integer)
-    Ly = length(cache.rows)
-    top = y == 1 ? nothing :
-        foldl((c, yy) -> _ctm_absorb_row(c, _ctm_row(cache, yy), cache.maxdim),
-              2:(y - 1); init = _ctm_absorb_row(nothing, _ctm_row(cache, 1), cache.maxdim))
-    bot = y == Ly ? nothing :
-        foldl((c, yy) -> _ctm_absorb_row(c, _ctm_row(cache, yy), cache.maxdim),
-              (Ly - 1):-1:(y + 1); init = _ctm_absorb_row(nothing, _ctm_row(cache, Ly), cache.maxdim))
-    return top, bot
-end
-
-# Sandwich (top env) · (row tensors) · (bottom env) → scalar. Insert operator-weighted
-# tensors into `rowts` (sharing the network's bond indices) to build an expectation.
-function contract_row(top, rowts::Vector{<:ITensor}, bot)
-    merged = ITensor[]
-    for x in eachindex(rowts)
-        t = rowts[x]
-        top !== nothing && (t = t * top[x])
-        bot !== nothing && (t = t * bot[x])
-        push!(merged, t)
-    end
-    return scalar(reduce(*, merged))
 end

@@ -46,7 +46,7 @@ end
 identity_tensor(row_inds::Vector{<:Index}, col_inds::Vector{<:Index}) = identity_tensor(Float64, row_inds, col_inds)
 
 #Function for checking the correct algorithm is being used for the given cache type and functionality
-function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState}, f::String, alg)
+function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState, CTMEnvironmentCache}, f::String, alg)
     if alg == "bp"
         if !((tns isa BeliefPropagationCache) || (tns isa TensorNetworkState))
             return error("Expected BeliefPropagationCache or TensorNetworkState for 'bp' algorithm, got $(typeof(tns))")
@@ -66,12 +66,20 @@ function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetwor
         if f ∈ ["normalize"]
             return error("boundarymps contraction not supported for this functionality yet")
         end
+    elseif alg == "ctmrg"
+        if !((tns isa CTMEnvironmentCache) || (tns isa TensorNetworkState))
+            return error("Expected CTMEnvironmentCache or TensorNetworkState for 'ctmrg' algorithm, got $(typeof(tns))")
+        end
+        # The 4C+4T ring encloses one vertex, so only single-site quantities are available.
+        if f ∈ ["normalize", "sample", "truncate"]
+            return error("ctmrg contraction not supported for this functionality yet")
+        end
     elseif alg == "exact"
         if f ∈ ["normalize", "sample", "truncate"]
             return error("exact contraction not supported for this functionality yet")
         end
-    elseif alg ∉ ["exact", "bp", "loopcorrections", "boundarymps"]
-        return error("Unrecognized algorithm specified. Must be one of 'exact', 'bp', 'loopcorrections', or 'boundarymps'")
+    elseif alg ∉ ["exact", "bp", "loopcorrections", "boundarymps", "ctmrg"]
+        return error("Unrecognized algorithm specified. Must be one of 'exact', 'bp', 'loopcorrections', 'boundarymps' or 'ctmrg'")
     else
         return nothing
     end
@@ -79,7 +87,8 @@ end
 
 default_alg(bp_cache::BeliefPropagationCache) = "bp"
 default_alg(bmps_cache::BoundaryMPSCache) = "boundarymps"
-default_alg(any) = error("You must specify a contraction algorithm. Currently supported: exact, bp and boundarymps.")
+default_alg(ctm_cache::CTMEnvironmentCache) = "ctmrg"
+default_alg(any) = error("You must specify a contraction algorithm. Currently supported: exact, bp, boundarymps and ctmrg.")
 
 # Fill in the `maxiter` cache-update default for `cache` unless the user already supplied one.
 function with_default_maxiter(cache_update_kwargs, cache)
