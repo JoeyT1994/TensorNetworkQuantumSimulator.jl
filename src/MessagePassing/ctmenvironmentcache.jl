@@ -510,6 +510,187 @@ function _ctm_enlarged(S::CTMVertexEnvironments, tbl, sym::Symbol, x::Int, y::In
     end
 end
 
+# =================================================================================
+# Möbius-weighted STATIONARY projector (partial Schur).
+#
+# The two-sided projector above maximises the fidelity of ONE local interface contraction.
+# But each interface appears in SIX regions of the CVM sum, and `Z_R` is linear in
+# `Π = P_A P_B`, so `Z_R = Tr[E_Rᵀ Π]` and
+#
+#     G  ≡  ∂F/∂Π  =  Σ_R c_R E_R / Z_R
+#
+# Variations preserving rank-`k` projector structure are `δΠ = (I−Π)XΠ + ΠY(I−Π)`, so
+# `δF = Tr[Gᵀ δΠ]` vanishes for all `X, Y` iff
+#
+#     Π Gᵀ (I−Π) = 0   and   (I−Π) Gᵀ Π = 0     ⟺     [Π, Gᵀ] = 0
+#
+# i.e. the kept subspace must be a Gᵀ-INVARIANT SUBSPACE — a partial Schur problem.
+# See docs/finite_ctmrg_design.md and examples/ctm_stationary_projector_prototype.jl, which
+# validates the gradient two ways (`Tr[E_Rᵀ Π] == Z_R` per region, and finite differences).
+const CTM_STATIONARY = Ref(false)
+
+# Blocks carrying an interface, as descriptors, split by which side of the pair they take.
+# NOTE these are NOT always two corners: in the vertex and v-edge regions one carrier is an
+# EDGE tensor. Getting the two sides backwards silently pairs P_B with P_B.
+function _ctm_carriers(sym::Symbol, x::Int, y::Int)
+    sym === :N && return ([(:C, :NW, x + 1, y), (:T, :N, x, y)],
+                          [(:C, :NE, x + 1, y), (:T, :N, x + 1, y)])
+    sym === :S && return ([(:C, :SW, x + 1, y), (:T, :S, x, y)],
+                          [(:C, :SE, x + 1, y), (:T, :S, x + 1, y)])
+    sym === :W && return ([(:C, :NW, x, y + 1), (:T, :W, x, y)],
+                          [(:C, :SW, x, y + 1), (:T, :W, x, y + 1)])
+    return ([(:C, :NE, x, y + 1), (:T, :E, x, y)],
+            [(:C, :SE, x, y + 1), (:T, :E, x, y + 1)])          # :E
+end
+
+# A region's block descriptors, its Möbius weight, and its centre vertex (if a vertex region).
+function _ctm_region_desc(cx::Real, cy::Real)
+    rL = ceil(Int, cx); rR = floor(Int, cx) + 1
+    tT = ceil(Int, cy); tB = floor(Int, cy) + 1
+    xint = rL < rR; yint = tT < tB
+    ds = Any[(:C, :NW, rL, tT), (:C, :NE, rR, tT), (:C, :SW, rL, tB), (:C, :SE, rR, tB)]
+    if xint
+        push!(ds, (:T, :N, Int(cx), tT)); push!(ds, (:T, :S, Int(cx), tB))
+    end
+    if yint
+        push!(ds, (:T, :W, rL, Int(cy))); push!(ds, (:T, :E, rR, Int(cy)))
+    end
+    nhalf = (xint ? 0 : 1) + (yint ? 0 : 1)
+    return ds, (iseven(nhalf) ? 1 : -1), (xint && yint ? (Int(cx), Int(cy)) : nothing)
+end
+
+# One block, rebuilt from the enlarged pieces plus the supplied projector getters — mirrors
+# `sweep_vertex_environments` exactly. A getter returning `nothing` leaves that interface
+# UNPROJECTED, which is how the gradient opens the target interface.
+function _ctm_block(S::CTMVertexEnvironments, tbl, phg, pvg, d)
+    kind, sym, i, j = d
+    aA(t, p) = (isnothing(p) || isnothing(t)) ? t : t * p[1]
+    aB(t, p) = (isnothing(p) || isnothing(t)) ? t : t * p[2]
+    fac(a, b) = haskey(tbl, (a, b)) ? _ctm_contract(tbl[(a, b)]) : nothing
+    if kind === :C
+        E = _ctm_enlarged(S, tbl, sym, i, j)
+        isnothing(E) && return nothing
+        sym === :NW && return aA(aA(E, phg((:N, i - 1, j))), pvg((:W, i, j - 1)))
+        sym === :NE && return aA(aB(E, phg((:N, i - 1, j))), pvg((:E, i, j - 1)))
+        sym === :SW && return aB(aA(E, phg((:S, i - 1, j))), pvg((:W, i, j - 1)))
+        return aB(aB(E, phg((:S, i - 1, j))), pvg((:E, i, j - 1)))
+    end
+    if sym === :N
+        r = _ctm_mul(_ctm_nn(S.T, (:N, i, j - 1)), fac(i, j - 1))
+        return isnothing(r) ? nothing : aA(aB(r, phg((:N, i - 1, j))), phg((:N, i, j)))
+    elseif sym === :S
+        r = _ctm_mul(fac(i, j), _ctm_nn(S.T, (:S, i, j + 1)))
+        return isnothing(r) ? nothing : aA(aB(r, phg((:S, i - 1, j))), phg((:S, i, j)))
+    elseif sym === :W
+        r = _ctm_mul(_ctm_nn(S.T, (:W, i - 1, j)), fac(i - 1, j))
+        return isnothing(r) ? nothing : aA(aB(r, pvg((:W, i, j - 1))), pvg((:W, i, j)))
+    end
+    r = _ctm_mul(fac(i, j), _ctm_nn(S.T, (:E, i + 1, j)))
+    return isnothing(r) ? nothing : aA(aB(r, pvg((:E, i, j - 1))), pvg((:E, i, j)))
+end
+
+# G = Σ_R c_R E_R / Z_R for one interface. The six contributing regions are found by
+# enumerating candidate centres and keeping those holding one carrier from EACH side, which
+# also handles the boundary (fewer than six) without a special case.
+function _ctm_gradient(S::CTMVertexEnvironments, tbl, Lx, Ly, PH0, PV0,
+                       isPH::Bool, sym::Symbol, x::Int, y::Int, pr, ins)
+    insp = prime.(ins)
+    Aset, Bset = _ctm_carriers(sym, x, y)
+    tkey = (sym, x, y)
+    ph(open) = k -> (isPH && k == tkey) ? (open ? nothing : pr) : _ctm_nn(PH0, k)
+    pv(open) = k -> (!isPH && k == tkey) ? (open ? nothing : pr) : _ctm_nn(PV0, k)
+    G = nothing; nreg = 0
+    for cx in max(1.0, x - 1.0):0.5:min(float(Lx), x + 2.0),
+        cy in max(1.0, y - 1.0):0.5:min(float(Ly), y + 2.0)
+        ds, wt, ctr = _ctm_region_desc(cx, cy)
+        (any(in(Aset), ds) && any(in(Bset), ds)) || continue
+        zs = ITensor[]; es = ITensor[]
+        phz, pvz = ph(false), pv(false)
+        pho, pvo = ph(true), pv(true)
+        ok = true
+        for d in ds
+            tz = _ctm_block(S, tbl, phz, pvz, d)
+            to = _ctm_block(S, tbl, pho, pvo, d)
+            isnothing(tz) && continue
+            isnothing(to) && (ok = false; break)
+            push!(zs, tz)
+            push!(es, d in Bset ? replaceinds(to, ins, insp) : to)
+        end
+        ok || continue
+        if !isnothing(ctr)
+            append!(zs, tbl[ctr]); append!(es, tbl[ctr])
+        end
+        (isempty(zs) || isempty(es)) && continue
+        ZR = scalar(_ctm_contract(zs))
+        (!isfinite(ZR) || iszero(ZR)) && continue
+        ER = _ctm_contract(es)
+        contrib = (wt / ZR) * ER
+        G = isnothing(G) ? contrib : G + contrib
+        nreg += 1
+    end
+    return G, nreg
+end
+
+# Exactly-stationary rank-k pair. Stationarity ([Π,Gᵀ]=0) holds for ANY Gᵀ-invariant
+# subspace, so there are many stationary points and `F` is not variational — picking the
+# DOMINANT-|λ| branch is arbitrary and measured 113x worse than the input. We instead take the
+# stationary point NEAREST the incoming projector: select the k eigenvalues whose eigenvectors
+# best overlap the current kept subspace. That is a continuation/Newton step rather than a jump
+# to an unrelated branch.
+#
+# Uses the spectral factorisation directly: with Gᵀ = V Λ V⁻¹, the spectral projector onto a
+# selected subset is Π = V[:,sel] · (V⁻¹)[sel,:]. Simpler than Schur + Sylvester and needs no
+# sign convention. Π is then split by an SVD — only `P_A P_B = Π` is required, not `P_B P_A = I`.
+function _ctm_schur_projector(G::ITensor, ins, k::Integer, pr)
+    insp = prime.(ins)
+    co = combiner(ins...); io = combinedind(co)
+    cop = combiner(insp...); iop = combinedind(cop)
+    Gm = Array(G * co * cop, io, iop)
+    n = size(Gm, 1)
+    (k >= n || n < 2) && return nothing
+    all(isfinite, Gm) || return nothing
+    λ, V = try
+        F = eigen(Matrix(Gm')); F.values, F.vectors
+    catch
+        return nothing
+    end
+    (all(isfinite, V) && all(isfinite, λ)) || return nothing
+    cond(V) > 1.0e10 && return nothing                  # near-defective: bail to the base pair
+
+    # orthogonal projector onto the CURRENT kept subspace, to score overlaps against
+    PAm = Array(pr[1] * co, io, pr[3])
+    Qc = Matrix(qr(PAm).Q)[:, 1:size(PAm, 2)]
+    score = [norm(Qc' * (V[:, j] / norm(V[:, j]))) for j in 1:n]
+
+    sel = falses(n); cnt = 0
+    for idx in sortperm(score; rev = true)
+        sel[idx] && continue
+        partner = 0
+        if !iszero(imag(λ[idx]))
+            for j in 1:n
+                if j != idx && !sel[j] && isapprox(λ[j], conj(λ[idx]); rtol = 1.0e-10)
+                    partner = j; break
+                end
+            end
+        end
+        add = partner == 0 ? 1 : 2
+        cnt + add > k && continue
+        sel[idx] = true; partner != 0 && (sel[partner] = true); cnt += add
+    end
+    (cnt == 0 || cnt >= n) && return nothing
+
+    Vi = try inv(V) catch; return nothing end
+    Pim = real.(V[:, sel] * Vi[sel, :])
+    all(isfinite, Pim) || return nothing
+    F = try svd(Pim) catch; return nothing end
+    kk = min(cnt, count(>(1.0e-10 * F.S[1]), F.S))
+    kk < 1 && return nothing
+    w = Index(kk)
+    PA = ITensor(F.U[:, 1:kk], io, w) * co
+    PB = ITensor(Diagonal(F.S[1:kk]) * F.Vt[1:kk, :], w, io) * co
+    return (PA, PB, w)
+end
+
 """
     sweep_vertex_environments(cache, S) -> CTMVertexEnvironments
 
@@ -529,6 +710,7 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
     PH = Dict{Tuple{Symbol, Int, Int}, Any}()
     PV = Dict{Tuple{Symbol, Int, Int}, Any}()
     enl = Dict{Tuple{Symbol, Int, Int}, Any}()
+    INS = Dict{Any, Any}()                    # interface -> its raw index set
     E(sym, x, y) = get!(enl, (sym, x, y)) do
         _ctm_enlarged(S, tbl, sym, x, y)
     end
@@ -536,8 +718,9 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
     for x in 1:(Lx - 1), y in 2:Ly            # PH[:N,x,y]: C_NW(x+1,y) | C_NE(x+1,y)
         Bw = E(:NW, x + 1, y); Be = E(:NE, x + 1, y)
         (isnothing(Bw) || isnothing(Be)) && continue
-        pr = _ctm_interface_proj2(Bw, Be, commoninds(Bw, Be), χ)
-        !isnothing(pr) && (PH[(:N, x, y)] = pr)
+        ins = commoninds(Bw, Be)
+        pr = _ctm_interface_proj2(Bw, Be, ins, χ)
+        !isnothing(pr) && (PH[(:N, x, y)] = pr; INS[(true, :N, x, y)] = ins)
     end
     # Every `:S` block is keyed by its FIRST included row (`T_S[x,y] = rows ≥ y`), so the
     # family lives at `y ∈ 2:Ly` — `y = Ly+1` is the empty block. All four `:S` loops below
@@ -546,20 +729,41 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
     for x in 1:(Lx - 1), y in 2:Ly            # PH[:S,x,y]: C_SW(x+1,y) | C_SE(x+1,y)
         Bw = E(:SW, x + 1, y); Be = E(:SE, x + 1, y)
         (isnothing(Bw) || isnothing(Be)) && continue
-        pr = _ctm_interface_proj2(Bw, Be, commoninds(Bw, Be), χ)
-        !isnothing(pr) && (PH[(:S, x, y)] = pr)
+        ins = commoninds(Bw, Be)
+        pr = _ctm_interface_proj2(Bw, Be, ins, χ)
+        !isnothing(pr) && (PH[(:S, x, y)] = pr; INS[(true, :S, x, y)] = ins)
     end
     for x in 2:Lx, y in 1:(Ly - 1)            # PV[:W,x,y]: C_NW(x,y+1) | C_SW(x,y+1)
         Bn = E(:NW, x, y + 1); Bs = E(:SW, x, y + 1)
         (isnothing(Bn) || isnothing(Bs)) && continue
-        pr = _ctm_interface_proj2(Bn, Bs, commoninds(Bn, Bs), χ)
-        !isnothing(pr) && (PV[(:W, x, y)] = pr)
+        ins = commoninds(Bn, Bs)
+        pr = _ctm_interface_proj2(Bn, Bs, ins, χ)
+        !isnothing(pr) && (PV[(:W, x, y)] = pr; INS[(false, :W, x, y)] = ins)
     end
     for x in 1:(Lx - 1), y in 1:(Ly - 1)      # PV[:E,x,y]: C_NE(x,y+1) | C_SE(x,y+1)
         Bn = E(:NE, x + 1, y + 1); Bs = E(:SE, x + 1, y + 1)
         (isnothing(Bn) || isnothing(Bs)) && continue
-        pr = _ctm_interface_proj2(Bn, Bs, commoninds(Bn, Bs), χ)
-        !isnothing(pr) && (PV[(:E, x + 1, y)] = pr)
+        ins = commoninds(Bn, Bs)
+        pr = _ctm_interface_proj2(Bn, Bs, ins, χ)
+        !isnothing(pr) && (PV[(:E, x + 1, y)] = pr; INS[(false, :E, x + 1, y)] = ins)
+    end
+    # --- optional phase two: swap in the Mobius-weighted STATIONARY pair --------------
+    # Only where the interface actually TRUNCATES: measured, the non-truncating interfaces
+    # contribute exactly zero to dF, so refining them is pure cost. On a 4x4 that is ~4 of 36.
+    if CTM_STATIONARY[]
+        PH0 = copy(PH); PV0 = copy(PV)
+        for (kk, ins) in INS
+            isPH, sym, ix, iy = kk
+            pr = isPH ? _ctm_nn(PH0, (sym, ix, iy)) : _ctm_nn(PV0, (sym, ix, iy))
+            isnothing(pr) && continue
+            k = ITensors.dim(pr[3])
+            k >= prod(ITensors.dim.(ins)) && continue        # not truncating
+            G, nreg = _ctm_gradient(S, tbl, Lx, Ly, PH0, PV0, isPH, sym, ix, iy, pr, ins)
+            (isnothing(G) || nreg == 0) && continue
+            new = _ctm_schur_projector(G, ins, k, pr)
+            isnothing(new) && continue
+            isPH ? (PH[(sym, ix, iy)] = new) : (PV[(sym, ix, iy)] = new)
+        end
     end
     # --- rebuild corners: P_A on the west/north side, P_B on the east/south side ----
     apA(t, pr) = isnothing(pr) || isnothing(t) ? t : t * pr[1]

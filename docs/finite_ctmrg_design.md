@@ -207,12 +207,17 @@ the marginal kept direction (`k` ↔ `k+1`) on a *single* interface moves `F` by
 `|ΔF|` 2.9e-5. Where the contraction is lossless (3×3 at χ≥3) `ΔF` is exactly 0, so the
 diagnostic correctly reports stationarity when there is nothing to truncate.
 
-**Finding 3 — the non-stationarity is concentrated in a handful of interfaces.** Median `|ΔF|`
-over interfaces is **exactly 0**: on a 4×4 only **4 of 36** interfaces are sensitive, and they
-are always the same ones — `PH[:N,2,3]`, `PH[:S,2,3]`, `PV[:W,3,2]`, `PV[:E,3,2]`, the
-**maximally balanced central cuts**, which carry the most rank. The other 32 are not truncating
-at all. This is the lever: a smarter (even brute-force) projector confined to the few
-maximally-balanced interfaces would cost almost nothing.
+**Finding 3 — sensitivity to the *minimal* swap is concentrated, but do not over-read it.**
+Median `|ΔF|` over interfaces is **exactly 0**: on a 4×4 only **4 of 36** interfaces respond to
+the `k` ↔ `k+1` swap, always the same ones — `PH[:N,2,3]`, `PH[:S,2,3]`, `PV[:W,3,2]`,
+`PV[:E,3,2]`, the **maximally balanced central cuts**, which carry the most rank.
+
+⚠️ **Corrected later.** That "4 of 36" is a property of *that one minimal perturbation*, not a
+general statement that only 4 interfaces matter. The exact residual below shows **12** interfaces
+truncate on the same system and **all 12** are far from stationary (residual 0.31–1.05). A
+full subspace change is a much stronger move than swapping one adjacent direction, so both
+measurements are consistent — but any claim of the form "only N interfaces matter" must name the
+perturbation it was measured under.
 
 **Finding 4 (negative) — explicit non-uniform χ buys nothing.** Since `k = min(maxdim, rank)`,
 low-rank interfaces *already* use less than χ; per-interface χ allocation is already implicit.
@@ -296,11 +301,53 @@ The current projector is far from stationary, the Schur one is exactly stationar
 construction, and the subspaces genuinely differ — principal angles `0°, 0°, 0°, 7.2°, 8.5°,
 40.5°`. `Π` is confirmed a true idempotent (`‖Π²−Π‖ = 1.2e-15`, rank 6).
 
-**Remaining work, and one caution.** Generalise the carrier table to `PH[:S]`, `PV[:W]`, `PV[:E]`;
-plumb into `sweep_vertex_environments` as a nested fixed point (`G` depends on the projectors it
-sets, so evaluate `G` at the previous state and iterate); handle real-Schur 2×2 conjugate blocks
-so selecting `k` cannot split a complex pair. Per Finding 1 above, judge the result by the
-residual and by observables, **never** by `|F − ln Z|`.
+### LANDED, and the result is a NEGATIVE one: free stationarity of `F` is the wrong target
+
+Generalised to all four families and wired into `sweep_vertex_environments` behind
+`CTM_STATIONARY[]` (**default `false`**). The pieces are `_ctm_carriers`, `_ctm_region_desc`,
+`_ctm_block`, `_ctm_gradient`, `_ctm_schur_projector`. The region set per interface is found by
+*enumerating candidate centres and keeping those holding one carrier from each side*, rather than
+hand-coding 24 cases — which also handles boundaries (fewer than six regions) with no special
+case.
+
+**The machinery is correct.** Every truncating interface, all four families, 4×4 D=3 χ=6:
+
+| interface | n | k | residual, base pair | residual, stationary pair |
+|---|---|---|---|---|
+| `(:N,1,3)` | 9 | 3 | 4.85e-1 | **1.6e-15** |
+| `(:N,2,3)` | 9 | 6 | 3.13e-1 | **2.8e-15** |
+| `(:N,2,4)` | 18 | 6 | 6.74e-1 | **8.2e-15** |
+| `(:S,2,2)` | 18 | 6 | 9.49e-1 | **4.0e-15** |
+| all 12 truncating | | | 0.31 – 1.05 | 1e-15 – 1e-14 |
+
+**And `F` gets much worse anyway:**
+
+| χ | base | stationary |
+|---|---|---|
+| 4 | 5.20e-3 | 7.24e-3 |
+| 6 | 1.56e-3 | 7.01e-1 |
+| 8 | 6.46e-6 | 6.21e-3 |
+
+So this is not a bug — the projector is *exactly* stationary and the answer is *worse*.
+
+**Why, and it is worth internalising.** `[Π, Gᵀ] = 0` holds for **any** `Gᵀ`-invariant subspace,
+and there are combinatorially many. `F` is not variational (its error changes sign), so those
+stationary points are mostly saddles and spurious branches. Selecting the **dominant-|λ|** branch
+measured **113× worse** than the input; re-selecting the branch *nearest* the incoming projector
+(by eigenvector overlap — a continuation step rather than a jump) recovered most of that but is
+still worse. Free stationarity simply does not single out the physical solution.
+
+**What to try instead.** In region-graph/CVM theory the free energy is stationary at the
+consistent solution **subject to marginal-matching constraints** — a parent region's marginal on a
+child's variables must equal the child's. That is *constrained* stationarity. Freely extremising
+`F` over the projectors, which is what this implements, is a different and evidently wrong
+problem. The natural next attempt is to impose parent/child consistency directly rather than
+`∂F/∂Π = 0`.
+
+**Kept, not deleted, despite being off by default:** `_ctm_gradient` computes the exact `∂F/∂Π`
+(validated two independent ways) and is the only way to *measure* the stationarity residual, which
+is the one `ln Z`-free diagnostic available. Any constrained scheme will need it. Rip it out if it
+proves dead weight.
 
 ### Two-sided projectors inside the per-vertex DP
 
