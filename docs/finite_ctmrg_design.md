@@ -370,7 +370,27 @@ at **6 of 9 — including all three sites at χ=6.** The single exception is a n
 χ=2, where the ring was barely truncated and the extra interfaces cost more than the exact context
 buys.
 
-**This corrects an earlier over-pessimistic conclusion in this document.** The observable deficit
+**⚠️ BUT MATCHED-χ IS THE WRONG METRIC, and I made exactly the mistake I flagged for boundary
+MPS.** Raising χ dominates the window. 6×6 D=2, mean `|err|` over three sites:
+
+| config | `update` s | obs ms/site | mean \|err\| |
+|---|---|---|---|
+| χ=6, w=0 | 1.90 | 0.4 | 1.48e-3 |
+| χ=6, w=1 | 0.41 | 1.9 | 5.95e-4 |
+| **χ=10, w=0** | **0.37** | **0.3** | **5.59e-5** |
+| χ=24, w=0 | 1.05 | 0.3 | 3.03e-6 |
+
+**χ=10 with the plain ring is 10× more accurate than χ=6 with `w=1`, and cheaper on both axes.**
+(`update` times are noisy from shape-cache effects; the error column and the per-site column are
+solid.) Warmed, `w=1` costs ~5× per observable — an earlier 380× figure was mostly first-call
+sequence optimisation, so the cost was overstated *and* the benefit was.
+
+**So `window` stays `0` by default, and that is now a data-backed choice rather than caution.** It
+is worth reaching for only when χ is the binding constraint — memory-bound runs, or an environment
+you cannot rebuild — which is the same narrow condition under which matched-χ comparisons against
+boundary MPS mean anything.
+
+**This still corrects an earlier over-pessimistic conclusion in this document.** The observable deficit
 was diagnosed as structural — only the vertex region contains a site, so no Möbius cancellation is
 available, and closing the gap would need a finer region graph. That diagnosis of the *mechanism*
 was right, but the *conclusion* was wrong: you do not need cancellation, you need more exact
