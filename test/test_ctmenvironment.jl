@@ -184,6 +184,26 @@ end
     @test mi[3] < 1.0e-10                   # lossless χ: marginals exactly parallel
     @test mi[1] > mi[3]                     # and it shrinks with χ
 
+    # `vertex_window`: a bigger window keeps more of the lattice EXACT around the site, which is
+    # the lever for observable accuracy at fixed χ. w=0 must reproduce the ring exactly, any w
+    # must stay exact at lossless χ, and on a lattice big enough for w=1 to be genuinely partial
+    # it must beat w=0.
+    @test length(vertex_window(cache, (2, 2), 0)) == length(vertex_ring(cache, (2, 2)))
+    @test expect(cache, ("Z", [(2, 2)]); window = 1) ≈ ex[(2, 2)] atol = 1.0e-8
+    @test rdm(cache, [(2, 2)]; window = 1) ≈ rdm(ψ, [(2, 2)]; alg = "exact") atol = 1.0e-8
+
+    Random.seed!(456)
+    g6 = named_grid((6, 6)); s6 = siteinds("S=1/2", g6)
+    ψ6 = random_tensornetworkstate(Float64, g6, s6; bond_dimension = 2)
+    c6 = update(CTMEnvironmentCache(ψ6, 6); maxiter = 20, tolerance = 1.0e-11)
+    for v in [(4, 3), (2, 2)]
+        exv = expect(ψ6, ("Z", [v]); alg = "exact")
+        e0 = abs(expect(c6, ("Z", [v])) - exv)
+        e1 = abs(expect(c6, ("Z", [v]); window = 1) - exv)
+        @test e1 < e0                                  # more exact context wins
+        @test length(vertex_window(c6, v, 1)) > length(vertex_window(c6, v, 0))
+    end
+
     # Multi-site is not supported: the ring encloses exactly one vertex.
     @test_throws ErrorException expect(cache, ("ZZ", [(1, 1), (2, 1)]))
     @test_throws ErrorException rdm(cache, [(1, 1), (2, 1)])

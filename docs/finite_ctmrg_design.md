@@ -340,6 +340,48 @@ measurable question against a working baseline rather than a prerequisite.
 
 Coverage: `test_ctmenvironment.jl`, testset "CVM on sparse (x,y) grids".
 
+### Observable accuracy at fixed χ: the WINDOW estimator — this one works
+
+The observable used the 1×1 window (`4C + 4T + a`). The same cut construction works for any
+rectangular window — cuts at `(xL, xR, yT, yB)` give
+
+```
+4C  +  T_N/T_S on columns xL … xR−1  +  T_W/T_E on rows yT … yB−1  +  interior sites except v
+```
+
+which tiles the lattice for any window, so it stays exact at lossless χ, and `w = 0` reproduces the
+ring exactly. **Every block already exists in the cache**, so a larger window costs only a larger
+contraction — no extra sweeps and no extra truncation of the blocks. `vertex_window(cache, v, w)`,
+with `expect`/`rdm` taking a `window` keyword.
+
+Measured, 6×6 D=2 PEPS, error in `⟨Z⟩`:
+
+| χ | vertex | w=0 (ring) | w=1 (3×3) | bMPS |
+|---|---|---|---|---|
+| 2 | (3,3) | 9.96e-2 | **1.11e-2** | 2.16e-2 |
+| 2 | (4,3) | 8.06e-2 | **7.07e-3** | 5.68e-2 |
+| 4 | (2,2) | 4.25e-3 | **6.83e-4** | 3.11e-3 |
+| 6 | (3,3) | 1.45e-3 | **1.02e-3** | 1.49e-3 |
+| 6 | (4,3) | 2.75e-3 | **6.71e-4** | 1.37e-3 |
+| 6 | (2,2) | 2.51e-4 | **9.26e-5** | 1.47e-4 |
+
+`w = 1` beats the ring at **8 of 9** (site, χ) combinations by 1.4×–11.4×, and beats boundary MPS
+at **6 of 9 — including all three sites at χ=6.** The single exception is a near-boundary site at
+χ=2, where the ring was barely truncated and the extra interfaces cost more than the exact context
+buys.
+
+**This corrects an earlier over-pessimistic conclusion in this document.** The observable deficit
+was diagnosed as structural — only the vertex region contains a site, so no Möbius cancellation is
+available, and closing the gap would need a finer region graph. That diagnosis of the *mechanism*
+was right, but the *conclusion* was wrong: you do not need cancellation, you need more exact
+context, and the existing blocks already supply it. No new region graph required.
+
+Implementation note: `alg = "optimal"` is ExhaustiveSearch netcon, exponential in **tensor count**,
+and it hangs outright on the ~25-tensor lists a `w = 1` window produces. `CTM_OPTIMAL_MAX` (12)
+gates it to the greedy optimiser above that — a feasibility gate, not the performance tweak of the
+same shape that was tried and reverted earlier. `expect`/`rdm` now route through `_ctm_contract` so
+they get both that gate and the sequence cache.
+
 ### Current state of the engine (the clean slate)
 
 | piece | state |

@@ -143,7 +143,8 @@ end
 function expect(
         alg::Algorithm"ctmrg",
         cache::CTMEnvironmentCache,
-        obs::Tuple
+        obs::Tuple;
+        window::Integer = 0,
     )
     op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
     iszero(coeff) && return zero(coeff)
@@ -151,12 +152,12 @@ function expect(
         error("alg=\"ctmrg\" supports single-site observables only; got $(length(obs_vs)) " *
               "vertices $(obs_vs). The 4C+4T ring encloses one vertex.")
     v = only(obs_vs)
-    ring = vertex_ring(cache, v)
+    env_ts = vertex_window(cache, v, window)   # `window > 0` keeps more of the lattice exact
 
     function contract_region(op_string_f)
         tensors = norm_factors(network(cache), [v]; op_strings = op_string_f)
-        append!(tensors, ring)
-        return scalar(contract(tensors; sequence = contraction_sequence(tensors; alg = "optimal")))
+        append!(tensors, env_ts)
+        return scalar(_ctm_contract(tensors))   # cached sequence + tensor-count gate
     end
 
     denom = contract_region(v -> "I")

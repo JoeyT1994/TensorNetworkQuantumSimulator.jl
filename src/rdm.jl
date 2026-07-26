@@ -78,14 +78,15 @@ function reduced_density_matrix(
         alg::Algorithm"ctmrg",
         cache::CTMEnvironmentCache,
         vs::Vector;
-        normalize = true
+        normalize = true,
+        window::Integer = 0,
     )
     length(vs) == 1 ||
         error("alg=\"ctmrg\" supports a single-vertex rdm only; got $(length(vs)) vertices $vs.")
     v = only(vs)
     ρ_tensors = norm_factors(network(cache), [v]; op_strings = _ -> "ρ")
-    append!(ρ_tensors, vertex_ring(cache, v))
-    ρ = contract(ρ_tensors; sequence = contraction_sequence(ρ_tensors; alg = "optimal"))
+    append!(ρ_tensors, vertex_window(cache, v, window))
+    ρ = _ctm_contract(ρ_tensors)               # cached sequence + tensor-count gate
     return normalize ? normalize_rdm(ρ) : ρ
 end
 

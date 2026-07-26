@@ -87,6 +87,7 @@ export
     region_lnZ,
     environments,
     vertex_ring,
+    vertex_window,
     TensorNetwork,
     AbstractTensorNetwork,
     partitionfunction,

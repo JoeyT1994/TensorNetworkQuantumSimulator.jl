@@ -225,11 +225,19 @@ function _ctm_seq_key(ts::Vector{ITensor})
     return Tuple(Tuple(label(i) for i in inds(t)) for t in ts)
 end
 
+# Above this tensor count, fall back to the greedy optimiser. This is a FEASIBILITY gate, not a
+# performance one: `alg = "optimal"` is ExhaustiveSearch netcon, exponential in the number of
+# tensors, and it hangs outright on the ~25-tensor lists a `vertex_window` observable produces.
+# (Tried and reverted as a *perf* tweak earlier — it bought ~1.5% on sweep-sized lists.)
+const CTM_OPTIMAL_MAX = Ref(12)
+
 function _ctm_contract(ts::Vector{ITensor})
     length(ts) == 1 && return only(ts)
     length(ts) == 2 && return ts[1] * ts[2]          # no sequence to choose
     seq = get!(CTM_SEQ_CACHE, _ctm_seq_key(ts)) do
-        contraction_sequence(ts; alg = "optimal")
+        length(ts) <= CTM_OPTIMAL_MAX[] ?
+            contraction_sequence(ts; alg = "optimal") :
+            contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
     end
     return contract(ts; sequence = seq)
 end
@@ -851,29 +859,62 @@ _ctm_env(cache::CTMEnvironmentCache) =
     isnothing(environments(cache)) ? vertex_environments(cache) : environments(cache)
 
 """
-    vertex_ring(cache::CTMEnvironmentCache, v) -> Vector{ITensor}
+    vertex_window(cache::CTMEnvironmentCache, v, w::Integer = 0) -> Vector{ITensor}
 
-The `4C + 4T` ring enclosing vertex `v = (x, y)` — the corners `C_NW(x,y)`, `C_NE(x+1,y)`,
-`C_SW(x,y+1)`, `C_SE(x+1,y+1)` and the edges `T_N(x,y)`, `T_S(x,y+1)`, `T_W(x,y)`,
-`T_E(x+1,y)`, with blocks that fall off the lattice omitted. This is the CTMRG analogue of
-`incoming_messages` for a BP cache: it is `v`'s environment, and it contains **no** factor from
-`v` itself, so the caller closes it with whatever they want at the site.
+The environment of vertex `v` from a rectangular window of half-width `w`, as the block list to
+close with `v`'s own factors. `w = 0` is the `4C + 4T` ring; `w = 1` keeps the surrounding 3×3
+patch **exact** and pushes the truncated environment one site further out; and so on.
 
-Its open legs are exactly the ket and bra virtual indices of `v`'s own tensors (kept separate at
-dimension `D`, never fused), so it pairs directly with `norm_factors(ψ, v; op_strings)`:
+Every block already exists in the cache, so a larger window costs only a larger contraction — no
+extra sweeps, no extra truncation of the blocks themselves. With cuts at `(xL, xR, yT, yB)` the
+window is
 
-```julia
-cache = update(CTMEnvironmentCache(ψ, χ))
-ring  = vertex_ring(cache, v)
-num   = scalar(contract([norm_factors(ψ, v; op_strings = _ -> "Z"); ring]))
-den   = scalar(contract([norm_factors(ψ, v; op_strings = _ -> "I"); ring]))
-Zexp  = num / den
+```
+4C  +  T_N/T_S on columns xL … xR−1  +  T_W/T_E on rows yT … yB−1  +  interior sites except v
 ```
 
-[`expect`](@ref) with `alg = "ctmrg"` does exactly this. [`update`](@ref) the cache first —
-otherwise the ring comes from the greedy single pass.
+which tiles the lattice for any window, so it is exact at lossless `maxdim` like the ring.
+
+**This is the lever for observable accuracy at fixed χ.** Measured on a 6×6 D=2 PEPS, `w = 1`
+against `w = 0`: better at 8 of 9 (site, χ) combinations by 1.4×–11.4×, and better than boundary
+MPS at 6 of 9 — including all three sites at χ=6. The exception is a near-boundary site at χ=2,
+where the ring was barely truncated and the extra interfaces cost more than the exact context buys.
+
+Note the site is *excluded* from the returned list, so the caller supplies it — that is what lets
+an operator be inserted. See [`expect`](@ref) with `alg = "ctmrg"` and its `window` keyword.
 """
-vertex_ring(cache::CTMEnvironmentCache, v) = vertex_ring(_ctm_env(cache), cache, v)
+function vertex_window(cache::CTMEnvironmentCache, v, w::Integer = 0)
+    env = _ctm_env(cache)
+    tbl = _ctm_factor_table(cache)
+    Lx, Ly = _ctm_dims(cache)
+    x, y = _ctm_coords(cache, v)
+    xL, xR = max(1, x - w), min(Lx, x + w) + 1
+    yT, yB = max(1, y - w), min(Ly, y + w) + 1
+    ts = ITensor[]
+    for b in (_ctm_nn(env.C, (:NW, xL, yT)), _ctm_nn(env.C, (:NE, xR, yT)),
+              _ctm_nn(env.C, (:SW, xL, yB)), _ctm_nn(env.C, (:SE, xR, yB)))
+        isnothing(b) || push!(ts, b)
+    end
+    for c in xL:(xR - 1), b in (_ctm_nn(env.T, (:N, c, yT)), _ctm_nn(env.T, (:S, c, yB)))
+        isnothing(b) || push!(ts, b)
+    end
+    for r in yT:(yB - 1), b in (_ctm_nn(env.T, (:W, xL, r)), _ctm_nn(env.T, (:E, xR, r)))
+        isnothing(b) || push!(ts, b)
+    end
+    for c in xL:(xR - 1), r in yT:(yB - 1)
+        (c, r) == (x, y) && continue
+        haskey(tbl, (c, r)) && append!(ts, tbl[(c, r)])
+    end
+    return ts
+end
+
+"""
+    vertex_ring(cache::CTMEnvironmentCache, v) -> Vector{ITensor}
+
+The `4C + 4T` ring enclosing `v` — [`vertex_window`](@ref) at `w = 0`. Its open legs are exactly
+`v`'s ket and bra virtual indices, so it pairs directly with `norm_factors(ψ, v; op_strings)`.
+"""
+vertex_ring(cache::CTMEnvironmentCache, v) = vertex_window(cache, v, 0)
 
 function vertex_ring(env::CTMVertexEnvironments, cache::CTMEnvironmentCache, v)
     x, y = _ctm_coords(cache, v)
