@@ -88,6 +88,34 @@ end
     @test swept[2] < abs(cvm_freenergy(fresh8) - lnZ)
 end
 
+@testset "CVM on sparse (x,y) grids: hexagonal and heavy-hexagonal" begin
+    Random.seed!(2024)
+    # Hex and heavy-hex are laid out on an (x,y) grid with vertices AND edges missing. The 4C+4T
+    # tiling survives holes because the quadrant/strip definitions partition by COMPARISON, not
+    # occupancy, and the Möbius identity is a telescoping one on the BOUNDING BOX:
+    #   Lx·Ly − (Lx−1)Ly − Lx(Ly−1) + (Lx−1)(Ly−1) = 1
+    # independent of which slots are filled. Unit squares need NOT be faces of the graph — the
+    # plaquette region is the four-quadrant overlap of a cut, not a lattice face.
+    for (lbl, g) in (("hex 2x2", named_hexagonal_lattice_graph(2, 2)),
+                     ("hex 3x3", named_hexagonal_lattice_graph(3, 3)),
+                     ("heavy-hex 2x2", heavy_hexagonal_lattice(2, 2)))
+        vs = collect(vertices(g))
+        Lx, Ly = maximum(first.(vs)), maximum(last.(vs))
+        @test length(vs) < Lx * Ly                      # genuinely sparse
+        tn = random_tensornetwork(Float64, g; bond_dimension = 2)
+        lnZ = log(abs(real(contract(tn; alg = "exact"))))
+        @test cvm_freenergy(update(CTMEnvironmentCache(tn, 40); maxiter = 6)) ≈ lnZ atol = 1.0e-8
+    end
+
+    # And it must beat BP, i.e. the corner tier carries real information on hex even though no
+    # unit square is a face there.
+    tn = random_tensornetwork(Float64, named_hexagonal_lattice_graph(3, 3); bond_dimension = 3)
+    lnZ = log(abs(real(contract(tn; alg = "exact"))))
+    ebp = abs(log(abs(real(contract(tn; alg = "bp")))) - lnZ)
+    ecvm = abs(cvm_freenergy(update(CTMEnvironmentCache(tn, 8); maxiter = 12)) - lnZ)
+    @test ecvm < ebp / 10
+end
+
 @testset "CVM single-site observables" begin
     Random.seed!(456)
     L, D = 4, 2

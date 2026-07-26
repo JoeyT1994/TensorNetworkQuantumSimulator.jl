@@ -295,6 +295,51 @@ gauge fixing unlocked and nobody has spent yet — Anderson acceleration on the 
 fixed point is the highest-value remaining performance work, and it attacks the one axis where
 boundary MPS is 25–38× ahead.
 
+### Sparse (x,y) grids: hexagonal and heavy-hexagonal — WORKS with the unit-square regions
+
+Hex and heavy-hex are laid out on an `(x,y)` grid with vertices *and* edges missing. All edges are
+grid-adjacent (displacements only `±(1,0)`, `±(0,1)`), so the embedding is faithful and the engine
+needed only sparse-grid plumbing: `grid` is now a `Dict` of occupied positions plus an explicit
+bounding box, with `nothing` at empty slots.
+
+**I first claimed this would degenerate to BP, on the grounds that no unit square is a face of a
+hex lattice. That was WRONG on two counts and the measurements below refute both.**
+
+1. **The Möbius identity has nothing to do with graph faces.** It is a telescoping identity on the
+   **bounding box**: `Lx·Ly − (Lx−1)Ly − Lx(Ly−1) + (Lx−1)(Ly−1) = 1`, independent of which slots
+   are filled. And every region still contracts to `Z`, because `C_NW = {col<x, row<y}` and the `T`
+   strips partition positions by **comparison**, not occupancy — an empty vertex slot simply has no
+   site factor to insert, and `T_W(x,y) ∪ T_E(x+1,y)` still covers row `y`.
+2. **The plaquette region is the four-quadrant overlap of a CUT, not a lattice face.** A cut does
+   not care whether the unit square it straddles happens to be a face. The corner tensors remain
+   genuine 2D blocks carrying information BP does not have.
+
+Measured, `|F − ln Z|`, `bond_dimension = 2`, χ=40:
+
+| lattice | V | E | bounding box | holes | error |
+|---|---|---|---|---|---|
+| hex 2×2 | 16 | 19 | 6×3 | 2 | 1.3e-15 |
+| hex 3×3 | 30 | 38 | 8×4 | 2 | 3.2e-13 |
+| heavy-hex 2×2 | 35 | 38 | 11×5 | **20** | 4.4e-16 |
+
+Exact even with 20 of 55 slots empty. And against BP at `D=3`:
+
+| lattice | BP error | CVM χ=2 | χ=4 | χ=8 |
+|---|---|---|---|---|
+| hex 3×3 | 8.6e-2 | 21× better | 46× | **2.7e8×** (3.2e-10) |
+| hex 4×4 | 1.47e1 | 73× | 12× | 114× |
+| heavy-hex 3×3 | 3.10 | 12× | 4.2e5× | **2.2e14×** (1.4e-14) |
+
+Better than BP by 12–73× even at χ=2. **No hexagonal region graph is required for correctness or
+for beating BP.**
+
+What is still open is *accuracy*, not correctness: whether a face-based region graph (regions per
+vertex / per edge / per hexagon, with hexagons being 2×1 bricks in this embedding) would do better
+than the cut-based unit-square one at matched χ, since hexagons are 6-cycles. That is now a
+measurable question against a working baseline rather than a prerequisite.
+
+Coverage: `test_ctmenvironment.jl`, testset "CVM on sparse (x,y) grids".
+
 ### Current state of the engine (the clean slate)
 
 | piece | state |

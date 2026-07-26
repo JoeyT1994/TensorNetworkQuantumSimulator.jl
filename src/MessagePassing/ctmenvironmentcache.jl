@@ -45,9 +45,10 @@ error, so `update` before you trust the number.
 """
 struct CTMEnvironmentCache{V, N, E}
     network::N
-    grid::Vector{Vector{V}}     # vertices by grid position: grid[y][x]. Geometry only.
+    grid::Dict{Tuple{Int, Int}, V}   # OCCUPIED positions only — holes allowed (hex, heavy-hex)
+    dims::Tuple{Int, Int}            # bounding box (Lx, Ly)
     maxdim::Int
-    environments::E             # `nothing`, or the CVM blocks from `update`
+    environments::E                  # `nothing`, or the CVM blocks from `update`
 end
 
 network(cache::CTMEnvironmentCache) = cache.network
@@ -67,15 +68,21 @@ function CTMEnvironmentCache(net, maxdim::Integer)
     vs = collect(vertices(graph(net)))
     all(v -> (v isa Tuple || v isa CartesianIndex) && length(v) == 2, vs) ||
         error("CTMEnvironmentCache requires a 2D grid network (vertices as (x, y)).")
-    ys = sort(unique(last.(vs)))
-    rows = [sort(filter(v -> last(v) == y, vs); by = first) for y in ys]
-    allequal(length.(rows)) || error("CTMEnvironmentCache requires a rectangular grid.")
-    return CTMEnvironmentCache(net, rows, Int(maxdim), nothing)
+    # NO rectangularity requirement. Holes are fine: `C_NW = {col<x, row<y}` and the `T`
+    # strips partition grid positions by COMPARISON, not occupancy, so the 4C+4T tiling and the
+    # Möbius identity both survive. The identity is a telescoping one on the BOUNDING BOX —
+    # Lx·Ly − (Lx−1)Ly − Lx(Ly−1) + (Lx−1)(Ly−1) = 1 — and is independent of which slots are
+    # filled. An empty vertex slot simply has no site factor to insert. This is what lets
+    # hexagonal and heavy-hexagonal lattices (laid out on (x,y) with vertices/edges missing) use
+    # the same engine.
+    grid = Dict{Tuple{Int, Int}, eltype(vs)}((Int(v[1]), Int(v[2])) => v for v in vs)
+    Lx = maximum(first.(keys(grid))); Ly = maximum(last.(keys(grid)))
+    return CTMEnvironmentCache(net, grid, (Lx, Ly), Int(maxdim), nothing)
 end
 
 # Same network/grid/maxdim, different CVM environments.
 _ctm_setenv(cache::CTMEnvironmentCache, env) =
-    CTMEnvironmentCache(cache.network, cache.grid, cache.maxdim, env)
+    CTMEnvironmentCache(cache.network, cache.grid, cache.dims, cache.maxdim, env)
 
 # --- the move --------------------------------------------------------------------
 # eig projector from a density matrix ρ(bnd, bnd'): the top-`maxdim` eigenvectors.
@@ -392,14 +399,20 @@ function _ctm_interface_proj(B, ins::Vector{<:Index}, maxdim::Integer)
 end
 
 # Grid geometry / lazy factors ----------------------------------------------------
-_ctm_dims(cache::CTMEnvironmentCache) = (length(first(cache.grid)), length(cache.grid))
-_ctm_vertex(cache::CTMEnvironmentCache, x::Int, y::Int) = cache.grid[y][x]
+_ctm_dims(cache::CTMEnvironmentCache) = cache.dims
+# `nothing` at an unoccupied grid position.
+_ctm_vertex(cache::CTMEnvironmentCache, x::Int, y::Int) = get(cache.grid, (x, y), nothing)
+
+# Contracted site tensor at a grid position, or `nothing` if unoccupied.
+_ctm_site(tbl, x::Int, y::Int) = haskey(tbl, (x, y)) ? _ctm_contract(tbl[(x, y)]) : nothing
 
 function _ctm_factor_table(cache::CTMEnvironmentCache)
     Lx, Ly = _ctm_dims(cache)
     tbl = Dict{Tuple{Int, Int}, Vector{ITensor}}()
     for y in 1:Ly, x in 1:Lx
-        tbl[(x, y)] = Vector{ITensor}(bp_factors(network(cache), _ctm_vertex(cache, x, y)))
+        v = _ctm_vertex(cache, x, y)
+        isnothing(v) && continue                      # unoccupied position (hex etc.)
+        tbl[(x, y)] = Vector{ITensor}(bp_factors(network(cache), v))
     end
     return tbl
 end
@@ -407,6 +420,7 @@ end
 # Links between neighbouring vertices: ONE index for a single layer, TWO (ket+bra) for a
 # double layer — discovered from the tensors, never fused.
 function _ctm_links(tbl, a::Tuple{Int, Int}, b::Tuple{Int, Int})
+    (haskey(tbl, a) && haskey(tbl, b)) || return Index[]   # one end unoccupied: no link
     is = Index[]
     for t1 in tbl[a], t2 in tbl[b]
         append!(is, commoninds(t1, t2))
@@ -427,7 +441,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
     tbl = _ctm_factor_table(cache)
     hl(x, y) = _ctm_links(tbl, (x, y), (x + 1, y))      # horizontal link cols x|x+1 at row y
     vl(x, y) = _ctm_links(tbl, (x, y), (x, y + 1))      # vertical link rows y|y+1 at col x
-    a(x, y) = tbl[(x, y)]
+    a(x, y) = get(tbl, (x, y), ITensor[])
 
     C = Dict{Tuple{Symbol, Int, Int}, Any}()
     T = Dict{Tuple{Symbol, Int, Int}, Any}()
@@ -436,7 +450,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
 
     # ---- W strips (y increasing, x increasing): derives PV[:W] ----
     for y in 1:Ly, x in 1:(Lx - 1)
-        raw = _ctm_mul(_ctm_nn(T, (:W, x, y)), _ctm_contract(a(x, y)))
+        raw = _ctm_mul(_ctm_nn(T, (:W, x, y)), _ctm_site(tbl, x, y))
         if y > 1
             P = _ctm_nn(PV, (:W, x + 1, y - 1))
             !isnothing(P) && (raw = raw * P[1])
@@ -455,7 +469,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
     end
     # ---- E strips (x decreasing): derives PV[:E] ----
     for y in 1:Ly, x in Lx:-1:2
-        raw = _ctm_mul(_ctm_contract(a(x, y)), _ctm_nn(T, (:E, x + 1, y)))
+        raw = _ctm_mul(_ctm_site(tbl, x, y), _ctm_nn(T, (:E, x + 1, y)))
         if y > 1
             P = _ctm_nn(PV, (:E, x, y - 1))
             !isnothing(P) && (raw = raw * P[1])
@@ -516,13 +530,13 @@ function vertex_environments(cache::CTMEnvironmentCache)
     # ---- N / S column strips: consume PH ----
     for x in 1:Lx
         for y in 1:(Ly - 1)
-            raw = _ctm_mul(_ctm_nn(T, (:N, x, y)), _ctm_contract(a(x, y)))
+            raw = _ctm_mul(_ctm_nn(T, (:N, x, y)), _ctm_site(tbl, x, y))
             P = _ctm_nn(PH, (:N, x - 1, y + 1)); !isnothing(P) && (raw = raw * dag(P[1]))
             Q = _ctm_nn(PH, (:N, x, y + 1));     !isnothing(Q) && (raw = raw * Q[1])
             T[(:N, x, y + 1)] = _ctm_rescale(raw)
         end
         for y in Ly:-1:2
-            raw = _ctm_mul(_ctm_contract(a(x, y)), _ctm_nn(T, (:S, x, y + 1)))
+            raw = _ctm_mul(_ctm_site(tbl, x, y), _ctm_nn(T, (:S, x, y + 1)))
             P = _ctm_nn(PH, (:S, x - 1, y)); !isnothing(P) && (raw = raw * dag(P[1]))
             Q = _ctm_nn(PH, (:S, x, y));     !isnothing(Q) && (raw = raw * Q[1])
             T[(:S, x, y)] = _ctm_rescale(raw)
@@ -772,19 +786,19 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
     end
     # --- rebuild edges from the previous state, projected on both sides -------------
     for x in 1:Lx, y in 2:Ly                  # T_N: left = east side, right = west side
-        raw = _ctm_mul(_ctm_nn(S.T, (:N, x, y - 1)), _ctm_contract(tbl[(x, y - 1)]))
+        raw = _ctm_mul(_ctm_nn(S.T, (:N, x, y - 1)), _ctm_site(tbl, x, y - 1))
         T[(:N, x, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PH, (:N, x - 1, y))), _ctm_nn(PH, (:N, x, y))))
     end
     for x in 1:Lx, y in 2:Ly                  # T_S
-        raw = _ctm_mul(_ctm_contract(tbl[(x, y)]), _ctm_nn(S.T, (:S, x, y + 1)))
+        raw = _ctm_mul(_ctm_site(tbl, x, y), _ctm_nn(S.T, (:S, x, y + 1)))
         T[(:S, x, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PH, (:S, x - 1, y))), _ctm_nn(PH, (:S, x, y))))
     end
     for x in 2:Lx, y in 1:Ly                  # T_W: up = south side, down = north side
-        raw = _ctm_mul(_ctm_nn(S.T, (:W, x - 1, y)), _ctm_contract(tbl[(x - 1, y)]))
+        raw = _ctm_mul(_ctm_nn(S.T, (:W, x - 1, y)), _ctm_site(tbl, x - 1, y))
         T[(:W, x, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PV, (:W, x, y - 1))), _ctm_nn(PV, (:W, x, y))))
     end
     for x in 1:(Lx - 1), y in 1:Ly            # T_E
-        raw = _ctm_mul(_ctm_contract(tbl[(x + 1, y)]), _ctm_nn(S.T, (:E, x + 2, y)))
+        raw = _ctm_mul(_ctm_site(tbl, x + 1, y), _ctm_nn(S.T, (:E, x + 2, y)))
         T[(:E, x + 1, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PV, (:E, x + 1, y - 1))),
                                              _ctm_nn(PV, (:E, x + 1, y))))
     end
@@ -824,7 +838,8 @@ end
 function region_lnZ(env::CTMVertexEnvironments, cache::CTMEnvironmentCache, cx::Real, cy::Real)
     ts = _ctm_region_blocks(env, cx, cy)
     if isinteger(cx) && isinteger(cy)     # vertex ring: close it with the vertex's own factors
-        append!(ts, bp_factors(network(cache), _ctm_vertex(cache, Int(cx), Int(cy))))
+        v = _ctm_vertex(cache, Int(cx), Int(cy))
+        isnothing(v) || append!(ts, bp_factors(network(cache), v))
     end
     isempty(ts) && return 0.0
     return log(abs(real(scalar(_ctm_contract(ts)))))
@@ -868,9 +883,8 @@ end
 # Grid position of a vertex, by lookup rather than by trusting `v == (x, y)` — the cache sorts
 # its rows, and a network's vertices need not be 1-based or contiguous.
 function _ctm_coords(cache::CTMEnvironmentCache, v)
-    for (y, row) in enumerate(cache.grid)
-        x = findfirst(==(v), row)
-        isnothing(x) || return (x, y)
+    for (pos, w) in cache.grid
+        w == v && return pos
     end
     return error("vertex $v is not in the CTMEnvironmentCache's grid.")
 end
@@ -945,7 +959,7 @@ function marginal_inconsistency(cache::CTMEnvironmentCache)
                 t = blk(e); isnothing(t) && continue
                 push!(full, t); e == d || push!(minus, t)
             end
-            if !isnothing(ctr)
+            if !isnothing(ctr) && haskey(tbl, ctr)
                 append!(full, tbl[ctr]); append!(minus, tbl[ctr])
             end
             (isempty(full) || isempty(minus)) && continue
