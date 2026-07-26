@@ -107,6 +107,21 @@ end
         @test cvm_freenergy(update(CTMEnvironmentCache(tn, 40); maxiter = 6)) ≈ lnZ atol = 1.0e-8
     end
 
+    # Observables and the diagnostic must work on a sparse grid too. Hex vertices have degree
+    # 2-3, so their rings are 3-5 blocks rather than 8 — the `nothing` paths must absorb that.
+    Random.seed!(21)
+    g = named_hexagonal_lattice_graph(2, 2)
+    si = siteinds("S=1/2", g)
+    ψh = random_tensornetworkstate(Float64, g, si; bond_dimension = 2)
+    ch = update(CTMEnvironmentCache(ψh, 40); maxiter = 6)
+    @test marginal_inconsistency(ch) < 1.0e-10          # lossless χ: marginals parallel
+    for v in collect(vertices(g))[1:6]
+        @test 0 < length(vertex_ring(ch, v)) <= 8
+        @test expect(ch, ("Z", [v])) ≈ expect(ψh, ("Z", [v]); alg = "exact") atol = 1.0e-7
+    end
+    @test rdm(ch, [collect(vertices(g))[3]]) ≈
+          rdm(ψh, [collect(vertices(g))[3]]; alg = "exact") atol = 1.0e-8
+
     # And it must beat BP, i.e. the corner tier carries real information on hex even though no
     # unit square is a face there.
     tn = random_tensornetwork(Float64, named_hexagonal_lattice_graph(3, 3); bond_dimension = 3)
