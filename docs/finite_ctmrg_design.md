@@ -402,6 +402,50 @@ gates it to the greedy optimiser above that — a feasibility gate, not the perf
 same shape that was tried and reverted earlier. `expect`/`rdm` now route through `_ctm_contract` so
 they get both that gate and the sequence cache.
 
+### Full re-derivation of the projector and sweep: no missed accuracy win, and why
+
+**The projector truncation is provably OPTIMAL for the bipartition it is given.** Substituting the
+truncated pair back:
+
+```
+A P_A^(k) P_B^(k) B†  =  Q_A [W V_k S_k⁻¹ U_k†] W Q_B†  =  Q_A U_k S_k V_k† Q_B†  =  Q_A W_k Q_B†
+```
+
+using `W V_k = U_k S_k` and `U_k† W = S_k V_k†`. `Q_A` and `Q_B` are isometries, so this is the
+**Eckart–Young optimal rank-k approximation of `A B†`**. Verified numerically against an explicit
+truncated SVD of `A B†` on four shapes: error ratio **1.0000000000** to ten decimals. So no better
+choice of subspace exists for that objective, which independently confirms the swap experiment.
+
+**The one assumption in that derivation is the bipartition — and there is no better one available.**
+`(C̃_NW | C̃_NE)` tiles only rows `< y`; the south closure does not weight the truncation. The
+natural fix would be an environment-aware ("full update") truncation. It is not available as a
+drop-in, because **the interface is never a bipartition of any region.** Measured on the plaquette,
+whose four corners each share exactly one χ-dim interface:
+
+```
+NW–NE, NW–SW, NE–SE, SW–SE     — a 4-CYCLE of blocks
+cut PH[:N] alone → NW–SW still connected, NE–SE still connected
+```
+
+So cutting one interface does not separate west from east even in the *smallest* region. The four
+truncations around a plaquette are **coupled in a loop**: there is no reduced density matrix for a
+single interface to be optimal against, and an environment-weighted scheme would have to optimise
+all four jointly. That is a variational full-update scheme — substantial new machinery, not a
+missed easy win. It is also the honest reason the corner-pair choice is the right local one: the
+two enlarged corners are the unique pair that exactly tiles the part of the lattice the interface
+lives in.
+
+**Sweep side, re-checked:** the Jacobi structure only affects convergence rate, since the fixed
+point is unique and seed-independent (measured, including χ-continuation). Block rescaling is
+gauge-invariant (`F` unchanged to 1 ulp). The nested interface chains do accumulate truncation —
+level `y` is built on level `y−1`'s truncated basis — which is a genuine error source, but the
+remedy is larger χ, and χ is cheap here because sweep count *falls* as χ rises.
+
+**Conclusion: the remaining accuracy lever is χ.** Five independent attempts now agree —
+arithmetic route, Möbius-stationary projector, subspace swaps, harder convergence, and the window
+estimator — and the projector is provably optimal for its objective. The only routes left are a
+joint variational treatment of the coupled truncation loop, or a different region graph.
+
 ### Current state of the engine (the clean slate)
 
 | piece | state |
