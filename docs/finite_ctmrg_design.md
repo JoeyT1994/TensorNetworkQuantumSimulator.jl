@@ -446,6 +446,52 @@ arithmetic route, Möbius-stationary projector, subspace swaps, harder convergen
 estimator — and the projector is provably optimal for its objective. The only routes left are a
 joint variational treatment of the coupled truncation loop, or a different region graph.
 
+### Is the projector optimal for OBSERVABLES? No — but the reason is cancellation, not the criterion
+
+The ring is exactly `∂Z/∂a_v` (punch the site out, legs open), so the natural question is whether a
+projector chosen to minimise `‖A B† − A P_A P_B B†‖_F` — which targets **Z** — is also right for
+`E_v`. It is not: an interface error `δ` reaches `Z` weighted by `∂Z/∂(interface)` but reaches `E_v`
+weighted by `∂²Z/∂a_v∂(interface)`. Different weightings, so optimal for one is generically not
+optimal for the other.
+
+**Measured, 6×6 D=2, site (3,3):**
+
+| χ | rel err `ln Z` | err `⟨Z⟩` | err rdm | ratio |
+|---|---|---|---|---|
+| 2 | 6.18e-4 | 9.96e-2 | 8.02e-2 | 161× |
+| 4 | 1.30e-5 | 2.78e-3 | 2.39e-3 | 214× |
+| 6 | 4.63e-7 | 1.45e-3 | 1.28e-3 | **3127×** |
+| 8 | 1.03e-6 | 6.03e-4 | 4.41e-4 | 585× |
+| 12 | 2.36e-7 | 4.16e-5 | 2.95e-5 | 176× |
+
+`E_v` is represented 160–3000× worse than `Z`. The rdm error tracks `⟨Z⟩` because the rdm *is*
+normalised `E_v`.
+
+**But the derivative argument shows the criterion is not the main culprit.** With a field `h`
+coupling to `O` at `v`, `⟨O⟩ = ∂lnZ/∂h`, so applying it to the estimator:
+
+```
+∂F/∂h|₀  =  Σ_R c_R (∂Z_R/∂h) / Z_R
+```
+
+Only regions **containing v** contribute, and only the vertex region contains a site. So `∂F/∂h`
+collapses to exactly `(∂Z_v/∂h)/Z_v` — the ring estimator we already compute. **The accurate
+free-energy estimator, differentiated, gives back the inaccurate observable estimator.** There is no
+free lunch to extract by reformulating.
+
+So the gap is not a suboptimal subspace choice; it is that `F` earns its accuracy from Möbius
+cancellation across many regions while a single-site observable lands in exactly one region and gets
+none. That is consistent with the window estimator recovering only 1.4–11.4× — better local
+treatment cannot touch a 3000× cancellation deficit — and with the strip estimator measuring
+`strip ≈ ring`.
+
+**The only route that addresses it is a region graph in which a site appears in several regions with
+opposite Möbius signs.** Candidates: 2×2 block regions as parents (a site then sits in up to four,
+with edge/plaquette overlaps that also contain sites), which restores cancellation for local
+quantities the same way `V − E + P = 1` does for `Z`. Worth checking on paper that the counting
+works before building: the requirement is that every *site* be covered with total weight 1 while
+every *block* still is.
+
 ### Current state of the engine (the clean slate)
 
 | piece | state |
