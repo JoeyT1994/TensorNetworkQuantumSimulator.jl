@@ -83,6 +83,18 @@ end
     end
     @test swept[2] < swept[1]                                  # monotone in χ
     @test swept[2] < 1.0e-3                                    # actually converging
+    # The rho-route projector is kept as the reference path but CTM_QR defaults on, so nothing
+    # else exercises it. One test keeps it honest: the two routes must agree, since they are the
+    # same truncation reached by different arithmetic.
+    for χ in (6, 12)
+        r = map((true, false)) do qr
+            TNQS.CTM_QR[] = qr
+            cvm_freenergy(update(CTMEnvironmentCache(tn, χ); maxiter = 20, tolerance = 1.0e-11))
+        end
+        TNQS.CTM_QR[] = true
+        @test r[1] ≈ r[2] atol = 1.0e-10
+    end
+
     # Beats greedy where greedy is still visibly wrong.
     fresh8 = CTMEnvironmentCache(tn, 8)
     @test swept[2] < abs(cvm_freenergy(fresh8) - lnZ)

@@ -581,8 +581,11 @@ inaccurate one** — the usual accuracy/cost tradeoff is inverted here, so do no
 
 ### The stationary (partial-Schur) projector — derived, prototyped, VALIDATED, not yet landed
 
-Prototype: `examples/ctm_stationary_projector_prototype.jl` (runs, self-checking). It covers one
-interface family on a 4×4; what remains is the other three families and plumbing into the sweep.
+The prototype that validated this (`examples/ctm_stationary_projector_prototype.jl`) has been
+**deleted** — it documented a disproven approach and its Schur step had come to error with
+`LAPACKException` after later cleanups, so it was a committed example that did not run. The full
+derivation, the carrier table and the sign trap are all recorded below; recover the script from git
+(`7bb0b2f`) if it is ever wanted.
 
 **Stationarity condition.** Variations that preserve rank-`k` projector structure are
 `δΠ = (I−Π) X Π + Π Y (I−Π)`, so `δF = Tr[GᵀδΠ]` vanishes for all `X, Y` iff
