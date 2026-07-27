@@ -455,9 +455,51 @@ _ctm_dims(cache::CTMEnvironmentCache) = cache.dims
 # `nothing` at an unoccupied grid position.
 _ctm_vertex(cache::CTMEnvironmentCache, x::Int, y::Int) = get(cache.grid, (x, y), nothing)
 
-# Contracted site tensor at a grid position, or `nothing` if unoccupied.
-_ctm_site(tbl, x::Int, y::Int, opts::CTMOptions) =
-    haskey(tbl, (x, y)) ? _ctm_contract(tbl[(x, y)], opts) : nothing
+# Site factors at a grid position as a LIST — `[ket, bra]` (or `[ket, op, bra]`) for a double
+# layer, `[a]` for a single one, empty if unoccupied.
+#
+# NEVER pre-contracted. `ket * bra` is the fat ket⊗bra site tensor the lazy double layer exists to
+# avoid: for a 4-link D=3 vertex it is D^8 = 6561 entries against 162 per factor, and forming it
+# also denies netcon the chance to interleave the two layers with the environment blocks. Every
+# absorption below therefore passes this list straight into `_ctm_contract`.
+_ctm_facs(tbl, x::Int, y::Int) = get(tbl, (x, y), ITensor[])
+
+# Flatten mixed arguments — `ITensor`, `nothing`, or a factor list — into one contraction list.
+function _ctm_list(args...)
+    ts = ITensor[]
+    for a in args
+        isnothing(a) && continue
+        a isa ITensor ? push!(ts, a) : append!(ts, a)
+    end
+    return ts
+end
+
+# ONE netcon over [core; extras], or `nothing` when the core is empty.
+#
+# `core` is the environment blocks and site factors; `extras` are isometries (projectors). The
+# split matters only at the boundary: with no core there is nothing to absorb, and the extras are
+# dropped rather than contracted on their own — which is what the `_ctm_mul`/`apA` chain this
+# replaces did by short-circuiting on `nothing`.
+#
+# Putting the projectors in the SAME netcon call as the growth is the second half of the fix: the
+# optimiser may now apply an isometry BEFORE the site factors, truncating an interface before it is
+# grown rather than after.
+function _ctm_absorb(opts::CTMOptions, core::Vector{ITensor}, extras...)
+    isempty(core) && return nothing
+    ts = copy(core)
+    for e in extras
+        isnothing(e) || push!(ts, e)
+    end
+    return _ctm_contract(ts, opts)
+end
+
+# `P_A` / `P_B` of a stored projector, or `nothing`. The greedy pass stores `(P, w)` so `p[1]` is
+# its only isometry; the sweep stores `(P_A, P_B, w)`.
+_ctm_pA(d, k) = (p = _ctm_nn(d, k); isnothing(p) ? nothing : p[1])
+_ctm_pB(d, k) = (p = _ctm_nn(d, k); isnothing(p) ? nothing : p[2])
+# `dag(P_A)`, which is how the east/south blocks of the GREEDY pass consume a projector derived on
+# their west/north partner. (The sweep uses a genuine biorthogonal `P_B` instead.)
+_ctm_pAdag(d, k) = (p = _ctm_pA(d, k); isnothing(p) ? nothing : dag(p))
 
 function _ctm_factor_table(cache::CTMEnvironmentCache)
     Lx, Ly = _ctm_dims(cache)
@@ -503,12 +545,12 @@ function vertex_environments(cache::CTMEnvironmentCache)
     PV = Dict{Tuple{Symbol, Int, Int}, Any}()
 
     # ---- W strips (y increasing, x increasing): derives PV[:W] ----
+    # The growth is ONE netcon over [edge; ket; bra; incoming isometry]. `raw` must be materialised
+    # before the interface projector below, since that projector is derived FROM it — but the
+    # absorption itself no longer pre-contracts `ket * bra`.
     for y in 1:Ly, x in 1:(Lx - 1)
-        raw = _ctm_mul(_ctm_nn(T, (:W, x, y)), _ctm_site(tbl, x, y, opts))
-        if y > 1
-            P = _ctm_nn(PV, (:W, x + 1, y - 1))
-            !isnothing(P) && (raw = raw * P[1])
-        end
+        raw = _ctm_absorb(opts, _ctm_list(_ctm_nn(T, (:W, x, y)), _ctm_facs(tbl, x, y)),
+                          y > 1 ? _ctm_pA(PV, (:W, x + 1, y - 1)) : nothing)
         if y < Ly
             ins = Index[]
             w = _ctm_widx(PV, (:W, x, y)); !isnothing(w) && push!(ins, w)
@@ -523,11 +565,8 @@ function vertex_environments(cache::CTMEnvironmentCache)
     end
     # ---- E strips (x decreasing): derives PV[:E] ----
     for y in 1:Ly, x in Lx:-1:2
-        raw = _ctm_mul(_ctm_site(tbl, x, y, opts), _ctm_nn(T, (:E, x + 1, y)))
-        if y > 1
-            P = _ctm_nn(PV, (:E, x, y - 1))
-            !isnothing(P) && (raw = raw * P[1])
-        end
+        raw = _ctm_absorb(opts, _ctm_list(_ctm_facs(tbl, x, y), _ctm_nn(T, (:E, x + 1, y))),
+                          y > 1 ? _ctm_pA(PV, (:E, x, y - 1)) : nothing)
         if y < Ly
             ins = Index[]
             append!(ins, vl(x, y))
@@ -569,31 +608,29 @@ function vertex_environments(cache::CTMEnvironmentCache)
     # ---- C[:NE] / C[:SE]: consume PH ----
     for x in 2:Lx
         for y in 1:(Ly - 1)
-            raw = _ctm_mul(_ctm_nn(C, (:NE, x, y)), _ctm_nn(T, (:E, x, y)))
-            P = _ctm_nn(PH, (:N, x - 1, y + 1))
-            !isnothing(P) && (raw = raw * dag(P[1]))
-            C[(:NE, x, y + 1)] = _ctm_rescale(raw)
+            C[(:NE, x, y + 1)] = _ctm_rescale(_ctm_absorb(opts,
+                _ctm_list(_ctm_nn(C, (:NE, x, y)), _ctm_nn(T, (:E, x, y))),
+                _ctm_pAdag(PH, (:N, x - 1, y + 1))))
         end
         for y in Ly:-1:2
-            raw = _ctm_mul(_ctm_nn(C, (:SE, x, y + 1)), _ctm_nn(T, (:E, x, y)))
-            P = _ctm_nn(PH, (:S, x - 1, y))
-            !isnothing(P) && (raw = raw * dag(P[1]))
-            C[(:SE, x, y)] = _ctm_rescale(raw)
+            C[(:SE, x, y)] = _ctm_rescale(_ctm_absorb(opts,
+                _ctm_list(_ctm_nn(C, (:SE, x, y + 1)), _ctm_nn(T, (:E, x, y))),
+                _ctm_pAdag(PH, (:S, x - 1, y))))
         end
     end
     # ---- N / S column strips: consume PH ----
+    # One netcon over [edge; ket; bra; both isometries] — the site factors stay a list and the
+    # optimiser is free to truncate either interface before growing.
     for x in 1:Lx
         for y in 1:(Ly - 1)
-            raw = _ctm_mul(_ctm_nn(T, (:N, x, y)), _ctm_site(tbl, x, y, opts))
-            P = _ctm_nn(PH, (:N, x - 1, y + 1)); !isnothing(P) && (raw = raw * dag(P[1]))
-            Q = _ctm_nn(PH, (:N, x, y + 1));     !isnothing(Q) && (raw = raw * Q[1])
-            T[(:N, x, y + 1)] = _ctm_rescale(raw)
+            T[(:N, x, y + 1)] = _ctm_rescale(_ctm_absorb(opts,
+                _ctm_list(_ctm_nn(T, (:N, x, y)), _ctm_facs(tbl, x, y)),
+                _ctm_pAdag(PH, (:N, x - 1, y + 1)), _ctm_pA(PH, (:N, x, y + 1))))
         end
         for y in Ly:-1:2
-            raw = _ctm_mul(_ctm_site(tbl, x, y, opts), _ctm_nn(T, (:S, x, y + 1)))
-            P = _ctm_nn(PH, (:S, x - 1, y)); !isnothing(P) && (raw = raw * dag(P[1]))
-            Q = _ctm_nn(PH, (:S, x, y));     !isnothing(Q) && (raw = raw * Q[1])
-            T[(:S, x, y)] = _ctm_rescale(raw)
+            T[(:S, x, y)] = _ctm_rescale(_ctm_absorb(opts,
+                _ctm_list(_ctm_facs(tbl, x, y), _ctm_nn(T, (:S, x, y + 1))),
+                _ctm_pAdag(PH, (:S, x - 1, y)), _ctm_pA(PH, (:S, x, y))))
         end
     end
     return CTMVertexEnvironments(C, T, PH, PV, Lx, Ly)
@@ -685,26 +722,27 @@ end
 # blocks (so all indices are in a consistent basis) with its two adjoining edges and vertex.
 function _ctm_enlarged(S::CTMVertexEnvironments, tbl, sym::Symbol, x::Int, y::Int,
                       opts::CTMOptions)
-    A(i, j) = (haskey(tbl, (i, j)) ? _ctm_contract(tbl[(i, j)], opts) : nothing)
-    # ONE netcon over all four rather than the hardcoded left fold `((C·T)·T)·a`. Measured: at
-    # these sizes netcon PICKS THAT SAME ORDER, so this buys no speed (within noise on four
-    # benchmarks) — it is here so the order stops being an unverified assumption, which matters
-    # because the enlarged corner is the hottest object in the sweep. Free, given the sequence
-    # cache. Boundary blocks arrive as `nothing` and drop out.
-    m4(args...) = (ts = ITensor[t for t in args if !isnothing(t)];
-                   isempty(ts) ? nothing : _ctm_contract(ts, opts))
+    # ONE netcon over the corner, both edges and the site's factor LIST, rather than the hardcoded
+    # left fold `((C·T)·T)·a`. Measured earlier: at these sizes netcon picks that same order for
+    # the *blocks*, so the four-way fold bought no speed on its own — it is here so the order stops
+    # being an unverified assumption, which matters because the enlarged corner is the hottest
+    # object in the sweep. Free, given the sequence cache. Boundary blocks arrive as `nothing`.
+    #
+    # The site enters as `_ctm_facs`, NOT as a pre-contracted `ket * bra`. Handing netcon the fused
+    # site tensor was throwing away the lazy double layer exactly where the sweep spends its time.
+    grow(blocks, facs) = _ctm_absorb(opts, _ctm_list(blocks..., facs))
     if sym === :NW          # cols<x, rows<y  — grown from vertex (x-1, y-1)
-        return m4(_ctm_nn(S.C, (:NW, x - 1, y - 1)), _ctm_nn(S.T, (:N, x - 1, y - 1)),
-                  _ctm_nn(S.T, (:W, x - 1, y - 1)), A(x - 1, y - 1))
+        return grow((_ctm_nn(S.C, (:NW, x - 1, y - 1)), _ctm_nn(S.T, (:N, x - 1, y - 1)),
+                     _ctm_nn(S.T, (:W, x - 1, y - 1))), _ctm_facs(tbl, x - 1, y - 1))
     elseif sym === :NE      # cols≥x, rows<y  — grown from vertex (x, y-1)
-        return m4(_ctm_nn(S.C, (:NE, x + 1, y - 1)), _ctm_nn(S.T, (:N, x, y - 1)),
-                  _ctm_nn(S.T, (:E, x + 1, y - 1)), A(x, y - 1))
+        return grow((_ctm_nn(S.C, (:NE, x + 1, y - 1)), _ctm_nn(S.T, (:N, x, y - 1)),
+                     _ctm_nn(S.T, (:E, x + 1, y - 1))), _ctm_facs(tbl, x, y - 1))
     elseif sym === :SW      # cols<x, rows≥y  — grown from vertex (x-1, y)
-        return m4(_ctm_nn(S.C, (:SW, x - 1, y + 1)), _ctm_nn(S.T, (:S, x - 1, y + 1)),
-                  _ctm_nn(S.T, (:W, x - 1, y)), A(x - 1, y))
+        return grow((_ctm_nn(S.C, (:SW, x - 1, y + 1)), _ctm_nn(S.T, (:S, x - 1, y + 1)),
+                     _ctm_nn(S.T, (:W, x - 1, y))), _ctm_facs(tbl, x - 1, y))
     else                    # :SE  cols≥x, rows≥y — grown from vertex (x, y)
-        return m4(_ctm_nn(S.C, (:SE, x + 1, y + 1)), _ctm_nn(S.T, (:S, x, y + 1)),
-                  _ctm_nn(S.T, (:E, x + 1, y)), A(x, y))
+        return grow((_ctm_nn(S.C, (:SE, x + 1, y + 1)), _ctm_nn(S.T, (:S, x, y + 1)),
+                     _ctm_nn(S.T, (:E, x + 1, y))), _ctm_facs(tbl, x, y))
     end
 end
 
@@ -740,32 +778,34 @@ end
 # `sweep_vertex_environments` exactly, which is the correctness argument for it.
 function _ctm_block(S::CTMVertexEnvironments, tbl, P::CTMVertexEnvironments, d,
                    opts::CTMOptions)
-    phg(k) = _ctm_nn(P.PH, k)
-    pvg(k) = _ctm_nn(P.PV, k)
     kind, sym, i, j = d
     aA(t, p) = (isnothing(p) || isnothing(t)) ? t : t * p[1]
     aB(t, p) = (isnothing(p) || isnothing(t)) ? t : t * p[2]
-    fac(a, b) = haskey(tbl, (a, b)) ? _ctm_contract(tbl[(a, b)], opts) : nothing
+    # Edge blocks absorb in ONE netcon over [edge; ket; bra; P_B; P_A] — no eager `ket * bra`,
+    # matching the edge rebuilds in `sweep_vertex_environments` term for term. The corner branch
+    # gets its laziness from `_ctm_enlarged`, and keeps the sequential `aA`/`aB` because the
+    # enlarged corner is memoised by the sweep and reused across interfaces.
+    edge(block, facs, pB, pA) = _ctm_absorb(opts, _ctm_list(block, facs), pB, pA)
     if kind === :C
         E = _ctm_enlarged(S, tbl, sym, i, j, opts)
         isnothing(E) && return nothing
-        sym === :NW && return aA(aA(E, phg((:N, i - 1, j))), pvg((:W, i, j - 1)))
-        sym === :NE && return aA(aB(E, phg((:N, i - 1, j))), pvg((:E, i, j - 1)))
-        sym === :SW && return aB(aA(E, phg((:S, i - 1, j))), pvg((:W, i, j - 1)))
-        return aB(aB(E, phg((:S, i - 1, j))), pvg((:E, i, j - 1)))
+        sym === :NW && return aA(aA(E, _ctm_nn(P.PH, (:N, i - 1, j))), _ctm_nn(P.PV, (:W, i, j - 1)))
+        sym === :NE && return aA(aB(E, _ctm_nn(P.PH, (:N, i - 1, j))), _ctm_nn(P.PV, (:E, i, j - 1)))
+        sym === :SW && return aB(aA(E, _ctm_nn(P.PH, (:S, i - 1, j))), _ctm_nn(P.PV, (:W, i, j - 1)))
+        return aB(aB(E, _ctm_nn(P.PH, (:S, i - 1, j))), _ctm_nn(P.PV, (:E, i, j - 1)))
     end
     if sym === :N
-        r = _ctm_mul(_ctm_nn(S.T, (:N, i, j - 1)), fac(i, j - 1))
-        return isnothing(r) ? nothing : aA(aB(r, phg((:N, i - 1, j))), phg((:N, i, j)))
+        return edge(_ctm_nn(S.T, (:N, i, j - 1)), _ctm_facs(tbl, i, j - 1),
+                    _ctm_pB(P.PH, (:N, i - 1, j)), _ctm_pA(P.PH, (:N, i, j)))
     elseif sym === :S
-        r = _ctm_mul(fac(i, j), _ctm_nn(S.T, (:S, i, j + 1)))
-        return isnothing(r) ? nothing : aA(aB(r, phg((:S, i - 1, j))), phg((:S, i, j)))
+        return edge(_ctm_nn(S.T, (:S, i, j + 1)), _ctm_facs(tbl, i, j),
+                    _ctm_pB(P.PH, (:S, i - 1, j)), _ctm_pA(P.PH, (:S, i, j)))
     elseif sym === :W
-        r = _ctm_mul(_ctm_nn(S.T, (:W, i - 1, j)), fac(i - 1, j))
-        return isnothing(r) ? nothing : aA(aB(r, pvg((:W, i, j - 1))), pvg((:W, i, j)))
+        return edge(_ctm_nn(S.T, (:W, i - 1, j)), _ctm_facs(tbl, i - 1, j),
+                    _ctm_pB(P.PV, (:W, i, j - 1)), _ctm_pA(P.PV, (:W, i, j)))
     end
-    r = _ctm_mul(fac(i, j), _ctm_nn(S.T, (:E, i + 1, j)))
-    return isnothing(r) ? nothing : aA(aB(r, pvg((:E, i, j - 1))), pvg((:E, i, j)))
+    return edge(_ctm_nn(S.T, (:E, i + 1, j)), _ctm_facs(tbl, i, j),
+                _ctm_pB(P.PV, (:E, i, j - 1)), _ctm_pA(P.PV, (:E, i, j)))
 end
 
 """
@@ -841,22 +881,27 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         end
     end
     # --- rebuild edges from the previous state, projected on both sides -------------
+    # ONE netcon per edge over [previous edge; ket; bra; P_B; P_A]. The site's factors go in as a
+    # LIST — pre-contracting `ket * bra` here built the fat site tensor on every one of the
+    # 4·Lx·Ly absorptions per sweep, which is where this engine spends its time. Folding both
+    # isometries into the same call also lets the optimiser truncate an interface before growing
+    # across it. `_ctm_block` mirrors these four term for term; keep them in step.
+    edge(block, facs, pB, pA) = _ctm_rescale(_ctm_absorb(opts, _ctm_list(block, facs), pB, pA))
     for x in 1:Lx, y in 2:Ly                  # T_N: left = east side, right = west side
-        raw = _ctm_mul(_ctm_nn(S.T, (:N, x, y - 1)), _ctm_site(tbl, x, y - 1, opts))
-        T[(:N, x, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PH, (:N, x - 1, y))), _ctm_nn(PH, (:N, x, y))))
+        T[(:N, x, y)] = edge(_ctm_nn(S.T, (:N, x, y - 1)), _ctm_facs(tbl, x, y - 1),
+                             _ctm_pB(PH, (:N, x - 1, y)), _ctm_pA(PH, (:N, x, y)))
     end
     for x in 1:Lx, y in 2:Ly                  # T_S
-        raw = _ctm_mul(_ctm_site(tbl, x, y, opts), _ctm_nn(S.T, (:S, x, y + 1)))
-        T[(:S, x, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PH, (:S, x - 1, y))), _ctm_nn(PH, (:S, x, y))))
+        T[(:S, x, y)] = edge(_ctm_nn(S.T, (:S, x, y + 1)), _ctm_facs(tbl, x, y),
+                             _ctm_pB(PH, (:S, x - 1, y)), _ctm_pA(PH, (:S, x, y)))
     end
     for x in 2:Lx, y in 1:Ly                  # T_W: up = south side, down = north side
-        raw = _ctm_mul(_ctm_nn(S.T, (:W, x - 1, y)), _ctm_site(tbl, x - 1, y, opts))
-        T[(:W, x, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PV, (:W, x, y - 1))), _ctm_nn(PV, (:W, x, y))))
+        T[(:W, x, y)] = edge(_ctm_nn(S.T, (:W, x - 1, y)), _ctm_facs(tbl, x - 1, y),
+                             _ctm_pB(PV, (:W, x, y - 1)), _ctm_pA(PV, (:W, x, y)))
     end
     for x in 1:(Lx - 1), y in 1:Ly            # T_E
-        raw = _ctm_mul(_ctm_site(tbl, x + 1, y, opts), _ctm_nn(S.T, (:E, x + 2, y)))
-        T[(:E, x + 1, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PV, (:E, x + 1, y - 1))),
-                                             _ctm_nn(PV, (:E, x + 1, y))))
+        T[(:E, x + 1, y)] = edge(_ctm_nn(S.T, (:E, x + 2, y)), _ctm_facs(tbl, x + 1, y),
+                                 _ctm_pB(PV, (:E, x + 1, y - 1)), _ctm_pA(PV, (:E, x + 1, y)))
     end
     return CTMVertexEnvironments(C, T, PH, PV, Lx, Ly)
 end
