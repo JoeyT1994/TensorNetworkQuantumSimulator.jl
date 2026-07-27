@@ -508,6 +508,26 @@ every *block* still is.
 Verified unchanged by the deletions, 4×4 D=3: `|F − ln Z|` = 5.203e-3 / 1.556e-3 / 6.455e-6 /
 5.33e-15 at χ = 4 / 6 / 8 / 12, with `marginal_inconsistency` 8.02e-3 / 3.88e-4 / 1.14e-5 / 6e-17.
 
+### Complex-path audit — CLEAN, and now covered by tests
+
+The projector bug was found by testing an invariant rather than by reading code, so every other
+operation that is "a no-op for real tensors" got the same treatment. All four passed first run.
+
+| path | invariant tested | result |
+|---|---|---|
+| greedy one-sided projector (`ρ = Bc·prime(dag(Bc))`, applied as `P` / `dag(P)`) | exact at lossless χ | complex 0.0e+00, real 1.3e-15 |
+| gauge fixing (`svd(a' * ao)`, a sesquilinear Procrustes) | `F` invariant to the gauge | 7.1e-15 / 3.6e-15, same as real |
+| `expect` / `rdm` | exact at lossless χ; Hermitian; positive | 2.8e-16; 1.7e-16; min eigval 0.38 |
+| hex / heavy-hex `nothing` paths | `F` and `⟨Z⟩` vs exact | 0.0e+00 and 1e-16 |
+| `marginal_inconsistency` | monotone in χ, → 0 when lossless | 4.0e-3 → 9.6e-5 → 1.8e-6 → 2.1e-16 |
+
+Two notes. The greedy projector's sesquilinear `ρ` is **suboptimal but not wrong** for complex — `P`
+is unitary at full rank so `P dag(P) = I` exactly against the bilinear pairing, and at finite χ it is
+only ever a seed that `update` sweeps away. And the RDM picks up ~1e-12 non-hermiticity at
+intermediate χ because the truncation does not respect the ket↔bra structure; that is the genuine
+symmetry defect, nine orders below the truncation error, and the reason the section below concludes
+what it does.
+
 ### REMOVED: ket↔bra symmetry in the projector — TESTED, no gain on speed OR accuracy
 
 The double layer has an exact symmetry the projector ignores. With σ the involution swapping every

@@ -1,7 +1,7 @@
 @eval module $(gensym())
 using Dictionaries: Dictionary
-using ITensors: commoninds, delta, dim, inds, scalar
-using LinearAlgebra: norm
+using ITensors: Array, commoninds, delta, dim, inds, prime, scalar
+using LinearAlgebra: Hermitian, eigvals, norm
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test, @test_throws, @test_logs
@@ -182,6 +182,70 @@ end
     # wrong number. Real input still reaches it (asserted in the two-route test above).
     @test_throws ErrorException cvm_freenergy(
         update(CTMEnvironmentCache(ψc, 8; qr = false); maxiter = 2))
+
+    # --- audit of the remaining conjugation-sensitive paths -------------------------------
+    # The projector bug above was found by testing an invariant, not by reading code, so the other
+    # operations that are a no-op for real tensors get the same treatment. All four passed on first
+    # run; these keep them honest.
+
+    # The GREEDY one-sided projector still builds a sesquilinear `ρ = Bc·prime(dag(Bc))` and applies
+    # `P` on one side, `dag(P)` on the other. At full rank `P` is unitary so `P dag(P) = I` and it is
+    # exact even against the bilinear pairing; at finite χ it is merely suboptimal, and it is only
+    # ever a seed for `update`. Assert the exactness, which is the part that could have been wrong.
+    Random.seed!(7)
+    tnr = random_tensornetwork(ComplexF64, named_grid((3, 3)); bond_dimension = 2)
+    lnZr = log(abs(contract(tnr; alg = "exact")))
+    let cg = CTMEnvironmentCache(tnr, 64)
+        @test cvm_freenergy(TNQS.vertex_environments(cg), cg) ≈ lnZr atol = 1.0e-10
+    end
+
+    # Gauge fixing is a sesquilinear Procrustes (`svd(a' * ao)`). `F` invariance was only ever
+    # verified on real tensors; it holds for complex too.
+    for χ in (6, 16)
+        on = cvm_freenergy(update(CTMEnvironmentCache(ψc, χ; gauge = true);
+                                  maxiter = 60, tolerance = 1.0e-12))
+        off = cvm_freenergy(update(CTMEnvironmentCache(ψc, χ; gauge = false);
+                                   maxiter = 60, tolerance = 1.0e-12))
+        @test on ≈ off atol = 1.0e-10
+    end
+
+    # Observables and the RDM: exact at lossless χ, Hermitian, and positive. The RDM picks up a
+    # small non-hermiticity at intermediate χ (~1e-12) because the truncation does not respect the
+    # ket↔bra structure — measured to be nine orders below the truncation error, hence not worth
+    # constraining the projector for. See the removed-symmetry section in the design doc.
+    let v = (2, 2), s = only(siteinds(ψc, v))
+        Oex = expect(ψc, ("Z", [v]); alg = "exact")
+        ρex = Array(rdm(ψc, [v]; alg = "exact"), s, prime(s))
+        c = update(CTMEnvironmentCache(ψc, 32); maxiter = 60, tolerance = 1.0e-12)
+        ρ = Array(rdm(c, [v]), s, prime(s))
+        @test expect(c, ("Z", [v])) ≈ Oex atol = 1.0e-10
+        @test norm(ρ - ρex) < 1.0e-10
+        @test norm(ρ - ρ') / norm(ρ) < 1.0e-10            # Hermitian
+        @test minimum(real.(eigvals(Hermitian((ρ + ρ') / 2)))) > 0   # and positive
+    end
+
+    # `marginal_inconsistency` must behave for complex exactly as documented for real: monotone in χ
+    # and machine-zero once lossless.
+    let mi = [marginal_inconsistency(update(CTMEnvironmentCache(ψc, χ);
+                                           maxiter = 60, tolerance = 1.0e-12)) for χ in (2, 8, 32)]
+        @test mi[1] > mi[2] > mi[3]
+        @test mi[3] < 1.0e-10
+    end
+
+    # Sparse (x,y) grids with complex tensors: the hex/heavy-hex `nothing` paths are their own code
+    # path and were only ever exercised with real tensors.
+    for gg in (named_hexagonal_lattice_graph(3, 3), heavy_hexagonal_lattice(2, 2))
+        Random.seed!(2024)
+        tnh = random_tensornetwork(ComplexF64, gg; bond_dimension = 2)
+        @test cvm_freenergy(update(CTMEnvironmentCache(tnh, 40);
+                                   maxiter = 60, tolerance = 1.0e-12)) ≈
+              log(abs(contract(tnh; alg = "exact"))) atol = 1.0e-10
+        sih = siteinds("S=1/2", gg)
+        ψh = random_tensornetworkstate(ComplexF64, gg, sih; bond_dimension = 2)
+        chh = update(CTMEnvironmentCache(ψh, 40); maxiter = 60, tolerance = 1.0e-12)
+        vh = first(vertices(gg))
+        @test expect(chh, ("Z", [vh])) ≈ expect(ψh, ("Z", [vh]); alg = "exact") atol = 1.0e-8
+    end
 end
 
 @testset "CVM convergence cannot be certified from one sweep" begin
