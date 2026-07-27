@@ -538,6 +538,26 @@ gate's verdict (`length(ts) ≤ optimal_max`) is now part of its key, so two cac
 `optimal_max` cannot trade sequences and each end up with whichever optimiser happened to run
 first. It remains not thread-safe.
 
+### The greedy fallback warns
+
+An un-updated cache still evaluates — `cvm_freenergy`, `region_lnZ`, `vertex_window` and hence
+`expect`/`rdm` all fall back to the greedy single pass — but it now **warns**, and the same number
+comes back, so nothing breaks.
+
+This was modelled on the `BeliefPropagationCache` convention, and that was the wrong analogy. An
+un-updated BP cache gives an unconverged answer from the *same* algorithm; this gives an answer
+from a *different* one, whose error is 3–4 orders larger and **non-monotone in χ** (a flat ~2.5e-3
+floor at every χ on the PEPS norm). So a forgotten `update` does not present as "not converged
+yet" — it presents as a plausible number that refuses to improve when you raise χ, which costs far
+more to diagnose than an early warning costs to read. The fallback also rebuilds the entire
+environment set per call, so a loop over regions pays a full greedy build each time.
+
+`update` itself seeds from the greedy pass, so the warning lives on the *read-out* paths only
+(`_ctm_env_checked`), not in `_ctm_env` — otherwise every normal `update` would warn. Asking for
+greedy on purpose is silent: `cvm_freenergy(vertex_environments(cache), cache)`, which is what the
+beats-greedy test and the `cvm_vs_boundarymps` example use. No `maxlog`: each occurrence is a
+separate wrong number over a separate full rebuild.
+
 **Next step, now well-posed:** Anderson acceleration of the sweep. The gauge makes iterates
 linearly combinable, and the Picard rate is ≈0.35/sweep over 8–12 sweeps, so there is real room.
 

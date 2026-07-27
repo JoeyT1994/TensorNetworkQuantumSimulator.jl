@@ -87,6 +87,7 @@ export
     marginal_inconsistency,
     region_lnZ,
     environments,
+    vertex_environments,
     vertex_ring,
     vertex_window,
     TensorNetwork,

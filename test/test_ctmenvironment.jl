@@ -3,7 +3,7 @@ using Dictionaries: Dictionary
 using ITensors: commoninds, delta, inds, scalar
 using Random
 using TensorNetworkQuantumSimulator
-using Test: @testset, @test, @test_throws
+using Test: @testset, @test, @test_throws, @test_logs
 const TNQS = TensorNetworkQuantumSimulator
 
 @testset "CVM free energy: Ising, anisotropic and non-square" begin
@@ -108,9 +108,13 @@ end
     # A mistyped option is an error, not a silently ignored keyword.
     @test_throws MethodError CTMEnvironmentCache(tn, 6; qr_cuttoff = 1.0e-9)
 
-    # Beats greedy where greedy is still visibly wrong.
+    # Beats greedy where greedy is still visibly wrong. The greedy pass is asked for EXPLICITLY,
+    # via its environments — `cvm_freenergy(fresh8)` would return the same number but warn, since
+    # an implicit fallback is almost always a forgotten `update`.
     fresh8 = CTMEnvironmentCache(tn, 8)
-    @test swept[2] < abs(cvm_freenergy(fresh8) - lnZ)
+    @test swept[2] < abs(cvm_freenergy(vertex_environments(fresh8), fresh8) - lnZ)
+    # And the implicit fallback does warn, rather than quietly returning the greedy number.
+    @test_logs (:warn, r"has not been `update`d") cvm_freenergy(CTMEnvironmentCache(tn, 4))
 end
 
 @testset "CVM on sparse (x,y) grids: hexagonal and heavy-hexagonal" begin

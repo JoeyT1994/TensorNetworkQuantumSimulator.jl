@@ -84,7 +84,9 @@ function cvm_vs_boundarymps(; L = 4, D = 3, seed = 5, χs = (4, 6, 8, 12))
     @printf("   %-4s %-11s %-11s %-11s\n", "χ", "greedy", "swept", "boundaryMPS")
     for χ in χs
         cache = CTMEnvironmentCache(tn, χ)
-        greedy = abs(cvm_freenergy(cache) - lnZ)              # un-updated: greedy pass
+        # Greedy asked for explicitly. `cvm_freenergy(cache)` on an un-updated cache returns the
+        # same number but warns — the implicit fallback is almost always a forgotten `update`.
+        greedy = abs(cvm_freenergy(vertex_environments(cache), cache) - lnZ)
         swept = abs(cvm_freenergy(update(cache)) - lnZ)       # two-sided, to stationarity
         bmps = abs(log(abs(real(contract(tn; alg = "boundarymps",
                                          mps_bond_dimension = χ)))) - lnZ)

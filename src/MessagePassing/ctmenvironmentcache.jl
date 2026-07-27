@@ -72,9 +72,13 @@ Position-resolved CTMRG environment for a 2D grid `TensorNetwork` (vertices `(x,
 
 A freshly built cache carries **no** per-vertex CVM environments. [`update`](@ref) runs the
 two-sided stationary sweep and returns a cache holding the converged ones; [`cvm_freenergy`](@ref)
-and [`region_lnZ`](@ref) then read them off. As with `BeliefPropagationCache`, evaluating an
-un-updated cache gives you the un-converged answer (here the greedy single pass) rather than an
-error, so `update` before you trust the number.
+and [`region_lnZ`](@ref) then read them off.
+
+Evaluating an un-updated cache falls back to the greedy single pass
+([`vertex_environments`](@ref)) rather than erroring, but **warns**, because that pass is a
+different algorithm — 3–4 orders less accurate and non-monotone in `maxdim`, so the number will
+not improve when you raise χ. `update` first. To ask for the greedy pass deliberately, pass its
+environments explicitly (`cvm_freenergy(vertex_environments(cache), cache)`); that is silent.
 
 Keyword arguments set the numerical strategy and are stored on the cache; see
 [`CTMOptions`](@ref) for the list.
@@ -874,7 +878,7 @@ axis → edge strip (4C+2T); both half-integer → plaquette loop (4C).
 The cache form uses the cache's own environments, so [`update`](@ref) it first.
 """
 region_lnZ(cache::CTMEnvironmentCache, cx::Real, cy::Real) =
-    region_lnZ(_ctm_env(cache), cache, cx, cy)
+    region_lnZ(_ctm_env_checked(cache), cache, cx, cy)
 
 # The C/T blocks bounding a region, with boundary `nothing`s dropped. No vertex factors — the
 # caller supplies those, which is what lets an observable be inserted (see `vertex_ring`).
@@ -899,9 +903,34 @@ function region_lnZ(env::CTMVertexEnvironments, cache::CTMEnvironmentCache, cx::
 end
 
 # The cache's environments, falling back to the greedy single pass when it has not been
-# `update`d. Matches the BP convention: an un-updated cache evaluates, it just is not converged.
+# `update`d. SILENT, because `update` seeds from this — the fallback is the intended path there.
 _ctm_env(cache::CTMEnvironmentCache) =
     isnothing(environments(cache)) ? vertex_environments(cache) : environments(cache)
+
+# Same, but WARNS on the fallback. Use this on every path that hands a number to the caller.
+#
+# The BP convention this was modelled on does not transfer. An un-updated `BeliefPropagationCache`
+# evaluates to an unconverged answer from the SAME algorithm; this falls back to a DIFFERENT one —
+# the one-sided greedy pass, measured 3–4 orders worse and, crucially, **non-monotone in `maxdim`**
+# (a flat ~2.5e-3 floor at every χ on the PEPS norm, which the sweep breaks straight through). So a
+# forgotten `update` does not read as "not converged yet": it reads as a plausible number that
+# refuses to improve when you raise χ, which is a much more expensive mistake to diagnose.
+# It also rebuilds the entire environment set on every call, so a loop over regions pays a full
+# greedy build per region.
+#
+# No `maxlog`: each occurrence is a separate wrong number over a separate full rebuild. Correct
+# usage never triggers it, and asking for the greedy pass on purpose —
+# `cvm_freenergy(vertex_environments(cache), cache)` — is silent, which is what the beats-greedy
+# comparisons in the tests and `examples/ctm_environment.jl` use.
+function _ctm_env_checked(cache::CTMEnvironmentCache)
+    isnothing(environments(cache)) && @warn(
+        "CTMEnvironmentCache has not been `update`d — falling back to the greedy single pass, " *
+        "which is 3–4 orders less accurate and NON-MONOTONE in `maxdim`, and is rebuilt on " *
+        "every call. Use `update(cache)` first. If you meant the greedy pass, ask for it " *
+        "explicitly with `vertex_environments(cache)` and this warning goes away."
+    )
+    return _ctm_env(cache)
+end
 
 """
     vertex_window(cache::CTMEnvironmentCache, v, w::Integer = 0) -> Vector{ITensor}
@@ -929,7 +958,7 @@ Note the site is *excluded* from the returned list, so the caller supplies it �
 an operator be inserted. See [`expect`](@ref) with `alg = "ctmrg"` and its `window` keyword.
 """
 function vertex_window(cache::CTMEnvironmentCache, v, w::Integer = 0)
-    env = _ctm_env(cache)
+    env = _ctm_env_checked(cache)
     tbl = _ctm_factor_table(cache)
     Lx, Ly = _ctm_dims(cache)
     x, y = _ctm_coords(cache, v)
@@ -981,11 +1010,13 @@ end
 Region-graph (CVM) free energy `F = Σ_v ln Z_v − Σ_e ln Z_e + Σ_p ln Z_p`, read off the cache's
 environments. Exact when they are lossless, since `V − E + P = 1` for a disk.
 
-[`update`](@ref) the cache first. On an un-updated cache this falls back to the greedy single
-pass ([`vertex_environments`](@ref)), whose one-sided cuts are 3–4 orders worse and
-**non-monotone in `maxdim`** — the two numbers differing is that, not a bug.
+[`update`](@ref) the cache first. On an un-updated cache this **warns** and falls back to the
+greedy single pass ([`vertex_environments`](@ref)), whose one-sided cuts are 3–4 orders worse and
+**non-monotone in `maxdim`** — the two numbers differing is that, not a bug. For the greedy number
+on purpose, and without the warning, use the two-argument form:
+`cvm_freenergy(vertex_environments(cache), cache)`.
 """
-cvm_freenergy(cache::CTMEnvironmentCache) = cvm_freenergy(_ctm_env(cache), cache)
+cvm_freenergy(cache::CTMEnvironmentCache) = cvm_freenergy(_ctm_env_checked(cache), cache)
 
 function cvm_freenergy(env::CTMVertexEnvironments, cache::CTMEnvironmentCache)
     Lx, Ly = env.Lx, env.Ly
@@ -1021,7 +1052,7 @@ its apparent gains are cancellation artifacts of the signed Möbius sum: the swa
 the stationarity residual.
 """
 function marginal_inconsistency(cache::CTMEnvironmentCache)
-    env = _ctm_env(cache)
+    env = _ctm_env_checked(cache)
     opts = cache.options
     nxt = sweep_vertex_environments(cache, env)      # its PH/PV are consistent with `env`
     tbl = _ctm_factor_table(cache)
