@@ -90,30 +90,24 @@ end
     end
     @test swept[2] < swept[1]                                  # monotone in χ
     @test swept[2] < 1.0e-3                                    # actually converging
-    # The rho-route projector is kept as the reference path but `qr` defaults on, so nothing
-    # else exercises it. One test keeps it honest: the two routes must agree, since they are the
-    # same truncation reached by different arithmetic. Per-cache options, so a failure here
-    # cannot leak the non-default route into any later testset.
-    for χ in (6, 12)
-        r = map((true, false)) do use_qr
-            cache = update(CTMEnvironmentCache(tn, χ; qr = use_qr);
-                           maxiter = 20, tolerance = 1.0e-11)
-            @test TNQS.options(cache).qr == use_qr     # options survive `update`
-            cvm_freenergy(cache)
-        end
-        @test r[1] ≈ r[2] atol = 1.0e-10
-    end
-
-    # Options are carried BY the cache, so two caches with different numerical strategies
-    # coexist — no global state to save and restore.
-    @test TNQS.options(CTMEnvironmentCache(tn, 6)).qr                  # default route
-    let c = CTMEnvironmentCache(tn, 6; qr = false, degtol = 1.0e-9)
-        @test !TNQS.options(c).qr
+    # There is only ONE interface projector now; the `ρ`-route alternative (`qr = false`) is gone,
+    # so there is no second implementation to cross-check against. What replaces that check is the
+    # full-rank identity assertion in the complex testset, which tests the pair against what it must
+    # satisfy rather than against another implementation that could be wrong the same way.
+    #
+    # Options are carried BY the cache, so two caches with different numerical strategies coexist —
+    # no global state to save and restore, and options survive `update`.
+    let c = CTMEnvironmentCache(tn, 6; degtol = 1.0e-9, qr_cutoff = 1.0e-11)
         @test TNQS.options(c).degtol == 1.0e-9
+        @test TNQS.options(c).qr_cutoff == 1.0e-11
         @test TNQS.options(c).gauge                                    # untouched fields default
+        @test TNQS.options(update(c; maxiter = 20, tolerance = 1.0e-11)).degtol == 1.0e-9
     end
-    # A mistyped option is an error, not a silently ignored keyword.
+    # A mistyped option is an error, not a silently ignored keyword. (`qr_cuttoff` is a typo of the
+    # real `qr_cutoff`, which is the mistake this actually guards against.)
     @test_throws MethodError CTMEnvironmentCache(tn, 6; qr_cuttoff = 1.0e-9)
+    # And a removed option is an error too, not silently accepted.
+    @test_throws MethodError CTMEnvironmentCache(tn, 6; qr = false)
 
     # Beats greedy where greedy is still visibly wrong. The greedy pass is asked for EXPLICITLY,
     # via its environments — `cvm_freenergy(fresh8)` would return the same number but warn, since
@@ -177,11 +171,6 @@ end
     @test Fc ≈ log(abs(Z)) atol = 1.0e-10
     @test !isapprox(Fc, log(abs(real(Z))); atol = 1.0e-3)      # and not the old quantity
 
-    # The ρ route is sesquilinear by construction and cannot be made bilinear without replacing
-    # its Hermitian-PSD machinery, so it REFUSES complex input rather than returning a plausible
-    # wrong number. Real input still reaches it (asserted in the two-route test above).
-    @test_throws ErrorException cvm_freenergy(
-        update(CTMEnvironmentCache(ψc, 8; qr = false); maxiter = 2))
 
     # --- audit of the remaining conjugation-sensitive paths -------------------------------
     # The projector bug above was found by testing an invariant, not by reading code, so the other

@@ -97,7 +97,7 @@ function reduced_density_matrix(
         verts::Vector;
         maxdim::Integer,
         cache_update_kwargs = (;),
-        ctm_options = (;),          # `CTMOptions` fields, e.g. `(qr = false,)`
+        ctm_options = (;),          # `CTMOptions` fields, e.g. `(degtol = 1e-9,)`
         kwargs...,
     )
     cache = update(CTMEnvironmentCache(ψ, maxdim; ctm_options...); cache_update_kwargs...)

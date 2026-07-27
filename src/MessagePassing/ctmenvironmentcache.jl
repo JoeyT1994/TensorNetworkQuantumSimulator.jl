@@ -10,11 +10,10 @@
 #   F = Σ_v ln Z_v − Σ_e ln Z_e + Σ_p ln Z_p     (Möbius numbers +1 / −1 / +1)
 #
 # Each shared interface is truncated to `maxdim` by a biorthogonal projector PAIR built from
-# BOTH bounding corners. The default route uses a Hermitian EIGENDECOMPOSITION (Arnoldi/Lanczos
-# where it pays) of the corner density matrices; `opts.qr` selects an equivalent triangular/QR
-# route that never squares and batches better on GPU (accuracy-neutral — see its comment). The
-# pair needs the complement environment, so the build is a fixed-point iteration: `update` sweeps
-# it to stationarity. Works for anisotropic / non-square grids and free boundaries.
+# BOTH bounding corners, via a thin QR of each block and one SVD of the small triangular product —
+# never squaring, and batching well on GPU (see `_ctm_twosided_projector_qr`). The pair needs the
+# complement environment, so the build is a fixed-point iteration: `update` sweeps it to
+# stationarity. Works for anisotropic / non-square grids and free boundaries.
 #
 # Entry points: `update` (run it), `cvm_freenergy` (ln Z), `vertex_ring` / `expect` / `rdm`
 # (single-site observables from a vertex's own ring).
@@ -36,28 +35,24 @@ using KrylovKit: eigsolve, svdsolve
 Numerical strategy for a [`CTMEnvironmentCache`](@ref). Carried BY the cache, so every derived
 quantity — `update`, `cvm_freenergy`, `expect`, `rdm` — uses the same settings the cache was
 built with, and two caches with different settings can coexist. Pass them as keywords to the
-cache constructor: `CTMEnvironmentCache(tn, 8; qr = false)`.
+cache constructor: `CTMEnvironmentCache(tn, 8; degtol = 1e-9)`.
 
 The defaults are the measured-best route; each field's rationale lives next to the code it
 governs, referenced below.
 
 | field | default | what it selects |
 |---|---|---|
-| `qr` | `true` | triangular/QR interface projector instead of the density-matrix (eig) route. Accuracy-neutral, batches better on GPU — see `_ctm_twosided_projector_qr`. |
 | `gauge` | `true` | fix the projector pair's gauge to the previous sweep by orthogonal Procrustes, making iterates comparable — see `_ctm_align`. Prerequisite for any accelerator. |
 | `arnoldi` | `true` | use Krylov (Arnoldi/Lanczos) for top-`k` eigen/singular triplets where it pays; `false` forces dense — see `_ctm_eigsolve`. |
 | `degtol` | `0.0` | relative gap below which a truncation is judged to split a near-degenerate multiplet, and is backed off. `0` disables. Matters for double-layer corners (ket↔bra exchange gives `λ_ij = λ_ji`). |
-| `pinv_cutoff` | `1e-8` | relative cutoff on the `S` values the eig-route projector inverts. `√eps` is the right scale because `S` comes off a squared object — see `_ctm_twosided_projector`. |
-| `qr_cutoff` | `1e-13` | the same cutoff for the QR route, which can sit far lower precisely because nothing is squared. |
+| `qr_cutoff` | `1e-13` | relative cutoff on the `S` values the projector inverts. It can sit this low because `S` comes off a triangular product rather than a squared object — see `_ctm_twosided_projector_qr`. |
 | `krylov_min` | `128` | smallest interface at which the Krylov SVD beats a dense one; below it dense LAPACK wins — see `_ctm_svd_topk` for the crossover. |
 | `optimal_max` | `12` | tensor count above which contraction-order search falls back from exhaustive netcon to greedy. A FEASIBILITY gate — see `_ctm_contract`. |
 """
 Base.@kwdef struct CTMOptions
-    qr::Bool = true
     gauge::Bool = true
     arnoldi::Bool = true
     degtol::Float64 = 0.0
-    pinv_cutoff::Float64 = 1.0e-8
     qr_cutoff::Float64 = 1.0e-13
     krylov_min::Int = 128
     optimal_max::Int = 12
@@ -143,15 +138,18 @@ _ctm_setenv(cache::CTMEnvironmentCache, env) =
 # than `maxdim` an Arnoldi/Lanczos solve (KrylovKit) costs O(maxdim·n²) instead of dense
 # eigen's O(n³). `false` forces dense. Falls back to dense if Krylov does not converge.
 #
-# `opts.pinv_cutoff` — relative cutoff on the S values inverted by the biorthogonal projector.
-# Those inverse powers amplify roundoff, so tiny directions must be dropped or they impose a
-# hard, χ-independent error floor. 1e-8 ≈ √eps is the right scale (not 1e-12): the projector
-# gets S from a Hermitian eig of a squared object, which resolves it to only ~√eps relatively.
-# Measured optimum — 6×6 Ising: 5.1e-13 here vs 3.1e-10 at 1e-12 and 3.4e-9 at 1e-4.
 
-# TRIANGULAR (QR) route for the interface projector. Instead of forming ρ_L = A†A and
-# ρ_R = B†B and then eigendecomposing ρ_R back into a square-root factor — squaring the
-# condition number and undoing it — take a thin QR of each block directly.
+# THE interface projector, via a TRIANGULAR (QR) factorization of each block.
+#
+# There used to be a second, `ρ`-based route (`ρ_L = A†A`, `ρ_R = B†B`, eigendecomposing `ρ_R` back
+# into a square-root factor) selected by a `qr` option, kept as the long-standing reference path.
+# It is GONE. It was sesquilinear by construction — it needs `ρ = A†A` Hermitian PSD to have a
+# square root at all — while the sweep contracts the corners bilinearly, so it was simply wrong for
+# complex tensors and could not be repaired without replacing its machinery (`Aᵀ A` is complex
+# SYMMETRIC and has no PSD root). Its value had been as an independent cross-check, and that job is
+# now done better by the full-rank identity test below, which checks the pair against what it is
+# supposed to satisfy rather than against another implementation that might be wrong the same way.
+# Its `pinv_cutoff` option went with it; `opts.qr_cutoff` is now the only cutoff.
 #
 # THE PAIRING IS BILINEAR, NOT SESQUILINEAR. The sweep contracts the two enlarged corners plainly:
 # `Bw * Be` conjugates nothing. So with `A`, `B` the blocks as (rest × interface) matrices, the
@@ -169,38 +167,27 @@ _ctm_setenv(cache::CTMEnvironmentCache, env) =
 #   P_A = R_Bᵀ V S^(-1/2)            P_B = S^(-1/2) U† R_A
 #
 # giving `R_A P_A P_B R_Bᵀ = U S^(1/2) · S^(1/2) V† = W`, i.e. `A (P_A P_B) Bᵀ = A Bᵀ` exactly at
-# full rank. The `S^(-3/2)` of the ρ route also collapses to a symmetric `S^(-1/2)` here, so the
-# worst inverse power is gone.
+# full rank — the identity the regression test asserts directly, since it is what caught the
+# sesquilinear bug. Note the symmetric `S^(-1/2)` on both sides: no worse inverse power appears.
 #
-# It uses ONE svd of a small triangular product, so U and V come from a single decomposition in
-# a consistent basis — the reason the ρ route avoided separate eigen-solves for U and V. It is
-# NOT an svd of a squared object.
+# It uses ONE svd of a small triangular product, so U and V come from a single decomposition in a
+# consistent basis, which is what keeps degenerate clusters from picking up a relative rotation.
+# It is NOT an svd of a squared object: `S` is resolved to ~eps relatively rather than ~√eps, which
+# is why `opts.qr_cutoff` can sit at 1e-13.
 #
-# WHY IT IS HERE — GPU / BATCHING, NOT ACCURACY. Measured: this is accuracy-NEUTRAL. On 18
-# moderate-χ configurations (3 seeds single-layer D=3, 2 double-layer D=2, 1 double-layer D=3;
-# χ = 4/6/8) and 10 near-lossless ones it matches the ρ route to 3 significant figures, and at
-# cutoffs 1e-8/1e-11/1e-13/1e-15 alike. The reason is that precision is not the binding
-# constraint: the RETAINED spectrum has median `S_k/S_1` of 1e-1…1e-2 (measured over 200–384
-# solves per sweep) and 0% of retained directions fall below 1e-8. In the ρ route a direction at
-# `S_k/S_1 = 1e-8` carries relative error `~eps·(S_1/S_k)² ≈ 50%`, which is exactly why
-# `opts.pinv_cutoff` sits at √eps — the cutoff and the squaring are two faces of one constraint.
-# QR makes directions down to ~1e-15 usable, but they carry no weight. **χ is the binding
-# constraint, not arithmetic.** Do not expect an accuracy win from this; the win is that
-# geqrf/gesvd have batched GPU implementations where batched Hermitian eig support is thin, and
-# a sweep is 200–384 INDEPENDENT tiny factorizations (n ≤ 128) — a batching problem, not a
-# big-linear-algebra one.
+# WHY QR AND NOT AN EIGENDECOMPOSITION — GPU / BATCHING, NOT ACCURACY. Measured accuracy-NEUTRAL
+# against the (now removed) ρ route: on 18 moderate-χ configurations (3 seeds single-layer D=3, 2
+# double-layer D=2, 1 double-layer D=3; χ = 4/6/8) and 10 near-lossless ones it matched to 3
+# significant figures, at cutoffs 1e-8/1e-11/1e-13/1e-15 alike. Precision is not the binding
+# constraint: the RETAINED spectrum has median `S_k/S_1` of 1e-1…1e-2 (measured over 200–384 solves
+# per sweep) and 0% of retained directions fall below 1e-8. **χ is the binding constraint, not
+# arithmetic** — and as the removed-symmetry section of the design doc records, that extends to
+# structure too, not just precision. The win is that geqrf/gesvd have batched GPU implementations
+# where batched Hermitian eig support is thin, and a sweep is 200–384 INDEPENDENT tiny
+# factorizations (n ≤ 128) — a batching problem, not a big-linear-algebra one.
 #
-# Remaining GPU blocker, in BOTH routes: `Array(ρ, b, bp)` / `_ctm_block_matrix` materialise a
-# host `Array`, so every projector round-trips through the CPU. Fixing that is separate work.
-#
-# DEFAULT (`opts.qr`) since the GPU rationale landed. The eig route is kept reachable with
-# `qr = false` because it is the long-standing reference path and the two are numerically
-# interchangeable; the general preference for eig-over-SVD elsewhere in this file still stands,
-# and the reason behind it — one decomposition, one consistent basis for U and V — is satisfied
-# here.
-#
-# `opts.qr_cutoff` is the relative cutoff for this route. It can sit far below
-# `opts.pinv_cutoff` precisely because `S` is no longer read off a squared object.
+# Remaining GPU blocker: `_ctm_block_matrix` materialises a host `Array`, so every projector
+# round-trips through the CPU. Fixing that is separate work.
 
 # Top-`k` eigenpairs of a Hermitian matrix: Krylov when it pays off, else dense.
 function _ctm_eigsolve(ρs::Hermitian, k::Integer, opts::CTMOptions)
@@ -307,11 +294,11 @@ function _ctm_block_matrix(B::ITensor, io::Index)
     return reshape(Array(B, rest..., io), :, ITensors.dim(io))
 end
 
-# Triangular factor of a block: `R` with `A = Q R`, never forming `ρ`. See the `opts.qr` note above.
+# Triangular factor of a block: `R` with `A = Q R`, never forming `ρ`. See the projector note above.
 _ctm_tri_factor(B::ITensor, io::Index) = Matrix(qr(_ctm_block_matrix(B, io)).R)
 
 # Biorthogonal pair from the TRIANGULAR factors of the two bounding blocks — no squaring
-# anywhere. See the `opts.qr` note above for the derivation.
+# anywhere. See the projector note above for the derivation.
 # Top-`k` singular triplets of `W`, by Golub–Kahan–Lanczos when it pays. `W` is `n×n` with
 # `n = χ·D_layer` and only `k = maxdim` triplets are ever used, so a full dense SVD discards
 # everything past column `k` — measured 45% of wall at 5×5 D=4 χ=12.
@@ -358,46 +345,6 @@ function _ctm_twosided_projector_qr(Bw::ITensor, Be::ITensor, io::Index, maxdim:
     return ITensor(PAm, io, w), ITensor(PBm, w, io), w
 end
 
-# PSD square-root factor: returns A with A†A = ρ (rows = rank, cols = bond).
-function _ctm_psd_factor(ρm::AbstractMatrix)
-    F = eigen(Hermitian((ρm + ρm') / 2))
-    λ = max.(real.(F.values), zero(real(eltype(ρm))))
-    tol = 1.0e-30 * (isempty(λ) ? one(eltype(λ)) : maximum(λ))
-    keep = findall(>(tol), λ)
-    isempty(keep) && (keep = [argmax(λ)])
-    return Diagonal(sqrt.(λ[keep])) * F.vectors[:, keep]'
-end
-
-# Built from a single HERMITIAN EIGENDECOMPOSITION, no SVD: with ρ_L = A†A and ρ_R = B†B,
-# H = B ρ_L Bᵀ is Hermitian PSD with eigenvalues S² and eigenvectors V, giving
-#     P_A = Bᵀ V S^{-1/2},    P_B = S^{-3/2} Vᵀ B ρ_L
-# and A(P_A P_B)Bᵀ = A Bᵀ exactly at full rank. Taking both from ONE eigenbasis also avoids
-# the sign/phase mismatch (and arbitrary rotation inside degenerate clusters) that separate
-# decompositions for U and V would introduce.
-function _ctm_twosided_projector(ρL::ITensor, ρR::ITensor, b::Index, maxdim::Integer,
-                                opts::CTMOptions)
-    bp = prime(b)
-    ρLm = Array(ρL, b, bp); ρLm = (ρLm + ρLm') / 2
-    B = _ctm_psd_factor(Array(ρR, b, bp))
-    H = Hermitian((H0 = B * ρLm * B'; (H0 + H0') / 2))
-    λ, V = _ctm_eigsolve(H, Int(maxdim), opts)
-    ord = sortperm(real.(λ); rev = true)
-    S = sqrt.(max.(real.(λ[ord]), zero(real(eltype(ρLm)))))
-    # S^{-1/2}/S^{-3/2} amplify roundoff in small values, which puts a hard floor on the
-    # achievable error, so tiny directions must be dropped (not merely the null ones).
-    k = min(Int(maxdim), length(S), size(V, 2))
-    while k > 1 && S[k] ≤ opts.pinv_cutoff * S[1]
-        k -= 1
-    end
-    while k > 1 && k < length(S) && abs(S[k] - S[k + 1]) ≤ opts.degtol * abs(S[k])
-        k -= 1                                      # don't split a degenerate multiplet
-    end
-    Vk = V[:, ord[1:k]]; Sk = S[1:k]
-    PAm = B' * Vk * Diagonal(1 ./ sqrt.(Sk))        # (bond × kept)
-    PBm = Diagonal(Sk .^ (-3 / 2)) * Vk' * B * ρLm  # (kept × bond)
-    w = Index(k)
-    return ITensor(PAm, b, w), ITensor(PBm, w, b), w
-end
 
 # =================================================================================
 # Per-vertex CVM environments: a 4C+4T ring on EVERY vertex.
@@ -655,27 +602,7 @@ end
 function _ctm_interface_proj2(Bw, Be, ins::Vector{<:Index}, maxdim::Integer, opts::CTMOptions)
     (isnothing(Bw) || isnothing(Be) || isempty(ins)) && return nothing
     co = combiner(ins...); io = combinedind(co)
-    Bwc = Bw * co; Bec = Be * co
-    if opts.qr
-        PA, PB, w = _ctm_twosided_projector_qr(Bwc, Bec, io, maxdim, opts)
-    else
-        # REAL TENSORS ONLY. This route is sesquilinear by construction — it needs `ρ = A†A`
-        # Hermitian PSD to have a square-root factor at all — but the sweep contracts the corners
-        # bilinearly (`A Bᵀ`). For real tensors `ᵀ ≡ †` and the two coincide; for complex ones this
-        # optimises the wrong pairing and lands 11% off its own full-rank identity, an error no χ
-        # can repair. Refuse rather than return a plausible wrong number; `qr = true` (the default)
-        # is correct for both element types. Making this route bilinear would mean replacing the
-        # Hermitian-PSD machinery outright, since `Aᵀ A` is complex SYMMETRIC and has no PSD root.
-        (eltype(Bwc) <: Complex || eltype(Bec) <: Complex) && error(
-            "CTMOptions(qr = false) — the density-matrix projector route — is valid only for " *
-            "real tensors, but this network is $(eltype(Bwc)). It is derived from a Hermitian " *
-            "`ρ = A†A`, while the sweep contracts the enlarged corners bilinearly (`A Bᵀ`). " *
-            "Use the default `qr = true`, which is exact for both."
-        )
-        ρL = Bwc * prime(dag(Bwc), io)
-        ρR = Bec * prime(dag(Bec), io)
-        PA, PB, w = _ctm_twosided_projector(ρL, ρR, io, maxdim, opts)
-    end
+    PA, PB, w = _ctm_twosided_projector_qr(Bw * co, Be * co, io, maxdim, opts)
     return PA * co, PB * co, w
 end
 

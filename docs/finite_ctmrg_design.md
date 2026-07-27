@@ -497,7 +497,7 @@ every *block* still is.
 | piece | state |
 |---|---|
 | two-sided biorthogonal projector | **on** — the default path, measured optimal (see the headroom re-run) |
-| `qr` triangular/QR route | **on by default** — accuracy-neutral, chosen for GPU batching |
+| interface projector | ONE route: thin QR + one SVD of the triangular product. The `ρ`-route alternative is deleted |
 | `gauge` unitary gauge fixing | **on by default** — `F` invariant to 1e-14, gives the state distance |
 | `marginal_inconsistency` | **live diagnostic** — the only `ln Z`-free quality measure |
 | Möbius-stationary projector | **deleted** — made results worse |
@@ -507,6 +507,28 @@ every *block* still is.
 
 Verified unchanged by the deletions, 4×4 D=3: `|F − ln Z|` = 5.203e-3 / 1.556e-3 / 6.455e-6 /
 5.33e-15 at χ = 4 / 6 / 8 / 12, with `marginal_inconsistency` 8.02e-3 / 3.88e-4 / 1.14e-5 / 6e-17.
+
+### REMOVED: the `ρ`-route projector (`qr = false`) — one projector now, not two
+
+The density-matrix route (`ρ_L = A†A`, `ρ_R = B†B`, eigendecomposing `ρ_R` back into a square-root
+factor, selected by `qr = false`) is gone, along with `_ctm_psd_factor` and the `pinv_cutoff` option.
+
+It was sesquilinear by construction — it needs `ρ = A†A` Hermitian PSD to have a square root at all —
+while the sweep contracts the corners bilinearly. So it was wrong for complex tensors and could not
+be repaired in place: `Aᵀ A` is complex *symmetric* and has no PSD root, so making it bilinear meant
+replacing its machinery outright. It had been guarded to error on complex input; now it simply does
+not exist.
+
+Its remaining value had been as an independent cross-check for real tensors, and **that job is now
+done better** by the full-rank identity assertion (`A (P_A P_B) Bᵀ = A Bᵀ`), which tests the pair
+against what it must satisfy rather than against a second implementation that could be wrong the same
+way. Note the history: the two routes *did* agree with each other for years, on complex networks,
+while both were wrong. Agreement between implementations is a weaker signal than an invariant.
+
+`opts.qr` and `opts.pinv_cutoff` are gone with it, so `CTMOptions` is down to six fields and
+`qr_cutoff` is the only cutoff. Passing `qr = false` (or any removed field) is now a `MethodError`,
+which is asserted. Default-path numbers are unchanged except for a 1.2e-15 relative shift on one hex
+case, from floating-point reassociation after the struct layout changed.
 
 ### Complex-path audit — CLEAN, and now covered by tests
 
