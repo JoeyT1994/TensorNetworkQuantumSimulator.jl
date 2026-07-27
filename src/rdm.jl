@@ -86,7 +86,8 @@ function reduced_density_matrix(
     v = only(vs)
     ρ_tensors = norm_factors(network(cache), [v]; op_strings = _ -> "ρ")
     append!(ρ_tensors, vertex_window(cache, v, window))
-    ρ = _ctm_contract(ρ_tensors)               # cached sequence + tensor-count gate
+    # cached sequence + tensor-count gate, using the cache's own options
+    ρ = _ctm_contract(ρ_tensors, options(cache))
     return normalize ? normalize_rdm(ρ) : ρ
 end
 
@@ -96,9 +97,10 @@ function reduced_density_matrix(
         verts::Vector;
         maxdim::Integer,
         cache_update_kwargs = (;),
+        ctm_options = (;),          # `CTMOptions` fields, e.g. `(qr = false,)`
         kwargs...,
     )
-    cache = update(CTMEnvironmentCache(ψ, maxdim); cache_update_kwargs...)
+    cache = update(CTMEnvironmentCache(ψ, maxdim; ctm_options...); cache_update_kwargs...)
     return reduced_density_matrix(alg, cache, verts; kwargs...)
 end
 

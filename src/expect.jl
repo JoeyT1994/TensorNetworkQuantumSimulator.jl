@@ -157,7 +157,8 @@ function expect(
     function contract_region(op_string_f)
         tensors = norm_factors(network(cache), [v]; op_strings = op_string_f)
         append!(tensors, env_ts)
-        return scalar(_ctm_contract(tensors))   # cached sequence + tensor-count gate
+        # cached sequence + tensor-count gate, using the cache's own options
+        return scalar(_ctm_contract(tensors, options(cache)))
     end
 
     denom = contract_region(v -> "I")
@@ -180,9 +181,10 @@ function expect(
         observable::Union{Tuple, Vector{<:Tuple}};
         maxdim::Integer,
         cache_update_kwargs = (;),
+        ctm_options = (;),          # `CTMOptions` fields, e.g. `(qr = false,)`
         kwargs...,
     )
-    cache = update(CTMEnvironmentCache(ψ, maxdim); cache_update_kwargs...)
+    cache = update(CTMEnvironmentCache(ψ, maxdim; ctm_options...); cache_update_kwargs...)
     return expect(alg, cache, observable; kwargs...)
 end
 

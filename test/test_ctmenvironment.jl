@@ -83,17 +83,30 @@ end
     end
     @test swept[2] < swept[1]                                  # monotone in χ
     @test swept[2] < 1.0e-3                                    # actually converging
-    # The rho-route projector is kept as the reference path but CTM_QR defaults on, so nothing
+    # The rho-route projector is kept as the reference path but `qr` defaults on, so nothing
     # else exercises it. One test keeps it honest: the two routes must agree, since they are the
-    # same truncation reached by different arithmetic.
+    # same truncation reached by different arithmetic. Per-cache options, so a failure here
+    # cannot leak the non-default route into any later testset.
     for χ in (6, 12)
-        r = map((true, false)) do qr
-            TNQS.CTM_QR[] = qr
-            cvm_freenergy(update(CTMEnvironmentCache(tn, χ); maxiter = 20, tolerance = 1.0e-11))
+        r = map((true, false)) do use_qr
+            cache = update(CTMEnvironmentCache(tn, χ; qr = use_qr);
+                           maxiter = 20, tolerance = 1.0e-11)
+            @test TNQS.options(cache).qr == use_qr     # options survive `update`
+            cvm_freenergy(cache)
         end
-        TNQS.CTM_QR[] = true
         @test r[1] ≈ r[2] atol = 1.0e-10
     end
+
+    # Options are carried BY the cache, so two caches with different numerical strategies
+    # coexist — no global state to save and restore.
+    @test TNQS.options(CTMEnvironmentCache(tn, 6)).qr                  # default route
+    let c = CTMEnvironmentCache(tn, 6; qr = false, degtol = 1.0e-9)
+        @test !TNQS.options(c).qr
+        @test TNQS.options(c).degtol == 1.0e-9
+        @test TNQS.options(c).gauge                                    # untouched fields default
+    end
+    # A mistyped option is an error, not a silently ignored keyword.
+    @test_throws MethodError CTMEnvironmentCache(tn, 6; qr_cuttoff = 1.0e-9)
 
     # Beats greedy where greedy is still visibly wrong.
     fresh8 = CTMEnvironmentCache(tn, 8)
@@ -139,7 +152,9 @@ end
     tn = random_tensornetwork(Float64, named_hexagonal_lattice_graph(3, 3); bond_dimension = 3)
     lnZ = log(abs(real(contract(tn; alg = "exact"))))
     ebp = abs(log(abs(real(contract(tn; alg = "bp")))) - lnZ)
-    ecvm = abs(cvm_freenergy(update(CTMEnvironmentCache(tn, 8); maxiter = 12)) - lnZ)
+    # maxiter = 20: this case needs ~14 sweeps for the state distance to clear the default
+    # tolerance. At 12 it converged in `F` but warned, which reads as a solver fault and is not.
+    ecvm = abs(cvm_freenergy(update(CTMEnvironmentCache(tn, 8); maxiter = 20)) - lnZ)
     @test ecvm < ebp / 10
 end
 

@@ -82,6 +82,7 @@ export
     scalartype,
     BoundaryMPSCache,
     CTMEnvironmentCache,
+    CTMOptions,
     cvm_freenergy,
     marginal_inconsistency,
     region_lnZ,

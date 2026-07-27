@@ -11,7 +11,7 @@
 #
 # Each shared interface is truncated to `maxdim` by a biorthogonal projector PAIR built from
 # BOTH bounding corners. The default route uses a Hermitian EIGENDECOMPOSITION (Arnoldi/Lanczos
-# where it pays) of the corner density matrices; `CTM_QR` selects an equivalent triangular/QR
+# where it pays) of the corner density matrices; `opts.qr` selects an equivalent triangular/QR
 # route that never squares and batches better on GPU (accuracy-neutral — see its comment). The
 # pair needs the complement environment, so the build is a fixed-point iteration: `update` sweeps
 # it to stationarity. Works for anisotropic / non-square grids and free boundaries.
@@ -31,7 +31,40 @@ using LinearAlgebra: eigen, Hermitian, norm, dot, I, Diagonal, qr, svd
 using KrylovKit: eigsolve, svdsolve
 
 """
-    CTMEnvironmentCache(tn::AbstractTensorNetwork, maxdim::Integer)
+    CTMOptions(; kwargs...)
+
+Numerical strategy for a [`CTMEnvironmentCache`](@ref). Carried BY the cache, so every derived
+quantity — `update`, `cvm_freenergy`, `expect`, `rdm` — uses the same settings the cache was
+built with, and two caches with different settings can coexist. Pass them as keywords to the
+cache constructor: `CTMEnvironmentCache(tn, 8; qr = false)`.
+
+The defaults are the measured-best route; each field's rationale lives next to the code it
+governs, referenced below.
+
+| field | default | what it selects |
+|---|---|---|
+| `qr` | `true` | triangular/QR interface projector instead of the density-matrix (eig) route. Accuracy-neutral, batches better on GPU — see `_ctm_twosided_projector_qr`. |
+| `gauge` | `true` | fix the projector pair's gauge to the previous sweep by orthogonal Procrustes, making iterates comparable — see `_ctm_align`. Prerequisite for any accelerator. |
+| `arnoldi` | `true` | use Krylov (Arnoldi/Lanczos) for top-`k` eigen/singular triplets where it pays; `false` forces dense — see `_ctm_eigsolve`. |
+| `degtol` | `0.0` | relative gap below which a truncation is judged to split a near-degenerate multiplet, and is backed off. `0` disables. Matters for double-layer corners (ket↔bra exchange gives `λ_ij = λ_ji`). |
+| `pinv_cutoff` | `1e-8` | relative cutoff on the `S` values the eig-route projector inverts. `√eps` is the right scale because `S` comes off a squared object — see `_ctm_twosided_projector`. |
+| `qr_cutoff` | `1e-13` | the same cutoff for the QR route, which can sit far lower precisely because nothing is squared. |
+| `krylov_min` | `128` | smallest interface at which the Krylov SVD beats a dense one; below it dense LAPACK wins — see `_ctm_svd_topk` for the crossover. |
+| `optimal_max` | `12` | tensor count above which contraction-order search falls back from exhaustive netcon to greedy. A FEASIBILITY gate — see `_ctm_contract`. |
+"""
+Base.@kwdef struct CTMOptions
+    qr::Bool = true
+    gauge::Bool = true
+    arnoldi::Bool = true
+    degtol::Float64 = 0.0
+    pinv_cutoff::Float64 = 1.0e-8
+    qr_cutoff::Float64 = 1.0e-13
+    krylov_min::Int = 128
+    optimal_max::Int = 12
+end
+
+"""
+    CTMEnvironmentCache(tn::AbstractTensorNetwork, maxdim::Integer; kwargs...)
 
 Position-resolved CTMRG environment for a 2D grid `TensorNetwork` (vertices `(x, y)`): a
 `4C + 4T` ring on every vertex, with each shared interface truncated to `maxdim` by a two-sided
@@ -42,6 +75,9 @@ two-sided stationary sweep and returns a cache holding the converged ones; [`cvm
 and [`region_lnZ`](@ref) then read them off. As with `BeliefPropagationCache`, evaluating an
 un-updated cache gives you the un-converged answer (here the greedy single pass) rather than an
 error, so `update` before you trust the number.
+
+Keyword arguments set the numerical strategy and are stored on the cache; see
+[`CTMOptions`](@ref) for the list.
 """
 struct CTMEnvironmentCache{V, N, E}
     network::N
@@ -49,6 +85,7 @@ struct CTMEnvironmentCache{V, N, E}
     dims::Tuple{Int, Int}            # bounding box (Lx, Ly)
     maxdim::Int
     environments::E                  # `nothing`, or the CVM blocks from `update`
+    options::CTMOptions              # numerical strategy, fixed at construction
 end
 
 network(cache::CTMEnvironmentCache) = cache.network
@@ -61,10 +98,18 @@ The cache's per-vertex CVM environments, or `nothing` if it has not been [`updat
 """
 environments(cache::CTMEnvironmentCache) = cache.environments
 
+"""
+    options(cache::CTMEnvironmentCache)
+
+The [`CTMOptions`](@ref) the cache was built with.
+"""
+options(cache::CTMEnvironmentCache) = cache.options
+
 # Works for a single-layer `TensorNetwork`, a `TensorNetworkState` (⟨ψ|ψ⟩) or an
 # `AbstractForm` (⟨ψ|O|ψ⟩) — all of them expose their per-vertex tensors through
 # `bp_factors`, which is how the double layer is kept LAZY.
-function CTMEnvironmentCache(net, maxdim::Integer)
+function CTMEnvironmentCache(net, maxdim::Integer; kwargs...)
+    opts = CTMOptions(; kwargs...)
     vs = collect(vertices(graph(net)))
     all(v -> (v isa Tuple || v isa CartesianIndex) && length(v) == 2, vs) ||
         error("CTMEnvironmentCache requires a 2D grid network (vertices as (x, y)).")
@@ -77,32 +122,28 @@ function CTMEnvironmentCache(net, maxdim::Integer)
     # the same engine.
     grid = Dict{Tuple{Int, Int}, eltype(vs)}((Int(v[1]), Int(v[2])) => v for v in vs)
     Lx = maximum(first.(keys(grid))); Ly = maximum(last.(keys(grid)))
-    return CTMEnvironmentCache(net, grid, (Lx, Ly), Int(maxdim), nothing)
+    return CTMEnvironmentCache(net, grid, (Lx, Ly), Int(maxdim), nothing, opts)
 end
 
-# Same network/grid/maxdim, different CVM environments.
+# Same network/grid/maxdim/options, different CVM environments.
 _ctm_setenv(cache::CTMEnvironmentCache, env) =
-    CTMEnvironmentCache(cache.network, cache.grid, cache.dims, cache.maxdim, env)
+    CTMEnvironmentCache(cache.network, cache.grid, cache.dims, cache.maxdim, env, cache.options)
 
 # --- the move --------------------------------------------------------------------
-# eig projector from a density matrix ρ(bnd, bnd'): the top-`maxdim` eigenvectors.
-# Relative cutoff gap below which the truncation is judged to split a (near-)degenerate
-# multiplet; the cut is then backed off to a real gap. Matters for DOUBLE-LAYER networks,
-# whose corner spectra carry systematic 2-fold degeneracies from ket↔bra exchange
-# (λ_ij = λ_ji). 0 disables it.
-const CTM_DEGTOL = Ref(0.0)
-
-# Only the top `maxdim` eigenpairs are needed, so for a corner much larger than `maxdim`
-# an Arnoldi/Lanczos solve (KrylovKit) costs O(maxdim·n²) instead of dense eigen's O(n³).
-# Set to `false` to force dense. Falls back to dense if Krylov does not converge.
-const CTM_ARNOLDI = Ref(true)
-
-# Relative cutoff on the S values inverted by the biorthogonal projector. Those inverse
-# powers amplify roundoff, so tiny directions must be dropped or they impose a hard,
-# χ-independent error floor. 1e-8 ≈ √eps is the right scale (not 1e-12): the projector gets
-# S from a Hermitian eig of a squared object, which resolves it to only ~√eps relatively.
+# `opts.degtol` — relative cutoff gap below which the truncation is judged to split a
+# (near-)degenerate multiplet; the cut is then backed off to a real gap. Matters for
+# DOUBLE-LAYER networks, whose corner spectra carry systematic 2-fold degeneracies from
+# ket↔bra exchange (λ_ij = λ_ji). 0 disables it.
+#
+# `opts.arnoldi` — only the top `maxdim` eigenpairs are needed, so for a corner much larger
+# than `maxdim` an Arnoldi/Lanczos solve (KrylovKit) costs O(maxdim·n²) instead of dense
+# eigen's O(n³). `false` forces dense. Falls back to dense if Krylov does not converge.
+#
+# `opts.pinv_cutoff` — relative cutoff on the S values inverted by the biorthogonal projector.
+# Those inverse powers amplify roundoff, so tiny directions must be dropped or they impose a
+# hard, χ-independent error floor. 1e-8 ≈ √eps is the right scale (not 1e-12): the projector
+# gets S from a Hermitian eig of a squared object, which resolves it to only ~√eps relatively.
 # Measured optimum — 6×6 Ising: 5.1e-13 here vs 3.1e-10 at 1e-12 and 3.4e-9 at 1e-4.
-const CTM_PINV_CUTOFF = Ref(1.0e-8)
 
 # TRIANGULAR (QR) route for the interface projector. Instead of forming ρ_L = A†A and
 # ρ_R = B†B and then eigendecomposing ρ_R back into a square-root factor — squaring the
@@ -130,7 +171,7 @@ const CTM_PINV_CUTOFF = Ref(1.0e-8)
 # constraint: the RETAINED spectrum has median `S_k/S_1` of 1e-1…1e-2 (measured over 200–384
 # solves per sweep) and 0% of retained directions fall below 1e-8. In the ρ route a direction at
 # `S_k/S_1 = 1e-8` carries relative error `~eps·(S_1/S_k)² ≈ 50%`, which is exactly why
-# `CTM_PINV_CUTOFF` sits at √eps — the cutoff and the squaring are two faces of one constraint.
+# `opts.pinv_cutoff` sits at √eps — the cutoff and the squaring are two faces of one constraint.
 # QR makes directions down to ~1e-15 usable, but they carry no weight. **χ is the binding
 # constraint, not arithmetic.** Do not expect an accuracy win from this; the win is that
 # geqrf/gesvd have batched GPU implementations where batched Hermitian eig support is thin, and
@@ -140,24 +181,19 @@ const CTM_PINV_CUTOFF = Ref(1.0e-8)
 # Remaining GPU blocker, in BOTH routes: `Array(ρ, b, bp)` / `_ctm_block_matrix` materialise a
 # host `Array`, so every projector round-trips through the CPU. Fixing that is separate work.
 #
-# DEFAULT since the GPU rationale landed. The eig route is kept reachable (`CTM_QR[] = false`)
-# because it is the long-standing reference path and the two are numerically interchangeable;
-# the general preference for eig-over-SVD elsewhere in this file still stands, and the reason
-# behind it — one decomposition, one consistent basis for U and V — is satisfied here.
-const CTM_QR = Ref(true)
-
-# Relative cutoff for the QR route. Can sit far below `CTM_PINV_CUTOFF` precisely because `S`
-# is no longer read off a squared object.
-const CTM_QR_CUTOFF = Ref(1.0e-13)
-
-# Smallest interface at which the Krylov SVD beats a dense one; see `_ctm_svd_topk` for the
-# measured crossover. Below this, dense LAPACK wins even when only `k` of `n` triplets are used.
-const CTM_KRYLOV_MIN = Ref(128)
+# DEFAULT (`opts.qr`) since the GPU rationale landed. The eig route is kept reachable with
+# `qr = false` because it is the long-standing reference path and the two are numerically
+# interchangeable; the general preference for eig-over-SVD elsewhere in this file still stands,
+# and the reason behind it — one decomposition, one consistent basis for U and V — is satisfied
+# here.
+#
+# `opts.qr_cutoff` is the relative cutoff for this route. It can sit far below
+# `opts.pinv_cutoff` precisely because `S` is no longer read off a squared object.
 
 # Top-`k` eigenpairs of a Hermitian matrix: Krylov when it pays off, else dense.
-function _ctm_eigsolve(ρs::Hermitian, k::Integer)
+function _ctm_eigsolve(ρs::Hermitian, k::Integer, opts::CTMOptions)
     n = size(ρs, 1)
-    if CTM_ARNOLDI[] && n > 4k
+    if opts.arnoldi && n > 4k
         try
             v0 = randn(eltype(ρs), n)
             # `verbosity = 0`: when the interface's effective rank is below `k` — routine at
@@ -186,15 +222,15 @@ function _ctm_eigsolve(ρs::Hermitian, k::Integer)
     return F.values, F.vectors
 end
 
-function _ctm_eig_projector(ρ::ITensor, bnd::Index, maxdim::Integer)
+function _ctm_eig_projector(ρ::ITensor, bnd::Index, maxdim::Integer, opts::CTMOptions)
     bp = prime(bnd)
     ρm = Array(ρ, bnd, bp)
     ρs = Hermitian((ρm + ρm') / 2)
-    vals, vecs = _ctm_eigsolve(ρs, Int(maxdim))
+    vals, vecs = _ctm_eigsolve(ρs, Int(maxdim), opts)
     order = sortperm(vals; rev = true)
     sv = vals[order]
     k = min(Int(maxdim), length(sv), size(vecs, 2))
-    while k > 1 && k < length(sv) && abs(sv[k] - sv[k + 1]) ≤ CTM_DEGTOL[] * abs(sv[k])
+    while k > 1 && k < length(sv) && abs(sv[k] - sv[k + 1]) ≤ opts.degtol * abs(sv[k])
         k -= 1                              # don't split a degenerate multiplet
     end
     keep = order[1:k]
@@ -225,17 +261,19 @@ function _ctm_seq_key(ts::Vector{ITensor})
     return Tuple(Tuple(label(i) for i in inds(t)) for t in ts)
 end
 
-# Above this tensor count, fall back to the greedy optimiser. This is a FEASIBILITY gate, not a
-# performance one: `alg = "optimal"` is ExhaustiveSearch netcon, exponential in the number of
-# tensors, and it hangs outright on the ~25-tensor lists a `vertex_window` observable produces.
-# (Tried and reverted as a *perf* tweak earlier — it bought ~1.5% on sweep-sized lists.)
-const CTM_OPTIMAL_MAX = Ref(12)
-
-function _ctm_contract(ts::Vector{ITensor})
+# Above `opts.optimal_max` tensors, fall back to the greedy optimiser. This is a FEASIBILITY
+# gate, not a performance one: `alg = "optimal"` is ExhaustiveSearch netcon, exponential in the
+# number of tensors, and it hangs outright on the ~25-tensor lists a `vertex_window` observable
+# produces. (Tried and reverted as a *perf* tweak earlier — it bought ~1.5% on sweep-sized lists.)
+#
+# The gate's verdict joins the cache key: `optimal_max` is per-cache, so two caches sharing a
+# lattice shape would otherwise trade sequences and each get whichever optimiser ran first.
+function _ctm_contract(ts::Vector{ITensor}, opts::CTMOptions)
     length(ts) == 1 && return only(ts)
     length(ts) == 2 && return ts[1] * ts[2]          # no sequence to choose
-    seq = get!(CTM_SEQ_CACHE, _ctm_seq_key(ts)) do
-        length(ts) <= CTM_OPTIMAL_MAX[] ?
+    use_optimal = length(ts) <= opts.optimal_max
+    seq = get!(CTM_SEQ_CACHE, (_ctm_seq_key(ts), use_optimal)) do
+        use_optimal ?
             contraction_sequence(ts; alg = "optimal") :
             contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
     end
@@ -253,16 +291,16 @@ function _ctm_block_matrix(B::ITensor, io::Index)
     return reshape(conj(Array(B, rest..., io)), :, ITensors.dim(io))
 end
 
-# Triangular factor of a block: R with R†R = ρ, never forming ρ. See `CTM_QR`.
+# Triangular factor of a block: R with R†R = ρ, never forming ρ. See the `opts.qr` note above.
 _ctm_tri_factor(B::ITensor, io::Index) = Matrix(qr(_ctm_block_matrix(B, io)).R)
 
 # Biorthogonal pair from the TRIANGULAR factors of the two bounding blocks — no squaring
-# anywhere. See `CTM_QR` for the derivation.
+# anywhere. See the `opts.qr` note above for the derivation.
 # Top-`k` singular triplets of `W`, by Golub–Kahan–Lanczos when it pays. `W` is `n×n` with
 # `n = χ·D_layer` and only `k = maxdim` triplets are ever used, so a full dense SVD discards
 # everything past column `k` — measured 45% of wall at 5×5 D=4 χ=12.
 #
-# GATE: `n ≥ CTM_KRYLOV_MIN` **and** `n > 4k`. The ratio test alone is not enough — measured
+# GATE: `n ≥ opts.krylov_min` **and** `n > 4k`. The ratio test alone is not enough — measured
 # crossover (dense vs `svdsolve`, ms per solve): n=72 0.62/0.50, n=96 1.06/3.31, n=128 2.13/1.11,
 # n=192 5.70/2.49, n=256 12.22/3.95. So Krylov wins 1.9–3.1× from n≈128 and *loses* below it;
 # gating on the ratio alone made 4×4 D=3 χ=8 (n≤72) 1.2× SLOWER. Falls back to dense on
@@ -279,20 +317,21 @@ function _ctm_svd_topk(W::AbstractMatrix, k::Integer)
     end
 end
 
-function _ctm_twosided_projector_qr(Bw::ITensor, Be::ITensor, io::Index, maxdim::Integer)
+function _ctm_twosided_projector_qr(Bw::ITensor, Be::ITensor, io::Index, maxdim::Integer,
+                                   opts::CTMOptions)
     RA = _ctm_tri_factor(Bw, io)
     RB = _ctm_tri_factor(Be, io)
     W = RA * RB'
     kw = min(Int(maxdim), min(size(W)...))
     nW = min(size(W)...)
-    F = (CTM_ARNOLDI[] && nW >= CTM_KRYLOV_MIN[] && nW > 4kw) ? _ctm_svd_topk(W, kw) : nothing
+    F = (opts.arnoldi && nW >= opts.krylov_min && nW > 4kw) ? _ctm_svd_topk(W, kw) : nothing
     isnothing(F) && (F = svd(W))            # ONE decomposition → consistent U, S, V
     S = F.S
     k = min(Int(maxdim), length(S))
-    while k > 1 && S[k] ≤ CTM_QR_CUTOFF[] * S[1]
+    while k > 1 && S[k] ≤ opts.qr_cutoff * S[1]
         k -= 1
     end
-    while k > 1 && k < length(S) && abs(S[k] - S[k + 1]) ≤ CTM_DEGTOL[] * abs(S[k])
+    while k > 1 && k < length(S) && abs(S[k] - S[k + 1]) ≤ opts.degtol * abs(S[k])
         k -= 1                                      # don't split a degenerate multiplet
     end
     Sk = S[1:k]; isk = Diagonal(1 ./ sqrt.(Sk))
@@ -318,21 +357,22 @@ end
 # and A(P_A P_B)Bᵀ = A Bᵀ exactly at full rank. Taking both from ONE eigenbasis also avoids
 # the sign/phase mismatch (and arbitrary rotation inside degenerate clusters) that separate
 # decompositions for U and V would introduce.
-function _ctm_twosided_projector(ρL::ITensor, ρR::ITensor, b::Index, maxdim::Integer)
+function _ctm_twosided_projector(ρL::ITensor, ρR::ITensor, b::Index, maxdim::Integer,
+                                opts::CTMOptions)
     bp = prime(b)
     ρLm = Array(ρL, b, bp); ρLm = (ρLm + ρLm') / 2
     B = _ctm_psd_factor(Array(ρR, b, bp))
     H = Hermitian((H0 = B * ρLm * B'; (H0 + H0') / 2))
-    λ, V = _ctm_eigsolve(H, Int(maxdim))
+    λ, V = _ctm_eigsolve(H, Int(maxdim), opts)
     ord = sortperm(real.(λ); rev = true)
     S = sqrt.(max.(real.(λ[ord]), zero(real(eltype(ρLm)))))
     # S^{-1/2}/S^{-3/2} amplify roundoff in small values, which puts a hard floor on the
     # achievable error, so tiny directions must be dropped (not merely the null ones).
     k = min(Int(maxdim), length(S), size(V, 2))
-    while k > 1 && S[k] ≤ CTM_PINV_CUTOFF[] * S[1]
+    while k > 1 && S[k] ≤ opts.pinv_cutoff * S[1]
         k -= 1
     end
-    while k > 1 && k < length(S) && abs(S[k] - S[k + 1]) ≤ CTM_DEGTOL[] * abs(S[k])
+    while k > 1 && k < length(S) && abs(S[k] - S[k + 1]) ≤ opts.degtol * abs(S[k])
         k -= 1                                      # don't split a degenerate multiplet
     end
     Vk = V[:, ord[1:k]]; Sk = S[1:k]
@@ -392,7 +432,7 @@ _ctm_rescale(t) = isnothing(t) ? t :
 
 # Isometry truncating index set `ins` of block `B` to `maxdim`, from the eigendecomposition
 # of B's reduced density matrix on those indices. Returns (P, w) with P legs (ins…, w).
-function _ctm_interface_proj(B, ins::Vector{<:Index}, maxdim::Integer)
+function _ctm_interface_proj(B, ins::Vector{<:Index}, maxdim::Integer, opts::CTMOptions)
     (isnothing(B) || isempty(ins)) && return nothing
     co = combiner(ins...); io = combinedind(co)
     d = ITensors.dim(io); k = min(Int(maxdim), d)
@@ -402,7 +442,7 @@ function _ctm_interface_proj(B, ins::Vector{<:Index}, maxdim::Integer)
     end
     Bc = B * co
     ρ = Bc * prime(dag(Bc), io)
-    P, w = _ctm_eig_projector(ρ, io, k)
+    P, w = _ctm_eig_projector(ρ, io, k, opts)
     return P * co, w
 end
 
@@ -412,7 +452,8 @@ _ctm_dims(cache::CTMEnvironmentCache) = cache.dims
 _ctm_vertex(cache::CTMEnvironmentCache, x::Int, y::Int) = get(cache.grid, (x, y), nothing)
 
 # Contracted site tensor at a grid position, or `nothing` if unoccupied.
-_ctm_site(tbl, x::Int, y::Int) = haskey(tbl, (x, y)) ? _ctm_contract(tbl[(x, y)]) : nothing
+_ctm_site(tbl, x::Int, y::Int, opts::CTMOptions) =
+    haskey(tbl, (x, y)) ? _ctm_contract(tbl[(x, y)], opts) : nothing
 
 function _ctm_factor_table(cache::CTMEnvironmentCache)
     Lx, Ly = _ctm_dims(cache)
@@ -446,6 +487,7 @@ Feeds [`region_lnZ`](@ref) and the CVM free energy.
 function vertex_environments(cache::CTMEnvironmentCache)
     Lx, Ly = _ctm_dims(cache)
     χ = cache.maxdim
+    opts = cache.options
     tbl = _ctm_factor_table(cache)
     hl(x, y) = _ctm_links(tbl, (x, y), (x + 1, y))      # horizontal link cols x|x+1 at row y
     vl(x, y) = _ctm_links(tbl, (x, y), (x, y + 1))      # vertical link rows y|y+1 at col x
@@ -458,7 +500,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
 
     # ---- W strips (y increasing, x increasing): derives PV[:W] ----
     for y in 1:Ly, x in 1:(Lx - 1)
-        raw = _ctm_mul(_ctm_nn(T, (:W, x, y)), _ctm_site(tbl, x, y))
+        raw = _ctm_mul(_ctm_nn(T, (:W, x, y)), _ctm_site(tbl, x, y, opts))
         if y > 1
             P = _ctm_nn(PV, (:W, x + 1, y - 1))
             !isnothing(P) && (raw = raw * P[1])
@@ -467,7 +509,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
             ins = Index[]
             w = _ctm_widx(PV, (:W, x, y)); !isnothing(w) && push!(ins, w)
             append!(ins, vl(x, y))
-            pr = _ctm_interface_proj(raw, ins, χ)
+            pr = _ctm_interface_proj(raw, ins, χ, opts)
             if !isnothing(pr)
                 PV[(:W, x + 1, y)] = pr
                 raw = raw * pr[1]
@@ -477,7 +519,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
     end
     # ---- E strips (x decreasing): derives PV[:E] ----
     for y in 1:Ly, x in Lx:-1:2
-        raw = _ctm_mul(_ctm_site(tbl, x, y), _ctm_nn(T, (:E, x + 1, y)))
+        raw = _ctm_mul(_ctm_site(tbl, x, y, opts), _ctm_nn(T, (:E, x + 1, y)))
         if y > 1
             P = _ctm_nn(PV, (:E, x, y - 1))
             !isnothing(P) && (raw = raw * P[1])
@@ -486,7 +528,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
             ins = Index[]
             append!(ins, vl(x, y))
             w = _ctm_widx(PV, (:E, x + 1, y)); !isnothing(w) && push!(ins, w)
-            pr = _ctm_interface_proj(raw, ins, χ)
+            pr = _ctm_interface_proj(raw, ins, χ, opts)
             if !isnothing(pr)
                 PV[(:E, x, y)] = pr
                 raw = raw * pr[1]
@@ -500,7 +542,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
         ins = Index[]
         w = _ctm_widx(PH, (:N, x - 1, y)); !isnothing(w) && push!(ins, w)
         append!(ins, hl(x - 1, y))
-        pr = _ctm_interface_proj(raw, ins, χ)
+        pr = _ctm_interface_proj(raw, ins, χ, opts)
         if !isnothing(pr)
             PH[(:N, x - 1, y + 1)] = pr
             raw = raw * pr[1]
@@ -513,7 +555,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
         ins = Index[]
         append!(ins, hl(x - 1, y))
         w = _ctm_widx(PH, (:S, x - 1, y + 1)); !isnothing(w) && push!(ins, w)
-        pr = _ctm_interface_proj(raw, ins, χ)
+        pr = _ctm_interface_proj(raw, ins, χ, opts)
         if !isnothing(pr)
             PH[(:S, x - 1, y)] = pr
             raw = raw * pr[1]
@@ -538,13 +580,13 @@ function vertex_environments(cache::CTMEnvironmentCache)
     # ---- N / S column strips: consume PH ----
     for x in 1:Lx
         for y in 1:(Ly - 1)
-            raw = _ctm_mul(_ctm_nn(T, (:N, x, y)), _ctm_site(tbl, x, y))
+            raw = _ctm_mul(_ctm_nn(T, (:N, x, y)), _ctm_site(tbl, x, y, opts))
             P = _ctm_nn(PH, (:N, x - 1, y + 1)); !isnothing(P) && (raw = raw * dag(P[1]))
             Q = _ctm_nn(PH, (:N, x, y + 1));     !isnothing(Q) && (raw = raw * Q[1])
             T[(:N, x, y + 1)] = _ctm_rescale(raw)
         end
         for y in Ly:-1:2
-            raw = _ctm_mul(_ctm_site(tbl, x, y), _ctm_nn(T, (:S, x, y + 1)))
+            raw = _ctm_mul(_ctm_site(tbl, x, y, opts), _ctm_nn(T, (:S, x, y + 1)))
             P = _ctm_nn(PH, (:S, x - 1, y)); !isnothing(P) && (raw = raw * dag(P[1]))
             Q = _ctm_nn(PH, (:S, x, y));     !isnothing(Q) && (raw = raw * Q[1])
             T[(:S, x, y)] = _ctm_rescale(raw)
@@ -556,16 +598,16 @@ end
 # Biorthogonal (two-sided) projector pair for the interface shared by two complementary
 # enlarged corners. Returns (P_A, P_B, w): P_A goes on the west/north block, P_B on the
 # east/south one, so every contraction across the interface pairs one with the other.
-function _ctm_interface_proj2(Bw, Be, ins::Vector{<:Index}, maxdim::Integer)
+function _ctm_interface_proj2(Bw, Be, ins::Vector{<:Index}, maxdim::Integer, opts::CTMOptions)
     (isnothing(Bw) || isnothing(Be) || isempty(ins)) && return nothing
     co = combiner(ins...); io = combinedind(co)
     Bwc = Bw * co; Bec = Be * co
-    if CTM_QR[]
-        PA, PB, w = _ctm_twosided_projector_qr(Bwc, Bec, io, maxdim)
+    if opts.qr
+        PA, PB, w = _ctm_twosided_projector_qr(Bwc, Bec, io, maxdim, opts)
     else
         ρL = Bwc * prime(dag(Bwc), io)
         ρR = Bec * prime(dag(Bec), io)
-        PA, PB, w = _ctm_twosided_projector(ρL, ρR, io, maxdim)
+        PA, PB, w = _ctm_twosided_projector(ρL, ρR, io, maxdim, opts)
     end
     return PA * co, PB * co, w
 end
@@ -593,11 +635,10 @@ end
 # becomes possible once the lower levels are already index-stable. The guard below falls through
 # to the unaligned pair whenever the old projector does not live on the current `ins`, which is
 # what happens on the first gauge-fixed sweep.
-# DEFAULT ON: `F` is exactly invariant (verified to 1e-14 at χ = 4/6/8/12), the cost is one k×k
-# SVD per interface per sweep, and it turns `|ΔF|` — which oscillates at the roundoff floor of a
-# signed log-sum, measured rising 1.2e-7 -> 3.4e-7 -> 5.4e-7 over sweeps 8..10 — into a monotone
-# state distance. It is also the prerequisite for any accelerator.
-const CTM_GAUGE = Ref(true)
+# `opts.gauge` DEFAULTS ON: `F` is exactly invariant (verified to 1e-14 at χ = 4/6/8/12), the cost
+# is one k×k SVD per interface per sweep, and it turns `|ΔF|` — which oscillates at the roundoff
+# floor of a signed log-sum, measured rising 1.2e-7 -> 3.4e-7 -> 5.4e-7 over sweeps 8..10 — into a
+# monotone state distance. It is also the prerequisite for any accelerator.
 
 function _ctm_align(pr, ins, prev)
     (isnothing(prev) || length(prev) < 3) && return pr
@@ -621,7 +662,7 @@ function _ctm_align(pr, ins, prev)
 end
 
 # Largest relative change of any block between two states, over blocks that share an index set.
-# Meaningful only with `CTM_GAUGE[]` on; returns `nothing` while the bases are still bootstrapping
+# Meaningful only with `opts.gauge` on; returns `nothing` while the bases are still bootstrapping
 # (the first ~3 sweeps), since `ins` carries the lower level's index and stability propagates up.
 function _ctm_statedist(a::CTMVertexEnvironments, b::CTMVertexEnvironments)
     n = 0; worst = 0.0
@@ -638,15 +679,16 @@ end
 
 # Enlarged corner: the quadrant cut at (x,y), grown one vertex out of the PREVIOUS state's
 # blocks (so all indices are in a consistent basis) with its two adjoining edges and vertex.
-function _ctm_enlarged(S::CTMVertexEnvironments, tbl, sym::Symbol, x::Int, y::Int)
-    A(i, j) = (haskey(tbl, (i, j)) ? _ctm_contract(tbl[(i, j)]) : nothing)
+function _ctm_enlarged(S::CTMVertexEnvironments, tbl, sym::Symbol, x::Int, y::Int,
+                      opts::CTMOptions)
+    A(i, j) = (haskey(tbl, (i, j)) ? _ctm_contract(tbl[(i, j)], opts) : nothing)
     # ONE netcon over all four rather than the hardcoded left fold `((C·T)·T)·a`. Measured: at
     # these sizes netcon PICKS THAT SAME ORDER, so this buys no speed (within noise on four
     # benchmarks) — it is here so the order stops being an unverified assumption, which matters
     # because the enlarged corner is the hottest object in the sweep. Free, given the sequence
     # cache. Boundary blocks arrive as `nothing` and drop out.
     m4(args...) = (ts = ITensor[t for t in args if !isnothing(t)];
-                   isempty(ts) ? nothing : _ctm_contract(ts))
+                   isempty(ts) ? nothing : _ctm_contract(ts, opts))
     if sym === :NW          # cols<x, rows<y  — grown from vertex (x-1, y-1)
         return m4(_ctm_nn(S.C, (:NW, x - 1, y - 1)), _ctm_nn(S.T, (:N, x - 1, y - 1)),
                   _ctm_nn(S.T, (:W, x - 1, y - 1)), A(x - 1, y - 1))
@@ -692,15 +734,16 @@ end
 
 # One block, rebuilt from `S`'s enlarged pieces plus the projector set `P` — mirrors
 # `sweep_vertex_environments` exactly, which is the correctness argument for it.
-function _ctm_block(S::CTMVertexEnvironments, tbl, P::CTMVertexEnvironments, d)
+function _ctm_block(S::CTMVertexEnvironments, tbl, P::CTMVertexEnvironments, d,
+                   opts::CTMOptions)
     phg(k) = _ctm_nn(P.PH, k)
     pvg(k) = _ctm_nn(P.PV, k)
     kind, sym, i, j = d
     aA(t, p) = (isnothing(p) || isnothing(t)) ? t : t * p[1]
     aB(t, p) = (isnothing(p) || isnothing(t)) ? t : t * p[2]
-    fac(a, b) = haskey(tbl, (a, b)) ? _ctm_contract(tbl[(a, b)]) : nothing
+    fac(a, b) = haskey(tbl, (a, b)) ? _ctm_contract(tbl[(a, b)], opts) : nothing
     if kind === :C
-        E = _ctm_enlarged(S, tbl, sym, i, j)
+        E = _ctm_enlarged(S, tbl, sym, i, j, opts)
         isnothing(E) && return nothing
         sym === :NW && return aA(aA(E, phg((:N, i - 1, j))), pvg((:W, i, j - 1)))
         sym === :NE && return aA(aB(E, phg((:N, i - 1, j))), pvg((:E, i, j - 1)))
@@ -734,6 +777,7 @@ until [`cvm_freenergy`](@ref) stops moving.
 function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvironments)
     Lx, Ly = S.Lx, S.Ly
     χ = cache.maxdim
+    opts = cache.options
     tbl = _ctm_factor_table(cache)
     C = Dict{Tuple{Symbol, Int, Int}, Any}()
     T = Dict{Tuple{Symbol, Int, Int}, Any}()
@@ -741,15 +785,15 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
     PV = Dict{Tuple{Symbol, Int, Int}, Any}()
     enl = Dict{Tuple{Symbol, Int, Int}, Any}()
     E(sym, x, y) = get!(enl, (sym, x, y)) do
-        _ctm_enlarged(S, tbl, sym, x, y)
+        _ctm_enlarged(S, tbl, sym, x, y, opts)
     end
     # --- derive every interface projector pair from its two bounding corners -------
     for x in 1:(Lx - 1), y in 2:Ly            # PH[:N,x,y]: C_NW(x+1,y) | C_NE(x+1,y)
         Bw = E(:NW, x + 1, y); Be = E(:NE, x + 1, y)
         (isnothing(Bw) || isnothing(Be)) && continue
         ins = commoninds(Bw, Be)
-        pr = _ctm_interface_proj2(Bw, Be, ins, χ)
-        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_nn(S.PH, (:N, x, y))))
+        pr = _ctm_interface_proj2(Bw, Be, ins, χ, opts)
+        opts.gauge && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_nn(S.PH, (:N, x, y))))
         !isnothing(pr) && (PH[(:N, x, y)] = pr)
     end
     # Every `:S` block is keyed by its FIRST included row (`T_S[x,y] = rows ≥ y`), so the
@@ -760,24 +804,24 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         Bw = E(:SW, x + 1, y); Be = E(:SE, x + 1, y)
         (isnothing(Bw) || isnothing(Be)) && continue
         ins = commoninds(Bw, Be)
-        pr = _ctm_interface_proj2(Bw, Be, ins, χ)
-        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_nn(S.PH, (:S, x, y))))
+        pr = _ctm_interface_proj2(Bw, Be, ins, χ, opts)
+        opts.gauge && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_nn(S.PH, (:S, x, y))))
         !isnothing(pr) && (PH[(:S, x, y)] = pr)
     end
     for x in 2:Lx, y in 1:(Ly - 1)            # PV[:W,x,y]: C_NW(x,y+1) | C_SW(x,y+1)
         Bn = E(:NW, x, y + 1); Bs = E(:SW, x, y + 1)
         (isnothing(Bn) || isnothing(Bs)) && continue
         ins = commoninds(Bn, Bs)
-        pr = _ctm_interface_proj2(Bn, Bs, ins, χ)
-        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_nn(S.PV, (:W, x, y))))
+        pr = _ctm_interface_proj2(Bn, Bs, ins, χ, opts)
+        opts.gauge && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_nn(S.PV, (:W, x, y))))
         !isnothing(pr) && (PV[(:W, x, y)] = pr)
     end
     for x in 1:(Lx - 1), y in 1:(Ly - 1)      # PV[:E,x,y]: C_NE(x,y+1) | C_SE(x,y+1)
         Bn = E(:NE, x + 1, y + 1); Bs = E(:SE, x + 1, y + 1)
         (isnothing(Bn) || isnothing(Bs)) && continue
         ins = commoninds(Bn, Bs)
-        pr = _ctm_interface_proj2(Bn, Bs, ins, χ)
-        CTM_GAUGE[] && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_nn(S.PV, (:E, x + 1, y))))
+        pr = _ctm_interface_proj2(Bn, Bs, ins, χ, opts)
+        opts.gauge && !isnothing(pr) && (pr = _ctm_align(pr, ins, _ctm_nn(S.PV, (:E, x + 1, y))))
         !isnothing(pr) && (PV[(:E, x + 1, y)] = pr)
     end
     # --- rebuild corners: P_A on the west/north side, P_B on the east/south side ----
@@ -794,19 +838,19 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
     end
     # --- rebuild edges from the previous state, projected on both sides -------------
     for x in 1:Lx, y in 2:Ly                  # T_N: left = east side, right = west side
-        raw = _ctm_mul(_ctm_nn(S.T, (:N, x, y - 1)), _ctm_site(tbl, x, y - 1))
+        raw = _ctm_mul(_ctm_nn(S.T, (:N, x, y - 1)), _ctm_site(tbl, x, y - 1, opts))
         T[(:N, x, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PH, (:N, x - 1, y))), _ctm_nn(PH, (:N, x, y))))
     end
     for x in 1:Lx, y in 2:Ly                  # T_S
-        raw = _ctm_mul(_ctm_site(tbl, x, y), _ctm_nn(S.T, (:S, x, y + 1)))
+        raw = _ctm_mul(_ctm_site(tbl, x, y, opts), _ctm_nn(S.T, (:S, x, y + 1)))
         T[(:S, x, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PH, (:S, x - 1, y))), _ctm_nn(PH, (:S, x, y))))
     end
     for x in 2:Lx, y in 1:Ly                  # T_W: up = south side, down = north side
-        raw = _ctm_mul(_ctm_nn(S.T, (:W, x - 1, y)), _ctm_site(tbl, x - 1, y))
+        raw = _ctm_mul(_ctm_nn(S.T, (:W, x - 1, y)), _ctm_site(tbl, x - 1, y, opts))
         T[(:W, x, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PV, (:W, x, y - 1))), _ctm_nn(PV, (:W, x, y))))
     end
     for x in 1:(Lx - 1), y in 1:Ly            # T_E
-        raw = _ctm_mul(_ctm_site(tbl, x + 1, y), _ctm_nn(S.T, (:E, x + 2, y)))
+        raw = _ctm_mul(_ctm_site(tbl, x + 1, y, opts), _ctm_nn(S.T, (:E, x + 2, y)))
         T[(:E, x + 1, y)] = _ctm_rescale(apA(apB(raw, _ctm_nn(PV, (:E, x + 1, y - 1))),
                                              _ctm_nn(PV, (:E, x + 1, y))))
     end
@@ -844,13 +888,14 @@ function _ctm_region_blocks(env::CTMVertexEnvironments, cx::Real, cy::Real)
 end
 
 function region_lnZ(env::CTMVertexEnvironments, cache::CTMEnvironmentCache, cx::Real, cy::Real)
+    opts = cache.options
     ts = _ctm_region_blocks(env, cx, cy)
     if isinteger(cx) && isinteger(cy)     # vertex ring: close it with the vertex's own factors
         v = _ctm_vertex(cache, Int(cx), Int(cy))
         isnothing(v) || append!(ts, bp_factors(network(cache), v))
     end
     isempty(ts) && return 0.0
-    return log(abs(real(scalar(_ctm_contract(ts)))))
+    return log(abs(real(scalar(_ctm_contract(ts, opts)))))
 end
 
 # The cache's environments, falling back to the greedy single pass when it has not been
@@ -977,12 +1022,13 @@ the stationarity residual.
 """
 function marginal_inconsistency(cache::CTMEnvironmentCache)
     env = _ctm_env(cache)
+    opts = cache.options
     nxt = sweep_vertex_environments(cache, env)      # its PH/PV are consistent with `env`
     tbl = _ctm_factor_table(cache)
     Lx, Ly = _ctm_dims(cache)
     memo = Dict{Any, Any}()
     blk(d) = get!(memo, d) do
-        _ctm_block(env, tbl, nxt, d)
+        _ctm_block(env, tbl, nxt, d, opts)
     end
     # descriptors only: this diagnostic is weight-free, it just needs the two regions a block
     # sits in and whether they carry a centre site
@@ -1004,9 +1050,9 @@ function marginal_inconsistency(cache::CTMEnvironmentCache)
                 append!(full, tbl[ctr]); append!(minus, tbl[ctr])
             end
             (isempty(full) || isempty(minus)) && continue
-            Z = try scalar(_ctm_contract(full)) catch; continue end
+            Z = try scalar(_ctm_contract(full, opts)) catch; continue end
             (!isfinite(Z) || iszero(Z)) && continue
-            push!(Ms, _ctm_contract(minus) / Z)
+            push!(Ms, _ctm_contract(minus, opts) / Z)
         end
         length(Ms) == 2 || continue
         a, b = Ms
@@ -1044,8 +1090,10 @@ and reads as a limit cycle. Warns if `tol` is not met within `maxiter`.
 function update(cache::CTMEnvironmentCache; maxiter::Integer = 30,
                 tolerance::Real = 1.0e-10, verbose::Bool = false)
     env = _ctm_env(cache)
+    opts = cache.options
     F = cvm_freenergy(env, cache)
-    converged, Δ = false, Inf
+    converged, Δ, crit = false, Inf, Inf
+    sd = nothing                       # hoisted: the warning below reports both terms
     for it in 1:maxiter
         prev = env
         env = sweep_vertex_environments(cache, env)
@@ -1060,7 +1108,7 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30,
         # `|ΔF| ~ sd²` — holding both to the same tolerance is dimensionally inconsistent and
         # measured ~3x the sweeps for no accuracy (5×5 D=2 χ=8: 30 sweeps / 21 s against 11
         # sweeps / 2.2 s, same `F` to 12 digits). This is equivalent to `sd ≤ √tolerance`.
-        sd = CTM_GAUGE[] ? _ctm_statedist(env, prev) : nothing
+        sd = opts.gauge ? _ctm_statedist(env, prev) : nothing
         crit = isnothing(sd) ? Δ : max(Δ, sd^2)
         verbose && @info "CVM sweep $it: F = $F, |ΔF| = $Δ, state Δ = $(something(sd, NaN))"
         if crit ≤ tolerance * max(one(crit), abs(F))
@@ -1070,8 +1118,13 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30,
         end
     end
     if !converged
+        # Report BOTH terms of the criterion. `|ΔF|` alone is actively misleading: it routinely
+        # bottoms out at ~1e-14 while `sd²` is still the binding term, so the message read
+        # "did not converge to tolerance 1e-10 (final |ΔF| = 1.4e-14)" — a number four orders
+        # BELOW the tolerance it claimed to have missed.
         msg = "CVM sweep did not converge to tolerance $tolerance after $maxiter sweeps " *
-              "(final |ΔF| = $Δ)."
+              "(final |ΔF| = $Δ, state Δ = $(something(sd, NaN)); " *
+              "binding criterion max(|ΔF|, state Δ²) = $crit)."
         verbose ? println(msg) : @warn(msg)
     end
     return _ctm_setenv(cache, env)

@@ -43,8 +43,8 @@ closing into a small ring (~χ⁴), *not* a slice of a whole-lattice contraction
 
 What survived the deletion, because the CVM path uses it: `_ctm_eigsolve`,
 `_ctm_eig_projector`, `_ctm_psd_factor`, `_ctm_twosided_projector`, `_ctm_contract` and the
-`CTM_*` tuning knobs. The `CTM_TWOSIDED` flag went with it — it only ever switched the chain
-sweep, and the CVM path is unconditionally two-sided.
+tuning knobs (since migrated to `CTMOptions`, see below). The `CTM_TWOSIDED` flag went with it —
+it only ever switched the chain sweep, and the CVM path is unconditionally two-sided.
 
 If you need an independent reference number, use `contract(tn; alg="boundarymps",
 mps_bond_dimension=χ)` or `alg="exact"`, not a resurrected row engine. The cache's `grid` field
@@ -108,7 +108,7 @@ rotation inside degenerate clusters, and double-layer corners *do* have degenera
 
 Hard-won numerical points (all measured, see `ctmenvironmentcache.jl`):
 
-* **`CTM_PINV_CUTOFF ≈ 1e-8 ≈ √eps`, not 1e-12.** The inverse powers of `S` amplify roundoff,
+* **`pinv_cutoff ≈ 1e-8 ≈ √eps`, not 1e-12.** The inverse powers of `S` amplify roundoff,
   and `S` comes from an eig of a squared object so it is only resolved to ~√eps relatively. A
   null-space-only cutoff leaves a hard, χ-independent error floor (measured: 9.5e-7).
 * **Krylov needs an isometry guard.** `eigsolve` returns non-orthonormal vectors on degenerate
@@ -117,7 +117,7 @@ Hard-won numerical points (all measured, see `ctmenvironmentcache.jl`):
 * **One-sided truncation is not a valid variational choice** and makes the error non-monotonic
   in χ. This was the root cause of a long chain of confusing results.
 
-### Triangular/QR projector — implemented, accuracy-NEUTRAL, kept for GPU (`CTM_QR`, default ON)
+### Triangular/QR projector — implemented, accuracy-NEUTRAL, kept for GPU (`opts.qr`, default ON)
 
 Take a thin QR of each bounding block instead of forming `ρ` and eigendecomposing it back into a
 square root: `Bw = Q_A R_A`, `Be = Q_B R_B`, so `R_A† R_A = ρ_L` and `R_B† R_B = ρ_R` *exactly*,
@@ -140,7 +140,7 @@ significant figures on 18 moderate-χ configurations and 10 near-lossless ones, 
 retained spectrum has median `S_k/S_1` of 1e-1…1e-2 (measured over the 200–384 solves in a
 sweep) and **0%** of retained directions fall below 1e-8. In the ρ route a direction at
 `S_k/S_1 = 1e-8` carries relative error `~eps·(S_1/S_k)² ≈ 50%`, which is exactly why
-`CTM_PINV_CUTOFF` sits at √eps: **the cutoff and the squaring are two faces of one constraint.**
+`pinv_cutoff` sits at √eps: **the cutoff and the squaring are two faces of one constraint.**
 QR makes directions down to ~1e-15 usable, but they carry no weight. So accuracy per χ cannot be
 bought with better arithmetic — only by changing *which subspace is kept*.
 
@@ -152,7 +152,7 @@ projector currently round-trips through the CPU. QR alone does not deliver GPU.
 
 ### Arnoldi is dormant on the CVM path at small D (measured)
 
-`CTM_ARNOLDI[] = true`, but the `n > 4k` gate almost never fires here, because a CVM interface is
+`arnoldi = true`, but the `n > 4k` gate almost never fires here, because a CVM interface is
 only `χ · D_layer` (`D_layer` = D single-layer, D² double) so `n > 4χ` needs `D_layer > 4`:
 
 | network | interface `n` | Arnoldi fired |
@@ -166,7 +166,7 @@ The `4k` heuristic was tuned for the deleted row engine, where `n` was the whole
 could be huge. Retuning it for CVM interface sizes is open work — and note Arnoldi is hostile to
 the batching above (iterative, data-dependent iteration counts, a `randn` per call).
 
-`CTM_DEGTOL[] = 0.0`, i.e. **eigenvalue pair-keeping is off**, consistent with it having measured
+`degtol = 0.0`, i.e. **eigenvalue pair-keeping is off**, consistent with it having measured
 as a no-op on single layer and marginal on double layer.
 
 
@@ -176,7 +176,7 @@ as a no-op on single layer and marginal on double layer.
 howmany == 10` says the interface's *effective rank* is 6 while χ=10 was requested — routine once
 D grows. `_ctm_eigsolve` already falls through to dense whenever `converged < k`, and the dense
 result is **bit-identical and deterministic** (three runs with different RNG streams: spread
-~1e-14; `CTM_ARNOLDI` on vs off: identical). Now silenced with `verbosity = 0`, since warning on
+~1e-14; `arnoldi` on vs off: identical). Now silenced with `verbosity = 0`, since warning on
 every such call buries real problems.
 
 **Continuation in χ buys nothing — the fixed point is unique.** Warm-starting a χ run from the
@@ -397,7 +397,7 @@ was right, but the *conclusion* was wrong: you do not need cancellation, you nee
 context, and the existing blocks already supply it. No new region graph required.
 
 Implementation note: `alg = "optimal"` is ExhaustiveSearch netcon, exponential in **tensor count**,
-and it hangs outright on the ~25-tensor lists a `w = 1` window produces. `CTM_OPTIMAL_MAX` (12)
+and it hangs outright on the ~25-tensor lists a `w = 1` window produces. `optimal_max` (12)
 gates it to the greedy optimiser above that — a feasibility gate, not the performance tweak of the
 same shape that was tried and reverted earlier. `expect`/`rdm` now route through `_ctm_contract` so
 they get both that gate and the sequence cache.
@@ -497,16 +497,46 @@ every *block* still is.
 | piece | state |
 |---|---|
 | two-sided biorthogonal projector | **on** — the default path, measured optimal (see the headroom re-run) |
-| `CTM_QR` triangular/QR route | **on by default** — accuracy-neutral, chosen for GPU batching |
-| `CTM_GAUGE` unitary gauge fixing | **on by default** — `F` invariant to 1e-14, gives the state distance |
+| `qr` triangular/QR route | **on by default** — accuracy-neutral, chosen for GPU batching |
+| `gauge` unitary gauge fixing | **on by default** — `F` invariant to 1e-14, gives the state distance |
 | `marginal_inconsistency` | **live diagnostic** — the only `ln Z`-free quality measure |
 | Möbius-stationary projector | **deleted** — made results worse |
 | row-absorption contractor | **deleted** — wrong object |
-| `CTM_DEGTOL` pair-keeping | present, `0.0` (off) — measured a no-op on single layer, marginal on double |
-| `CTM_ARNOLDI` | present, on, but dormant unless `D_layer > 4` |
+| `degtol` pair-keeping | present, `0.0` (off) — measured a no-op on single layer, marginal on double |
+| `arnoldi` | present, on, but dormant unless `D_layer > 4` |
 
 Verified unchanged by the deletions, 4×4 D=3: `|F − ln Z|` = 5.203e-3 / 1.556e-3 / 6.455e-6 /
 5.33e-15 at χ = 4 / 6 / 8 / 12, with `marginal_inconsistency` 8.02e-3 / 3.88e-4 / 1.14e-5 / 6e-17.
+
+### The knobs are per-cache (`CTMOptions`), not global `Ref`s
+
+All eight tuning flags used to be module-level `const … = Ref(…)`. They are now fields of a
+`CTMOptions` struct stored ON the cache and passed as keywords to the constructor:
+
+```julia
+cache = update(CTMEnvironmentCache(tn, 8; qr = false, degtol = 1e-9))
+```
+
+Renamed `CTM_QR` → `qr`, `CTM_GAUGE` → `gauge`, `CTM_ARNOLDI` → `arnoldi`, `CTM_DEGTOL` →
+`degtol`, `CTM_PINV_CUTOFF` → `pinv_cutoff`, `CTM_QR_CUTOFF` → `qr_cutoff`, `CTM_KRYLOV_MIN` →
+`krylov_min`, `CTM_OPTIMAL_MAX` → `optimal_max`. Defaults are unchanged, so every measurement in
+this document still describes the default path. Each flag's rationale stays in the comment next to
+the code it governs; `CTMOptions`' docstring is a one-line index into those.
+
+Three reasons this mattered:
+
+* **A run was not reproducible from its call site.** `cvm_freenergy(cache)` meant something
+  different depending on globals set arbitrarily far away, including by a previous test.
+* **The test that exercised the ρ route flipped `CTM_QR[]` with no `try`/`finally`.** Any throw
+  inside it — the `update` call, say — would have left the non-default route on for every later
+  testset in the file, silently. It now builds two caches instead, and there is nothing to restore.
+* **It foreclosed threading**, on top of the `CTM_SEQ_CACHE` issue.
+
+`CTM_SEQ_CACHE` deliberately stays a global: it is a pure memo keyed on tensor *shape*, so entries
+are valid for any network of the same geometry, and sharing it across caches is the point. The
+gate's verdict (`length(ts) ≤ optimal_max`) is now part of its key, so two caches with different
+`optimal_max` cannot trade sequences and each end up with whichever optimiser happened to run
+first. It remains not thread-safe.
 
 **Next step, now well-posed:** Anderson acceleration of the sweep. The gauge makes iterates
 linearly combinable, and the Picard rate is ≈0.35/sweep over 8–12 sweeps, so there is real room.
@@ -749,7 +779,7 @@ fixed points are its stationary points.
 project(grow(C))` is a non-symmetric eigenproblem, so Krylov–Schur replaces fixed-point iteration
 and should cut the 8–12 sweeps. That is a convergence-rate win, not an accuracy win, given (2).
 
-### Gauge fixing — LANDED, `CTM_GAUGE` default ON
+### Gauge fixing — LANDED, `gauge` default ON
 
 The pair has an exact gauge freedom `P_A → P_A R`, `P_B → R⁻¹ P_B`, leaving `Π = P_A P_B` and so
 every region value untouched. The sweep used to pick that gauge — and a fresh `Index` — arbitrarily
@@ -929,7 +959,7 @@ with the projector taken as the **invariant subspace of that (non-symmetric) gro
 than from a density matrix. That is exactly where a **partial Schur** decomposition is the right
 tool — a symmetric eigendecomposition does not apply because the four corners are distinct and
 non-symmetric — and it is almost certainly what the collaborator means. `KrylovKit.schursolve`
-provides Krylov–Schur directly, and `CTM_ARNOLDI` already pulls KrylovKit in.
+provides Krylov–Schur directly, and `arnoldi` already pulls KrylovKit in.
 
 This is a different algorithm from the current biorthogonal/density-matrix projector, not a tweak
 to it. Enforce parent/child consistency directly (GBP-style) rather than deriving it from the
