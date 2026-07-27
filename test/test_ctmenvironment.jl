@@ -1,6 +1,7 @@
 @eval module $(gensym())
 using Dictionaries: Dictionary
-using ITensors: commoninds, delta, inds, scalar
+using ITensors: commoninds, delta, dim, inds, scalar
+using LinearAlgebra: norm
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test, @test_throws, @test_logs
@@ -115,6 +116,66 @@ end
     @test swept[2] < abs(cvm_freenergy(vertex_environments(fresh8), fresh8) - lnZ)
     # And the implicit fallback does warn, rather than quietly returning the greedy number.
     @test_logs (:warn, r"has not been `update`d") cvm_freenergy(CTMEnvironmentCache(tn, 4))
+end
+
+@testset "CVM with complex tensors" begin
+    # REGRESSION. The interface projector used to be derived from CONJUGATED blocks (`ρ = A†A`,
+    # `W = R_A R_B†`) while the sweep contracts the enlarged corners BILINEARLY (`Bw * Be`
+    # conjugates nothing). For real tensors `ᵀ ≡ †` and it was exact; for complex ones the pair was
+    # 11% off its own full-rank identity, so every truncation sat in the wrong subspace and no χ
+    # could repair it. Symptom: 4×4 complex double layer stuck 3.7e-3 from the exact norm at χ=16
+    # AND χ=64, while boundary MPS was exact — the saturation in χ is the tell.
+    #
+    # Small lattices hid it (2×2 and 3×3 were exact), so test at 4×4 and check saturation.
+    Random.seed!(31)
+    g = named_grid((4, 4)); si = siteinds("S=1/2", g)
+    for elt in (Float64, ComplexF64)
+        ψ = random_tensornetworkstate(elt, g, si; bond_dimension = 2)
+        lnN = log(abs(real(norm_sqr(ψ; alg = "exact"))))
+        for χ in (16, 64)                       # both lossless: the value must not drift with χ
+            cache = update(CTMEnvironmentCache(ψ, χ); maxiter = 40, tolerance = 1.0e-11)
+            @test cvm_freenergy(cache) ≈ lnN atol = 1.0e-10
+        end
+    end
+
+    # The projector pair must be EXACT at full rank — the invariant the bug violated. Checked
+    # directly, since an end-to-end free energy can mask it (small lattices did).
+    ψc = random_tensornetworkstate(ComplexF64, g, si; bond_dimension = 2)
+    let cache = CTMEnvironmentCache(ψc, 64), opts = TNQS.options(cache)
+        S = TNQS.vertex_environments(cache)
+        tbl = TNQS._ctm_factor_table(cache)
+        worst, nchecked = 0.0, 0
+        for x in 1:3, y in 2:4
+            Bw = TNQS._ctm_enlarged(S, tbl, :NW, x + 1, y, opts)
+            Be = TNQS._ctm_enlarged(S, tbl, :NE, x + 1, y, opts)
+            (isnothing(Bw) || isnothing(Be)) && continue
+            ins = collect(commoninds(Bw, Be)); isempty(ins) && continue
+            pr = TNQS._ctm_interface_proj2(Bw, Be, ins, prod(dim.(ins)), opts)  # full rank
+            isnothing(pr) && continue
+            exact = Bw * Be
+            worst = max(worst, norm(exact - (Bw * pr[1]) * (pr[2] * Be)) / norm(exact))
+            nchecked += 1
+        end
+        @test nchecked > 0
+        @test worst < 1.0e-12
+    end
+
+    # A genuinely complex single-layer Z: `F` must be log|Z|. `region_lnZ` used `abs(real(·))`,
+    # which telescoped to log|Re Z| instead — a no-op for real tensors and for the double-layer
+    # norm (both real positive), wrong for anything with a phase.
+    Random.seed!(5)
+    tnc = random_tensornetwork(ComplexF64, named_grid((4, 4)); bond_dimension = 3)
+    Z = contract(tnc; alg = "exact")
+    @test abs(imag(Z)) > 0.1 * abs(real(Z))         # the test is vacuous without a real phase
+    Fc = cvm_freenergy(update(CTMEnvironmentCache(tnc, 64); maxiter = 40, tolerance = 1.0e-11))
+    @test Fc ≈ log(abs(Z)) atol = 1.0e-10
+    @test !isapprox(Fc, log(abs(real(Z))); atol = 1.0e-3)      # and not the old quantity
+
+    # The ρ route is sesquilinear by construction and cannot be made bilinear without replacing
+    # its Hermitian-PSD machinery, so it REFUSES complex input rather than returning a plausible
+    # wrong number. Real input still reaches it (asserted in the two-route test above).
+    @test_throws ErrorException cvm_freenergy(
+        update(CTMEnvironmentCache(ψc, 8; qr = false); maxiter = 2))
 end
 
 @testset "CVM on sparse (x,y) grids: hexagonal and heavy-hexagonal" begin

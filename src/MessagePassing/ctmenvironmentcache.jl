@@ -151,18 +151,26 @@ _ctm_setenv(cache::CTMEnvironmentCache, env) =
 
 # TRIANGULAR (QR) route for the interface projector. Instead of forming ρ_L = A†A and
 # ρ_R = B†B and then eigendecomposing ρ_R back into a square-root factor — squaring the
-# condition number and undoing it — take a thin QR of each block directly:
+# condition number and undoing it — take a thin QR of each block directly.
 #
-#   Bw = Q_A R_A,  Be = Q_B R_B      ⇒  R_A† R_A = ρ_L,  R_B† R_B = ρ_R    (exactly)
+# THE PAIRING IS BILINEAR, NOT SESQUILINEAR. The sweep contracts the two enlarged corners plainly:
+# `Bw * Be` conjugates nothing. So with `A`, `B` the blocks as (rest × interface) matrices, the
+# object the pair must preserve is `A Bᵀ` — TRANSPOSE, not adjoint. Getting this wrong is invisible
+# on real tensors and catastrophic on complex ones: the earlier conjugated version optimised
+# `A B†` and was 11% off its own full-rank identity on a complex 4×4, so every truncation sat in
+# the wrong subspace and raising χ never helped.
 #
-# The R's ARE the square-root factors, obtained without ever squaring. Both Q's are isometries,
-# so the singular values of the full cross-interface object `Bw Be†` are those of the small
-# triangular product `W = R_A R_B†`, and with `W = U S V†`:
+#   A = Q_A R_A,  B = Q_B R_B   (thin QR, no conjugation)
+#   A Bᵀ = Q_A (R_A R_Bᵀ) Q_Bᵀ           ⇒   W = R_A R_Bᵀ
 #
-#   P_A = R_B† V S^(-1/2)            P_B = S^(-1/2) U† R_A
+# `Q_A† Q_A = I` and `Q_Bᵀ (Q_Bᵀ)† = I`, so `W`'s singular values ARE those of `A Bᵀ` and the
+# truncation is optimal for the product the network actually forms. With `W = U S V†`:
 #
-# which is A(P_A P_B)B† = A B† exactly at full rank (verified to 1e-15). The `S^(-3/2)` on
-# `P_B` also collapses to a symmetric `S^(-1/2)`, so the worst inverse power is gone.
+#   P_A = R_Bᵀ V S^(-1/2)            P_B = S^(-1/2) U† R_A
+#
+# giving `R_A P_A P_B R_Bᵀ = U S^(1/2) · S^(1/2) V† = W`, i.e. `A (P_A P_B) Bᵀ = A Bᵀ` exactly at
+# full rank. The `S^(-3/2)` of the ρ route also collapses to a symmetric `S^(-1/2)` here, so the
+# worst inverse power is gone.
 #
 # It uses ONE svd of a small triangular product, so U and V come from a single decomposition in
 # a consistent basis — the reason the ρ route avoided separate eigen-solves for U and V. It is
@@ -286,16 +294,20 @@ end
 
 
 
-# A block as a plain (rest × interface) matrix, CONJUGATED so that the triangular factor `R`
-# from its QR satisfies `R†R = ρ` under this file's ρ convention
-# (`ρ[i,j] = Σ_r B[r,i] conj(B[r,j])`, i.e. ρ = conj(B†B)). A no-op for real tensors.
+# A block as a plain (rest × interface) matrix. NO conjugation.
+#
+# It used to conjugate, so that `R†R` reproduced this file's Hermitian `ρ` convention. That was
+# wrong for complex networks and invisible for real ones: the sweep contracts the two enlarged
+# corners PLAINLY (`Bw * Be` conjugates nothing), so the projector must preserve the BILINEAR
+# product `A Bᵀ`, not the sesquilinear `A B†`. Conjugating here optimised the wrong pairing and
+# broke the pair's exactness at full rank by ~11% on a complex 4×4. See `_ctm_twosided_projector_qr`.
 function _ctm_block_matrix(B::ITensor, io::Index)
     rest = collect(uniqueinds(B, io))
-    isempty(rest) && return reshape(conj(Array(B, io)), 1, ITensors.dim(io))
-    return reshape(conj(Array(B, rest..., io)), :, ITensors.dim(io))
+    isempty(rest) && return reshape(Array(B, io), 1, ITensors.dim(io))
+    return reshape(Array(B, rest..., io), :, ITensors.dim(io))
 end
 
-# Triangular factor of a block: R with R†R = ρ, never forming ρ. See the `opts.qr` note above.
+# Triangular factor of a block: `R` with `A = Q R`, never forming `ρ`. See the `opts.qr` note above.
 _ctm_tri_factor(B::ITensor, io::Index) = Matrix(qr(_ctm_block_matrix(B, io)).R)
 
 # Biorthogonal pair from the TRIANGULAR factors of the two bounding blocks — no squaring
@@ -325,7 +337,8 @@ function _ctm_twosided_projector_qr(Bw::ITensor, Be::ITensor, io::Index, maxdim:
                                    opts::CTMOptions)
     RA = _ctm_tri_factor(Bw, io)
     RB = _ctm_tri_factor(Be, io)
-    W = RA * RB'
+    RBt = transpose(RB)                     # TRANSPOSE: the pairing is `A Bᵀ`, not `A B†`
+    W = RA * RBt
     kw = min(Int(maxdim), min(size(W)...))
     nW = min(size(W)...)
     F = (opts.arnoldi && nW >= opts.krylov_min && nW > 4kw) ? _ctm_svd_topk(W, kw) : nothing
@@ -339,7 +352,7 @@ function _ctm_twosided_projector_qr(Bw::ITensor, Be::ITensor, io::Index, maxdim:
         k -= 1                                      # don't split a degenerate multiplet
     end
     Sk = S[1:k]; isk = Diagonal(1 ./ sqrt.(Sk))
-    PAm = RB' * F.V[:, 1:k] * isk           # (bond × kept)
+    PAm = RBt * F.V[:, 1:k] * isk           # (bond × kept)
     PBm = isk * F.U[:, 1:k]' * RA           # (kept × bond)
     w = Index(k)
     return ITensor(PAm, io, w), ITensor(PBm, w, io), w
@@ -646,6 +659,19 @@ function _ctm_interface_proj2(Bw, Be, ins::Vector{<:Index}, maxdim::Integer, opt
     if opts.qr
         PA, PB, w = _ctm_twosided_projector_qr(Bwc, Bec, io, maxdim, opts)
     else
+        # REAL TENSORS ONLY. This route is sesquilinear by construction — it needs `ρ = A†A`
+        # Hermitian PSD to have a square-root factor at all — but the sweep contracts the corners
+        # bilinearly (`A Bᵀ`). For real tensors `ᵀ ≡ †` and the two coincide; for complex ones this
+        # optimises the wrong pairing and lands 11% off its own full-rank identity, an error no χ
+        # can repair. Refuse rather than return a plausible wrong number; `qr = true` (the default)
+        # is correct for both element types. Making this route bilinear would mean replacing the
+        # Hermitian-PSD machinery outright, since `Aᵀ A` is complex SYMMETRIC and has no PSD root.
+        (eltype(Bwc) <: Complex || eltype(Bec) <: Complex) && error(
+            "CTMOptions(qr = false) — the density-matrix projector route — is valid only for " *
+            "real tensors, but this network is $(eltype(Bwc)). It is derived from a Hermitian " *
+            "`ρ = A†A`, while the sweep contracts the enlarged corners bilinearly (`A Bᵀ`). " *
+            "Use the default `qr = true`, which is exact for both."
+        )
         ρL = Bwc * prime(dag(Bwc), io)
         ρR = Bec * prime(dag(Bec), io)
         PA, PB, w = _ctm_twosided_projector(ρL, ρR, io, maxdim, opts)
@@ -944,7 +970,7 @@ function region_lnZ(env::CTMVertexEnvironments, cache::CTMEnvironmentCache, cx::
         isnothing(v) || append!(ts, bp_factors(network(cache), v))
     end
     isempty(ts) && return 0.0
-    return log(abs(real(scalar(_ctm_contract(ts, opts)))))
+    return log(abs(scalar(_ctm_contract(ts, opts))))
 end
 
 # The cache's environments, falling back to the greedy single pass when it has not been

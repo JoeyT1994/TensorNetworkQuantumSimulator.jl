@@ -508,6 +508,60 @@ every *block* still is.
 Verified unchanged by the deletions, 4×4 D=3: `|F − ln Z|` = 5.203e-3 / 1.556e-3 / 6.455e-6 /
 5.33e-15 at χ = 4 / 6 / 8 / 12, with `marginal_inconsistency` 8.02e-3 / 3.88e-4 / 1.14e-5 / 6e-17.
 
+### FIXED: the projector was sesquilinear, the network is bilinear (complex tensors were wrong)
+
+**Complex networks gave silently wrong answers, at every χ, until this was fixed.** Symptom on a
+4×4 complex double layer: `cvm_freenergy` sat 3.663e-3 from the exact norm at χ=16 **and χ=64**,
+while `inner(ψ, ψ; alg="boundarymps")` was exact to 0.000e+00 at every χ. The saturation in χ is
+the tell — a truncation error shrinks, a wrong subspace does not.
+
+**Cause.** The sweep contracts the two enlarged corners *plainly*: `Bw * Be` conjugates nothing.
+But both projector routes were derived from conjugated objects — `_ctm_block_matrix` returned
+`conj(...)` (commented "a no-op for real tensors", which is exactly why it hid), and the ρ route
+built `ρL = Bwc * prime(dag(Bwc), io)`. So the pair was optimised to preserve the sesquilinear
+`Bw Be†` while the engine applied it to the bilinear `Bw Be`. Identical for real tensors, 11% wrong
+for complex — measured directly against the pair's own full-rank identity:
+
+| eltype | route | worst ‖Bw·P_A·P_B·Be − Bw·Be‖/‖Bw·Be‖ at full rank |
+|---|---|---|
+| Float64 | QR | 1.3e-15 |
+| Float64 | ρ | 3.3e-13 |
+| ComplexF64 | QR | **0.111** → **1.8e-15** after the fix |
+| ComplexF64 | ρ | **0.111** → now refuses (see below) |
+
+**The corrected QR derivation.** With `A`, `B` the blocks as (rest × interface) matrices, so that
+the tensor contraction is `A Bᵀ`:
+
+```
+A = Q_A R_A,  B = Q_B R_B          (thin QR, NO conjugation)
+A Bᵀ = Q_A (R_A R_Bᵀ) Q_Bᵀ    ⇒    W = R_A R_Bᵀ          -- transpose, not adjoint
+W = U S V†                    ⇒    P_A = R_Bᵀ V S^(-1/2),  P_B = S^(-1/2) U† R_A
+```
+
+`R_A P_A P_B R_Bᵀ = U S^(1/2) · S^(1/2) V† = W`, so `A (P_A P_B) Bᵀ = A Bᵀ` exactly at full rank.
+`Q_A† Q_A = I` and `Q_Bᵀ (Q_Bᵀ)† = I`, so `W`'s singular values are those of `A Bᵀ` and the
+truncation is optimal for the product the network actually forms.
+
+**The ρ route cannot be fixed this way and now errors on complex input.** It is sesquilinear by
+construction — it needs `ρ = A†A` Hermitian PSD to have a square-root factor at all — and `Aᵀ A` is
+complex *symmetric* with no PSD root. Making it bilinear means replacing the machinery outright, so
+it refuses rather than returning a plausible wrong number. `qr = true` (the default) is exact for
+both element types.
+
+**Second, independent bug found alongside it.** `region_lnZ` used `log(abs(real(Z_R)))`. For a
+genuinely complex single-layer `Z` the Möbius sum then telescoped to `log|Re Z|` rather than
+`log|Z|` — verified: the error equalled `log|Z| − log|Re Z|` exactly. Now `log(abs(Z_R))`, which
+gives `Σ c_R log|Z_R| = Re(Σ c_R log Z_R) = log|Z|`, confirmed to 1.8e-15. A no-op for real tensors
+and for the double-layer norm (both real positive).
+
+**Why it went unnoticed:** 2×2 and 3×3 were exact for complex; only 4×4 and larger failed. Any
+test small enough to check by hand passed. The regression test therefore uses 4×4, asserts the
+value at two lossless χ (to catch the saturation signature), and checks the pair's full-rank
+identity directly rather than only end-to-end.
+
+**Real tensors are bit-identical across both fixes** — verified over `F` at three χ single-layer,
+`F`/`⟨Z⟩`/`marginal_inconsistency` at two χ double-layer, the `w=1` window estimator and a hex grid.
+
 ### The knobs are per-cache (`CTMOptions`), not global `Ref`s
 
 All eight tuning flags used to be module-level `const … = Ref(…)`. They are now fields of a
