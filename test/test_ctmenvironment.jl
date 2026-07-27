@@ -16,7 +16,8 @@ const TNQS = TensorNetworkQuantumSimulator
         Js = Dictionary(es, [(src(e)[2] == dst(e)[2]) ? Kx : Ky for e in es])   # Kx horiz, Ky vert
         tn = ising_partitionfunction(g, 1.0; Js)
         lnZ = log(real(contract(tn; alg = "exact")))
-        @test cvm_freenergy(update(CTMEnvironmentCache(tn, 40); maxiter = 2)) ≈ lnZ atol = 1.0e-8
+        # maxiter must let the STATE converge, not just F: F ~ sd^2, so it lands first.
+        @test cvm_freenergy(update(CTMEnvironmentCache(tn, 40); maxiter = 30)) ≈ lnZ atol = 1.0e-8
     end
 
     # χ-convergence: near-critical and too big to be lossless → error shrinks with χ.
@@ -37,7 +38,7 @@ end
     for (Lx, Ly) in [(3, 3), (4, 3)]
         tn = random_tensornetwork(Float64, named_grid((Lx, Ly)); bond_dimension = 2)
         lnZ = log(abs(real(contract(tn; alg = "exact"))))
-        cache = update(CTMEnvironmentCache(tn, 100); maxiter = 3)
+        cache = update(CTMEnvironmentCache(tn, 100); maxiter = 30)
         @test !isnothing(environments(cache))       # `update` stores them on the cache
 
         # 1. EVERY region type must close — interior, edge and corner vertices, boundary edge
@@ -58,7 +59,7 @@ end
     ψ = random_tensornetworkstate(Float64, named_grid((3, 3)); bond_dimension = 2)
     lnN = log(abs(real(norm_sqr(ψ; alg = "exact"))))
     for net in (ψ, QuadraticForm(ψ))
-        cache = update(CTMEnvironmentCache(net, 200); maxiter = 2)
+        cache = update(CTMEnvironmentCache(net, 200); maxiter = 30)
         @test cvm_freenergy(cache) ≈ lnN atol = 1.0e-8
         @test isfinite(region_lnZ(cache, 2, 2))                # interior vertex closes
         @test isfinite(region_lnZ(cache, 1.5, 1.5))            # corner plaquette closes
@@ -79,8 +80,13 @@ end
         cache = update(fresh; maxiter = 30, tolerance = 1.0e-11)
         F = cvm_freenergy(cache)
         push!(swept, abs(F - lnZ))
-        # Stationary: sweeping the converged cache again barely moves F.
-        @test cvm_freenergy(update(cache; maxiter = 2)) ≈ F atol = 1.0e-7
+        # Stationary: sweeping the converged cache again barely moves F. Uses the sweep directly
+        # rather than `update(...; maxiter = 2)` — the point is "one more sweep changes nothing",
+        # and a 2-sweep `update` cannot certify convergence (it needs a state distance, which is
+        # unavailable on the first sweep) so it would warn about something this test does not care
+        # about.
+        @test cvm_freenergy(TNQS.sweep_vertex_environments(cache, TNQS.environments(cache)),
+                            cache) ≈ F atol = 1.0e-7
     end
     @test swept[2] < swept[1]                                  # monotone in χ
     @test swept[2] < 1.0e-3                                    # actually converging
@@ -178,6 +184,39 @@ end
         update(CTMEnvironmentCache(ψc, 8; qr = false); maxiter = 2))
 end
 
+@testset "CVM convergence cannot be certified from one sweep" begin
+    # REGRESSION, and it hid behind the same Möbius cancellation as the projector bug above.
+    #
+    # `update` used to accept convergence on the FIRST sweep, where `_ctm_statedist` returns
+    # `nothing` (the interface bases are still bootstrapping) so the criterion degenerates to
+    # `|ΔF|` alone. `F` is a signed Möbius sum whose cancellation is worth ~4000×, so at some χ it
+    # already sits at its final value while the state is still the one-sided GREEDY seed — which is
+    # 3–4 orders worse and non-monotone in χ.
+    #
+    # Measured, complex hex 4×4 D=2 at χ=64: sweep 1 reported `|ΔF| = 2.2e-16`, `update` returned
+    # after ONE sweep, and the norm was still exact to 1.3e-15 (all cancellation) while `⟨Z⟩` was
+    # 7.0e-4 wrong and `marginal_inconsistency` 2.9e-6 against 8.7e-10 at χ=32 and χ=128. Nothing
+    # was special about χ=64 — `Δ` just got unlucky, which is exactly the point: a single `Δ`
+    # carries no information about the state. The observable is the sensitive probe because a
+    # single-region ratio gets no cancellation; the norm cannot see this class of bug at all.
+    Random.seed!(1234)
+    g = named_hexagonal_lattice_graph(4, 4)
+    s = siteinds("S=1/2", g)
+    ψ = gauge_and_scale(random_tensornetworkstate(ComplexF64, g, s; bond_dimension = 2))
+    obs = ("Z", (2, 2))
+    O_exact = expect(ψ, obs; alg = "exact")
+
+    # One sweep can never certify, even at a lossless χ where `|ΔF|` is at the roundoff floor.
+    @test_logs (:warn, r"did not converge") update(CTMEnvironmentCache(ψ, 64); maxiter = 1)
+
+    # End to end: the observable must be at machine precision at every lossless χ, with no
+    # anomalous value. χ=64 is the one that used to fail; 32 brackets it as a control.
+    for χ in (32, 64)
+        cache = update(CTMEnvironmentCache(ψ, χ); maxiter = 100, tolerance = 1.0e-14)
+        @test abs(O_exact - expect(cache, obs)) < 1.0e-12
+    end
+end
+
 @testset "CVM on sparse (x,y) grids: hexagonal and heavy-hexagonal" begin
     Random.seed!(2024)
     # Hex and heavy-hex are laid out on an (x,y) grid with vertices AND edges missing. The 4C+4T
@@ -194,7 +233,7 @@ end
         @test length(vs) < Lx * Ly                      # genuinely sparse
         tn = random_tensornetwork(Float64, g; bond_dimension = 2)
         lnZ = log(abs(real(contract(tn; alg = "exact"))))
-        @test cvm_freenergy(update(CTMEnvironmentCache(tn, 40); maxiter = 6)) ≈ lnZ atol = 1.0e-8
+        @test cvm_freenergy(update(CTMEnvironmentCache(tn, 40); maxiter = 30)) ≈ lnZ atol = 1.0e-8
     end
 
     # Observables and the diagnostic must work on a sparse grid too. Hex vertices have degree
@@ -203,7 +242,7 @@ end
     g = named_hexagonal_lattice_graph(2, 2)
     si = siteinds("S=1/2", g)
     ψh = random_tensornetworkstate(Float64, g, si; bond_dimension = 2)
-    ch = update(CTMEnvironmentCache(ψh, 40); maxiter = 6)
+    ch = update(CTMEnvironmentCache(ψh, 40); maxiter = 30)
     @test marginal_inconsistency(ch) < 1.0e-10          # lossless χ: marginals parallel
     for v in collect(vertices(g))[1:6]
         @test 0 < length(vertex_ring(ch, v)) <= 8

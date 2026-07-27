@@ -508,6 +508,41 @@ every *block* still is.
 Verified unchanged by the deletions, 4×4 D=3: `|F − ln Z|` = 5.203e-3 / 1.556e-3 / 6.455e-6 /
 5.33e-15 at χ = 4 / 6 / 8 / 12, with `marginal_inconsistency` 8.02e-3 / 3.88e-4 / 1.14e-5 / 6e-17.
 
+### FIXED: `update` could "converge" after ONE sweep, returning the greedy environment
+
+Found from `examples/ctm_test.jl`: on a complex hex 4×4 D=2 state the single-site `⟨Z⟩` was at
+machine precision at χ = 16 and 32, jumped to **7.0e-4 at χ = 64**, and was fine again at χ = 128.
+Non-monotone in χ, with the norm exact to 1.3e-15 throughout.
+
+**Cause, and it is not about χ at all.** `_ctm_statedist` returns `nothing` on the first sweep (the
+interface bases are still bootstrapping), so `crit = max(Δ, sd²)` degenerates to `Δ` alone. `F` is a
+signed Möbius sum whose cancellation is worth ~4000×, so it can already sit at its final value while
+the state is still the one-sided **greedy seed**. At χ=64 sweep 1 happened to report
+`|ΔF| = 2.2e-16`, the loop exited immediately, and the returned cache was the greedy environment —
+3–4 orders worse and non-monotone, exactly as this document says of it. χ=64 was not special; `Δ`
+just got unlucky. That is the point: **a single `Δ` carries no information about the state.**
+
+`marginal_inconsistency` confirmed it independently — 2.9e-6 at χ=64 against 8.7e-10 at χ=32 and
+χ=128, i.e. a genuinely worse fixed point, not a bad readout.
+
+**Fix.** Require positive evidence the state stopped moving: at least two sweeps, plus a real
+`_ctm_statedist` whenever the gauge makes one available. With `gauge = false` there is no state
+distance to be had and `Δ` remains the only signal, unchanged. After the fix the χ sweep is monotone
+and `⟨Z⟩` is ≤ 2.8e-16 at every lossless χ, with `marginal_inconsistency` a flat 8.747e-10.
+
+**Two lessons worth keeping.** First, `|ΔF|` is structurally unfit as a sole convergence signal here
+— the cancellation that makes `F` accurate is exactly what makes it blind to the state. Second, the
+norm cannot detect this class of bug at all; a **single-region observable** can, because it is a
+ratio over one region with no cancellation available. Diagnose with `⟨Z⟩` and
+`marginal_inconsistency`, never with `|F − ln Z|` — which this document already says, for a
+different reason.
+
+Several tests were quietly relying on the old shortcut: they passed their `F` assertions with
+`maxiter` of 2, 3 and 6 because `F` converges as `sd²` and lands long before the state. Their
+budgets are now 30, and the "sweeping again barely moves `F`" check calls
+`sweep_vertex_environments` directly rather than `update(...; maxiter = 2)`, which cannot certify by
+construction.
+
 ### FIXED: the projector was sesquilinear, the network is bilinear (complex tensors were wrong)
 
 **Complex networks gave silently wrong answers, at every χ, until this was fixed.** Symptom on a

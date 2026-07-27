@@ -1213,7 +1213,21 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30,
         sd = opts.gauge ? _ctm_statedist(env, prev) : nothing
         crit = isnothing(sd) ? Δ : max(Δ, sd^2)
         verbose && @info "CVM sweep $it: F = $F, |ΔF| = $Δ, state Δ = $(something(sd, NaN))"
-        if crit ≤ tolerance * max(one(crit), abs(F))
+        # `|ΔF|` IS NOT A CERTIFICATE ON ITS OWN, and least of all on the first sweep. `F` is a
+        # signed Möbius sum whose cancellation is worth ~4000×, so it can already sit at its final
+        # value while the state is still the GREEDY seed. Measured, complex hex 4×4 D=2 at χ=64:
+        # sweep 1 reported `|ΔF| = 2.2e-16`, the loop exited after ONE sweep, and the returned
+        # cache was still the one-sided greedy environment — norm exact to 1.3e-15 (all
+        # cancellation), but `⟨Z⟩` 7.0e-4 wrong and `marginal_inconsistency` 2.9e-6 against 8.7e-10
+        # at χ=32 and χ=128. Nothing was special about χ=64 except that `Δ` got unlucky; that is
+        # the point — a single `Δ` carries no information about the state.
+        #
+        # So require positive evidence that the STATE stopped moving: at least two sweeps, and a
+        # real `_ctm_statedist` when the gauge makes one available (it returns `nothing` while the
+        # interface bases bootstrap, which is exactly when `Δ` is least trustworthy). With the gauge
+        # off there is no state distance to be had and `Δ` remains the only signal, as before.
+        certified = it >= 2 && (!opts.gauge || !isnothing(sd))
+        if certified && crit ≤ tolerance * max(one(crit), abs(F))
             converged = true
             verbose && @info "CVM sweep converged after $it sweeps."
             break
