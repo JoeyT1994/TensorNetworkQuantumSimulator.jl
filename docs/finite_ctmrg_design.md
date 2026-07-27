@@ -508,6 +508,67 @@ every *block* still is.
 Verified unchanged by the deletions, 4×4 D=3: `|F − ln Z|` = 5.203e-3 / 1.556e-3 / 6.455e-6 /
 5.33e-15 at χ = 4 / 6 / 8 / 12, with `marginal_inconsistency` 8.02e-3 / 3.88e-4 / 1.14e-5 / 6e-17.
 
+### REMOVED: ket↔bra symmetry in the projector — TESTED, no gain on speed OR accuracy
+
+The double layer has an exact symmetry the projector ignores. With σ the involution swapping every
+ket leg with its bra partner, any contracted region satisfies (verified to 1e-16, real and complex):
+
+```
+B[σ(r), σ(i)] = conj(B[r, i])
+```
+
+Real tensors: a linear Z₂ symmetry, so the interface splits into σ = ±1 sectors. Complex tensors:
+antilinear, `M = A Bᵀ` commutes with `K = σ∘conj` with `K² = +1` — no block split, but an explicit
+basis in which every block is **real**: take the σ = +1 vectors as they are and multiply the σ = −1
+vectors by `i`. Verified: an enlarged corner with all legs rotated comes out real to 3.1e-17.
+
+Two traps found while deriving it, worth keeping:
+
+* **The rotation is not the same on both sides.** `U` is unitary but not orthogonal — the `i` makes
+  `U Uᵀ ≠ I` — and the pairing is BILINEAR, so inserting the same `U` on both blocks silently changes
+  the contraction. It must be `U` on the west/north block and `conj(U)` on the east/south one, giving
+  `Σ_α (Bw U)(Be conj U) = Bw (U U†) Be = Bw Be`. Both realify, since `U[σ(a),α] = conj(U[a,α])`.
+* **The invariant must hold through the projector, not locally.** A block's array is real only if
+  EVERY leg is K-adapted. An enlarged corner carrying a non-K-real kept index sits at ~0.4 imaginary.
+  `P_A = U · P_A_real` keeps the kept index K-real, so the induction closes with no grading
+  bookkeeping — `K = σ ⊗ conj` factorises over `w ⊗ (ℓ_ket, ℓ_bra)`.
+
+**Implemented behind a `symmetric` option, measured, and removed.**
+
+*Speed* — complex 4×4, best-of-3: D=2 χ=8 0.73×, D=3 χ=8 **0.49×**, D=3 χ=16 **0.40×**. The real
+LAPACK is genuinely happening; it just cannot pay for four rotation contractions, two
+`norm(imag(·))` passes and two `real(·)` allocations per interface per sweep. The only way to make
+the rotation free is to keep the environment permanently in the K basis, which means rotating a raw
+pair when it is absorbed — i.e. **fusing** `(ℓ_ket, ℓ_bra)` into one D² leg. So the symmetry lives on
+the fused pair and laziness exists to keep it unfused: **the two goals are in direct tension**, and
+this engine has chosen laziness.
+
+*Accuracy* — the real reason it is not worth it. Measured on 4×4 D=3, single-site RDM at (2,2):
+
+| | min eigval | ‖ρ−ρ†‖/‖ρ‖ | ‖ρ−ρ_exact‖ |
+|---|---|---|---|
+| Float64, χ=2…8 | 0.47 … 0.49 | 1e-16 | 3.5e-2 … 9.4e-3 |
+| ComplexF64, χ=2…8 | 0.40 … 0.40 | 2.7e-7 … 1.2e-11 | 3.0e-2 … 1.2e-2 |
+
+Positivity is **not** violated, so there is no PSD-preservation target. Hermiticity **is** violated
+for complex — that is the genuine symmetry defect — but at 1e-11 against a truncation error of
+1e-2, i.e. **nine orders below what dominates**. Enforcing the symmetry cannot move a measurable
+number, and indeed `F` was identical to the default route at χ=8. `(ρ + ρ†)/2` in `rdm` would
+capture the entire measurable benefit in one line.
+
+So "χ is the binding constraint, not arithmetic" extends to STRUCTURE, not just precision.
+
+Also settled while measuring: **the observable error is not monotone in χ, and that is not a bug.**
+4×4 D=3, `marginal_inconsistency` is strictly monotone (6.6e-3, 1.8e-3, 7.3e-4, 3.0e-4, 8.7e-5,
+5.2e-5, 1.9e-5 at χ = 2…24) while `|⟨Z⟩ − exact|` bounces (1.4e-3 at χ=6, 5.0e-3 at χ=12) — and
+boundary MPS bounces identically. The observable error is a signed quantity passing through zero, so
+its magnitude need not fall monotonically even as the environment improves uniformly. Judge
+environment quality with `marginal_inconsistency`, never with a single observable's error.
+
+The remaining untried variant is the REAL-tensor ± block split: no rotation, so no per-call overhead
+to lose, worth ~2.3× (D=2) to 4× (D→∞) on the factorizations alone (~1.2–1.35× end-to-end). It needs
+the ± grading recursion and is irrelevant to complex networks.
+
 ### FIXED: `update` could "converge" after ONE sweep, returning the greedy environment
 
 Found from `examples/ctm_test.jl`: on a complex hex 4×4 D=2 state the single-site `⟨Z⟩` was at
