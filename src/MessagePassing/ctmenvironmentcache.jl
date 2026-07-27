@@ -1061,11 +1061,6 @@ The `4C + 4T` ring enclosing `v` — [`vertex_window`](@ref) at `w = 0`. Its ope
 """
 vertex_ring(cache::CTMEnvironmentCache, v) = vertex_window(cache, v, 0)
 
-function vertex_ring(env::CTMVertexEnvironments, cache::CTMEnvironmentCache, v)
-    x, y = _ctm_coords(cache, v)
-    return _ctm_region_blocks(env, x, y)
-end
-
 # Grid position of a vertex, by lookup rather than by trusting `v == (x, y)` — the cache sorts
 # its rows, and a network's vertices need not be 1-based or contiguous.
 function _ctm_coords(cache::CTMEnvironmentCache, v)
