@@ -128,8 +128,7 @@ function expect(
         kwargs...,
     )
 
-    ψ_bpc = BeliefPropagationCache(ψ)
-    ψ_bpc = update(ψ_bpc; cache_update_kwargs...)
+    ψ_bpc = converged_cache(alg, ψ; cache_update_kwargs)
 
     return expect(alg, ψ_bpc, observable; kwargs...)
 end
@@ -145,9 +144,7 @@ function expect(
         kwargs...,
     )
 
-    ψ_bmps = BoundaryMPSCache(ψ, mps_bond_dimension; partition_by, gauge_state)
-    cache_update_kwargs = with_default_maxiter(cache_update_kwargs, ψ_bmps)
-    ψ_bmps = update(ψ_bmps; cache_update_kwargs...)
+    ψ_bmps = converged_cache(alg, ψ; mps_bond_dimension, partition_by, gauge_state, cache_update_kwargs)
 
     obs_vs = observables_vertices(observable, graph(ψ))
     ψ_bmps = update_partitions(ψ_bmps, obs_vs)
@@ -188,13 +185,16 @@ function boundarymps_partitioning(observable::Union{Tuple, Vector{<:Tuple}}, g::
     partitioning = nothing
     for o in observables
         vs = observables_vertices(o, g)
-        if allequal(first.(vs)) && (partitioning == "row" || partitioning == nothing)
+        #Single-site observables sit in every row and every column, so they constrain nothing
+        length(vs) < 2 && continue
+        if allequal(first.(vs)) && (partitioning == "row" || isnothing(partitioning))
             partitioning = "row"
-        elseif allequal(last.(vs)) && (partitioning == "col" || partitioning == nothing)
+        elseif allequal(last.(vs)) && (partitioning == "col" || isnothing(partitioning))
             partitioning = "col"
         else
             error("Observables must all be aligned in either the same column or the same row to do BoundaryMPS measurements.")
         end
     end
-    return partitioning
+    #Only single-site observables: any partitioning works, so pick rows
+    return isnothing(partitioning) ? "row" : partitioning
 end

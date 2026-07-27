@@ -17,7 +17,13 @@ function ITensors.truncate(bpc::BeliefPropagationCache; bp_update_kwargs = defau
     if edge_color
         g = graph(network(bpc))
         z = maximum([degree(g, v) for v in vertices(g)])
-        edge_groups = SimpleGraphAlgorithms.edge_color(g, z)
+        #Vizing's theorem only guarantees Δ + 1 colours suffice. Class 2 graphs (odd cycles, and any
+        #lattice containing a triangle) are not Δ-edge-colourable, so fall back to Δ + 1 for those.
+        edge_groups = try
+            SimpleGraphAlgorithms.edge_color(g, z)
+        catch
+            SimpleGraphAlgorithms.edge_color(g, z + 1)
+        end
         for eg in edge_groups
             for e in eg
                 if truncatable_edge(bpc, e)

@@ -50,7 +50,7 @@ and primed indices are column indices.
 - `α`: Rényi index (default `1`, i.e. von Neumann entropy).
 """
 function renyi_entropy(a::ITensor, row_inds = filter(i -> plev(i) ==0, inds(a)); normalize = true, α = 1)
-    return renyi_entropy(matricize(a, row_inds), α)
+    return renyi_entropy(matricize(a, row_inds), α; normalize)
 end
 
 """

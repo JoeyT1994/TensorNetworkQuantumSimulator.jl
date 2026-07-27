@@ -62,16 +62,13 @@ function ITensors.inner(alg::Algorithm, cache::AbstractBeliefPropagationCache; m
     return state_error("BilinearForm")
 end
 
-function ITensors.inner(alg::Union{Algorithm"bp", Algorithm"loopcorrections"}, ψ::TensorNetworkState, ϕ::TensorNetworkState; cache_update_kwargs = (;), kwargs...)
-    ψϕ_bpc = BeliefPropagationCache(BilinearForm(ψ, ϕ))
-    ψϕ_bpc = update(ψϕ_bpc; cache_update_kwargs...)
+function ITensors.inner(alg::Union{Algorithm"bp", Algorithm"loopcorrections"}, ψ::TensorNetworkState, ϕ::TensorNetworkState; cache_update_kwargs = default_bp_update_kwargs(ψ), kwargs...)
+    ψϕ_bpc = converged_cache(alg, BilinearForm(ψ, ϕ); cache_update_kwargs)
     return inner(alg, ψϕ_bpc; kwargs...)
 end
 
-function ITensors.inner(alg::Algorithm"boundarymps", ψ::TensorNetworkState, ϕ::TensorNetworkState; mps_bond_dimension::Integer, partition_by = "row", cache_update_kwargs = (;), kwargs...)
-    ψϕ_bmps = BoundaryMPSCache(BilinearForm(ψ, ϕ), mps_bond_dimension; partition_by)
-    cache_update_kwargs = with_default_maxiter(cache_update_kwargs, ψϕ_bmps)
-    ψϕ_bmps = update(ψϕ_bmps; cache_update_kwargs...)
+function ITensors.inner(alg::Algorithm"boundarymps", ψ::TensorNetworkState, ϕ::TensorNetworkState; mps_bond_dimension::Integer, partition_by = "row", cache_update_kwargs = default_bmps_update_kwargs(ψ), kwargs...)
+    ψϕ_bmps = converged_cache(alg, BilinearForm(ψ, ϕ); mps_bond_dimension, partition_by, cache_update_kwargs)
     return inner(alg, ψϕ_bmps; kwargs...)
 end
 

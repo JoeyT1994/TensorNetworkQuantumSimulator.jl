@@ -1,5 +1,4 @@
 function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 * eps(real(scalartype(bp_cache))), kwargs...)
-    dtype = datatype(bp_cache)
     tn = network(bp_cache)
     !(tn isa TensorNetworkState) && error("Can only transform TensorNetworkStates to the symmetric gauge")
     for e in edges(tn)
