@@ -122,19 +122,17 @@ function apply_gate!(
     envs = nv == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
 
     ψ⃗ = ITensor[network(ψ_bpc)[v] for v in v⃗]
-    updated_tensors, s_values, err = simple_update(gate, ψ⃗; envs, apply_kwargs...)
+    updated_tensors, messages, err = simple_update(gate, ψ⃗; envs, apply_kwargs...)
     if nv == 2
         v1, v2 = v⃗
         e = NamedEdge(v1 => v2)
-        u = commonind(s_values, first(updated_tensors))
-        v = uniqueind(s_values, first(updated_tensors))
-        # The new messages are the singular values over the bond-and-prime pair.
-        # MatrixAlgebraKit singular values are nonnegative, so the legacy sign fix
-        # (`s * sign(s)` via `map_diag!`) was a no-op and is dropped; fermionic sign
-        # handling for this message construction is future work.
-        s_values = replaceinds(s_values, v => prime(u))
-        setmessage!(ψ_bpc, e, conj(s_values))
-        setmessage!(ψ_bpc, reverse(e), s_values)
+        # `simple_update` returns the two directed messages as doubled `conj(R) * R` contractions
+        # of the reformed factors: the v1-side factor for `v1 => v2`, the v2-side for the reverse.
+        # A doubled ket/bra contraction carries the odd-parity sign, so these are fermion-sign-
+        # correct in place of the bare singular values.
+        message_v1, message_v2 = messages
+        setmessage!(ψ_bpc, e, message_v1)
+        setmessage!(ψ_bpc, reverse(e), message_v2)
     end
 
     for (i, v) in enumerate(v⃗)

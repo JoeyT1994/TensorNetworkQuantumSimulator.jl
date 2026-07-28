@@ -15,7 +15,7 @@ Simple update of one or two local tensors in the presence of factorized environm
 
 # Returns
 - `updated_tensors::Vector{ITensor}`: The updated tensors after applying the gate.
-- `s_values::Union{Nothing, ITensor}`: The singular values from the SVD (if applicable).
+- `messages::Union{Nothing, Tuple{ITensor, ITensor}}`: For a two-site gate, the two directed bond messages (`v1 => v2` and its reverse), each a doubled `conj(R) * R` contraction of the reformed factor; `nothing` for a one-site gate.
 - `err::Number`: The truncation error from the SVD (if applicable).
 """
 function simple_update(
@@ -25,7 +25,7 @@ function simple_update(
 
     if length(ψ⃗) == 1
         updated_tensors = ITensor[apply(o, only(ψ⃗))]
-        s_values, err = nothing, 0
+        messages, err = nothing, 0
     else
         # When envs is empty no gauging happens and the cutoff is unused, so fall back to
         # the scalartype of the local tensors to materialize a valid default without erroring.
@@ -61,26 +61,34 @@ function simple_update(
         rᵥ₂ = commoninds(Qᵥ₂, Rᵥ₂)
         oR = apply(o, Rᵥ₁ * Rᵥ₂)
         # Balanced SVD: split the singular values symmetrically (√S into each factor) so neither
-        # side is isometric. The bond stays on `prime(u)` (keeping `u`'s name), so once this
-        # function `noprime`s its result the bond becomes `u`, which the returned `s_values` (over
-        # `(u, v)`) still shares for `apply_gate!`'s bond-message construction.
+        # reformed factor is isometric. Each factor carries the bond on `prime(u)` (a primed copy
+        # of `u`), so once this function `noprime`s the updated tensors their bond becomes `u`, the
+        # ket bond the doubled-contraction messages below leave in place.
         U, S, V, ϵ = MAK.svd_trunc(oR, union(rᵥ₁, sᵥ₁); trunc = itensor_trunc(; apply_kwargs...))
         u = only(commoninds(U, S))
         v = only(commoninds(S, V))
-        sqrtS = sqrth_safe(S, (u,), (v,); atol = 0, rtol = 0)
-        Rᵥ₁, Rᵥ₂ = U * replaceinds(sqrtS, v => prime(u)), replaceinds(sqrtS, u => prime(u)) * V
-        s_values = S
         # Relative squared truncation error, from MatrixAlgebraKit's exact discarded-weight `ϵ`
         # (the 2-norm of the discarded singular values) rather than the cancellation-prone
-        # `1 - ‖S‖²/‖oR‖²` norm subtraction.
+        # `1 - ‖S‖²/‖oR‖²` norm subtraction. Taken before normalizing `S`, so it uses the raw
+        # singular values.
         total = norm(oR)
         err = iszero(total) ? zero(real(scalartype(oR))) : (ϵ / total)^2
+        if normalize_tensors
+            S = normalize(S)
+        end
+        sqrtS = sqrth_safe(S, (u,), (v,); atol = 0, rtol = 0)
+        Rᵥ₁, Rᵥ₂ = U * replaceinds(sqrtS, v => prime(u)), replaceinds(sqrtS, u => prime(u)) * V
+        # The two directed bond messages, each the doubled contraction `conj(R) * R` of that side's
+        # reformed factor over its environment-facing legs, leaving the ket bond `u` and the bra
+        # bond `prime(u)`. A doubled ket/bra contraction carries the odd-parity sign, so the
+        # refreshed message is fermion-sign-correct instead of the bare (sign-blind) singular values.
+        messages = (
+            conj(Rᵥ₁) * replaceinds(Rᵥ₁, prime(u) => u),
+            conj(Rᵥ₂) * replaceinds(Rᵥ₂, prime(u) => u),
+        )
         Qᵥ₁ = contract_network([Qᵥ₁; conj.(inv_sqrt_envs_v1)])
         Qᵥ₂ = contract_network([Qᵥ₂; conj.(inv_sqrt_envs_v2)])
         updated_tensors = [Qᵥ₁ * Rᵥ₁, Qᵥ₂ * Rᵥ₂]
-        if normalize_tensors
-            s_values = normalize(s_values)
-        end
     end
 
     if normalize_tensors
@@ -89,5 +97,5 @@ function simple_update(
         end
     end
 
-    return noprime.(updated_tensors), s_values, err
+    return noprime.(updated_tensors), messages, err
 end
