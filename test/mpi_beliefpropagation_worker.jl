@@ -119,6 +119,17 @@ function run_case(case)
         Set(collect(vertices(TNQS.messages_graph(mpi_bpc)))) == union(Set(my_vertices), ghosts),
         "messages_graph carries exactly the ghosts $ghosts"
     )
+
+    # shared_vertices is built with similar(), so it has an entry for every shared vertex
+    # in the problem and only the ones this rank holds are initialised. Pin those; the
+    # uninitialised remainder is why nothing in the update path may read this field.
+    held = Set(v for (v, ranks) in pairs(case.shared) if RANK in ranks)
+    for v in held
+        r1, r2 = case.shared[v]
+        other = RANK == r1 ? r2 : r1
+        check(mpi_bpc.shared_vertices[v] == other, "shared_vertices[$v] == $other")
+    end
+
     return mpi_bpc
 end
 
