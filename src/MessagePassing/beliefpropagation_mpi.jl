@@ -11,11 +11,13 @@ struct BeliefPropagationCacheMPI{
         V,
         N <: AbstractTensorNetwork{V},
         M <: Union{ITensor, Vector{ITensor}},
+        G <: AbstractGraph,
     } <: AbstractBeliefPropagationCache{V}
     network::N
     messages::Dictionary{NamedEdge, M}
     contraction_sequences::Dictionary{Pair, Vector}
     edge_sequence::Vector
+    messages_graph::G # local graph plus a ghost vertex per remote neighbour
     shared_vertices::Dictionary{V, Int32}
     edges_to_send::Dictionary{NamedEdge, Int32} # edge -> mpi rank
     edges_to_recv::Dictionary{NamedEdge, Int32} # edge -> mpi rank
@@ -24,15 +26,17 @@ struct BeliefPropagationCacheMPI{
         messages::Dictionary{NamedEdge, M},
         contraction_sequences::Dictionary{Pair, Vector},
         edge_sequence::Vector,
+        messages_graph::G,
         shared_vertices::Dictionary{V, Int32},
         edges_to_send::Dictionary{NamedEdge, Int32},
         edges_to_recv::Dictionary{NamedEdge, Int32}
-    ) where {V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Vector{ITensor}}}
-        new{V, N, M}(
+    ) where {V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Vector{ITensor}}, G <: AbstractGraph}
+        new{V, N, M, G}(
             network,
             messages,
             contraction_sequences,
             edge_sequence,
+            messages_graph,
             shared_vertices,
             edges_to_send,
             edges_to_recv
@@ -43,6 +47,7 @@ end
 messages(bp_cache::BeliefPropagationCacheMPI) = bp_cache.messages
 network(bp_cache::BeliefPropagationCacheMPI) = bp_cache.network
 graph(bp_cache::BeliefPropagationCacheMPI) = graph(network(bp_cache))
+messages_graph(bp_cache::BeliefPropagationCacheMPI) = bp_cache.messages_graph
 
 # Without this, copy() falls through to NamedGraphs.copy(::AbstractNamedGraph).
 function Base.copy(bp_cache::BeliefPropagationCacheMPI)
@@ -51,6 +56,7 @@ function Base.copy(bp_cache::BeliefPropagationCacheMPI)
         copy(messages(bp_cache)),
         copy(contraction_sequences(bp_cache)),
         copy(edge_sequence(bp_cache)),
+        copy(messages_graph(bp_cache)),
         copy(bp_cache.shared_vertices),
         copy(bp_cache.edges_to_send),
         copy(bp_cache.edges_to_recv)
@@ -104,11 +110,21 @@ function BeliefPropagationCacheMPI(
         end
     end
 
+    # Ghost vertices hold the incoming boundary messages. They live only here, so
+    # graph(network) stays ghost-free and vertex iteration is unaffected.
+    _messages_graph = copy(local_graph)
+    for edge in keys(edges_to_recv)
+        ghost = src(edge)
+        has_vertex(_messages_graph, ghost) || add_vertex!(_messages_graph, ghost)
+        add_edge!(_messages_graph, edge)
+    end
+
     return BeliefPropagationCacheMPI(
         network,
         messages,
         cache.contraction_sequences,
         cache.edge_sequence,
+        _messages_graph,
         shared_vertices_other,
         edges_to_send,
         edges_to_recv
@@ -123,6 +139,15 @@ function communicate_messages!(bp_cache::BeliefPropagationCacheMPI; comm = MPI.C
         bp_cache.messages[edge] = MPI.recv(comm; source = rank)
     end
     return bp_cache
+end
+
+# Boundary messages arrive on ghost edges, which only messages_graph knows about.
+function incoming_messages(
+        bp_cache::BeliefPropagationCacheMPI, vertices::Vector{<:Any}; ignore_edges = []
+    )
+    b_edges = boundary_edges(messages_graph(bp_cache), vertices; dir = :in)
+    b_edges = !isempty(ignore_edges) ? setdiff(b_edges, ignore_edges) : b_edges
+    return messages(bp_cache, b_edges)
 end
 
 contraction_sequences(bp_cache::BeliefPropagationCacheMPI) = bp_cache.contraction_sequences

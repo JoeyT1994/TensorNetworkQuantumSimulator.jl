@@ -102,8 +102,23 @@ function run_case(case)
         check(m isa ITensor, "received message on $e is an ITensor")
     end
 
+    serial = update(BeliefPropagationCache(tn); maxiter = case.maxiter, tolerance = nothing)
     mpi_bpc = update(mpi_bpc; maxiter = case.maxiter, tolerance = nothing)
-    check(mpi_bpc isa TNQS.BeliefPropagationCacheMPI, "cache survives update")
+
+    for e in directed_edges(local_tn)
+        d = TNQS.message_diff(message(mpi_bpc, e), message(serial, e))
+        check(d < 1.0e-8, "message $e differs from serial: diff = $d")
+    end
+    for v in my_vertices
+        a, b = TNQS.vertex_scalar(mpi_bpc, v), TNQS.vertex_scalar(serial, v)
+        check(isapprox(a, b; rtol = 1.0e-8), "vertex_scalar $v: $a vs serial $b")
+    end
+
+    ghosts = Set(src(e) for e in keys(mpi_bpc.edges_to_recv))
+    check(
+        Set(collect(vertices(TNQS.messages_graph(mpi_bpc)))) == union(Set(my_vertices), ghosts),
+        "messages_graph carries exactly the ghosts $ghosts"
+    )
     return mpi_bpc
 end
 
