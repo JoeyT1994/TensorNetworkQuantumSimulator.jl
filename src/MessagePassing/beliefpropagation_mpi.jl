@@ -132,12 +132,14 @@ function BeliefPropagationCacheMPI(
 end
 
 function communicate_messages!(bp_cache::BeliefPropagationCacheMPI; comm = MPI.COMM_WORLD)
-    for (edge, rank) in pairs(bp_cache.edges_to_send)
+    requests = [
         MPI.isend(bp_cache.messages[edge], comm; dest = rank)
-    end
+            for (edge, rank) in pairs(bp_cache.edges_to_send)
+    ]
     for (edge, rank) in pairs(bp_cache.edges_to_recv)
         bp_cache.messages[edge] = MPI.recv(comm; source = rank)
     end
+    MPI.Waitall(requests)
     return bp_cache
 end
 
