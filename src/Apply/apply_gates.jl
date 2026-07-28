@@ -79,7 +79,6 @@ function apply_gates(
             if verbose
                 println("Done in $(t.time) secs")
             end
-
         end
 
         # actually apply the gate
@@ -100,7 +99,7 @@ end
 #Apply function for a single gate
 function apply_gate!(
         gate::ITensor,
-        ψ_bpc::BeliefPropagationCache;
+        ψ_bpc::AbstractBeliefPropagationCache;
         v⃗ = vertices(gate, network(ψ_bpc)),
         apply_kwargs
     )

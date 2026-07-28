@@ -1,6 +1,6 @@
 using MPI: mpiexec
 
-# A cache mismatch hangs rather than errors, because the constructor's sends are
+# A cache mismatch hangs rather than errors, because the constructor's receives are
 # blocking — so every run gets a hard wall-clock kill.
 function run_mpi_worker(case::String, nranks::Int; timeout = 180)
     worker = joinpath(@__DIR__, "mpi_beliefpropagation_worker.jl")
