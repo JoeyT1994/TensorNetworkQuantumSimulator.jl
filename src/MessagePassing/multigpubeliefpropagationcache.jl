@@ -12,10 +12,14 @@ the device-resident partitions. The wrapped cache provides the standard
 as the scratch buffer for device-local gate application; the partitions hold the
 authoritative device-resident tensors and messages during the BP sweep.
 
+The device backend lives in the `TensorNetworkQuantumSimulatorCUDAExt` package
+extension, which is loaded automatically once both CUDA.jl and KaHyPar.jl are
+available. Without them this type has no constructor and no update/apply methods.
+
 # Fields
 - `bpc::B`: host/owner-side `BeliefPropagationCache` (interface + scratch).
 - `partitions::Vector{P}`: per-device partition state; `P` is the device-backend
-  partition type (`DevicePartition`, defined in `multigpu_cuda.jl`).
+  partition type (`DevicePartition`, defined in the extension).
 - `partition_map::Dictionary{V,Int}`: vertex → partition id (0-indexed).
 - `edge_groups::Vector{Vector{NamedEdge}}`: edges grouped by proper edge color; all
   edges within a group can be updated in parallel without write conflicts.
@@ -110,12 +114,33 @@ multi-GPU regime to optimize for:
   has ample memory.
 
 Both accept `imbalance` (default `0.0`); keep it small so the balance constraint
-stays tight. The implementations live in `multigpu_cuda.jl` (KaHyPar backend).
+stays tight. The implementations are provided by the KaHyPar backend in the
+`TensorNetworkQuantumSimulatorCUDAExt` extension (`using CUDA, KaHyPar`).
 """
 function partition_graph(g::AbstractGraph, n_parts::Integer; alg = "memory_balanced", kwargs...)
     return partition_graph(Algorithm(alg; kwargs...), g, n_parts)
 end
 
 function partition_graph(alg::Algorithm, g::AbstractGraph, n_parts::Integer)
-    return error("Unknown partitioning algorithm. Use \"memory_balanced\" or \"min_cut\".")
+    return error(
+        "Unknown partitioning algorithm. Use \"memory_balanced\" or \"min_cut\", and " *
+        "make sure both CUDA.jl and KaHyPar.jl are loaded so that the multi-GPU " *
+        "extension is active.",
+    )
 end
+
+"""
+    collect_to_cpu!(cache::MultiGPUBeliefPropagationCache) -> BeliefPropagationCache
+
+Pull all partition tensors and messages to host memory and return the wrapped host
+cache for measurement. Implemented in the multi-GPU extension.
+"""
+function collect_to_cpu! end
+
+"""
+    collect_to_device0!(cache::MultiGPUBeliefPropagationCache; complex_type) -> BeliefPropagationCache
+
+Copy all partition tensors and messages to device 0 and return the wrapped host
+cache for measurement. Implemented in the multi-GPU extension.
+"""
+function collect_to_device0! end

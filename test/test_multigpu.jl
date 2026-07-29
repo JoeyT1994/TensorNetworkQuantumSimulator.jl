@@ -1,5 +1,9 @@
+# Multi-GPU tests. The multi-GPU backend is a package extension, so both triggers
+# (CUDA.jl and KaHyPar.jl) must be loaded for these methods to exist.
+
 using Test
 using CUDA
+using KaHyPar
 using TensorNetworkQuantumSimulator
 const TN = TensorNetworkQuantumSimulator
 using NamedGraphs
@@ -7,6 +11,10 @@ using NamedGraphs.NamedGraphGenerators: named_hexagonal_lattice_graph
 using Graphs: degree, vertices, edges, src, dst
 
 @testset "MultiGPU BP" begin
+
+    @testset "extension is loaded" begin
+        @test !isnothing(Base.get_extension(TN, :TensorNetworkQuantumSimulatorCUDAExt))
+    end
 
     @testset "partition_graph (memory_balanced)" begin
         g = named_hexagonal_lattice_graph(3, 3)

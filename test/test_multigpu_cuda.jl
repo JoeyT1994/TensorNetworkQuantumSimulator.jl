@@ -1,11 +1,12 @@
 # Multi-GPU CUDA equivalence tests.
 #
 # Run on a node with >=2 functional CUDA devices:
-#   TNQS_TEST_MULTIGPU=true julia --project=. test/runtests.jl
+#   TNQS_TEST_MULTIGPU=true julia --project=. -e 'using Pkg; Pkg.test()'
 
 using Test
 using Random
 using CUDA
+using KaHyPar
 using Adapt: adapt
 using TensorNetworkQuantumSimulator
 const TN = TensorNetworkQuantumSimulator

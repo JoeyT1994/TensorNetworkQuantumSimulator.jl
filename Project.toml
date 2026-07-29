@@ -7,11 +7,9 @@ description = "A Julia package for quantum simulation with tensor networks of ne
 
 [deps]
 Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
-CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 Dictionaries = "85a47980-9c8c-11e8-2b9f-f7ca1fa99fb4"
 Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
 ITensors = "9136182c-28ba-11e9-034c-db9fb085ebd5"
-KaHyPar = "2a6221f6-aa48-11e9-3542-2d9e0ef01880"
 KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 NamedGraphs = "678767b0-92e7-4007-89e4-4527a8725b19"
@@ -22,6 +20,13 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 SplitApplyCombine = "03a91e81-4c3e-53e1-a0a4-9c0c8f19dd66"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 TypeParameterAccessors = "7e5a90cf-f82e-492e-a09b-e3e26432c138"
+
+[weakdeps]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+KaHyPar = "2a6221f6-aa48-11e9-3542-2d9e0ef01880"
+
+[extensions]
+TensorNetworkQuantumSimulatorCUDAExt = ["CUDA", "KaHyPar"]
 
 [compat]
 Adapt = "4.3.0"
@@ -44,9 +49,11 @@ TypeParameterAccessors = "0.3.10, 0.4"
 julia = "1.10"
 
 [extras]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+KaHyPar = "2a6221f6-aa48-11e9-3542-2d9e0ef01880"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "Random", "Statistics"]
+test = ["CUDA", "KaHyPar", "Random", "Statistics", "Test"]

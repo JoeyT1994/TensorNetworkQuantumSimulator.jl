@@ -11,12 +11,66 @@
 #
 # ──────────────────────────────────────────────────────────────────────────────
 
+module TensorNetworkQuantumSimulatorCUDAExt
+
 using CUDA
 using CUDA: CuArray, CuDevice, OutOfGPUMemoryError
 using KaHyPar
 using SparseArrays: sparse
 using ITensors: dim
 using ITensors.NDTensors: Dense
+
+# Methods added to parent-package functions.
+import TensorNetworkQuantumSimulator:
+    MultiGPUBeliefPropagationCache,
+    adapt_gate,
+    apply_gate!,
+    collect_to_cpu!,
+    collect_to_device0!,
+    partition_graph,
+    update
+
+# Names used (but not extended) by this backend. Everything is taken from the
+# parent package, which re-exports the relevant Graphs/ITensors/Dictionaries API.
+using TensorNetworkQuantumSimulator:
+    AbstractGraph,
+    Algorithm,
+    BeliefPropagationCache,
+    Dictionary,
+    ITensor,
+    ITensors,
+    Index,
+    NamedEdge,
+    TensorNetworkState,
+    @Algorithm_str,
+    adapt,
+    colored_edge_groups,
+    contraction_sequence,
+    dag,
+    degree,
+    denseblocks,
+    dst,
+    edge_groups,
+    edges,
+    graph,
+    inds,
+    inner_cache,
+    itensor,
+    make_hermitian,
+    message,
+    message_diff,
+    neighbors,
+    network,
+    partition_map,
+    partitions,
+    prime,
+    replaceinds,
+    set!,
+    setindex_preserve!,
+    setmessage!,
+    siteinds,
+    src,
+    vertices
 
 # ── 1. Device-resident partition state ────────────────────────────────────────
 
@@ -662,3 +716,5 @@ function _kahypar_partition(g::AbstractGraph, n_parts::Integer; weight, imbalanc
     end
     return assignment
 end
+
+end # module
