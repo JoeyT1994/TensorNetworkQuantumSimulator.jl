@@ -74,6 +74,19 @@ function _staging!(store::Dict, bp_cache, peer::Integer, T::Type, n::Integer)
     return buf
 end
 
+# Host mirrors of the payload buffers, used only when the MPI build cannot read device memory.
+_alloc_host_buffer(T::Type, n::Integer) = Vector{T}(undef, n)
+
+function _host_staging!(store::Dict, peer::Integer, T::Type, n::Integer)
+    key = (Int32(peer), T)
+    buf = get(store, key, nothing)
+    if buf === nothing || length(buf) < n
+        buf = _alloc_host_buffer(T, max(n, 1))
+        store[key] = buf
+    end
+    return buf
+end
+
 # Scratch space for the raw payload exchange. Shared by reference across `copy`, like `comm`:
 # the contents are only meaningful for the duration of one exchange, and exchanges are
 # collective so they never interleave. Sharing is what keeps a BP sweep from reallocating a
@@ -81,11 +94,91 @@ end
 struct ExchangeBuffers
     send::Dict{Tuple{Int32, DataType}, Any}
     recv::Dict{Tuple{Int32, DataType}, Any}
+    send_host::Dict{Tuple{Int32, DataType}, Any}
+    recv_host::Dict{Tuple{Int32, DataType}, Any}
 end
 function ExchangeBuffers()
-    return ExchangeBuffers(
-        Dict{Tuple{Int32, DataType}, Any}(), Dict{Tuple{Int32, DataType}, Any}()
-    )
+    D() = Dict{Tuple{Int32, DataType}, Any}()
+    return ExchangeBuffers(D(), D(), D(), D())
+end
+
+# `true` once the network's tensors live on an accelerator: `datatype` is `Vector{T}` on the host
+# and e.g. `CuArray{T,1,…}` after `adapt`ing the cache to a GPU. Tested structurally so that
+# nothing here has to depend on CUDA.jl.
+_is_device_backed(bp_cache) = !(unspecify_type_parameters(datatype(bp_cache)) <: Array)
+
+# Device tensors are copied to host memory before MPI sees them, and copied back on arrival.
+# This is the default, and deliberately so, even though it costs a device->host->device round
+# trip per message. Passing device pointers to MPI instead fails in two ways that are both worse
+# than the copy:
+#
+#  * An MPI not built against CUDA/ROCm does not reject a device pointer. Its transport layer
+#    (UCX, say) assumes host memory and issues a plain CPU memcpy, segfaulting inside the MPI
+#    library with a stack trace pointing at `MPI_Isend` rather than at anything here.
+#    `MPI.has_cuda()` is not a reliable guard: it reports a capability flag, and builds that
+#    report `true` while UCX lacks `cuda_copy`/`cuda_ipc` still crash.
+#  * Even with a genuinely GPU-aware MPI, the buffer handed over has just been written by a
+#    device-to-device `copyto!`, which is queued on a stream and does not synchronise with the
+#    host. MPI can read it before the copy lands, which corrupts messages silently and
+#    intermittently rather than failing. Staging through the host avoids this for free, because
+#    `copyto!(::Array, ::CuArray)` blocks and is ordered behind previously queued stream work.
+#
+# `gpu_direct_mpi!(true)` opts into the direct path for a verified setup; see its docstring for
+# what "verified" has to mean.
+const _GPU_DIRECT = Ref(false)
+
+# Test hook: forces the staging path so its offset and copy bookkeeping is exercised on the host,
+# where both mirrors happen to be plain arrays, without needing a GPU.
+const _FORCE_HOST_STAGING = Ref(false)
+
+"""
+    gpu_direct_mpi() -> Bool
+    gpu_direct_mpi!(enabled::Bool)
+
+Whether boundary tensors held on a GPU are handed to MPI as device pointers (`true`) or copied
+through host memory first (`false`, the default).
+
+The default is the safe one. Enabling this is only correct when **both** hold:
+
+  * MPI is genuinely GPU-aware -- built against CUDA/ROCm, with the transport layer configured
+    for it (for UCX, `ucx_info -d` showing `cuda_copy`/`cuda_ipc`, and `UCX_TLS` either unset or
+    including them). `MPI.has_cuda()` returning `true` is necessary but not sufficient.
+  * The device queue is synchronised before MPI reads a buffer. Define a method for
+    [`mpi_device_synchronize`](@ref) to do that, e.g. `mpi_device_synchronize() =
+    CUDA.synchronize()`; without it, sends can race the device-to-device copy that fills them.
+
+Getting either wrong produces a segfault inside MPI or silent message corruption, not an error
+from this package.
+"""
+gpu_direct_mpi() = _GPU_DIRECT[]
+
+function gpu_direct_mpi!(enabled::Bool)
+    if enabled && !(MPI.has_cuda() || MPI.has_rocm())
+        @warn """
+        gpu_direct_mpi!(true) with an MPI that reports no CUDA/ROCm support. Sending a device
+        pointer to it will segfault inside the MPI library. Point MPI.jl at a GPU-aware system
+        MPI (`MPIPreferences.use_system_binary()`) -- the JLL binaries installed by default are
+        not GPU-aware -- or leave this disabled to stage through host memory.
+        """
+    end
+    _GPU_DIRECT[] = enabled
+    return enabled
+end
+
+"""
+    mpi_device_synchronize()
+
+Hook called before a device-resident payload is handed to MPI and after one is received, to wait
+for queued device work. The default does nothing, which is correct while payloads are staged
+through host memory. Override it when enabling [`gpu_direct_mpi!`](@ref):
+
+    TensorNetworkQuantumSimulator.mpi_device_synchronize() = CUDA.synchronize()
+"""
+mpi_device_synchronize() = nothing
+
+function _needs_host_staging(bp_cache)
+    _FORCE_HOST_STAGING[] && return true
+    return _is_device_backed(bp_cache) && !_GPU_DIRECT[]
 end
 
 function _flatten_values(values)
@@ -116,9 +209,14 @@ function _prepare_send(bp_cache, peer, values)
     header = TensorBatch([collect(inds(t)) for t in canonical], counts, T)
 
     lengths = [length(ITensors.data(t)) for t in canonical]
-    # One tensor is the common case (a partition boundary is usually one edge per peer): hand
-    # its storage straight to MPI with no staging copy at all.
-    isone(length(canonical)) && return header, ITensors.data(only(canonical))
+    host_staging = _needs_host_staging(bp_cache)
+
+    # One tensor is the common case (a partition boundary is usually one edge per peer): hand its
+    # storage straight to MPI with no staging copy at all. Not available when the payload has to
+    # be mirrored to the host first.
+    if isone(length(canonical)) && !host_staging
+        return header, ITensors.data(only(canonical))
+    end
 
     n = sum(lengths)
     buf = _staging!(bp_cache.buffers.send, bp_cache, peer, T, n)
@@ -127,7 +225,16 @@ function _prepare_send(bp_cache, peer, values)
         copyto!(view(buf, (offset + 1):(offset + len)), ITensors.data(t))
         offset += len
     end
-    return header, view(buf, 1:n)
+    if !host_staging
+        # The packing copies above are queued on a device stream; MPI must not read the buffer
+        # until they land.
+        _is_device_backed(bp_cache) && mpi_device_synchronize()
+        return header, view(buf, 1:n)
+    end
+
+    hbuf = view(_host_staging!(bp_cache.buffers.send_host, peer, T, n), 1:n)
+    copyto!(hbuf, view(buf, 1:n))
+    return header, hbuf
 end
 
 function _scatter!(setter, items, header::TensorBatch, payload)
@@ -182,18 +289,39 @@ function _exchange!(
     # `Waitall`, so none of them can be collected while MPI is reading or writing it.
     # Keyed rather than positional: a peer whose header took the serialised fallback has no
     # payload, so a parallel array here would slip out of step with `recv_headers`.
+    # `_scatter!` must read a payload that lives wherever the network's tensors do, so when MPI
+    # cannot write into device memory the data lands in a host mirror and is copied across after
+    # `Waitall`. `recv_payloads` always holds the device-resident view.
+    host_staging = _needs_host_staging(bp_cache)
     recv_payloads = Dict{Int32, Any}()
+    recv_mirrors = Dict{Int32, Any}()
     for (peer, header) in recv_headers
         header isa TensorBatch || continue
         n = sum(_batch_lengths(header); init = 0)
         payload = view(_staging!(bp_cache.buffers.recv, bp_cache, peer, header.eltype, n), 1:n)
         recv_payloads[peer] = payload
-        push!(requests, MPI.Irecv!(payload, comm; source = peer, tag = payload_tag))
+        target = payload
+        if host_staging
+            target = view(
+                _host_staging!(bp_cache.buffers.recv_host, peer, header.eltype, n), 1:n
+            )
+            recv_mirrors[peer] = target
+        end
+        push!(requests, MPI.Irecv!(target, comm; source = peer, tag = payload_tag))
     end
     for (peer, payload) in send_payloads
         push!(requests, MPI.Isend(payload, comm; dest = peer, tag = payload_tag))
     end
     MPI.Waitall(requests)
+    for (peer, mirror) in recv_mirrors
+        copyto!(recv_payloads[peer], mirror)
+    end
+    # On the direct path MPI wrote into device memory; wait for that before reading it back out
+    # into tensors. (Staged receives need no barrier: the host->device copies just above are
+    # ordered ahead of the reads in `_scatter!` on the same stream.)
+    if !host_staging && _is_device_backed(bp_cache) && !isempty(recv_payloads)
+        mpi_device_synchronize()
+    end
 
     for (peer, header) in recv_headers
         items = recv_items[peer]

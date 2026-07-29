@@ -19,6 +19,8 @@ include(joinpath(@__DIR__, "mpi_runner.jl"))
             "defaults_path", "defaults_ring",
             # A malformed partition must throw on every rank rather than hang.
             "validation",
+            # The device->host->device fallback for a non-GPU-aware MPI.
+            "host_staging_path", "host_staging_ring",
         ],
         2
     )

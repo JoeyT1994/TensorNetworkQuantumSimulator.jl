@@ -63,6 +63,8 @@ export
     BeliefPropagationCacheMPI,
     apply_gates_mpi,
     inner_mpi,
+    gpu_direct_mpi,
+    gpu_direct_mpi!,
     rescale!,
     message,
     network,

@@ -511,6 +511,24 @@ function run_validation_case(case)
     return nothing
 end
 
+# The fallback taken when the tensors are on a GPU but MPI cannot read device memory: payloads
+# are mirrored through host buffers. Without a GPU the mirrors are host arrays too, but the offset
+# and copy bookkeeping -- and the disabling of the single-tensor zero-copy path -- are the same
+# code, so this still guards the part that a segfault deep inside MPI would otherwise be the
+# first sign of.
+function run_host_staging_case(case)
+    TNQS._FORCE_HOST_STAGING[] = true
+    try
+        mpi_bpc = run_case(case)
+        check(
+            TNQS._needs_host_staging(mpi_bpc), "host staging is actually engaged for this case"
+        )
+        return mpi_bpc
+    finally
+        TNQS._FORCE_HOST_STAGING[] = false
+    end
+end
+
 const CASES = Dict(
     "path" => (run_case, path_case),
     "ring" => (run_case, ring_case),
@@ -524,7 +542,9 @@ const CASES = Dict(
     "defaults_path" => (run_default_kwargs_case, path_case),
     "defaults_ring" => (run_default_kwargs_case, ring_case),
     "defaults_chain3" => (run_default_kwargs_case, chain3_case),
-    "validation" => (run_validation_case, path_case)
+    "validation" => (run_validation_case, path_case),
+    "host_staging_path" => (run_host_staging_case, path_case),
+    "host_staging_ring" => (run_host_staging_case, ring_case)
 )
 
 # Every case named on the command line runs in this one process. Loading the package and
