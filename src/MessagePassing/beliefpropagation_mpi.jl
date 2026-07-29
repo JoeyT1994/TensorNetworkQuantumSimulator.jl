@@ -74,6 +74,18 @@ function _staging!(store::Dict, bp_cache, peer::Integer, T::Type, n::Integer)
     return buf
 end
 
+# All bulk data movement goes through this. `copyto!(dest, src)` between two `SubArray`s that
+# live in different memory spaces has no specialised method -- CUDA.jl's two-argument methods are
+# defined on `Array`/`DenseCuArray`, and a host `SubArray` is not an `Array` -- so it falls back
+# to Base's elementwise loop, which is scalar indexing on a device array and throws. The
+# five-argument form on the *parent* buffers has methods for every host/device combination, so
+# offsets are passed explicitly here rather than baked into views.
+function _copy_range!(dest, doffset::Integer, src, soffset::Integer, n::Integer)
+    iszero(n) && return dest
+    copyto!(dest, doffset, src, soffset, n)
+    return dest
+end
+
 # Host mirrors of the payload buffers, used only when the MPI build cannot read device memory.
 _alloc_host_buffer(T::Type, n::Integer) = Vector{T}(undef, n)
 
@@ -222,7 +234,7 @@ function _prepare_send(bp_cache, peer, values)
     buf = _staging!(bp_cache.buffers.send, bp_cache, peer, T, n)
     offset = 0
     for (t, len) in zip(canonical, lengths)
-        copyto!(view(buf, (offset + 1):(offset + len)), ITensors.data(t))
+        _copy_range!(buf, offset + 1, ITensors.data(t), 1, len)
         offset += len
     end
     if !host_staging
@@ -232,11 +244,13 @@ function _prepare_send(bp_cache, peer, values)
         return header, view(buf, 1:n)
     end
 
-    hbuf = view(_host_staging!(bp_cache.buffers.send_host, peer, T, n), 1:n)
-    copyto!(hbuf, view(buf, 1:n))
-    return header, hbuf
+    hbuf = _host_staging!(bp_cache.buffers.send_host, peer, T, n)
+    _copy_range!(hbuf, 1, buf, 1, n)
+    return header, view(hbuf, 1:n)
 end
 
+# `payload` is the whole staging buffer, not a view of the filled prefix: slicing it here would
+# make the copies below `SubArray`-to-`SubArray`, which is the case that has no method.
 function _scatter!(setter, items, header::TensorBatch, payload)
     lengths = _batch_lengths(header)
     offset, k = 0, 0
@@ -246,7 +260,7 @@ function _scatter!(setter, items, header::TensorBatch, payload)
             k += 1
             len = lengths[k]
             data = similar(payload, header.eltype, len)
-            copyto!(data, view(payload, (offset + 1):(offset + len)))
+            _copy_range!(data, 1, payload, offset + 1, len)
             push!(ts, itensor(NDTensors.Dense(data), Tuple(header.inds[k])))
             offset += len
         end
@@ -292,29 +306,32 @@ function _exchange!(
     # `_scatter!` must read a payload that lives wherever the network's tensors do, so when MPI
     # cannot write into device memory the data lands in a host mirror and is copied across after
     # `Waitall`. `recv_payloads` always holds the device-resident view.
+    # `recv_payloads` holds whole staging buffers, always the ones in the same memory space as the
+    # network's tensors. Views are built only where MPI needs them.
     host_staging = _needs_host_staging(bp_cache)
     recv_payloads = Dict{Int32, Any}()
     recv_mirrors = Dict{Int32, Any}()
+    recv_lengths = Dict{Int32, Int}()
     for (peer, header) in recv_headers
         header isa TensorBatch || continue
         n = sum(_batch_lengths(header); init = 0)
-        payload = view(_staging!(bp_cache.buffers.recv, bp_cache, peer, header.eltype, n), 1:n)
-        recv_payloads[peer] = payload
-        target = payload
+        buffer = _staging!(bp_cache.buffers.recv, bp_cache, peer, header.eltype, n)
+        recv_payloads[peer] = buffer
+        recv_lengths[peer] = n
         if host_staging
-            target = view(
-                _host_staging!(bp_cache.buffers.recv_host, peer, header.eltype, n), 1:n
-            )
-            recv_mirrors[peer] = target
+            mirror = _host_staging!(bp_cache.buffers.recv_host, peer, header.eltype, n)
+            recv_mirrors[peer] = mirror
+            push!(requests, MPI.Irecv!(view(mirror, 1:n), comm; source = peer, tag = payload_tag))
+        else
+            push!(requests, MPI.Irecv!(view(buffer, 1:n), comm; source = peer, tag = payload_tag))
         end
-        push!(requests, MPI.Irecv!(target, comm; source = peer, tag = payload_tag))
     end
     for (peer, payload) in send_payloads
         push!(requests, MPI.Isend(payload, comm; dest = peer, tag = payload_tag))
     end
     MPI.Waitall(requests)
     for (peer, mirror) in recv_mirrors
-        copyto!(recv_payloads[peer], mirror)
+        _copy_range!(recv_payloads[peer], 1, mirror, 1, recv_lengths[peer])
     end
     # On the direct path MPI wrote into device memory; wait for that before reading it back out
     # into tensors. (Staged receives need no barrier: the host->device copies just above are
