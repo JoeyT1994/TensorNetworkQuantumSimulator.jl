@@ -91,6 +91,13 @@ fidelity
 optimise_p_q
 ```
 
+## Multi-GPU
+
+```@docs
+MultiGPUBeliefPropagationCache
+partition_graph
+```
+
 ## Custom Gate Definitions
 
 ```@docs

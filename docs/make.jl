@@ -7,6 +7,7 @@ makedocs(;
     modules = [TensorNetworkQuantumSimulator],
     authors = "JoeyT1994 <jtindall@flatironinstitute.org>, MSRudolph <manuel.rudolph@web.de>, Xuanzhao Gao <xgao@flatironinstitute.org>, and contributors",
     sitename = "TensorNetworkQuantumSimulator.jl",
+    checkdocs = :exports,
     format = Documenter.HTML(;
         canonical = "https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl",
         edit_link = "main",
