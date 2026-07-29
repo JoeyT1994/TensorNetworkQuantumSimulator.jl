@@ -1,0 +1,349 @@
+# Runs under mpiexec. One positional arg: a case name from CASES below.
+# Deliberately avoids Test and Random, which are in [extras] and so unavailable
+# under --project=<package>.
+using Dictionaries: Dictionary, delete!
+using Graphs: dst, neighbors, src
+using ITensors: ITensor, contract, scalar, state
+using LinearAlgebra: norm
+using MPI
+using NamedGraphs.GraphsExtensions: subgraph
+using NamedGraphs: NamedEdge, rem_vertex!
+using TensorNetworkQuantumSimulator
+const TNQS = TensorNetworkQuantumSimulator
+
+MPI.Init()
+const COMM = MPI.COMM_WORLD
+const RANK = MPI.Comm_rank(COMM)
+
+const FAILURES = String[]
+function check(cond::Bool, msg::AbstractString)
+    cond || push!(FAILURES, "[rank $RANK] $msg")
+    return cond
+end
+
+function path_case()
+    g = named_grid((6, 1))
+    parts = [[(i, 1) for i in 1:3], [(i, 1) for i in 3:6]]
+    shared = Dictionary([(3, 1)], [(Int32(0), Int32(1))])
+    return (; name = "6-site path, 2 ranks", g, parts, shared, maxiter = 12)
+end
+
+function ring_case()
+    g = named_grid((6, 1); periodic = true)
+    parts = [[(i, 1) for i in 1:4], [(4, 1), (5, 1), (6, 1), (1, 1)]]
+    shared = Dictionary([(1, 1), (4, 1)], [(Int32(0), Int32(1)), (Int32(0), Int32(1))])
+    return (; name = "6-site ring, 2 ranks", g, parts, shared, maxiter = 200)
+end
+
+function chain3_case()
+    g = named_grid((7, 1))
+    parts = [[(i, 1) for i in 1:3], [(i, 1) for i in 3:5], [(i, 1) for i in 5:7]]
+    shared = Dictionary([(3, 1), (5, 1)], [(Int32(0), Int32(1)), (Int32(1), Int32(2))])
+    return (; name = "7-site path, 3 ranks", g, parts, shared, maxiter = 14)
+end
+
+apply_path_case() = (; path_case()..., name = "6-site path apply, 2 ranks", maxiter = 25)
+apply_ring_case() = (; ring_case()..., name = "6-site ring apply, 2 ranks", maxiter = 100)
+
+# All ranks must share byte-identical Index objects, so the network is built once
+# and broadcast; Random.seed! does not reproduce ITensor Index ids.
+function global_network(g)
+    tn = RANK == 0 ? random_tensornetwork(Float64, g; bond_dimension = 2) : nothing
+    return MPI.bcast(tn, COMM; root = 0)
+end
+
+function global_state(g)
+    ψ = RANK == 0 ? random_tensornetworkstate(ComplexF64, g; bond_dimension = 2) : nothing
+    return MPI.bcast(ψ, COMM; root = 0)
+end
+
+# Index ids are random, so they must be drawn once and broadcast.
+function global_siteinds(g)
+    s = RANK == 0 ? siteinds("S=1/2", g) : nothing
+    return MPI.bcast(s, COMM; root = 0)
+end
+
+function restrict(d::Dictionary, ks)
+    out = copy(d)
+    for k in setdiff(collect(keys(out)), ks)
+        delete!(out, k)
+    end
+    return out
+end
+
+function local_partition(tn, my_vertices)
+    local_tn = copy(tn)
+    for v in setdiff(collect(vertices(tn)), my_vertices)
+        rem_vertex!(local_tn, v)
+    end
+    return local_tn
+end
+
+# rem_vertex! is only defined for TensorNetwork, so partition the wrapped network.
+function local_partition(ψ::TensorNetworkState, my_vertices)
+    return TensorNetworkState(
+        local_partition(TNQS.tensornetwork(ψ), my_vertices),
+        restrict(siteinds(ψ), my_vertices)
+    )
+end
+
+directed_edges(tn) = reduce(vcat, [[e, reverse(e)] for e in edges(tn)])
+
+# The MPI constructor indexes `messages[edge]` directly, so entries must exist.
+# Seed clean deltas rather than running a local update, whose boundary messages
+# carry the dangling virtual index of the removed remote neighbour.
+function seeded_cache(local_tn)
+    bpc = BeliefPropagationCache(local_tn)
+    des = directed_edges(local_tn)
+    TNQS.setmessages!(bpc, des, [TNQS.default_message(bpc, e) for e in des])
+    return bpc
+end
+
+function run_case(case)
+    g = case.g
+    tn = global_network(g)
+    my_vertices = case.parts[RANK + 1]
+    local_tn = local_partition(tn, my_vertices)
+    bpc = seeded_cache(local_tn)
+    mpi_bpc = TNQS.BeliefPropagationCacheMPI(bpc, g, case.shared; comm = COMM)
+
+    check(mpi_bpc isa TNQS.BeliefPropagationCacheMPI, "constructed cache type")
+    check(
+        Set(collect(vertices(network(mpi_bpc)))) == Set(my_vertices),
+        "local network vertices == partition"
+    )
+
+    # Every shared vertex this rank holds contributes one send edge (from its
+    # local neighbour) and one recv edge (from the remote neighbour).
+    expected_send, expected_recv = Set{NamedEdge}(), Set{NamedEdge}()
+    for (sv, ranks) in pairs(case.shared)
+        RANK in ranks || continue
+        for n in neighbors(g, sv)
+            e = NamedEdge(n => sv)
+            push!(n in my_vertices ? expected_send : expected_recv, e)
+        end
+    end
+    check(
+        Set(keys(mpi_bpc.edges_to_send)) == expected_send,
+        "edges_to_send == $expected_send"
+    )
+    check(
+        Set(keys(mpi_bpc.edges_to_recv)) == expected_recv,
+        "edges_to_recv == $expected_recv"
+    )
+
+    # Received messages must be present and carry the boundary tensor's dangling index.
+    for e in expected_recv
+        m = messages(mpi_bpc)[e]
+        check(m isa ITensor, "received message on $e is an ITensor")
+    end
+
+    serial = update(BeliefPropagationCache(tn); maxiter = case.maxiter, tolerance = nothing)
+    mpi_bpc = update(mpi_bpc; maxiter = case.maxiter, tolerance = nothing)
+
+    # The runs use different edge orderings, so they agree only at the fixed point: both
+    # thresholds assert convergence. message_diff is a fidelity, so a diff of e bounds derived
+    # scalars at sqrt(e) -- keep the pair consistent or non-convergence looks like a bug.
+    for e in directed_edges(local_tn)
+        d = TNQS.message_diff(message(mpi_bpc, e), message(serial, e))
+        check(d < 1.0e-14, "message $e differs from serial: diff = $d")
+    end
+    for v in my_vertices
+        a, b = TNQS.vertex_scalar(mpi_bpc, v), TNQS.vertex_scalar(serial, v)
+        check(isapprox(a, b; rtol = 1.0e-6), "vertex_scalar $v: $a vs serial $b")
+    end
+
+    # update_iteration! reduces the diff, so avg_diff is global and a tolerance exit breaks the
+    # loop at the same sweep on every rank. Without that the first rank to converge stops
+    # calling communicate_messages! and the others block in MPI.recv. A fresh seeded cache is
+    # needed because the constructor inserts ghost entries into the one it is given.
+    tol_bpc = TNQS.BeliefPropagationCacheMPI(
+        seeded_cache(local_tn), g, case.shared; comm = COMM
+    )
+    tol_bpc = update(tol_bpc; maxiter = case.maxiter, tolerance = 1.0e-12)
+    for e in directed_edges(local_tn)
+        d = TNQS.message_diff(message(tol_bpc, e), message(mpi_bpc, e))
+        check(d < 1.0e-12, "tolerance exit differs from fixed-sweep on $e: diff = $d")
+    end
+
+    ghosts = Set(src(e) for e in keys(mpi_bpc.edges_to_recv))
+    check(
+        Set(collect(vertices(TNQS.messages_graph(mpi_bpc)))) ==
+            union(Set(my_vertices), ghosts),
+        "messages_graph carries exactly the ghosts $ghosts"
+    )
+
+    # apply_gates reads keys() to decide which factors to exchange, so a stray key would make
+    # a rank wait on a factor nobody sends.
+    held = Set(v for (v, ranks) in pairs(case.shared) if RANK in ranks)
+    check(Set(keys(mpi_bpc.shared_vertices)) == held, "shared_vertices keys == $held")
+    for v in held
+        r1, r2 = case.shared[v]
+        other = RANK == r1 ? r2 : r1
+        check(mpi_bpc.shared_vertices[v] == other, "shared_vertices[$v] == $other")
+    end
+
+    return mpi_bpc
+end
+
+# One Trotter layer, sorted so every rank builds an identical gate order.
+function trotter_layer(g)
+    layer = []
+    append!(layer, ("Rx", [v], 0.3) for v in sort(collect(vertices(g))))
+    append!(
+        layer,
+        ("Rzz", [src(e), dst(e)], 0.4) for e in sort(collect(edges(g)); by = repr)
+    )
+    return layer
+end
+
+# expect()'s Algorithm"bp" methods only accept a BeliefPropagationCache, so this repeats their
+# body. Valid only for observables supported inside one partition; `vs` must be connected.
+function bpexpect(cache, ops::AbstractString, vs)
+    incoming = TNQS.incoming_messages(cache, vs)
+    function region(op_of)
+        ts = TNQS.norm_factors(network(cache), vs; op_strings = op_of)
+        append!(ts, incoming)
+        return scalar(contract(ts; sequence = TNQS.contraction_sequence(ts; alg = "optimal")))
+    end
+    opmap = Dict(zip(vs, [string(c) for c in ops]))
+    return region(v -> get(opmap, v, "I")) / region(v -> "I")
+end
+
+# Runs the same circuit serially on the whole network and distributed over the
+# partitions, then compares local observables. The gates are converted against the
+# global graph and site indices: the tuple form cannot be used here because each rank
+# only holds part of the circuit's support.
+function run_apply_case(case)
+    ψ = global_state(case.g)
+    return check_apply(case, ψ, local_partition(ψ, case.parts[RANK + 1]))
+end
+
+# The memory-limited path: no rank holds the global network. Ranks agree on the boundary by
+# drawing every bond index from the broadcast map.
+function run_localbuild_apply_case(case)
+    g = case.g
+    sinds = global_siteinds(g)
+    bond_inds = TNQS.shared_bond_inds(g; comm = COMM)
+
+    my_vertices = case.parts[RANK + 1]
+    local_ψ = product_partition(g, my_vertices, sinds, bond_inds)
+    reference = product_partition(g, collect(vertices(g)), sinds, bond_inds)
+
+    # Without this the comparison below would measure the construction, not the algorithm.
+    for v in my_vertices
+        d = norm(local_ψ[v] - reference[v])
+        check(d < 1.0e-14, "locally built tensor at $v differs from reference by $d")
+    end
+
+    return check_apply(case, reference, local_ψ)
+end
+
+# Every tensor is overwritten because tensornetworkstate() mints its own bond indices per call,
+# which two independent builds could never agree on. All virtual legs come from `bond_inds`.
+function product_partition(super_graph, my_vertices, sinds, bond_inds)
+    vs = collect(my_vertices)
+    ψ = tensornetworkstate(ComplexF64, v -> "↓", subgraph(super_graph, vs), restrict(sinds, vs))
+    for v in vs
+        TNQS.setindex_preserve!(ψ, state("↓", only(sinds[v])) * one(ComplexF64), v)
+    end
+    TNQS.insert_partition_virtualinds!(ψ, super_graph, bond_inds)
+    return ψ
+end
+
+# Gates are converted against the global graph and site indices: the tuple form cannot be used
+# because each rank holds only part of the circuit's support.
+function check_apply(case, ψ_reference, local_ψ)
+    g = case.g
+    my_vertices = case.parts[RANK + 1]
+    bp_update_kwargs = (; maxiter = case.maxiter, tolerance = nothing)
+    # cutoff 0 with maxdim headroom: no truncation, so both runs do identical arithmetic and
+    # any mismatch is a protocol bug rather than lost precision.
+    apply_kwargs = (; maxdim = 16, cutoff = 0.0, normalize_tensors = false)
+
+    gates = TNQS.toitensor(trotter_layer(g), g, siteinds(ψ_reference))
+    itensors = [gate[1] for gate in gates]
+    gate_vertices = [gate[2] for gate in gates]
+
+    serial = update(BeliefPropagationCache(ψ_reference); bp_update_kwargs...)
+    serial, serial_errs = TNQS.apply_gates(
+        itensors, serial; gate_vertices, apply_kwargs, bp_update_kwargs
+    )
+
+    mpi_bpc = TNQS.BeliefPropagationCacheMPI(
+        seeded_cache(local_ψ), g, case.shared; comm = COMM
+    )
+    # Converge first so the distributed run starts from the same messages as serial.
+    mpi_bpc = update(mpi_bpc; bp_update_kwargs...)
+    mpi_bpc, mpi_errs = TNQS.apply_gates(
+        itensors, mpi_bpc; gate_vertices, apply_kwargs, bp_update_kwargs
+    )
+
+    check(mpi_bpc isa TNQS.BeliefPropagationCacheMPI, "cache survives apply_gates")
+    check(
+        Set(collect(vertices(network(mpi_bpc)))) == Set(my_vertices),
+        "apply_gates did not change the local partition"
+    )
+    check(all(<(1.0e-12), serial_errs), "serial run truncated: $(maximum(serial_errs))")
+    check(all(<(1.0e-12), mpi_errs), "distributed run truncated: $(maximum(mpi_errs))")
+
+    # A rank applies a gate exactly when it holds all its vertices: one rank for a gate
+    # crossing a boundary, both holders for a one-site gate on a shared vertex.
+    applied = [
+        first(TNQS.should_apply_gate(gv, my_vertices, mpi_bpc.shared_vertices)) ? 1 : 0
+            for gv in gate_vertices
+    ]
+    holders = [all(in(my_vertices), gv) ? 1 : 0 for gv in gate_vertices]
+    owners = MPI.Allreduce(applied, MPI.SUM, COMM)
+    nholders = MPI.Allreduce(holders, MPI.SUM, COMM)
+    check(all(>=(1), owners), "every gate applied by some rank, got $owners")
+    check(owners == nholders, "owners $owners != ranks holding all gate vertices $nholders")
+
+    # Shared vertices are included, so a factor that failed to cross a boundary shows up here.
+    for v in my_vertices
+        for op in ("Z", "X")
+            a, b = bpexpect(mpi_bpc, op, [v]), bpexpect(serial, op, [v])
+            check(isapprox(a, b; atol = 1.0e-8), "<$(op)_$v> = $a vs serial $b")
+        end
+    end
+    for e in edges(network(mpi_bpc))
+        vs = [src(e), dst(e)]
+        a, b = bpexpect(mpi_bpc, "ZZ", vs), bpexpect(serial, "ZZ", vs)
+        check(isapprox(a, b; atol = 1.0e-8), "<Z_$(src(e)) Z_$(dst(e))> = $a vs serial $b")
+    end
+
+    # A global scalar, so this also pins the freenergy reduction.
+    ip = TNQS.inner_mpi(
+        network(mpi_bpc), network(mpi_bpc), g, case.shared; comm = COMM, bp_update_kwargs
+    )
+    ip_serial = TNQS.inner(
+        network(serial), network(serial); alg = "bp", cache_update_kwargs = bp_update_kwargs
+    )
+    check(isapprox(ip, ip_serial; rtol = 1.0e-6), "inner_mpi = $ip vs serial $ip_serial")
+
+    return mpi_bpc
+end
+
+const CASES = Dict(
+    "path" => (run_case, path_case),
+    "ring" => (run_case, ring_case),
+    "chain3" => (run_case, chain3_case),
+    "apply_path" => (run_apply_case, apply_path_case),
+    "apply_ring" => (run_apply_case, apply_ring_case),
+    "localbuild_path" => (run_localbuild_apply_case, apply_path_case),
+    "localbuild_ring" => (run_localbuild_apply_case, apply_ring_case)
+)
+
+const CASE_NAME = ARGS[1]
+let (runner, case_fn) = CASES[CASE_NAME]
+    runner(case_fn())
+end
+
+# Agree on the verdict so every rank exits the same way and none is left blocking.
+const TOTAL = MPI.Allreduce(length(FAILURES), MPI.SUM, COMM)
+for f in FAILURES
+    println(stderr, f)
+end
+RANK == 0 && println("case $CASE_NAME: $TOTAL failure(s)")
+MPI.Finalize()
+exit(TOTAL == 0 ? 0 : 1)
