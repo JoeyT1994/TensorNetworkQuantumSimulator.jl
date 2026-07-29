@@ -517,6 +517,7 @@ end
 # code, so this still guards the part that a segfault deep inside MPI would otherwise be the
 # first sign of.
 function run_host_staging_case(case)
+    check_no_scalar_indexing()
     TNQS._FORCE_HOST_STAGING[] = true
     try
         mpi_bpc = run_case(case)
@@ -527,6 +528,65 @@ function run_host_staging_case(case)
     finally
         TNQS._FORCE_HOST_STAGING[] = false
     end
+end
+
+# Stands in for a device array in the one respect that broke: scalar indexing throws, so any copy
+# that falls back to Base's elementwise loop fails here exactly as it does on a CuArray. Only the
+# strided five-argument `copyto!` is provided, which is what a real device array offers.
+struct NoScalarArray{T} <: AbstractArray{T, 1}
+    data::Vector{T}
+end
+Base.size(a::NoScalarArray) = size(a.data)
+Base.getindex(::NoScalarArray, ::Int) = error("scalar indexing is disallowed")
+Base.setindex!(::NoScalarArray, ::Any, ::Int) = error("scalar indexing is disallowed")
+function Base.similar(::NoScalarArray, ::Type{T}, dims::Base.Dims{1}) where {T}
+    return NoScalarArray(Vector{T}(undef, dims[1]))
+end
+function Base.copyto!(d::NoScalarArray, do_::Integer, s::NoScalarArray, so::Integer, n::Integer)
+    copyto!(d.data, do_, s.data, so, n)
+    return d
+end
+function Base.copyto!(d::NoScalarArray, do_::Integer, s::Array, so::Integer, n::Integer)
+    copyto!(d.data, do_, s, so, n)
+    return d
+end
+function Base.copyto!(d::Array, do_::Integer, s::NoScalarArray, so::Integer, n::Integer)
+    copyto!(d, do_, s.data, so, n)
+    return d
+end
+
+# Guards the host<->device staging copies directly, without needing a GPU: every one of them has
+# to survive a source or destination that refuses scalar access, and land at the right offset.
+function check_no_scalar_indexing()
+    src = NoScalarArray(collect(1.0:8.0))
+    host = fill(-1.0, 8)
+    ok = try
+        TNQS._copy_range!(host, 1, src, 1, 8)
+        true
+    catch e
+        check(false, "device->host staging copy threw: $e")
+        false
+    end
+    ok && check(host == collect(1.0:8.0), "device->host staging copy moved the wrong data")
+
+    back = NoScalarArray(fill(-1.0, 8))
+    ok = try
+        TNQS._copy_range!(back, 1, collect(1.0:8.0), 1, 8)
+        true
+    catch e
+        check(false, "host->device staging copy threw: $e")
+        false
+    end
+    ok && check(back.data == collect(1.0:8.0), "host->device staging copy moved the wrong data")
+
+    # A batch with more than one tensor packs at an offset, which is where an off-by-one hides.
+    offset_dest = fill(-1.0, 8)
+    TNQS._copy_range!(offset_dest, 5, NoScalarArray(collect(1.0:4.0)), 1, 4)
+    check(
+        offset_dest == [-1.0, -1.0, -1.0, -1.0, 1.0, 2.0, 3.0, 4.0],
+        "offset staging copy landed in the wrong place: $offset_dest"
+    )
+    return nothing
 end
 
 const CASES = Dict(
