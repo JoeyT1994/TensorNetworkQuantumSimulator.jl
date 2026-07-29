@@ -63,7 +63,13 @@ function expect(
     )
     op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
     iszero(coeff) && return zero(coeff)
+    return _expect_bp(cache, op_strings, obs_vs, coeff)
+end
 
+# Shared by the serial and the distributed (`BeliefPropagationCacheMPI`) caches: everything it
+# touches is on the `AbstractBeliefPropagationCache` interface, and `incoming_messages` is what
+# pulls in the distributed cache's ghost boundary messages.
+function _expect_bp(cache::AbstractBeliefPropagationCache, op_strings, obs_vs, coeff)
     steiner_vs = length(obs_vs) == 1 ? obs_vs : collect(vertices(steiner_tree(network(cache), obs_vs)))
     incoming_ms = incoming_messages(cache, steiner_vs)
 
