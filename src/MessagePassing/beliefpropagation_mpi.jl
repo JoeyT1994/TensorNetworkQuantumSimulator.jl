@@ -483,3 +483,106 @@ function inner_mpi(
     bpc = update(bpc; bp_update_kwargs...)
     return inner(Algorithm("bp"), bpc)
 end
+
+function apply_gate!(
+        gate::ITensor,
+        ψ_bpc::BeliefPropagationCacheMPI;
+        v⃗ = vertices(gate, network(ψ_bpc)),
+        apply_kwargs
+    )
+    nv = length(v⃗)
+
+    1 <= nv <= 2 || error(
+        "apply_gate!: only one- and two-site gates are supported; " *
+        "received a gate acting on $nv vertices: $v⃗.",
+    )
+
+    if nv == 2
+        has_edge(graph(ψ_bpc), NamedEdge(first(v⃗) => last(v⃗))) || error(
+            "apply_gate!: cannot apply a two-site gate on the non-adjacent vertices " *
+            "$(first(v⃗)) and $(last(v⃗)). Simple update requires the two sites to share an " *
+            "edge of the tensor-network graph.",
+        )
+    end
+
+    envs = nv == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
+
+    ψ⃗ = ITensor[network(ψ_bpc)[v] for v in v⃗]
+    updated_tensors, s_values, err = simple_update_mpi(gate, ψ⃗; envs, apply_kwargs...)
+    if nv == 2
+        v1, v2 = v⃗
+        e = NamedEdge(v1 => v2)
+        ind2 = commonind(s_values, first(updated_tensors))
+        δuv = dag(copy(s_values))
+        δuv = replaceind(δuv, ind2, ind2')
+        map_diag!(sign, δuv, δuv)
+        s_values = denseblocks(s_values) * denseblocks(δuv)
+        setmessage!(ψ_bpc, e, dag(s_values))
+        setmessage!(ψ_bpc, reverse(e), s_values)
+    end
+
+    for (i, v) in enumerate(v⃗)
+        setindex_preserve!(ψ_bpc, updated_tensors[i], v)
+    end
+
+    return ψ_bpc, err
+end
+
+# identical to the non-MPI version, but with a different signature so it can be called
+function simple_update_mpi(
+        o::ITensor, ψ⃗::Vector{<:ITensor};
+        envs, normalize_tensors = true, sqrt_cutoff = nothing, apply_kwargs...
+    )
+
+    if length(ψ⃗) == 1
+        updated_tensors = ITensor[ITensors.apply(o, only(ψ⃗))]
+        s_values, err = nothing, 0
+    else
+        # When envs is empty no gauging happens and the cutoff is unused, so fall back to
+        # the scalartype of the local tensors to materialize a valid default without erroring.
+        sqrt_cutoff_ref = isempty(envs) ? first(ψ⃗) : first(envs)
+        sqrt_cutoff = isnothing(sqrt_cutoff) ? 10 * eps(real(scalartype(sqrt_cutoff_ref))) : sqrt_cutoff
+        envs_v1 = filter(env -> hascommoninds(env, ψ⃗[1]), envs)
+        envs_v2 = filter(env -> hascommoninds(env, ψ⃗[2]), envs)
+        @assert all(ndims(env) == 2 for env in vcat(envs_v1, envs_v2))
+
+        sqrt_inv_sqrt_envs_v1 = pseudo_sqrt_inv_sqrt.(envs_v1; cutoff = sqrt_cutoff)
+        sqrt_inv_sqrt_envs_v2 = pseudo_sqrt_inv_sqrt.(envs_v2; cutoff = sqrt_cutoff)
+        sqrt_envs_v1, inv_sqrt_envs_v1 = first.(sqrt_inv_sqrt_envs_v1), last.(sqrt_inv_sqrt_envs_v1)
+        sqrt_envs_v2, inv_sqrt_envs_v2 = first.(sqrt_inv_sqrt_envs_v2), last.(sqrt_inv_sqrt_envs_v2)
+
+        ψᵥ₁ = contract([ψ⃗[1]; sqrt_envs_v1])
+        ψᵥ₂ = contract([ψ⃗[2]; sqrt_envs_v2])
+        sᵥ₁ = commoninds(ψ⃗[1], o)
+        sᵥ₂ = commoninds(ψ⃗[2], o)
+        Qᵥ₁, Rᵥ₁ = qr(ψᵥ₁, uniqueinds(uniqueinds(ψᵥ₁, ψᵥ₂), sᵥ₁))
+        Qᵥ₂, Rᵥ₂ = qr(ψᵥ₂, uniqueinds(uniqueinds(ψᵥ₂, ψᵥ₁), sᵥ₂))
+        rᵥ₁ = commoninds(Qᵥ₁, Rᵥ₁)
+        rᵥ₂ = commoninds(Qᵥ₂, Rᵥ₂)
+        oR = ITensors.apply(o, Rᵥ₁ * Rᵥ₂)
+        singular_values! = Ref(ITensor())
+        Rᵥ₁, Rᵥ₂, spec = factorize_svd(
+            oR,
+            unioninds(rᵥ₁, sᵥ₁);
+            ortho = "none",
+            singular_values!,
+            apply_kwargs...,
+        )
+        err = spec.truncerr
+        s_values = singular_values![]
+        Qᵥ₁ = contract([Qᵥ₁; dag.(inv_sqrt_envs_v1)])
+        Qᵥ₂ = contract([Qᵥ₂; dag.(inv_sqrt_envs_v2)])
+        updated_tensors = [Qᵥ₁ * Rᵥ₁, Qᵥ₂ * Rᵥ₂]
+        if normalize_tensors
+            s_values = normalize(s_values)
+        end
+    end
+
+    if normalize_tensors
+        for ψᵥ in updated_tensors
+            rmul!(ITensors.data(ψᵥ), inv(norm(ψᵥ)))
+        end
+    end
+
+    return noprime.(updated_tensors), s_values, err
+end
