@@ -3,7 +3,7 @@
 # under --project=<package>.
 using Dictionaries: Dictionary, delete!
 using Graphs: dst, neighbors, src
-using ITensors: ITensor, contract, scalar, state
+using ITensors: ITensors, ITensor, contract, scalar, state
 using LinearAlgebra: norm
 using MPI
 using NamedGraphs.GraphsExtensions: subgraph
@@ -14,6 +14,33 @@ const TNQS = TensorNetworkQuantumSimulator
 MPI.Init()
 const COMM = MPI.COMM_WORLD
 const RANK = MPI.Comm_rank(COMM)
+
+# BP on a loopy partition does not reach a fixed point for every random draw, and the cases
+# below compare against serial to 1e-14 -- which only means anything at the fixed point. Left
+# on the global RNG the loopy cases fail every so often, and a flaky case is indistinguishable
+# from a protocol bug. Random.seed! is not an option (Random lives in [extras], so it is absent
+# under --project=<package>), hence this small LCG.
+mutable struct Lcg
+    state::UInt64
+end
+function next!(rng::Lcg)
+    rng.state = rng.state * 0x5851f42d4c957f2d + 0x14057b7ef767814f
+    return Float64(rng.state >> 11) / Float64(UInt64(1) << 53) - 0.5
+end
+
+# Overwrites the storage in place, so the index structure the constructors chose is untouched.
+# Only ever called on the rank that then broadcasts the network, so cross-rank agreement still
+# comes from the broadcast.
+function fill_deterministic!(tn, seed::Integer)
+    rng = Lcg(UInt64(seed))
+    for v in sort(collect(vertices(tn)))
+        d = ITensors.data(tn[v])
+        for i in eachindex(d)
+            d[i] = eltype(d) <: Complex ? complex(next!(rng), next!(rng)) : next!(rng)
+        end
+    end
+    return tn
+end
 
 const FAILURES = String[]
 function check(cond::Bool, msg::AbstractString)
@@ -47,13 +74,17 @@ apply_ring_case() = (; ring_case()..., name = "6-site ring apply, 2 ranks", maxi
 
 # All ranks must share byte-identical Index objects, so the network is built once
 # and broadcast; Random.seed! does not reproduce ITensor Index ids.
-function global_network(g)
-    tn = RANK == 0 ? random_tensornetwork(Float64, g; bond_dimension = 2) : nothing
+function global_network(g; seed = 20250729)
+    tn = RANK == 0 ?
+        fill_deterministic!(random_tensornetwork(Float64, g; bond_dimension = 2), seed) :
+        nothing
     return MPI.bcast(tn, COMM; root = 0)
 end
 
-function global_state(g)
-    ψ = RANK == 0 ? random_tensornetworkstate(ComplexF64, g; bond_dimension = 2) : nothing
+function global_state(g; seed = 11071988)
+    ψ = RANK == 0 ?
+        fill_deterministic!(random_tensornetworkstate(ComplexF64, g; bond_dimension = 2), seed) :
+        nothing
     return MPI.bcast(ψ, COMM; root = 0)
 end
 
@@ -140,6 +171,15 @@ function run_case(case)
 
     serial = update(BeliefPropagationCache(tn); maxiter = case.maxiter, tolerance = nothing)
     mpi_bpc = update(mpi_bpc; maxiter = case.maxiter, tolerance = nothing)
+
+    # Everything below compares the two runs at their fixed point, which is only meaningful if
+    # they got there. Asserted separately so that a network BP simply cannot solve reports
+    # itself rather than showing up as a pile of mismatches.
+    serial_extra = update(serial; maxiter = 1, tolerance = nothing)
+    for e in directed_edges(tn)
+        d = TNQS.message_diff(message(serial_extra, e), message(serial, e))
+        check(d < 1.0e-14, "serial run is not at a fixed point on $e (diff = $d); bad seed?")
+    end
 
     # The runs use different edge orderings, so they agree only at the fixed point: both
     # thresholds assert convergence. message_diff is a fidelity, so a diff of e bounds derived
@@ -324,6 +364,171 @@ function check_apply(case, ψ_reference, local_ψ)
     return mpi_bpc
 end
 
+# The top-level entry point, driven exactly as a user would: a tuple circuit spanning the whole
+# graph, no hand-conversion to ITensors and no explicit gate_vertices. This is the path that
+# needs `super_graph` to resolve gate supports and lazy per-rank `toitensor` conversion, since
+# no rank holds the site indices of the whole circuit.
+function run_apply_gates_mpi_case(case)
+    g = case.g
+    ψ = global_state(g)
+    my_vertices = case.parts[RANK + 1]
+    bp_update_kwargs = (; maxiter = case.maxiter, tolerance = nothing)
+    apply_kwargs = (; maxdim = 16, cutoff = 0.0, normalize_tensors = false)
+    circuit = trotter_layer(g)
+
+    serial, serial_errs = TNQS.apply_gates(
+        circuit, ψ; apply_kwargs, bp_update_kwargs
+    )
+
+    local_ψ, errs = TNQS.apply_gates_mpi(
+        circuit, local_partition(ψ, my_vertices), g, case.shared;
+        comm = COMM, bp_update_kwargs, apply_kwargs
+    )
+
+    check(local_ψ isa TensorNetworkState, "apply_gates_mpi returns a state")
+    check(
+        Set(collect(vertices(local_ψ))) == Set(my_vertices),
+        "apply_gates_mpi did not change the local partition"
+    )
+    # Reduced across ranks, so every rank sees every gate's error rather than 0 for the gates it
+    # skipped.
+    check(
+        isapprox(errs, serial_errs; atol = 1.0e-10),
+        "truncation errors not reduced: max |Δ| = $(maximum(abs.(errs - serial_errs)))"
+    )
+
+    mpi_bpc = update(
+        TNQS.BeliefPropagationCacheMPI(seeded_cache(local_ψ), g, case.shared; comm = COMM);
+        bp_update_kwargs...
+    )
+    serial_bpc = update(BeliefPropagationCache(serial); bp_update_kwargs...)
+    for v in my_vertices
+        for op in ("Z", "X")
+            # expect() on the distributed cache, rather than the hand-rolled bpexpect above.
+            a = expect(mpi_bpc, (op, [v]))
+            b = expect(serial_bpc, (op, [v]))
+            check(isapprox(a, b; atol = 1.0e-8), "<$(op)_$v> = $a vs serial $b")
+        end
+    end
+    for e in edges(network(mpi_bpc))
+        vs = [src(e), dst(e)]
+        a, b = expect(mpi_bpc, ("ZZ", vs)), expect(serial_bpc, ("ZZ", vs))
+        check(isapprox(a, b; atol = 1.0e-8), "<Z_$(src(e)) Z_$(dst(e))> = $a vs serial $b")
+    end
+
+    # An observable straddling a boundary cannot be measured from one partition, and must say so
+    # rather than quietly answering from a truncated region.
+    remote = first(setdiff(collect(vertices(g)), my_vertices))
+    threw = try
+        expect(mpi_bpc, ("Z", [remote]))
+        false
+    catch
+        true
+    end
+    check(threw, "expect on the non-local vertex $remote should error")
+
+    return mpi_bpc
+end
+
+# Rank-dependent kwargs used to deadlock: `maxiter` defaulted to `is_tree(local partition)`, so a
+# rank whose piece is a tree ran one sweep and left the rest blocking in MPI.Recv. Passing no
+# kwargs at all now has to terminate and agree with a generously-converged serial run.
+function run_default_kwargs_case(case)
+    g = case.g
+    tn = global_network(g)
+    my_vertices = case.parts[RANK + 1]
+    local_tn = local_partition(tn, my_vertices)
+
+    mpi_bpc = TNQS.BeliefPropagationCacheMPI(
+        seeded_cache(local_tn), g, case.shared; comm = COMM
+    )
+    kwargs = TNQS.default_bp_update_kwargs(mpi_bpc)
+    check(
+        kwargs.maxiter >= MPI.Comm_size(COMM),
+        "default maxiter $(kwargs.maxiter) leaves no room to cross $(MPI.Comm_size(COMM)) partitions"
+    )
+    # Identical on every rank, or the run cannot terminate together.
+    lo = MPI.Allreduce(kwargs.maxiter, MPI.MIN, COMM)
+    hi = MPI.Allreduce(kwargs.maxiter, MPI.MAX, COMM)
+    check(lo == hi, "default maxiter differs across ranks: $lo vs $hi")
+
+    # The point of this case is that the run terminates on every rank with no kwargs at all. The
+    # comparison is deliberately loose: the default tolerance is on message_diff, a fidelity, so
+    # it only pins derived scalars to its square root (1e-8 -> ~1e-4).
+    mpi_bpc = update(mpi_bpc)
+    serial = update(BeliefPropagationCache(tn); maxiter = 400, tolerance = 1.0e-14)
+    for v in my_vertices
+        a, b = TNQS.vertex_scalar(mpi_bpc, v), TNQS.vertex_scalar(serial, v)
+        check(isapprox(a, b; rtol = 1.0e-3), "default-kwargs vertex_scalar $v: $a vs $b")
+    end
+    return mpi_bpc
+end
+
+# Malformed partitions must throw on every rank instead of hanging on a mismatched exchange.
+function run_validation_case(case)
+    g = named_grid((6, 1))
+    my_vertices = case.parts[RANK + 1]
+    tn = global_network(g)
+
+    function rejects(name, parts, shared)
+        local_tn = local_partition(tn, parts[RANK + 1])
+        threw = try
+            TNQS.BeliefPropagationCacheMPI(seeded_cache(local_tn), g, shared; comm = COMM)
+            false
+        catch
+            true
+        end
+        # Reduced, so a rank that failed to notice is a failure too: if only some ranks throw,
+        # the others are left in a collective the first will never join.
+        agreed = MPI.Allreduce(threw ? 1 : 0, MPI.SUM, COMM) == MPI.Comm_size(COMM)
+        return check(agreed, "$name should be rejected on every rank")
+    end
+
+    # Adjacent shared vertices: both holders would own the edge between them.
+    rejects(
+        "adjacent shared vertices",
+        [[(i, 1) for i in 1:4], [(3, 1), (4, 1), (5, 1), (6, 1)]],
+        Dictionary([(3, 1), (4, 1)], [(Int32(0), Int32(1)), (Int32(0), Int32(1))])
+    )
+    # A vertex claimed by three ranks.
+    rejects(
+        "three-way shared vertex",
+        [[(i, 1) for i in 1:3], [(i, 1) for i in 3:6]],
+        Dictionary([(3, 1)], [(Int32(0), Int32(1), Int32(1))])
+    )
+    # An out-of-range rank.
+    rejects(
+        "rank outside the communicator",
+        [[(i, 1) for i in 1:3], [(i, 1) for i in 3:6]],
+        Dictionary([(3, 1)], [(Int32(0), Int32(7))])
+    )
+    # A partition that drops an edge of the super graph.
+    rejects(
+        "uncovered edge",
+        [[(i, 1) for i in 1:3], [(i, 1) for i in 4:6]],
+        Dictionary([(3, 1)], [(Int32(0), Int32(1))])
+    )
+    return nothing
+end
+
+# The fallback taken when the tensors are on a GPU but MPI cannot read device memory: payloads
+# are mirrored through host buffers. Without a GPU the mirrors are host arrays too, but the offset
+# and copy bookkeeping -- and the disabling of the single-tensor zero-copy path -- are the same
+# code, so this still guards the part that a segfault deep inside MPI would otherwise be the
+# first sign of.
+function run_host_staging_case(case)
+    TNQS._FORCE_HOST_STAGING[] = true
+    try
+        mpi_bpc = run_case(case)
+        check(
+            TNQS._needs_host_staging(mpi_bpc), "host staging is actually engaged for this case"
+        )
+        return mpi_bpc
+    finally
+        TNQS._FORCE_HOST_STAGING[] = false
+    end
+end
+
 const CASES = Dict(
     "path" => (run_case, path_case),
     "ring" => (run_case, ring_case),
@@ -331,12 +536,30 @@ const CASES = Dict(
     "apply_path" => (run_apply_case, apply_path_case),
     "apply_ring" => (run_apply_case, apply_ring_case),
     "localbuild_path" => (run_localbuild_apply_case, apply_path_case),
-    "localbuild_ring" => (run_localbuild_apply_case, apply_ring_case)
+    "localbuild_ring" => (run_localbuild_apply_case, apply_ring_case),
+    "apply_gates_mpi_path" => (run_apply_gates_mpi_case, apply_path_case),
+    "apply_gates_mpi_ring" => (run_apply_gates_mpi_case, apply_ring_case),
+    "defaults_path" => (run_default_kwargs_case, path_case),
+    "defaults_ring" => (run_default_kwargs_case, ring_case),
+    "defaults_chain3" => (run_default_kwargs_case, chain3_case),
+    "validation" => (run_validation_case, path_case),
+    "host_staging_path" => (run_host_staging_case, path_case),
+    "host_staging_ring" => (run_host_staging_case, ring_case)
 )
 
-const CASE_NAME = ARGS[1]
-let (runner, case_fn) = CASES[CASE_NAME]
-    runner(case_fn())
+# Every case named on the command line runs in this one process. Loading the package and
+# JIT-compiling the BP paths costs far more than any single case, so running the cases of a given
+# rank count together rather than one mpiexec each is most of the suite's wall time.
+for case_name in ARGS
+    haskey(CASES, case_name) || error("unknown case $case_name; have $(sort(collect(keys(CASES))))")
+    before = length(FAILURES)
+    let (runner, case_fn) = CASES[case_name]
+        runner(case_fn())
+    end
+    # Reduced per case so the report says which one failed, not just that something did.
+    n = MPI.Allreduce(length(FAILURES) - before, MPI.SUM, COMM)
+    RANK == 0 && println("case $case_name: $n failure(s)")
+    flush(stdout)
 end
 
 # Agree on the verdict so every rank exits the same way and none is left blocking.
@@ -344,6 +567,6 @@ const TOTAL = MPI.Allreduce(length(FAILURES), MPI.SUM, COMM)
 for f in FAILURES
     println(stderr, f)
 end
-RANK == 0 && println("case $CASE_NAME: $TOTAL failure(s)")
+RANK == 0 && println("total: $TOTAL failure(s)")
 MPI.Finalize()
 exit(TOTAL == 0 ? 0 : 1)
