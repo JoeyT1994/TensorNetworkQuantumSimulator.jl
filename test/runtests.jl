@@ -8,6 +8,7 @@ using Test
     include("test_boundarymps.jl")
     include("test_beliefpropagation.jl")
     include("test_beliefpropagation_mpi.jl")
+    include("test_gpu_paths.jl")
     include("test_apply.jl")
     include("test_sampling.jl")
     include("test_truncate.jl")

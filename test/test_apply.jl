@@ -105,4 +105,107 @@ end
     @test ψ_check isa TensorNetworkState
 end
 
+# `apply_gate!` releases its inputs so a two-site update does not pin a full copy of each site
+# tensor while the equally large QR intermediates are alive. That is a memory optimisation, so it
+# has to be provably free of observable effect.
+@testset "simple_update input release" begin
+    g = named_hexagonal_lattice_graph(2, 2)
+    ψ = random_tensornetworkstate(ComplexF64, g; bond_dimension = 6)
+    bpc = update(BeliefPropagationCache(ψ); maxiter = 4, tolerance = nothing)
+    apply_kwargs = (; maxdim = 6, cutoff = 1.0e-14)
+    TNQS = TensorNetworkQuantumSimulator
+
+    for e in TNQS.edges(bpc)
+        v⃗ = [src(e), dst(e)]
+        gate = TNQS.adapt_gate(
+            first(TNQS.toitensor(("Rxx", v⃗, 0.41), TNQS.graph(bpc), siteinds(network(bpc)))),
+            bpc
+        )
+        envs = TNQS.incoming_messages(bpc, v⃗)
+
+        # The consuming path (what apply_gate! uses) must agree exactly with the plain one.
+        applied, _ = TNQS.apply_gate!(gate, copy(bpc); v⃗, apply_kwargs)
+        keep = ITensors.ITensor[network(bpc)[v] for v in v⃗]
+        ref, _, _ = TNQS.simple_update(gate, keep; envs, consume_inputs = false, apply_kwargs...)
+        a = network(applied)[v⃗[1]] * network(applied)[v⃗[2]]
+        b = ref[1] * ref[2]
+        @test isapprox(a, b; atol = 1.0e-12)
+
+        # Not consuming leaves the caller's vector alone, and operating on a copy must never
+        # disturb the cache it was copied from.
+        @test all(!isempty(ITensors.inds(t)) for t in keep)
+        @test !isempty(ITensors.inds(network(bpc)[v⃗[1]]))
+
+        # Consuming empties it, which is the whole point.
+        take = ITensors.ITensor[network(bpc)[v] for v in v⃗]
+        TNQS.simple_update(gate, take; envs, consume_inputs = true, apply_kwargs...)
+        @test all(isempty(ITensors.inds(t)) for t in take)
+    end
+end
+
+# `blocked_gates!(true)` exists purely to bound peak memory, so it has to be numerically
+# indistinguishable from the standard branch -- including when a gate truncates the bond
+# (maxdim < χ) and when it grows it (maxdim > χ), which take different paths through the padding
+# in `_lmul_q`.
+@testset "Blocked two-site gate" begin
+    TNQS = TensorNetworkQuantumSimulator
+    g = named_hexagonal_lattice_graph(2, 2)
+
+    for (chi, normalize_tensors, maxdim) in
+        [(4, true, 4), (4, false, 4), (6, true, 3), (6, true, 12)]
+
+        ψ = random_tensornetworkstate(ComplexF64, g; bond_dimension = chi)
+        bpc = update(BeliefPropagationCache(ψ); maxiter = 4, tolerance = nothing)
+        apply_kwargs = (; maxdim, cutoff = 1.0e-14, normalize_tensors)
+        specialised = 0
+
+        for e in TNQS.edges(bpc)
+            v⃗ = [src(e), dst(e)]
+            gate = TNQS.adapt_gate(
+                first(TNQS.toitensor(("Rxx", v⃗, 0.41), TNQS.graph(bpc), siteinds(network(bpc)))),
+                bpc
+            )
+            envs = TNQS.incoming_messages(bpc, v⃗)
+            ψ⃗ = ITensors.ITensor[network(bpc)[v] for v in v⃗]
+
+            blocked = TNQS.blocked_two_site_update(
+                gate, copy(ψ⃗); envs, normalize_tensors, sqrt_cutoff = nothing,
+                consume_inputs = false, apply_kwargs...
+            )
+            isnothing(blocked) && continue
+            specialised += 1
+            reference = TNQS.simple_update(gate, copy(ψ⃗); envs, apply_kwargs...)
+
+            # Compared as the contracted pair: the two paths mint different bond Index ids.
+            @test isapprox(
+                blocked[1][1] * blocked[1][2], reference[1][1] * reference[1][2]; atol = 1.0e-11
+            )
+            @test isapprox(ITensors.norm(blocked[2]), ITensors.norm(reference[2]); atol = 1.0e-11)
+            @test isapprox(blocked[3], reference[3]; atol = 1.0e-11)
+        end
+        # Guards against the assertions above passing because everything fell back.
+        @test specialised > 0
+    end
+
+    # And the switch actually routes apply_gates through it.
+    ψ = random_tensornetworkstate(ComplexF64, g; bond_dimension = 4)
+    apply_kwargs = (; maxdim = 4, cutoff = 1.0e-14)
+    circuit = [("Rzz", [src(e), dst(e)], 0.2) for e in edges(g)]
+    plain, errs_plain = apply_gates(circuit, ψ; apply_kwargs)
+    blocked_gates!(true)
+    try
+        fast, errs_fast = apply_gates(circuit, ψ; apply_kwargs)
+        @test isapprox(errs_fast, errs_plain; atol = 1.0e-10)
+        for v in vertices(g)
+            @test isapprox(
+                expect(plain, ("Z", [v]); alg = "bp"), expect(fast, ("Z", [v]); alg = "bp");
+                atol = 1.0e-8
+            )
+        end
+    finally
+        blocked_gates!(false)
+    end
+    @test !blocked_gates()
+end
+
 end

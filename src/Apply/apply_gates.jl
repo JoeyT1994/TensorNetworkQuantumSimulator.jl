@@ -121,7 +121,20 @@ function apply_gate!(
     envs = nv == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
 
     ψ⃗ = ITensor[network(ψ_bpc)[v] for v in v⃗]
-    updated_tensors, s_values, err = simple_update(gate, ψ⃗; envs, apply_kwargs...)
+    if nv == 2
+        # `ψ⃗` now holds the only references that matter, and the results below overwrite these
+        # slots regardless. Releasing them here (together with `consume_inputs`) keeps a two-site
+        # update from pinning both site tensors while the QR intermediates -- each the same size
+        # again -- are alive. On a GPU that is the difference between reusing a block and growing
+        # the pool. An exception between here and the writeback leaves this cache incomplete, but
+        # `apply_gates` works on its own copy and an aborted circuit is discarded anyway.
+        for v in v⃗
+            setindex_preserve!(ψ_bpc, ITensor(), v)
+        end
+    end
+    updated_tensors, s_values, err = simple_update(
+        gate, ψ⃗; envs, consume_inputs = (nv == 2), apply_kwargs...
+    )
     if nv == 2
         v1, v2 = v⃗
         e = NamedEdge(v1 => v2)

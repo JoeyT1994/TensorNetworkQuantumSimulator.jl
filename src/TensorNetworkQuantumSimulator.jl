@@ -24,6 +24,7 @@ include("utils.jl")
 
 include("Apply/apply_gates.jl")
 include("Apply/simple_update.jl")
+include("Apply/blocked_gate.jl")
 include("Apply/full_update.jl")
 include("Apply/gate_definitions.jl")
 include("expect.jl")
@@ -66,6 +67,8 @@ export
     inner_mpi,
     gpu_direct_mpi,
     gpu_direct_mpi!,
+    blocked_gates,
+    blocked_gates!,
     rescale!,
     message,
     network,

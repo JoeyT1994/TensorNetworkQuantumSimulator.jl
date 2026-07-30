@@ -21,6 +21,8 @@ include(joinpath(@__DIR__, "mpi_runner.jl"))
             "validation",
             # The device->host->device fallback for a non-GPU-aware MPI.
             "host_staging_path", "host_staging_ring",
+            # apply_gates_mpi routed through the memory-bounded gate path.
+            "blocked_apply_path", "blocked_apply_ring",
         ],
         2
     )

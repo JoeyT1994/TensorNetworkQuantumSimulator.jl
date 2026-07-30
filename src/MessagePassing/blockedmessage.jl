@@ -92,11 +92,17 @@ function blocked_message!(outT_v, buf1, buf2, Tp, A, perm, ma, mb, S, chi, b)
     return outT
 end
 
-default_blocked_blocksize(::Algorithm"blocked") = 64
+# The block buffers are the whole overhead above the two factor-sized arrays: 2·S·χ²·b elements,
+# which is 2b/χ of a factor. So `b` has to scale with χ to hold a memory bound -- a constant 64 is
+# 12.5% of a factor at χ=1024 but 200% of one at χ=64, which is how the peak drifts from 2.1× to
+# 3.0×. χ/16 keeps the overhead at 12.5% everywhere, and the cap is where the closing gemm is
+# already compute-bound in fp32 so raising it only grows the peak.
+default_blocked_blocksize(chi::Integer) = clamp(chi ÷ 16, 1, 64)
 
 function set_default_kwargs(alg::Algorithm"blocked", bp_cache::AbstractBeliefPropagationCache)
     normalize = get(alg.kwargs, :normalize, default_normalize(Algorithm("contract")))
-    b = get(alg.kwargs, :b, default_blocked_blocksize(alg))
+    # `nothing` defers to χ, which is only known per edge in `updated_message`.
+    b = get(alg.kwargs, :b, nothing)
     return Algorithm("blocked"; normalize, b)
 end
 
@@ -132,7 +138,8 @@ function updated_message(
     la, lb = legs[ord]
     ma, mb = ms[ord]
 
-    b = min(alg.kwargs.b, chi)
+    # `clamp` rather than `min`: b must be at least 1 or the block loop gets a zero step.
+    b = clamp(isnothing(alg.kwargs.b) ? default_blocked_blocksize(chi) : alg.kwargs.b, 1, chi)
     A = array(T)                                  # dims follow inds(T); a view when dense
     sitepos = [i for i in eachindex(is) if is[i] ∉ (la, lb, le)]
     perm = (sitepos..., findfirst(==(la), is), findfirst(==(lb), is), findfirst(==(le), is))

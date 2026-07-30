@@ -589,6 +589,49 @@ function check_no_scalar_indexing()
     return nothing
 end
 
+# `blocked_gates!(true)` is a process-global switch, and `apply_gates_mpi` reaches
+# `simple_update` through the same `apply_gate!` as the serial path, so flipping it is all that is
+# needed to route a distributed run through the memory-bounded gate. This asserts that: the
+# distributed result with the switch on must still match the serial reference with it off.
+function run_blocked_apply_case(case)
+    g = case.g
+    ψ = global_state(g)
+    my_vertices = case.parts[RANK + 1]
+    bp_update_kwargs = (; maxiter = case.maxiter, tolerance = nothing)
+    apply_kwargs = (; maxdim = 16, cutoff = 0.0, normalize_tensors = false)
+    circuit = trotter_layer(g)
+
+    # Reference: serial, standard gate path.
+    serial, serial_errs = TNQS.apply_gates(circuit, ψ; apply_kwargs, bp_update_kwargs)
+
+    blocked_gates!(true)
+    local_ψ, errs = try
+        TNQS.apply_gates_mpi(
+            circuit, local_partition(ψ, my_vertices), g, case.shared;
+            comm = COMM, bp_update_kwargs, apply_kwargs
+        )
+    finally
+        blocked_gates!(false)
+    end
+    check(!blocked_gates(), "the switch is restored afterwards")
+    check(
+        isapprox(errs, serial_errs; atol = 1.0e-10),
+        "blocked distributed truncation errors match serial: max |Δ| = " *
+            "$(maximum(abs.(errs - serial_errs)))"
+    )
+
+    mpi_bpc = update(
+        TNQS.BeliefPropagationCacheMPI(seeded_cache(local_ψ), g, case.shared; comm = COMM);
+        bp_update_kwargs...
+    )
+    serial_bpc = update(BeliefPropagationCache(serial); bp_update_kwargs...)
+    for v in my_vertices, op in ("Z", "X")
+        a, b = expect(mpi_bpc, (op, [v])), expect(serial_bpc, (op, [v]))
+        check(isapprox(a, b; atol = 1.0e-8), "blocked <$(op)_$v> = $a vs serial $b")
+    end
+    return mpi_bpc
+end
+
 const CASES = Dict(
     "path" => (run_case, path_case),
     "ring" => (run_case, ring_case),
@@ -604,7 +647,9 @@ const CASES = Dict(
     "defaults_chain3" => (run_default_kwargs_case, chain3_case),
     "validation" => (run_validation_case, path_case),
     "host_staging_path" => (run_host_staging_case, path_case),
-    "host_staging_ring" => (run_host_staging_case, ring_case)
+    "host_staging_ring" => (run_host_staging_case, ring_case),
+    "blocked_apply_path" => (run_blocked_apply_case, apply_path_case),
+    "blocked_apply_ring" => (run_blocked_apply_case, apply_ring_case)
 )
 
 # Every case named on the command line runs in this one process. Loading the package and
