@@ -53,6 +53,21 @@ function scratch_buffer!(ref::Base.RefValue{Any}, proto::AbstractVector, n::Int)
     return s
 end
 
+# Give the buffer back between updates: it is the largest single allocation the MPI cache
+# holds, and nothing outside `updated_message` reads it, so holding it across gate
+# application costs `apply_gate!` the memory its SVD needs. `scratch_buffer!` rebuilds it on
+# the next message update, where the `Bool[]` sentinel fails its `isa typeof(proto)` check.
+function release_message_scratch!(bp_cache::AbstractBeliefPropagationCache)
+    ref = message_scratch(bp_cache)
+    s = ref[]
+    # `resize!` on a CuVector returns the device allocation to CUDA's pool here rather than
+    # at the next finalizer run; on a Vector it does nothing that dropping the reference
+    # below would not already do.
+    applicable(resize!, s, 0) && resize!(s, 0)
+    ref[] = Bool[]
+    return bp_cache
+end
+
 # out[l_e', l_e] = Σ_{s,l_a,l_b} conj(T)[s,l_a',l_b',l_e'] ma[l_a,l_a'] mb[l_b,l_b'] T[s,l_a,l_b,l_e]
 #
 # `A` is the ket tensor's raw array in whatever index order the ITensor happens to have and

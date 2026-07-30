@@ -107,8 +107,8 @@ function default_tolerance(type)
     return nothing
 end
 
-function default_bp_update_kwargs(tn::AbstractTensorNetwork)
-    if is_tree(tn)
+function default_bp_update_kwargs(tn::AbstractTensorNetwork; istree = is_tree(tn))
+    if istree
         maxiter, tolerance, verbose = 1, nothing, false
     else
         maxiter, tolerance, verbose = _default_bp_update_maxiter, default_tolerance(ITensors.NDTensors.scalartype(tn)), false

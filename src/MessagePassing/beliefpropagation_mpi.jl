@@ -251,6 +251,16 @@ function update_iteration!(
     return bpc
 end
 
+# The blocked message update's scratch buffer is only read inside a sweep, so it is released
+# on the way out and reallocated by the next sweep's first `updated_message`. The buffer is
+# shared with every copy of this cache, including the one `update` was handed, so the release
+# frees the memory for whatever runs next (`apply_gate!`'s SVD) rather than only for the
+# returned cache.
+function update(alg::Algorithm"bp", bp_cache::BeliefPropagationCacheMPI)
+    bp_cache = @invoke update(alg::Algorithm"bp", bp_cache::AbstractBeliefPropagationCache)
+    return release_message_scratch!(bp_cache)
+end
+
 # Pass `gate_vertices` resolved against `super_graph`. The default reads them off the local
 # network, silently reducing a remote gate to zero vertices and a boundary-straddling two-site
 # gate to one.
@@ -260,7 +270,7 @@ function apply_gates_mpi(
         super_graph::AbstractGraph,
         shared_vertices::Dictionary;
         comm::MPI.Comm = MPI.COMM_WORLD,
-        bp_update_kwargs = default_bp_update_kwargs(ψ),
+        bp_update_kwargs = default_bp_update_kwargs(ψ; istree = is_tree(super_graph)),
         kwargs...
     )
     ψ_bpc = BeliefPropagationCache(ψ)
