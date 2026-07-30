@@ -426,12 +426,28 @@ struct BeliefPropagationCacheMPI{
     recv_order::Dictionary{Int32, Vector{NamedEdge{V}}} # peer -> edges, canonically ordered
     buffers::ExchangeBuffers
     comm::MPI.Comm
+    # Flat work buffer for the "blocked" message update (see blockedmessage.jl). Starts
+    # empty and is grown to fit on first use; a `Ref` so it can be replaced from an
+    # immutable struct. It holds no semantic state, so `copy` shares it rather than
+    # reallocating -- `update` copies the cache on every call.
+    scratch::Base.RefValue{Any}
 end
 
 local_cache(bp_cache::BeliefPropagationCacheMPI) = bp_cache.local_cache
 messages_graph(bp_cache::BeliefPropagationCacheMPI) = bp_cache.messages_graph
 super_graph(bp_cache::BeliefPropagationCacheMPI) = bp_cache.super_graph
 communicator(bp_cache::BeliefPropagationCacheMPI) = bp_cache.comm
+message_scratch(bp_cache::BeliefPropagationCacheMPI) = bp_cache.scratch
+
+# Five-field form for callers predating the scratch buffer: starts empty, grown on demand.
+function BeliefPropagationCacheMPI(
+        local_cache, messages_graph, shared_vertices, edges_to_send, edges_to_recv, comm
+    )
+    return BeliefPropagationCacheMPI(
+        local_cache, messages_graph, shared_vertices, edges_to_send, edges_to_recv, comm,
+        Base.RefValue{Any}(Bool[])
+    )
+end
 
 # The wrapped cache's network and messages are shared by reference, so mutating through
 # either view is visible to both.
@@ -465,6 +481,8 @@ function Base.copy(bp_cache::BeliefPropagationCacheMPI)
         copy(bp_cache.shared_vertices),
         copy(bp_cache.edges_to_send),
         copy(bp_cache.edges_to_recv),
+        communicator(bp_cache), # shared, not duplicated: a copy stays on the same comm
+        message_scratch(bp_cache) # also shared: pure scratch, and `update` copies per call
         bp_cache.send_order,
         bp_cache.recv_order,
         bp_cache.buffers,
