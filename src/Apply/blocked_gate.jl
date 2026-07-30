@@ -55,7 +55,8 @@ function blocked_gates!(enabled::Bool)
 end
 
 # Flatten `t` into an `m x n` matrix whose row space is `rowinds` and column space is `colinds`,
-# in exactly that order, as a buffer that may be overwritten. `permute` copies (the one copy this
+# in exactly that order, as a buffer that may be overwritten. The copy is load-bearing: `qr!`
+# overwrites its argument, so this must not alias the network's tensor. `permute` copies (the one copy this
 # path makes) and `array` is a reshaped view onto that copy's storage, so no further allocation
 # happens here.
 function _matrixize(t::ITensor, rowinds, colinds)
@@ -64,24 +65,19 @@ function _matrixize(t::ITensor, rowinds, colinds)
     return reshape(array(permute(t, rowinds..., colinds...)), m, n)
 end
 
-# Small, so a contiguous copy of the triangular factor costs nothing and avoids reshaping a view.
-function _dense_r(F, prototype)
-    R = F.R
-    out = similar(prototype, size(R, 1), size(R, 2))
-    copyto!(out, R)
-    return out
-end
-
 # `Q * Rn`, where Q is only ever present as the reflectors inside `F`.
 #
 # `lmul!` applies the full m-by-m Q, so the target has to have m rows: `Rn` is written into the
 # leading `r` rows of an m-by-n buffer and the rest zeroed. Because the trailing rows are zero and
 # Q's leading r columns are the thin Q, the product is exactly `thin_Q * Rn` -- and the buffer is
 # the result, so the padding costs nothing extra.
-function _lmul_q(F, Rn::ITensor, r::Index, m::Integer, rowinds)
+function _lmul_q(F, Rn::ITensor, r::Index, rowinds)
     colinds = filter(!isequal(r), collect(inds(Rn)))
-    rr, nn = dim(r), prod(dim, colinds; init = 1)
-    Rmat = _matrixize(Rn, [r], colinds)
+    m = prod(dim, rowinds; init = 1)
+    # Read-only, so `array` (which aliases when the layout already matches) rather than the
+    # always-copying `_matrixize`.
+    Rmat = reshape(array(Rn, r, colinds...), dim(r), prod(dim, colinds; init = 1))
+    rr, nn = size(Rmat)
 
     C = similar(Rmat, m, nn)
     fill!(C, zero(eltype(C)))
@@ -142,8 +138,6 @@ function blocked_two_site_update(
     rinds₁ = filter(i -> i ∉ qinds₁, collect(inds(ψᵥ₁)))
     rinds₂ = filter(i -> i ∉ qinds₂, collect(inds(ψᵥ₂)))
 
-    m₁ = prod(dim, qinds₁; init = 1)
-    m₂ = prod(dim, qinds₂; init = 1)
     M₁ = _matrixize(ψᵥ₁, qinds₁, rinds₁)
     ψᵥ₁ = ITensor()
     M₂ = _matrixize(ψᵥ₂, qinds₂, rinds₂)
@@ -153,14 +147,12 @@ function blocked_two_site_update(
     F₁ = qr!(M₁)
     F₂ = qr!(M₂)
 
-    rᵥ₁ = Index(size(F₁.R, 1))
-    rᵥ₂ = Index(size(F₂.R, 1))
-    Rᵥ₁ = itensor(
-        reshape(_dense_r(F₁, M₁), dim(rᵥ₁), dim.(rinds₁)...), rᵥ₁, rinds₁...
-    )
-    Rᵥ₂ = itensor(
-        reshape(_dense_r(F₂, M₂), dim(rᵥ₂), dim.(rinds₂)...), rᵥ₂, rinds₂...
-    )
+    # `F.R` already allocates a fresh contiguous upper-triangular matrix, so it is reshaped
+    # directly -- and the rank is read off `M` rather than by materialising `R` a second time.
+    rᵥ₁ = Index(min(size(M₁)...))
+    rᵥ₂ = Index(min(size(M₂)...))
+    Rᵥ₁ = itensor(reshape(F₁.R, dim(rᵥ₁), dim.(rinds₁)...), rᵥ₁, rinds₁...)
+    Rᵥ₂ = itensor(reshape(F₂.R, dim(rᵥ₂), dim.(rinds₂)...), rᵥ₂, rinds₂...)
 
     # The coupled problem is small (the QR ranks are S·χ, not χ²), so it keeps going through
     # `factorize_svd` -- matching the standard path's truncation semantics exactly rather than
@@ -172,17 +164,13 @@ function blocked_two_site_update(
     )
     s_values = singular_values![]
 
-    out₁ = _lmul_q(F₁, Rᵥ₁, rᵥ₁, m₁, qinds₁)
+    out₁ = _lmul_q(F₁, Rᵥ₁, rᵥ₁, qinds₁)
     F₁ = M₁ = nothing            # reflectors dead; release before the second site's buffer
-    for env in inv_sqrt_envs_v1
-        out₁ = out₁ * dag(env)
-    end
+    out₁ = absorb_envs(out₁, inv_sqrt_envs_v1)
 
-    out₂ = _lmul_q(F₂, Rᵥ₂, rᵥ₂, m₂, qinds₂)
+    out₂ = _lmul_q(F₂, Rᵥ₂, rᵥ₂, qinds₂)
     F₂ = M₂ = nothing
-    for env in inv_sqrt_envs_v2
-        out₂ = out₂ * dag(env)
-    end
+    out₂ = absorb_envs(out₂, inv_sqrt_envs_v2)
 
     updated_tensors = ITensor[out₁, out₂]
     if normalize_tensors

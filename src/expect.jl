@@ -119,7 +119,7 @@ end
 
 function expect(
         alg::Algorithm"bp",
-        cache::BeliefPropagationCache,
+        cache::AbstractBeliefPropagationCache,
         observables::Vector{<:Tuple};
         kwargs...,
     )

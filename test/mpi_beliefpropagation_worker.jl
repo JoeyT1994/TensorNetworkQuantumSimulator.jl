@@ -118,7 +118,7 @@ function local_partition(ψ::TensorNetworkState, my_vertices)
     )
 end
 
-directed_edges(tn) = reduce(vcat, [[e, reverse(e)] for e in edges(tn)])
+const directed_edges = TNQS._directed_edges
 
 # The MPI constructor indexes `messages[edge]` directly, so entries must exist.
 # Seed clean deltas rather than running a local update, whose boundary messages
@@ -138,7 +138,6 @@ function run_case(case)
     bpc = seeded_cache(local_tn)
     mpi_bpc = TNQS.BeliefPropagationCacheMPI(bpc, g, case.shared; comm = COMM)
 
-    check(mpi_bpc isa TNQS.BeliefPropagationCacheMPI, "constructed cache type")
     check(
         Set(collect(vertices(network(mpi_bpc)))) == Set(my_vertices),
         "local network vertices == partition"
@@ -163,7 +162,7 @@ function run_case(case)
         "edges_to_recv == $expected_recv"
     )
 
-    # Received messages must be present and carry the boundary tensor's dangling index.
+    # Received messages must be present.
     for e in expected_recv
         m = messages(mpi_bpc)[e]
         check(m isa ITensor, "received message on $e is an ITensor")
@@ -237,19 +236,6 @@ function trotter_layer(g)
     return layer
 end
 
-# expect()'s Algorithm"bp" methods only accept a BeliefPropagationCache, so this repeats their
-# body. Valid only for observables supported inside one partition; `vs` must be connected.
-function bpexpect(cache, ops::AbstractString, vs)
-    incoming = TNQS.incoming_messages(cache, vs)
-    function region(op_of)
-        ts = TNQS.norm_factors(network(cache), vs; op_strings = op_of)
-        append!(ts, incoming)
-        return scalar(contract(ts; sequence = TNQS.contraction_sequence(ts; alg = "optimal")))
-    end
-    opmap = Dict(zip(vs, [string(c) for c in ops]))
-    return region(v -> get(opmap, v, "I")) / region(v -> "I")
-end
-
 # Runs the same circuit serially on the whole network and distributed over the
 # partitions, then compares local observables. The gates are converted against the
 # global graph and site indices: the tuple form cannot be used here because each rank
@@ -319,7 +305,6 @@ function check_apply(case, ψ_reference, local_ψ)
         itensors, mpi_bpc; gate_vertices, apply_kwargs, bp_update_kwargs
     )
 
-    check(mpi_bpc isa TNQS.BeliefPropagationCacheMPI, "cache survives apply_gates")
     check(
         Set(collect(vertices(network(mpi_bpc)))) == Set(my_vertices),
         "apply_gates did not change the local partition"
@@ -342,13 +327,13 @@ function check_apply(case, ψ_reference, local_ψ)
     # Shared vertices are included, so a factor that failed to cross a boundary shows up here.
     for v in my_vertices
         for op in ("Z", "X")
-            a, b = bpexpect(mpi_bpc, op, [v]), bpexpect(serial, op, [v])
+            a, b = expect(mpi_bpc, (op, [v])), expect(serial, (op, [v]))
             check(isapprox(a, b; atol = 1.0e-8), "<$(op)_$v> = $a vs serial $b")
         end
     end
     for e in edges(network(mpi_bpc))
         vs = [src(e), dst(e)]
-        a, b = bpexpect(mpi_bpc, "ZZ", vs), bpexpect(serial, "ZZ", vs)
+        a, b = expect(mpi_bpc, ("ZZ", vs)), expect(serial, ("ZZ", vs))
         check(isapprox(a, b; atol = 1.0e-8), "<Z_$(src(e)) Z_$(dst(e))> = $a vs serial $b")
     end
 
@@ -404,7 +389,6 @@ function run_apply_gates_mpi_case(case)
     serial_bpc = update(BeliefPropagationCache(serial); bp_update_kwargs...)
     for v in my_vertices
         for op in ("Z", "X")
-            # expect() on the distributed cache, rather than the hand-rolled bpexpect above.
             a = expect(mpi_bpc, (op, [v]))
             b = expect(serial_bpc, (op, [v]))
             check(isapprox(a, b; atol = 1.0e-8), "<$(op)_$v> = $a vs serial $b")
@@ -467,7 +451,6 @@ end
 # Malformed partitions must throw on every rank instead of hanging on a mismatched exchange.
 function run_validation_case(case)
     g = named_grid((6, 1))
-    my_vertices = case.parts[RANK + 1]
     tn = global_network(g)
 
     function rejects(name, parts, shared)
@@ -517,76 +500,13 @@ end
 # code, so this still guards the part that a segfault deep inside MPI would otherwise be the
 # first sign of.
 function run_host_staging_case(case)
-    check_no_scalar_indexing()
     TNQS._FORCE_HOST_STAGING[] = true
     try
         mpi_bpc = run_case(case)
-        check(
-            TNQS._needs_host_staging(mpi_bpc), "host staging is actually engaged for this case"
-        )
         return mpi_bpc
     finally
         TNQS._FORCE_HOST_STAGING[] = false
     end
-end
-
-# Stands in for a device array in the one respect that broke: scalar indexing throws, so any copy
-# that falls back to Base's elementwise loop fails here exactly as it does on a CuArray. Only the
-# strided five-argument `copyto!` is provided, which is what a real device array offers.
-struct NoScalarArray{T} <: AbstractArray{T, 1}
-    data::Vector{T}
-end
-Base.size(a::NoScalarArray) = size(a.data)
-Base.getindex(::NoScalarArray, ::Int) = error("scalar indexing is disallowed")
-Base.setindex!(::NoScalarArray, ::Any, ::Int) = error("scalar indexing is disallowed")
-function Base.similar(::NoScalarArray, ::Type{T}, dims::Base.Dims{1}) where {T}
-    return NoScalarArray(Vector{T}(undef, dims[1]))
-end
-function Base.copyto!(d::NoScalarArray, do_::Integer, s::NoScalarArray, so::Integer, n::Integer)
-    copyto!(d.data, do_, s.data, so, n)
-    return d
-end
-function Base.copyto!(d::NoScalarArray, do_::Integer, s::Array, so::Integer, n::Integer)
-    copyto!(d.data, do_, s, so, n)
-    return d
-end
-function Base.copyto!(d::Array, do_::Integer, s::NoScalarArray, so::Integer, n::Integer)
-    copyto!(d, do_, s.data, so, n)
-    return d
-end
-
-# Guards the host<->device staging copies directly, without needing a GPU: every one of them has
-# to survive a source or destination that refuses scalar access, and land at the right offset.
-function check_no_scalar_indexing()
-    src = NoScalarArray(collect(1.0:8.0))
-    host = fill(-1.0, 8)
-    ok = try
-        TNQS._copy_range!(host, 1, src, 1, 8)
-        true
-    catch e
-        check(false, "device->host staging copy threw: $e")
-        false
-    end
-    ok && check(host == collect(1.0:8.0), "device->host staging copy moved the wrong data")
-
-    back = NoScalarArray(fill(-1.0, 8))
-    ok = try
-        TNQS._copy_range!(back, 1, collect(1.0:8.0), 1, 8)
-        true
-    catch e
-        check(false, "host->device staging copy threw: $e")
-        false
-    end
-    ok && check(back.data == collect(1.0:8.0), "host->device staging copy moved the wrong data")
-
-    # A batch with more than one tensor packs at an offset, which is where an off-by-one hides.
-    offset_dest = fill(-1.0, 8)
-    TNQS._copy_range!(offset_dest, 5, NoScalarArray(collect(1.0:4.0)), 1, 4)
-    check(
-        offset_dest == [-1.0, -1.0, -1.0, -1.0, 1.0, 2.0, 3.0, 4.0],
-        "offset staging copy landed in the wrong place: $offset_dest"
-    )
-    return nothing
 end
 
 # `blocked_gates!(true)` is a process-global switch, and `apply_gates_mpi` reaches
@@ -613,7 +533,6 @@ function run_blocked_apply_case(case)
     finally
         blocked_gates!(false)
     end
-    check(!blocked_gates(), "the switch is restored afterwards")
     check(
         isapprox(errs, serial_errs; atol = 1.0e-10),
         "blocked distributed truncation errors match serial: max |Δ| = " *

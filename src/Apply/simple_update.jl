@@ -126,8 +126,14 @@ end
 # smaller when a gate truncates but larger whenever a gate grows the bond, and an unpredictable
 # peak is the thing worth avoiding here.
 function absorb_and_close(Q::ITensor, envs, R::ITensor)
+    return absorb_envs(Q, envs) * R
+end
+
+# Ungauge the environments off `t`, one at a time so each factor-sized intermediate is dropped
+# before the next is allocated.
+function absorb_envs(t::ITensor, envs)
     for env in envs
-        Q = Q * dag(env)
+        t = t * dag(env)
     end
-    return Q * R
+    return t
 end

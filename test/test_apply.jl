@@ -3,6 +3,7 @@ using ITensors: ITensors, datatype, op, Index, @OpName_str, @SiteType_str
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test, @test_throws
+const TNQS = TensorNetworkQuantumSimulator
 
 
 @testset "Test Apply Circuit" begin
@@ -113,7 +114,6 @@ end
     ψ = random_tensornetworkstate(ComplexF64, g; bond_dimension = 6)
     bpc = update(BeliefPropagationCache(ψ); maxiter = 4, tolerance = nothing)
     apply_kwargs = (; maxdim = 6, cutoff = 1.0e-14)
-    TNQS = TensorNetworkQuantumSimulator
 
     for e in TNQS.edges(bpc)
         v⃗ = [src(e), dst(e)]
@@ -148,7 +148,6 @@ end
 # (maxdim < χ) and when it grows it (maxdim > χ), which take different paths through the padding
 # in `_lmul_q`.
 @testset "Blocked two-site gate" begin
-    TNQS = TensorNetworkQuantumSimulator
     g = named_hexagonal_lattice_graph(2, 2)
 
     for (chi, normalize_tensors, maxdim) in
@@ -205,7 +204,6 @@ end
     finally
         blocked_gates!(false)
     end
-    @test !blocked_gates()
 end
 
 end

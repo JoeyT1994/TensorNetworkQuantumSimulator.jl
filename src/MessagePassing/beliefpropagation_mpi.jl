@@ -34,7 +34,7 @@ struct TensorBatch
     eltype::DataType
 end
 
-_batch_lengths(b::TensorBatch) = [prod(dim.(is); init = 1) for is in b.inds]
+_batch_lengths(b::TensorBatch) = [prod(dim, is; init = 1) for is in b.inds]
 
 # Sender and receiver have to agree on the memory layout of a tensor without having exchanged
 # it, so indices are always permuted into ascending `(id, plev)` order before the storage is
@@ -53,20 +53,24 @@ end
 # else (block-sparse, diagonal) falls back to serialising the tensors themselves.
 function _is_raw_transferable(t::ITensor)
     ITensors.storage(t) isa NDTensors.Dense || return false
-    return length(ITensors.data(t)) == prod(dim.(inds(t)); init = 1)
+    return length(ITensors.data(t)) == prod(dim, inds(t); init = 1)
 end
 
 # An array that already lives wherever the network's tensors do, used only as a `similar` template
 # for the exchange buffers. Taken from a real tensor rather than from `datatype`, which can come
 # back as a UnionAll with the element type still free (`CuArray{T,1,DeviceMemory} where T`) and so
-# cannot be constructed directly. `bp_factors` rather than `tn[v]` so this also works for a form,
-# whose vertices hold several tensors.
+# cannot be constructed directly.
+#
+# Reads the stored tensor directly rather than going through `bp_factors`: for a state that builds
+# `dag(prime(T))`, a full conjugated copy of a site tensor, which this would allocate and throw
+# away on every call -- and it is called once per peer per exchange.
+_prototype_tensor(tn::AbstractTensorNetwork, v) = tn[v]
+_prototype_tensor(form::AbstractForm, v) = ket(form)[v]
+
 function _storage_prototype(bp_cache)
     tn = network(bp_cache)
     for v in vertices(tn)
-        factors = bp_factors(tn, [v])
-        isempty(factors) && continue
-        return ITensors.data(first(factors))
+        return ITensors.data(_prototype_tensor(tn, v))
     end
     return nothing
 end
@@ -78,13 +82,17 @@ function _alloc_buffer(bp_cache, T::Type, n::Integer)
     return isnothing(prototype) ? Vector{T}(undef, n) : similar(prototype, T, n)
 end
 
+_device_alloc(bp_cache) = (T, n) -> _alloc_buffer(bp_cache, T, n)
+_host_alloc(T::Type, n::Integer) = Vector{T}(undef, n)
+
 # Payload buffers are pure scratch, so they are grown rather than reallocated. Keyed by element
-# type as well as peer because messages and factors need not share a scalar type.
-function _staging!(store::Dict, bp_cache, peer::Integer, T::Type, n::Integer)
+# type as well as peer because messages and factors need not share a scalar type. `alloc` picks
+# the memory space: device-side for the payload proper, host-side for the staging mirrors.
+function _staging!(alloc, store::Dict, peer::Integer, T::Type, n::Integer)
     key = (Int32(peer), T)
     buf = get(store, key, nothing)
     if buf === nothing || length(buf) < n
-        buf = _alloc_buffer(bp_cache, T, max(n, 1))
+        buf = alloc(T, max(n, 1))
         store[key] = buf
     end
     return buf
@@ -100,19 +108,6 @@ function _copy_range!(dest, doffset::Integer, src, soffset::Integer, n::Integer)
     iszero(n) && return dest
     copyto!(dest, doffset, src, soffset, n)
     return dest
-end
-
-# Host mirrors of the payload buffers, used only when the MPI build cannot read device memory.
-_alloc_host_buffer(T::Type, n::Integer) = Vector{T}(undef, n)
-
-function _host_staging!(store::Dict, peer::Integer, T::Type, n::Integer)
-    key = (Int32(peer), T)
-    buf = get(store, key, nothing)
-    if buf === nothing || length(buf) < n
-        buf = _alloc_host_buffer(T, max(n, 1))
-        store[key] = buf
-    end
-    return buf
 end
 
 # Scratch space for the raw payload exchange. Shared by reference across `copy`, like `comm`:
@@ -252,7 +247,7 @@ function _prepare_send(bp_cache, peer, values)
     end
 
     n = sum(lengths)
-    buf = _staging!(bp_cache.buffers.send, bp_cache, peer, T, n)
+    buf = _staging!(_device_alloc(bp_cache), bp_cache.buffers.send, peer, T, n)
     offset = 0
     for (t, len) in zip(canonical, lengths)
         _copy_range!(buf, offset + 1, ITensors.data(t), 1, len)
@@ -265,7 +260,7 @@ function _prepare_send(bp_cache, peer, values)
         return header, view(buf, 1:n)
     end
 
-    hbuf = _host_staging!(bp_cache.buffers.send_host, peer, T, n)
+    hbuf = _staging!(_host_alloc, bp_cache.buffers.send_host, peer, T, n)
     _copy_range!(hbuf, 1, buf, 1, n)
     return header, view(hbuf, 1:n)
 end
@@ -324,11 +319,9 @@ function _exchange!(
     # `Waitall`, so none of them can be collected while MPI is reading or writing it.
     # Keyed rather than positional: a peer whose header took the serialised fallback has no
     # payload, so a parallel array here would slip out of step with `recv_headers`.
-    # `_scatter!` must read a payload that lives wherever the network's tensors do, so when MPI
-    # cannot write into device memory the data lands in a host mirror and is copied across after
-    # `Waitall`. `recv_payloads` always holds the device-resident view.
     # `recv_payloads` holds whole staging buffers, always the ones in the same memory space as the
-    # network's tensors. Views are built only where MPI needs them.
+    # network's tensors; when MPI cannot write there the data lands in a host mirror and is copied
+    # across after `Waitall`. Views are built only where MPI needs them.
     host_staging = _needs_host_staging(bp_cache)
     recv_payloads = Dict{Int32, Any}()
     recv_mirrors = Dict{Int32, Any}()
@@ -336,11 +329,11 @@ function _exchange!(
     for (peer, header) in recv_headers
         header isa TensorBatch || continue
         n = sum(_batch_lengths(header); init = 0)
-        buffer = _staging!(bp_cache.buffers.recv, bp_cache, peer, header.eltype, n)
+        buffer = _staging!(_device_alloc(bp_cache), bp_cache.buffers.recv, peer, header.eltype, n)
         recv_payloads[peer] = buffer
         recv_lengths[peer] = n
         if host_staging
-            mirror = _host_staging!(bp_cache.buffers.recv_host, peer, header.eltype, n)
+            mirror = _staging!(_host_alloc, bp_cache.buffers.recv_host, peer, header.eltype, n)
             recv_mirrors[peer] = mirror
             push!(requests, MPI.Irecv!(view(mirror, 1:n), comm; source = peer, tag = payload_tag))
         else
@@ -439,6 +432,11 @@ super_graph(bp_cache::BeliefPropagationCacheMPI) = bp_cache.super_graph
 communicator(bp_cache::BeliefPropagationCacheMPI) = bp_cache.comm
 message_scratch(bp_cache::BeliefPropagationCacheMPI) = bp_cache.scratch
 
+function release_message_scratch!(bp_cache::BeliefPropagationCacheMPI)
+    message_scratch(bp_cache)[] = Bool[]
+    return bp_cache
+end
+
 # The wrapped cache's network and messages are shared by reference, so mutating through
 # either view is visible to both.
 for f in [
@@ -484,6 +482,14 @@ end
 function _directed_edges(x)
     es = collect(edges(x))
     return isempty(es) ? es : reduce(vcat, [[e, reverse(e)] for e in es])
+end
+
+# Seed deltas, not a serial update: that update's `incoming_messages` sees only local edges, so it
+# never contracts the cut bonds' dangling indices and they survive as free indices in the boundary
+# messages, which then have ndims > 2.
+function _seed_default_messages!(bpc::AbstractBeliefPropagationCache)
+    es = _directed_edges(bpc)
+    return setmessages!(bpc, es, [default_message(bpc, e) for e in es])
 end
 
 # Moving the cache to a GPU is how the raw-payload exchange becomes GPU-direct: once the
@@ -862,26 +868,6 @@ end
 # Belief propagation
 # ---------------------------------------------------------------------------------------------
 
-# Boundary messages arrive on ghost edges, which only messages_graph knows about.
-function incoming_messages(
-        bp_cache::BeliefPropagationCacheMPI, vertices::Vector{<:Any}; ignore_edges = []
-    )
-    b_edges = boundary_edges(messages_graph(bp_cache), vertices; dir = :in)
-    b_edges = !isempty(ignore_edges) ? setdiff(b_edges, ignore_edges) : b_edges
-    return messages(bp_cache, b_edges)
-end
-
-# Cannot forward to the local cache: updated_message() must dispatch on this type for
-# incoming_messages() to pick up the ghost edges.
-function update_message!(
-        message_update_alg::Algorithm, bp_cache::BeliefPropagationCacheMPI, edge::AbstractEdge
-    )
-    m, (cache_key, sequence, seq_changed) =
-        updated_message(message_update_alg, bp_cache, edge)
-    seq_changed && set!(contraction_sequences(bp_cache), cache_key, sequence)
-    return setmessage!(bp_cache, edge, m)
-end
-
 # Boundary messages advance one partition per sweep, so a rank's own subgraph does not say how
 # many sweeps are needed: `is_tree` on a partition of a tree is true, but a chain of P
 # partitions still needs P sweeps for information to cross it. Worse, if two ranks disagree
@@ -933,67 +919,23 @@ function set_default_kwargs(alg::Algorithm"bp", bp_cache::BeliefPropagationCache
     )
 end
 
-function update_iteration!(
-        alg::Algorithm"bp",
-        bpc::BeliefPropagationCacheMPI,
-        edges::Vector;
-        (update_diff!) = nothing
-    )
-    for e in edges
-        prev_message = !isnothing(update_diff!) ? message(bpc, e) : nothing
-        update_message!(alg.kwargs.message_update_alg, bpc, e)
-        if !isnothing(update_diff!)
-            update_diff![] += message_diff(message(bpc, e), prev_message)
-        end
-    end
-    return communicate_messages!(bpc)
+# The three deltas from the generic BP loop. Everything else -- the sweep, the convergence test,
+# the reporting -- is the shared implementation in abstractbeliefpropagationcache.jl.
+sync_messages!(bpc::BeliefPropagationCacheMPI) = communicate_messages!(bpc)
+
+# Every graph edge lies inside exactly one partition (the constructor checks this), so the local
+# counts sum to the global one. Allreduce returns the same value on every rank, so the tolerance
+# test below breaks the loop at the same sweep everywhere -- and dividing once after the reduction
+# keeps a rank holding no edges from computing 0/0 and never converging.
+function diff_denominator(bpc::BeliefPropagationCacheMPI, edges)
+    return MPI.Allreduce(length(edges), MPI.SUM, communicator(bpc))
 end
 
-# Collective, and a near-copy of the generic `update` -- the difference is that the convergence
-# test is taken on the global average so that every rank leaves the loop on the same sweep.
-function update(alg::Algorithm"bp", bpc::BeliefPropagationCacheMPI)
-    isnothing(alg.kwargs.maxiter) && error("You need to specify a number of iterations for BP!")
-    comm = communicator(bpc)
-    isroot = iszero(MPI.Comm_rank(comm))
-    compute_error = !isnothing(alg.kwargs.tolerance)
+reduce_diff(bpc::BeliefPropagationCacheMPI, diff) =
+    MPI.Allreduce(diff, MPI.SUM, communicator(bpc))
 
-    bpc = copy(bpc)
-    invalidate_contraction_sequences!(bpc)
-
-    # `update_iteration!` only accumulates this rank's edges. Every graph edge lies inside
-    # exactly one partition, so the local counts sum to the global one.
-    nglobal = MPI.Allreduce(length(alg.kwargs.edge_sequence), MPI.SUM, comm)
-
-    converged, avg_diff, niter = false, nothing, alg.kwargs.maxiter
-    for i in 1:alg.kwargs.maxiter
-        diff = compute_error ? Ref(0.0) : nothing
-        update_iteration!(alg, bpc, alg.kwargs.edge_sequence; (update_diff!) = diff)
-        compute_error || continue
-        # Allreduce yields the same value on every rank, so the test below breaks the loop at
-        # the same sweep everywhere. Reducing the sum and dividing once also keeps a rank that
-        # holds no edges from computing 0/0 and never converging.
-        total = MPI.Allreduce(diff[], MPI.SUM, comm)
-        avg_diff = iszero(nglobal) ? 0.0 : total / nglobal
-        if avg_diff <= alg.kwargs.tolerance
-            converged, niter = true, i
-            break
-        end
-    end
-
-    # Reported once for the run rather than once per rank.
-    if compute_error && isroot
-        if converged
-            alg.kwargs.verbose &&
-                println("BP converged to desired precision after $niter iterations.")
-        else
-            msg = "BP did not converge to tolerance $(alg.kwargs.tolerance) after $niter iterations (final average message change: $avg_diff)."
-            alg.kwargs.verbose ? println(msg) : @warn(msg)
-        end
-    end
-
-    invalidate_contraction_sequences!(bpc)
-    return bpc
-end
+# Otherwise the non-convergence warning fires once per rank.
+reports_convergence(bpc::BeliefPropagationCacheMPI) = iszero(MPI.Comm_rank(communicator(bpc)))
 
 # Local edges only -- every edge lies inside exactly one partition. Rescaling one changes a
 # message the peer holds a copy of, hence the refresh.
@@ -1009,18 +951,7 @@ end
 # exchange. This cannot delegate to the local cache, whose `vertex_scalar` would miss the ghost
 # half of a shared vertex's environment.
 function rescale_vertices!(bp_cache::BeliefPropagationCacheMPI, vertices::Vector)
-    tn = network(bp_cache)
-    for v in vertices
-        vn = vertex_scalar(bp_cache, v)
-        s = isreal(vn) ? sign(vn) : one(vn)
-        if tn isa TensorNetworkState
-            setindex_preserve!(tn, tn[v] * s * inv(sqrt(vn)), v)
-        elseif tn isa TensorNetwork
-            setindex_preserve!(tn, tn[v] * s * inv(vn), v)
-        else
-            error("Don't know how to rescale the vertices of this type")
-        end
-    end
+    @invoke rescale_vertices!(bp_cache::AbstractBeliefPropagationCache, vertices::Vector)
     return communicate_messages!(bp_cache)
 end
 
@@ -1043,12 +974,8 @@ function freenergy(bp_cache::BeliefPropagationCacheMPI)
     negative =
         any(t -> real(t) < 0, numerator_terms) || any(t -> real(t) < 0, denominator_terms)
     complex_here = scalartype(bp_cache) <: Complex || negative
-    if iszero(MPI.Allreduce(complex_here ? Int32(1) : Int32(0), MPI.MAX, comm))
-        return MPI.Allreduce(_local_freenergy(S, numerator_terms, denominator_terms), MPI.SUM, comm)
-    end
-    return MPI.Allreduce(
-        _local_freenergy(Complex{S}, numerator_terms, denominator_terms), MPI.SUM, comm
-    )
+    T = iszero(MPI.Allreduce(complex_here ? Int32(1) : Int32(0), MPI.MAX, comm)) ? S : Complex{S}
+    return MPI.Allreduce(_local_freenergy(T, numerator_terms, denominator_terms), MPI.SUM, comm)
 end
 
 # -Inf rather than an early return: every rank must reach the Allreduce.
@@ -1087,12 +1014,7 @@ function apply_gates_mpi(
         validate::Bool = true,
         kwargs...
     )
-    ψ_bpc = BeliefPropagationCache(ψ)
-    # Seed deltas, not a serial update: that update's incoming_messages sees only local edges,
-    # so it never contracts the cut bonds' dangling indices and they survive as free indices in
-    # the boundary messages, which then have ndims > 2.
-    es = _directed_edges(ψ)
-    setmessages!(ψ_bpc, es, [default_message(ψ_bpc, e) for e in es])
+    ψ_bpc = _seed_default_messages!(BeliefPropagationCache(ψ))
     ψ_bpc = BeliefPropagationCacheMPI(ψ_bpc, super_graph, shared_vertices; comm, validate)
     # Resolved here rather than as a keyword default: the defaults have to be read off the
     # distributed cache, since the local partition's tree-ness says nothing about the global
@@ -1243,15 +1165,6 @@ function _apply_gates(
     return ψ_bpc, truncation_errors
 end
 
-function adapt_gate(gate::ITensor, ψ_bpc::BeliefPropagationCacheMPI)
-    gate = if scalartype(gate) <: Complex
-        adapt(complex(scalartype(ψ_bpc)), gate)
-    else
-        adapt(scalartype(ψ_bpc), gate)
-    end
-    return adapt(unspecify_type_parameters(datatype(ψ_bpc)), gate)
-end
-
 function should_apply_gate(gate_vertices, local_vertices, shared_vertices)
     touched = filter(in(keys(shared_vertices)), gate_vertices)
 
@@ -1300,17 +1213,13 @@ function inner_mpi(
         bp_update_kwargs = nothing,
         validate::Bool = true
     )
-    bpc = BeliefPropagationCache(BilinearForm(ψ, ϕ))
-    es = _directed_edges(bpc)
-    setmessages!(bpc, es, [default_message(bpc, e) for e in es])
+    bpc = _seed_default_messages!(BeliefPropagationCache(BilinearForm(ψ, ϕ)))
     bpc = BeliefPropagationCacheMPI(bpc, super_graph, shared_vertices; comm, validate)
     bp_update_kwargs =
         isnothing(bp_update_kwargs) ? default_bp_update_kwargs(bpc) : bp_update_kwargs
     bpc = update(bpc; bp_update_kwargs...)
     return inner(Algorithm("bp"), bpc)
 end
-
-default_alg(bp_cache::BeliefPropagationCacheMPI) = "bp"
 
 """
     expect(cache::BeliefPropagationCacheMPI, observable; alg = "bp")
@@ -1338,20 +1247,11 @@ function expect(
 end
 
 function expect(
-        alg::Algorithm"bp",
-        cache::BeliefPropagationCacheMPI,
-        observables::Vector{<:Tuple};
-        kwargs...
-    )
-    return map(obs -> expect(alg, cache, obs; kwargs...), observables)
-end
-
-function expect(
         cache::BeliefPropagationCacheMPI, observable;
         alg::Union{String, Nothing} = default_alg(cache), kwargs...
     )
     alg == "bp" || error(
         "Only the 'bp' algorithm is supported on a BeliefPropagationCacheMPI, got '$alg'."
     )
-    return expect(Algorithm(alg), cache, observable; kwargs...)
+    return expect(Algorithm(alg), cache, observable)
 end

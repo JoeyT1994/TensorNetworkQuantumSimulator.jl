@@ -44,14 +44,25 @@ message_scratch(::AbstractBeliefPropagationCache) = Base.RefValue{Any}(Bool[])
 
 # Grow the buffer to fit. The type check also catches a change of element type or device,
 # in which case the old buffer is unusable and is replaced.
+#
+# The old buffer is dropped *before* the replacement is allocated. Otherwise both are live across
+# the `similar`, which at S=4, χ=1024 is 32 GiB held while 36 GiB is requested -- and since the
+# buffer is regrown every time a bond dimension climbs, that doubling happens repeatedly through a
+# circuit. Releasing first lets the allocator hand back the same block.
 function scratch_buffer!(ref::Base.RefValue{Any}, proto::AbstractVector, n::Int)
     s = ref[]
     if !(s isa typeof(proto)) || length(s) < n
+        ref[] = Bool[]
         s = similar(proto, n)
         ref[] = s
     end
     return s
 end
+
+# Called once a BP solve is done. The scratch is only needed between the first and last message
+# update of a sweep sequence; holding it afterwards means a factor-sized buffer squatting while
+# gate application allocates its own.
+release_message_scratch!(bpc::AbstractBeliefPropagationCache) = bpc
 
 # out[l_e', l_e] = Σ_{s,l_a,l_b} conj(T)[s,l_a',l_b',l_e'] ma[l_a,l_a'] mb[l_b,l_b'] T[s,l_a,l_b,l_e]
 #
@@ -98,9 +109,10 @@ end
 # 3.0×. χ/16 keeps the overhead at 12.5% everywhere, and the cap is where the closing gemm is
 # already compute-bound in fp32 so raising it only grows the peak.
 default_blocked_blocksize(chi::Integer) = clamp(chi ÷ 16, 1, 64)
+default_normalize(::Algorithm"blocked") = true
 
 function set_default_kwargs(alg::Algorithm"blocked", bp_cache::AbstractBeliefPropagationCache)
-    normalize = get(alg.kwargs, :normalize, default_normalize(Algorithm("contract")))
+    normalize = get(alg.kwargs, :normalize, default_normalize(alg))
     # `nothing` defers to χ, which is only known per edge in `updated_message`.
     b = get(alg.kwargs, :b, nothing)
     return Algorithm("blocked"; normalize, b)

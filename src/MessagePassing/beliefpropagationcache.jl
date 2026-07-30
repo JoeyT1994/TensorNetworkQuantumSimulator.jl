@@ -71,35 +71,6 @@ function set_default_kwargs(alg::Algorithm"bp", bp_cache::BeliefPropagationCache
     return Algorithm("bp"; verbose, maxiter, edge_sequence = _edge_sequence, tolerance, message_update_alg)
 end
 
-function update_message!(
-        message_update_alg::Algorithm, bp_cache::BeliefPropagationCache, edge::AbstractEdge
-    )
-    m, (cache_key, sequence, seq_changed) = updated_message(message_update_alg, bp_cache, edge)
-    seq_changed && set!(contraction_sequences(bp_cache), cache_key, sequence)
-    return setmessage!(bp_cache, edge, m)
-end
-
-function rescale_vertices!(
-        bpc::BeliefPropagationCache,
-        vertices::Vector
-    )
-    tn = network(bpc)
-
-    for v in vertices
-        vn = vertex_scalar(bpc, v)
-        s = isreal(vn) ? sign(vn) : one(vn)
-        if tn isa TensorNetworkState
-            setindex_preserve!(tn, tn[v] * s * inv(sqrt(vn)), v)
-        elseif tn isa TensorNetwork
-            setindex_preserve!(tn, tn[v] * s * inv(vn), v)
-        else
-            error("Don't know how to rescale the vertices of this type")
-        end
-    end
-
-    return bpc
-end
-
 const _default_bp_update_maxiter = 25
 function default_tolerance(type)
     (type == Float32 || type == ComplexF32) && return 1.0e-5

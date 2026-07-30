@@ -22,6 +22,3 @@ function run_mpi_worker(cases::Vector{String}, nranks::Int; timeout = 180 * leng
     end
     return success(p)
 end
-
-run_mpi_worker(case::String, nranks::Int; kwargs...) =
-    run_mpi_worker([case], nranks; kwargs...)

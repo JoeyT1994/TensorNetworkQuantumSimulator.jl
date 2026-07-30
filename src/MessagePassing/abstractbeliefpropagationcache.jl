@@ -1,5 +1,6 @@
 using Graphs: Graphs
 using Adapt
+using ITensors: Algorithm
 
 abstract type AbstractBeliefPropagationCache{V} <: AbstractNamedGraph{V} end
 
@@ -13,10 +14,22 @@ function rescale_messages!(
     )
     return not_implemented()
 end
-function rescale_vertices!(
-        bp_cache::AbstractBeliefPropagationCache, vertices::Vector; kwargs...
-    )
-    return not_implemented()
+# Everything here is on the interface -- `vertex_scalar` goes through `incoming_messages`, which
+# a cache may override -- so this is correct for any cache, not just the serial one.
+function rescale_vertices!(bp_cache::AbstractBeliefPropagationCache, vertices::Vector)
+    tn = network(bp_cache)
+    for v in vertices
+        vn = vertex_scalar(bp_cache, v)
+        s = isreal(vn) ? sign(vn) : one(vn)
+        if tn isa TensorNetworkState
+            setindex_preserve!(tn, tn[v] * s * inv(sqrt(vn)), v)
+        elseif tn isa TensorNetwork
+            setindex_preserve!(tn, tn[v] * s * inv(vn), v)
+        else
+            error("Don't know how to rescale the vertices of this type")
+        end
+    end
+    return bp_cache
 end
 
 function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
@@ -147,12 +160,29 @@ function scalar_factors_quotient(bp_cache::AbstractBeliefPropagationCache)
     return vertex_scalars(bp_cache), edge_scalars(bp_cache)
 end
 
+# The graph the messages live on. Normally the network's own graph, but a cache whose messages
+# arrive from elsewhere (see `BeliefPropagationCacheMPI`) overrides this with a graph carrying
+# extra ghost vertices, and every message lookup below then follows.
+messages_graph(bp_cache::AbstractBeliefPropagationCache) = graph(bp_cache)
+
 function incoming_messages(
         bp_cache::AbstractBeliefPropagationCache, vertices::Vector{<:Any}; ignore_edges = []
     )
-    b_edges = NamedGraphs.GraphsExtensions.boundary_edges(bp_cache, vertices; dir = :in)
+    b_edges = NamedGraphs.GraphsExtensions.boundary_edges(
+        messages_graph(bp_cache), vertices; dir = :in
+    )
     b_edges = !isempty(ignore_edges) ? setdiff(b_edges, ignore_edges) : b_edges
     return messages(bp_cache, b_edges)
+end
+
+# Dispatches on the cache rather than forwarding, so that a cache which overrides
+# `incoming_messages` (or `messages_graph`) is the one `updated_message` sees.
+function update_message!(
+        message_update_alg::Algorithm, bp_cache::AbstractBeliefPropagationCache, edge::AbstractEdge
+    )
+    m, (cache_key, sequence, seq_changed) = updated_message(message_update_alg, bp_cache, edge)
+    seq_changed && set!(contraction_sequences(bp_cache), cache_key, sequence)
+    return setmessage!(bp_cache, edge, m)
 end
 
 function incoming_messages(bp_cache::AbstractBeliefPropagationCache, vertex; kwargs...)
@@ -201,6 +231,16 @@ end
 """
 Do a sequential update of the message tensors on `edges`
 """
+# Hooks a distributed cache overrides so it does not have to fork the sweep loop below.
+# `sync_messages!` runs at the end of every sweep; `diff_denominator` turns the accumulated diff
+# into an average (the count has to be global, or ranks disagree about convergence and the first
+# one to stop leaves the rest blocked); `reports_convergence` keeps the log to one rank.
+sync_messages!(bpc::AbstractBeliefPropagationCache) = bpc
+diff_denominator(bpc::AbstractBeliefPropagationCache, edges) = length(edges)
+reports_convergence(bpc::AbstractBeliefPropagationCache) = true
+# Sums this rank's contribution into the global one. Identity for a cache that holds everything.
+reduce_diff(bpc::AbstractBeliefPropagationCache, diff) = diff
+
 function update_iteration!(
         alg::Algorithm"bp",
         bpc::AbstractBeliefPropagationCache,
@@ -214,7 +254,7 @@ function update_iteration!(
             update_diff![] += message_diff(message(bpc, e), prev_message)
         end
     end
-    return bpc
+    return sync_messages!(bpc)
 end
 
 """
@@ -230,11 +270,12 @@ function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
     converged = false
     avg_diff = nothing
     niter = alg.kwargs.maxiter
+    ndiff = diff_denominator(bpc, alg.kwargs.edge_sequence)
     for i in 1:alg.kwargs.maxiter
         diff = compute_error ? Ref(0.0) : nothing
         update_iteration!(alg, bpc, alg.kwargs.edge_sequence; (update_diff!) = diff)
         if compute_error
-            avg_diff = diff.x / length(alg.kwargs.edge_sequence)
+            avg_diff = iszero(ndiff) ? 0.0 : reduce_diff(bpc, diff.x) / ndiff
             if avg_diff <= alg.kwargs.tolerance
                 converged = true
                 niter = i
@@ -242,7 +283,7 @@ function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
             end
         end
     end
-    if compute_error
+    if compute_error && reports_convergence(bpc)
         if converged
             alg.kwargs.verbose && println("BP converged to desired precision after $niter iterations.")
         else
@@ -251,6 +292,7 @@ function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
         end
     end
     invalidate_contraction_sequences!(bpc)
+    release_message_scratch!(bpc)
     return bpc
 end
 

@@ -77,7 +77,7 @@ function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetwor
     end
 end
 
-default_alg(bp_cache::BeliefPropagationCache) = "bp"
+default_alg(bp_cache::AbstractBeliefPropagationCache) = "bp"
 default_alg(bmps_cache::BoundaryMPSCache) = "boundarymps"
 default_alg(any) = error("You must specify a contraction algorithm. Currently supported: exact, bp and boundarymps.")
 
