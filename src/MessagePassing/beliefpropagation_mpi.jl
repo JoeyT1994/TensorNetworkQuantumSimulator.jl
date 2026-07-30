@@ -56,10 +56,26 @@ function _is_raw_transferable(t::ITensor)
     return length(ITensors.data(t)) == prod(dim.(inds(t)); init = 1)
 end
 
-# Allocate on whichever device the network lives on: `datatype` is e.g. `Vector{Float64}` on the
-# host and `CuArray{Float64,1,…}` after `adapt`ing the cache to a GPU.
+# An array that already lives wherever the network's tensors do, used only as a `similar` template
+# for the exchange buffers. Taken from a real tensor rather than from `datatype`, which can come
+# back as a UnionAll with the element type still free (`CuArray{T,1,DeviceMemory} where T`) and so
+# cannot be constructed directly. `bp_factors` rather than `tn[v]` so this also works for a form,
+# whose vertices hold several tensors.
+function _storage_prototype(bp_cache)
+    tn = network(bp_cache)
+    for v in vertices(tn)
+        factors = bp_factors(tn, [v])
+        isempty(factors) && continue
+        return ITensors.data(first(factors))
+    end
+    return nothing
+end
+
+# Allocate on whichever device the network lives on. A partition with no tensors has nothing to
+# exchange, so the host fallback is never actually sent from.
 function _alloc_buffer(bp_cache, T::Type, n::Integer)
-    return similar(datatype(bp_cache)(undef, 0), T, n)
+    prototype = _storage_prototype(bp_cache)
+    return isnothing(prototype) ? Vector{T}(undef, n) : similar(prototype, T, n)
 end
 
 # Payload buffers are pure scratch, so they are grown rather than reallocated. Keyed by element
@@ -114,10 +130,15 @@ function ExchangeBuffers()
     return ExchangeBuffers(D(), D(), D(), D())
 end
 
-# `true` once the network's tensors live on an accelerator: `datatype` is `Vector{T}` on the host
-# and e.g. `CuArray{T,1,…}` after `adapt`ing the cache to a GPU. Tested structurally so that
-# nothing here has to depend on CUDA.jl.
-_is_device_backed(bp_cache) = !(unspecify_type_parameters(datatype(bp_cache)) <: Array)
+# `true` once the network's tensors live on an accelerator. Asks an actual storage array rather
+# than reasoning about `datatype`, which can be a UnionAll on a GPU and does not survive type
+# arithmetic reliably; a wrong answer here would silently disable host staging. Nothing depends on
+# CUDA.jl -- anything that is not a host `Array` counts as device memory. An empty partition has
+# nothing to exchange, so its answer does not matter.
+function _is_device_backed(bp_cache)
+    prototype = _storage_prototype(bp_cache)
+    return isnothing(prototype) ? false : !(prototype isa Array)
+end
 
 # Device tensors are copied to host memory before MPI sees them, and copied back on arrival.
 # This is the default, and deliberately so, even though it costs a device->host->device round
