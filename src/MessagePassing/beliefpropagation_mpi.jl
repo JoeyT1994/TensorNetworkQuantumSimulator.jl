@@ -439,16 +439,6 @@ super_graph(bp_cache::BeliefPropagationCacheMPI) = bp_cache.super_graph
 communicator(bp_cache::BeliefPropagationCacheMPI) = bp_cache.comm
 message_scratch(bp_cache::BeliefPropagationCacheMPI) = bp_cache.scratch
 
-# Five-field form for callers predating the scratch buffer: starts empty, grown on demand.
-function BeliefPropagationCacheMPI(
-        local_cache, messages_graph, shared_vertices, edges_to_send, edges_to_recv, comm
-    )
-    return BeliefPropagationCacheMPI(
-        local_cache, messages_graph, shared_vertices, edges_to_send, edges_to_recv, comm,
-        Base.RefValue{Any}(Bool[])
-    )
-end
-
 # The wrapped cache's network and messages are shared by reference, so mutating through
 # either view is visible to both.
 for f in [
@@ -481,12 +471,11 @@ function Base.copy(bp_cache::BeliefPropagationCacheMPI)
         copy(bp_cache.shared_vertices),
         copy(bp_cache.edges_to_send),
         copy(bp_cache.edges_to_recv),
-        communicator(bp_cache), # shared, not duplicated: a copy stays on the same comm
-        message_scratch(bp_cache) # also shared: pure scratch, and `update` copies per call
         bp_cache.send_order,
         bp_cache.recv_order,
         bp_cache.buffers,
-        communicator(bp_cache)
+        communicator(bp_cache), # shared, not duplicated: a copy stays on the same comm
+        message_scratch(bp_cache) # also shared: pure scratch, and `update` copies per call
     )
 end
 
@@ -515,7 +504,10 @@ function Adapt.adapt_structure(to, bpc::BeliefPropagationCacheMPI)
         adapted.send_order,
         adapted.recv_order,
         ExchangeBuffers(),
-        communicator(adapted)
+        communicator(adapted),
+        # Dropped rather than carried over, for the same reason as the exchange buffers: it was
+        # allocated for the device the cache came from.
+        Base.RefValue{Any}(Bool[])
     )
 end
 
@@ -792,7 +784,8 @@ function BeliefPropagationCacheMPI(
         send_order,
         recv_order,
         ExchangeBuffers(),
-        comm
+        comm,
+        Base.RefValue{Any}(Bool[])
     )
 
     # Populate the ghost messages, which have no entry in `cache` yet.
