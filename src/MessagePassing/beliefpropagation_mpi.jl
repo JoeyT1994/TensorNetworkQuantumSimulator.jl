@@ -562,6 +562,124 @@ function thin_qr_matrix!(A::AbstractMatrix)
     return LAPACK.orgqr!(A, tau), R
 end
 
+# --------------------- alternating-buffer chain for one vertex side ----------------- #
+#
+# The large side of a two-site update is a chain of equally sized d·χ^deg objects:
+#
+#   T --(× √env)--> ψᵥ --(QR)--> Q --(× env^-1/2)--> Q' --(× R)--> out
+#
+# With `contract` each link allocates its own output plus its own permuted temporaries, so
+# several coexist. Here two preallocated buffers are alternated, so at most two of these are
+# ever live (three transiently, while the input is still being read).
+#
+# Everything is `mul!`, `permutedims!`, `reshape` and `view` on flat buffers -- no scalar
+# indexing -- so it runs on CPU or GPU. The working layout is (env legs…, site…, bond): the env
+# legs lead so the QR's row block is contiguous and needs no permute of its own.
+
+# `M` is always the environment matrix as an array ordered (a, a'). `fwd = true` contracts its
+# FIRST index (a), producing a' -- the √env step. `fwd = false` contracts its SECOND (a'),
+# producing a -- the env^-1/2 step. Which transpose that needs differs between the leading and
+# middle cases, because `apply_lead!` contracts the array's first index while `apply_mid!`
+# contracts the second index of each 2-D slice.
+
+# LEADING index: one gemm, since (χ, rest) is already a valid matrix. `Op` must be
+# (produced, contracted).
+function apply_lead!(dst, src, M, chi, rest, fwd::Bool = true)
+    Op = fwd ? transpose(M) : M
+    mul!(reshape(dst, chi, rest), Op, reshape(src, chi, rest))
+    return dst
+end
+
+# MIDDLE index of (lead, χ, trail). BLAS needs unit stride down a column, and a fixed middle
+# index does not give that, so this loops over `trail`; each slice (lead, χ) is contiguous with
+# leading dimension `lead`, so every iteration is a genuine gemm. `Op` must be
+# (contracted, produced).
+function apply_mid!(dst, src, M, lead, chi, trail, fwd::Bool = true)
+    Op = fwd ? M : transpose(M)
+    S = reshape(src, lead, chi, trail)
+    Dv = reshape(dst, lead, chi, trail)
+    for t in 1:trail
+        mul!(view(Dv, :, :, t), view(S, :, :, t), Op)
+    end
+    return dst
+end
+
+# Walks `mats` over the leading env legs of a buffer laid out (env legs…, rest), alternating
+# `cur` and `spare`. Returns them in their new roles.
+function apply_env_chain!(cur, spare, mats, chi, n, fwd::Bool)
+    for (k, M) in enumerate(mats)
+        if k == 1
+            apply_lead!(view(spare, 1:n), view(cur, 1:n), M, chi, n ÷ chi, fwd)
+        else
+            apply_mid!(view(spare, 1:n), view(cur, 1:n), M, chi^(k - 1), chi, n ÷ chi^k, fwd)
+        end
+        cur, spare = spare, cur
+    end
+    return cur, spare
+end
+
+# Absorbs `mats` (one χ×χ per env leg, in `alegs` order) into `T`, laid out as
+# (alegs…, sinds…, lb), and returns the buffer holding the result plus the spare one.
+# `T` is read once, into `first(bufs)`, and is not referenced again.
+function absorb_envs!(bufs, T::ITensor, mats, alegs, sinds, lb, chi)
+    tgt = Index[alegs...; sinds...; lb]
+    src_inds = collect(inds(T))
+    perm = ntuple(i -> findfirst(==(tgt[i]), src_inds), length(tgt))
+    dims = ntuple(i -> dim(tgt[i]), length(tgt))
+
+    cur, spare = bufs
+    n = prod(dims)
+    permutedims!(reshape(view(cur, 1:n), dims), ITensors.array(T), perm)
+    return apply_env_chain!(cur, spare, mats, chi, n, true)
+end
+
+# Phase 1 of the buffered chain: absorb the √env factors into `T` and factor it, leaving Q in a
+# buffer. Returns `nothing` when the buffered path does not apply, so the caller falls back.
+function buffered_phase1(T::ITensor, mats, alegs, sinds, lb)
+    hasqns(T) && return nothing
+    isempty(alegs) && return nothing
+    chi = dim(first(alegs))
+    all(l -> dim(l) == chi, alegs) || return nothing
+    k = length(alegs)
+    S = isempty(sinds) ? 1 : prod(dim, sinds)
+    m = chi^k
+    ncol = S * dim(lb)
+    m >= ncol || return nothing                   # wide: no thin Q to place in the buffer
+    n = m * ncol
+    n == prod(dim, collect(inds(T))) || return nothing   # layout must account for every index
+
+    proto = vec(ITensors.array(T))
+    bufs = (similar(proto, n), similar(proto, n))
+    cur, spare = absorb_envs!(bufs, T, mats, alegs, sinds, lb, chi)
+
+    factored = thin_qr_matrix!(reshape(view(cur, 1:n), m, ncol))
+    isnothing(factored) && return nothing
+    _, Rm = factored                              # Q is in `cur`
+    qb = Index(ncol, "Link,qr")
+    R = ITensor(reshape(Rm, ncol, map(dim, sinds)..., dim(lb)), qb, sinds..., lb)
+    return (; cur, spare, alegs, qb, chi, k, m, n, R)
+end
+
+# Phase 2: absorb env^-1/2 into the Q sitting in the buffer, then multiply by the post-SVD `Rp`.
+# Continues the same alternation, so no third large buffer appears.
+function buffered_phase2(st, mats, Rp::ITensor)
+    ncol = dim(st.qb)
+    cur, spare = apply_env_chain!(st.cur, st.spare, mats, st.chi, st.n, false)
+
+    rest = setdiff(collect(inds(Rp)), [st.qb])
+    rcols = isempty(rest) ? 1 : prod(dim, rest)
+    Rarr = reshape(ITensors.array(Rp, st.qb, rest...), ncol, rcols)
+    outlen = st.m * rcols
+    mul!(reshape(view(spare, 1:outlen), st.m, rcols),
+        reshape(view(cur, 1:st.n), st.m, ncol), Rarr)
+
+    dims = (map(dim, st.alegs)..., map(dim, rest)...)
+    # Reuse the buffer as the result's storage when it fills it exactly (the untruncated case);
+    # otherwise take a right-sized copy, which is still at most one tensor.
+    data = outlen == length(spare) ? reshape(spare, dims) : reshape(spare[1:outlen], dims)
+    return ITensor(data, st.alegs..., rest...)
+end
+
 # Thin QR of `T` with `linds` as the row indices. Same contract as `ITensors.qr(T, linds)`.
 #
 # `ITensors.qr` allocates several factor-sized temporaries; this allocates only the small R,
@@ -596,7 +714,8 @@ end
 # identical to the non-MPI version, but with a different signature so it can be called
 function simple_update_mpi(
         o::ITensor, ψ⃗::Vector{<:ITensor};
-        envs, normalize_tensors = true, sqrt_cutoff = nothing, apply_kwargs...
+        envs, normalize_tensors = true, sqrt_cutoff = nothing, buffered = false,
+        apply_kwargs...
     )
 
     if length(ψ⃗) == 1
@@ -619,6 +738,20 @@ function simple_update_mpi(
         # Site indices come off the inputs, so read them before the data is released.
         sᵥ₁ = commoninds(ψ⃗[1], o)
         sᵥ₂ = commoninds(ψ⃗[2], o)
+        lb = only(commoninds(ψ⃗[1], ψ⃗[2]))
+
+        # Each env matrix as an array ordered (leg, leg'), paired with its leg on this side.
+        legs(es, ψ) = [only(commoninds(e, ψ)) for e in es]
+        arrs(es, ls) = [ITensors.array(es[i], ls[i], prime(ls[i])) for i in eachindex(ls)]
+        legs₁, legs₂ = legs(envs_v1, ψ⃗[1]), legs(envs_v2, ψ⃗[2])
+
+        # `buffered` routes the LARGER side through the alternating-buffer chain; the smaller one
+        # stays on the ITensor path, where it is O(χ^(deg-1)) and irrelevant to the peak.
+        big1 = prod(dim, collect(inds(ψ⃗[1]))) >= prod(dim, collect(inds(ψ⃗[2])))
+        st₁ = (buffered && big1) ?
+            buffered_phase1(ψ⃗[1], arrs(sqrt_envs_v1, legs₁), legs₁, collect(sᵥ₁), lb) : nothing
+        st₂ = (buffered && !big1) ?
+            buffered_phase1(ψ⃗[2], arrs(sqrt_envs_v2, legs₂), legs₂, collect(sᵥ₂), lb) : nothing
 
         # Clearing `ψ⃗` is the one release the compiler cannot make for us. Julia frees a local
         # at its last use, but a value reachable through a heap-allocated container stays live
@@ -626,23 +759,39 @@ function simple_update_mpi(
         # held in a Vector at 600 MiB. `apply_gate!` has already dropped the network's reference,
         # so `ψ⃗` is the last holder, and without this the inputs are pinned to the end of the
         # call. CONSEQUENCE: this function consumes `ψ⃗`; callers must not use it afterwards.
-        ψᵥ₁ = contract([ψ⃗[1]; sqrt_envs_v1])
+        if isnothing(st₁)
+            ψᵥ₁ = contract([ψ⃗[1]; sqrt_envs_v1])
+        end
         ψ⃗[1] = ITensor()
-        ψᵥ₂ = contract([ψ⃗[2]; sqrt_envs_v2])
+        if isnothing(st₂)
+            ψᵥ₂ = contract([ψ⃗[2]; sqrt_envs_v2])
+        end
         ψ⃗[2] = ITensor()
 
         # Both index sets are resolved before either QR runs. Written inline, the second QR's
         # `uniqueinds(ψᵥ₂, ψᵥ₁)` still references ψᵥ₁, which keeps it alive past its own
-        # factorisation for no reason.
-        linds₁ = uniqueinds(uniqueinds(ψᵥ₁, ψᵥ₂), sᵥ₁)
-        linds₂ = uniqueinds(uniqueinds(ψᵥ₂, ψᵥ₁), sᵥ₂)
+        # factorisation for no reason. A buffered side has already factored in phase 1.
+        if isnothing(st₁)
+            linds₁ = uniqueinds(uniqueinds(ψᵥ₁, isnothing(st₂) ? ψᵥ₂ : st₂.R), sᵥ₁)
+        end
+        if isnothing(st₂)
+            linds₂ = uniqueinds(uniqueinds(ψᵥ₂, isnothing(st₁) ? ψᵥ₁ : st₁.R), sᵥ₂)
+        end
 
-        Qᵥ₁, Rᵥ₁ = thin_qr(ψᵥ₁, linds₁)
-        ψᵥ₁ = ITensor()
-        Qᵥ₂, Rᵥ₂ = thin_qr(ψᵥ₂, linds₂)
-        ψᵥ₂ = ITensor()
+        if isnothing(st₁)
+            Qᵥ₁, Rᵥ₁ = thin_qr(ψᵥ₁, linds₁)
+            ψᵥ₁ = ITensor()
+        else
+            Qᵥ₁, Rᵥ₁ = ITensor(), st₁.R
+        end
+        if isnothing(st₂)
+            Qᵥ₂, Rᵥ₂ = thin_qr(ψᵥ₂, linds₂)
+            ψᵥ₂ = ITensor()
+        else
+            Qᵥ₂, Rᵥ₂ = ITensor(), st₂.R
+        end
 
-        rᵥ₁ = commoninds(Qᵥ₁, Rᵥ₁)
+        rᵥ₁ = isnothing(st₁) ? commoninds(Qᵥ₁, Rᵥ₁) : Index[st₁.qb]
         oR = ITensors.apply(o, Rᵥ₁ * Rᵥ₂)
         singular_values! = Ref(ITensor())
         Rᵥ₁, Rᵥ₂, spec = factorize_svd(
@@ -656,12 +805,22 @@ function simple_update_mpi(
         s_values = singular_values![]
         # One side at a time. `[Qᵥ₁ * Rᵥ₁, Qᵥ₂ * Rᵥ₂]` evaluates both products while both Q's
         # are still live; finishing side 1 first lets its Q go before side 2's is built.
-        Qᵥ₁ = contract([Qᵥ₁; dag.(inv_sqrt_envs_v1)])
-        u₁ = Qᵥ₁ * Rᵥ₁
-        Qᵥ₁ = ITensor()
-        Qᵥ₂ = contract([Qᵥ₂; dag.(inv_sqrt_envs_v2)])
-        u₂ = Qᵥ₂ * Rᵥ₂
-        Qᵥ₂ = ITensor()
+        if isnothing(st₁)
+            Qᵥ₁ = contract([Qᵥ₁; dag.(inv_sqrt_envs_v1)])
+            u₁ = Qᵥ₁ * Rᵥ₁
+            Qᵥ₁ = ITensor()
+        else
+            u₁ = buffered_phase2(st₁, arrs(dag.(inv_sqrt_envs_v1), legs₁), Rᵥ₁)
+            st₁ = nothing
+        end
+        if isnothing(st₂)
+            Qᵥ₂ = contract([Qᵥ₂; dag.(inv_sqrt_envs_v2)])
+            u₂ = Qᵥ₂ * Rᵥ₂
+            Qᵥ₂ = ITensor()
+        else
+            u₂ = buffered_phase2(st₂, arrs(dag.(inv_sqrt_envs_v2), legs₂), Rᵥ₂)
+            st₂ = nothing
+        end
         updated_tensors = ITensor[u₁, u₂]
         if normalize_tensors
             s_values = normalize(s_values)
