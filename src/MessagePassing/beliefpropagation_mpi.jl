@@ -633,14 +633,6 @@ function permute_into!(buf, T::ITensor, alegs, sinds, lb)
     return prod(dims)
 end
 
-# Absorbs `mats` (one χ×χ per env leg, in `alegs` order) into `T`, laid out as
-# (alegs…, sinds…, lb), and returns the buffer holding the result plus the spare one.
-function absorb_envs!(bufs, T::ITensor, mats, alegs, sinds, lb, chi)
-    cur, spare = bufs
-    n = permute_into!(cur, T, alegs, sinds, lb)
-    return apply_env_chain!(cur, spare, mats, chi, n, true)
-end
-
 # Phase 1 of the buffered chain: absorb the √env factors into `ψ⃗[i]` and factor it, leaving Q in
 # a buffer. Returns `nothing` when the buffered path does not apply, so the caller falls back.
 #
@@ -695,7 +687,7 @@ function buffered_phase1(ψ⃗::Vector{<:ITensor}, i::Int, mats, alegs, sinds, l
         "applicability probe above should have caught this")
     _, Rm = factored                              # Q is in `cur`
     qb = Index(ncol, "Link,qr")
-    R = ITensor(reshape(Rm, ncol, map(dim, sinds)..., dim(lb)), qb, sinds..., lb)
+    R = ITensors.itensor(reshape(Rm, ncol, map(dim, sinds)..., dim(lb)), qb, sinds..., lb)
     return (; cur, spare, alegs, qb, chi, k, m, n, R)
 end
 
@@ -715,7 +707,12 @@ function buffered_phase2(st, mats, Rp::ITensor)
     mul!(reshape(out, st.m, rcols), reshape(cur, st.m, ncol), Rarr)
 
     dims = (map(dim, st.alegs)..., map(dim, rest)...)
-    return ITensor(reshape(out, dims), st.alegs..., rest...)
+    # `itensor`, NOT `ITensor`. The capitalised constructor defaults to `NeverAlias` and `copy`s
+    # its input, which is a THIRD factor-sized buffer and undoes the whole point of the chain --
+    # at χ=1024 that copy is the 32 GiB allocation that OOM'd on a 95 GiB card. Aliasing is safe
+    # here: `out` is one of our own two buffers and has no other reader. (`Dense` vecs the
+    # reshaped array, which also shares memory, so this really is zero-copy.)
+    return ITensors.itensor(reshape(out, dims), st.alegs..., rest...)
 end
 
 # Thin QR of `T` with `linds` as the row indices. Same contract as `ITensors.qr(T, linds)`.
@@ -745,8 +742,10 @@ function thin_qr(T::ITensor, linds)
     Q, R = factored
 
     qb = Index(n, "Link,qr")
-    return ITensor(reshape(Q, map(dim, ls)..., n), ls..., qb),
-        ITensor(reshape(R, n, map(dim, rs)...), qb, rs...)
+    # `itensor` (aliasing): `ITensor` would `copy` Q, which is factor-sized. `A` is the permuted
+    # copy made above and has no other reader, so there is nothing to protect it from.
+    return ITensors.itensor(reshape(Q, map(dim, ls)..., n), ls..., qb),
+        ITensors.itensor(reshape(R, n, map(dim, rs)...), qb, rs...)
 end
 
 # identical to the non-MPI version, but with a different signature so it can be called
@@ -799,6 +798,12 @@ function simple_update_mpi(
         # held in a Vector at 600 MiB. `apply_gate!` has already dropped the network's reference,
         # so `ψ⃗` is the last holder, and without this the inputs are pinned to the end of the
         # call. CONSEQUENCE: this function consumes `ψ⃗`; callers must not use it afterwards.
+        #
+        # BUT ON A GPU THIS DOES NOT ACTUALLY RETURN THE BYTES. Measured at χ=512: after the
+        # assignment and a full `GC.gc(true)`, the input's 4 GiB is still resident, and the next
+        # allocation OOMs under a cap that ought to fit. So the clear helps the host path only;
+        # on the device the plain path still peaks around 3.25 × one tensor. The buffered path
+        # does not depend on this -- it takes the input's buffer over as scratch instead.
         if isnothing(st₁)
             ψᵥ₁ = contract([ψ⃗[1]; sqrt_envs_v1])
         end
