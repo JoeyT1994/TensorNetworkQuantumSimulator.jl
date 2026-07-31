@@ -606,12 +606,16 @@ end
 
 # Walks `mats` over the leading env legs of a buffer laid out (env legs…, rest), alternating
 # `cur` and `spare`. Returns them in their new roles.
+# `cur`/`spare` must have length exactly `n` and are passed WHOLE, never as views: on the GPU
+# `reshape(view(v, 1:n), …)` is a `ReshapedArray`, which is not a `StridedCuMatrix`, so cuSOLVER
+# and cuBLAS methods do not apply to it. `reshape` of a whole `CuVector` is a `CuArray`.
 function apply_env_chain!(cur, spare, mats, chi, n, fwd::Bool)
+    @assert length(cur) == n && length(spare) == n
     for (k, M) in enumerate(mats)
         if k == 1
-            apply_lead!(view(spare, 1:n), view(cur, 1:n), M, chi, n ÷ chi, fwd)
+            apply_lead!(spare, cur, M, chi, n ÷ chi, fwd)
         else
-            apply_mid!(view(spare, 1:n), view(cur, 1:n), M, chi^(k - 1), chi, n ÷ chi^k, fwd)
+            apply_mid!(spare, cur, M, chi^(k - 1), chi, n ÷ chi^k, fwd)
         end
         cur, spare = spare, cur
     end
@@ -625,7 +629,7 @@ function permute_into!(buf, T::ITensor, alegs, sinds, lb)
     src_inds = collect(inds(T))
     perm = ntuple(i -> findfirst(==(tgt[i]), src_inds), length(tgt))
     dims = ntuple(i -> dim(tgt[i]), length(tgt))
-    permutedims!(reshape(view(buf, 1:prod(dims)), dims), ITensors.array(T), perm)
+    permutedims!(reshape(buf, dims), ITensors.array(T), perm)
     return prod(dims)
 end
 
@@ -660,6 +664,11 @@ function buffered_phase1(ψ⃗::Vector{<:ITensor}, i::Int, mats, alegs, sinds, l
     n = m * ncol
     n == prod(dim, collect(inds(T))) || return nothing   # layout must account for every index
 
+    # Decide NOW whether the in-place QR will apply, on a 2x2 of the same array type. Discovering
+    # it later would mean returning `nothing` after the input has been released, leaving the
+    # caller's fallback with an empty tensor -- which is exactly how this failed on the GPU.
+    applicable(LAPACK.geqrf!, similar(vec(ITensors.array(T)), 2, 2)) || return nothing
+
     # `vec(array(T))` is only a prototype for `similar`; it must not outlive this line, or it
     # would keep the input alive past the release below.
     cur = similar(vec(ITensors.array(T)), n)
@@ -672,8 +681,9 @@ function buffered_phase1(ψ⃗::Vector{<:ITensor}, i::Int, mats, alegs, sinds, l
     spare = similar(cur, n)                       # allocated only now: peak stays at 2 ×
     cur, spare = apply_env_chain!(cur, spare, mats, chi, n, true)
 
-    factored = thin_qr_matrix!(reshape(view(cur, 1:n), m, ncol))
-    isnothing(factored) && return nothing
+    factored = thin_qr_matrix!(reshape(cur, m, ncol))
+    isnothing(factored) && error("in-place QR declined after the input was released; the " *
+        "applicability probe above should have caught this")
     _, Rm = factored                              # Q is in `cur`
     qb = Index(ncol, "Link,qr")
     R = ITensor(reshape(Rm, ncol, map(dim, sinds)..., dim(lb)), qb, sinds..., lb)
@@ -690,14 +700,13 @@ function buffered_phase2(st, mats, Rp::ITensor)
     rcols = isempty(rest) ? 1 : prod(dim, rest)
     Rarr = reshape(ITensors.array(Rp, st.qb, rest...), ncol, rcols)
     outlen = st.m * rcols
-    mul!(reshape(view(spare, 1:outlen), st.m, rcols),
-        reshape(view(cur, 1:st.n), st.m, ncol), Rarr)
+    # Whole arrays, not views, for the same StridedCuMatrix reason as above. When the SVD
+    # truncated, `spare` is larger than the result, so use a right-sized array (<= one tensor).
+    out = outlen == length(spare) ? spare : similar(spare, outlen)
+    mul!(reshape(out, st.m, rcols), reshape(cur, st.m, ncol), Rarr)
 
     dims = (map(dim, st.alegs)..., map(dim, rest)...)
-    # Reuse the buffer as the result's storage when it fills it exactly (the untruncated case);
-    # otherwise take a right-sized copy, which is still at most one tensor.
-    data = outlen == length(spare) ? reshape(spare, dims) : reshape(spare[1:outlen], dims)
-    return ITensor(data, st.alegs..., rest...)
+    return ITensor(reshape(out, dims), st.alegs..., rest...)
 end
 
 # Thin QR of `T` with `linds` as the row indices. Same contract as `ITensors.qr(T, linds)`.
