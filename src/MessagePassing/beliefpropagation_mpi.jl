@@ -644,12 +644,22 @@ end
 # Phase 1 of the buffered chain: absorb the √env factors into `ψ⃗[i]` and factor it, leaving Q in
 # a buffer. Returns `nothing` when the buffered path does not apply, so the caller falls back.
 #
-# Takes `ψ⃗` and the position rather than the tensor, because releasing the input is what caps the
-# peak at 2 × one tensor. The order below is deliberate: allocate ONE buffer, permute into it,
-# drop the input, and only then allocate the second. Allocating both up front instead makes the
-# permute step hold input + buf1 + buf2 = 3 ×. `permutedims` cannot work in place for a
-# non-trivial permutation, so input + destination coexisting once is unavoidable -- that pair is
-# what sets the 2 × floor.
+# Takes `ψ⃗` and the position rather than the tensor, because reusing the input's storage is what
+# caps the peak at 2 × one tensor. `permutedims` cannot work in place for a non-trivial
+# permutation, so input + destination must coexist once -- that pair is the 2 × floor, and the
+# trick is to not need a third buffer beyond it.
+#
+# DROPPING THE REFERENCE IS NOT ENOUGH. Setting `ψ⃗[i] = ITensor()` and then allocating a second
+# buffer gives 3 ×, not 2 ×: measured on CPU, the input is still resident after the assignment
+# AND a full `GC.gc(true)`, because the stack slot that held it is only overwritten by the next
+# call. On the GPU that is a hard failure -- at χ=512 the three 4 GiB buffers OOM'd under a 12 GiB
+# cap. So the input's own buffer is taken over as the second scratch: it is exactly `n` elements
+# and is dead the moment the permute has read it, which makes the 2 × peak deterministic rather
+# than dependent on when the collector runs.
+#
+# That scribbles on the input's memory, a stronger claim than merely releasing it, and it is sound
+# only because `apply_gate!` has already dropped the network's reference so `ψ⃗` is the last
+# holder. It is opt-in via `buffered = true`.
 function buffered_phase1(ψ⃗::Vector{<:ITensor}, i::Int, mats, alegs, sinds, lb)
     T = ψ⃗[i]
     hasqns(T) && return nothing
@@ -664,21 +674,20 @@ function buffered_phase1(ψ⃗::Vector{<:ITensor}, i::Int, mats, alegs, sinds, l
     n = m * ncol
     n == prod(dim, collect(inds(T))) || return nothing   # layout must account for every index
 
+    # The flat storage vector, which is what gets reused below. A view or an offset storage would
+    # not have exactly `n` elements, and overwriting it could touch memory we do not own.
+    dat = ITensors.data(T)
+    length(dat) == n || return nothing
+
     # Decide NOW whether the in-place QR will apply, on a 2x2 of the same array type. Discovering
-    # it later would mean returning `nothing` after the input has been released, leaving the
-    # caller's fallback with an empty tensor -- which is exactly how this failed on the GPU.
-    applicable(LAPACK.geqrf!, similar(vec(ITensors.array(T)), 2, 2)) || return nothing
+    # it later would mean bailing out after the input has been consumed, leaving the caller's
+    # fallback with an empty tensor -- which is exactly how this failed on the GPU.
+    applicable(LAPACK.geqrf!, similar(dat, 2, 2)) || return nothing
 
-    # `vec(array(T))` is only a prototype for `similar`; it must not outlive this line, or it
-    # would keep the input alive past the release below.
-    cur = similar(vec(ITensors.array(T)), n)
+    cur = similar(dat, n)                         # the only large allocation in this function
     permute_into!(cur, T, alegs, sinds, lb)
-    # Last use of `T` was the permute, so the local is already dead (Julia frees at last use);
-    # clearing the vector entry drops the only remaining reference, since a value reachable
-    # through a heap-allocated container stays live for the whole function.
+    spare = dat                                   # input's buffer, now scratch: 2 × not 3 ×
     ψ⃗[i] = ITensor()
-
-    spare = similar(cur, n)                       # allocated only now: peak stays at 2 ×
     cur, spare = apply_env_chain!(cur, spare, mats, chi, n, true)
 
     factored = thin_qr_matrix!(reshape(cur, m, ncol))
