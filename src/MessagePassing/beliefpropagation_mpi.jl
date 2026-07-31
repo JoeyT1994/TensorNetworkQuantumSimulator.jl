@@ -92,6 +92,12 @@ function _staging!(alloc, store::Dict, peer::Integer, T::Type, n::Integer)
     key = (Int32(peer), T)
     buf = get(store, key, nothing)
     if buf === nothing || length(buf) < n
+        # Drop the old buffer *before* allocating its replacement, the same discipline
+        # `scratch_buffer!` follows. Otherwise both are live across the `alloc`, and since a
+        # circuit grows bond dimensions repeatedly this doubling recurs -- at χ=1024 it is a
+        # 32 GiB buffer held while 36 GiB is requested, on the device.
+        buf = nothing
+        delete!(store, key)
         buf = alloc(T, max(n, 1))
         store[key] = buf
     end
@@ -433,7 +439,12 @@ communicator(bp_cache::BeliefPropagationCacheMPI) = bp_cache.comm
 message_scratch(bp_cache::BeliefPropagationCacheMPI) = bp_cache.scratch
 
 function release_message_scratch!(bp_cache::BeliefPropagationCacheMPI)
-    message_scratch(bp_cache)[] = Bool[]
+    ref = message_scratch(bp_cache)
+    # Freed before the reference is dropped, so a GPU gets the memory back now rather than at the
+    # next finalizer run. Safe because the messages `blocked_message!` produced were copied out of
+    # the scratch, so nothing outlives it.
+    free_scratch_buffer!(ref[])
+    ref[] = Bool[]
     return bp_cache
 end
 
@@ -1108,22 +1119,26 @@ function _apply_gates(
             length(v⃗) >= 2 &&
             any(vert in affected_vertices for vert in v⃗)
 
-        # update the BP cache
-        if update_cache && cache_update_required
-            if verbose && isroot
-                println("Updating BP cache")
-            end
-
+        if cache_update_required
+            # Unconditional, and deliberately outside the `update_cache` guard below: exchanging
+            # factors is not part of the cache update. It is the only thing keeping the two copies
+            # of a duplicated shared vertex identical after one holder applied a gate to it.
+            # Gating it lets the copies diverge silently and permanently -- they end up with
+            # different indices, and the failure surfaces much later, on a subset of ranks, as a
+            # non-scalar out of `vertex_scalar`.
             communicate_factors!(ψ_bpc, vertices_to_send, vertices_to_recv)
-
-            t = @timed ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
-
             empty!(affected_vertices)
             empty!(vertices_to_send)
             empty!(vertices_to_recv)
 
-            if verbose && isroot
-                println("Done in $(t.time) secs")
+            if update_cache
+                if verbose && isroot
+                    println("Updating BP cache")
+                end
+                t = @timed ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
+                if verbose && isroot
+                    println("Done in $(t.time) secs")
+                end
             end
         end
 
@@ -1152,8 +1167,10 @@ function _apply_gates(
         end
     end
 
+    # Same reasoning as above: the copies of a shared vertex must agree when this returns,
+    # whatever the caller asked about the cache.
+    communicate_factors!(ψ_bpc, vertices_to_send, vertices_to_recv)
     if update_cache
-        communicate_factors!(ψ_bpc, vertices_to_send, vertices_to_recv)
         ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
     end
 

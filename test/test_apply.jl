@@ -1,6 +1,8 @@
 @eval module $(gensym())
 using ITensors: ITensors, datatype, op, Index, @OpName_str, @SiteType_str
 using Random
+using LinearAlgebra
+using Graphs: degree
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test, @test_throws
 const TNQS = TensorNetworkQuantumSimulator
@@ -184,6 +186,145 @@ end
         end
         # Guards against the assertions above passing because everything fell back.
         @test specialised > 0
+    end
+
+    # Every other test in this file uses a complex state, which hides the case that matters most
+    # in practice: the state constructors default to `Float64` and every standard rotation is
+    # complex, so `zerostate |> apply_gates` promotes. The specialised path builds its
+    # factorization at the state's type and multiplies it into a buffer sized from the post-gate
+    # SVD, and `lmul!` has no mixed-eltype method -- so this has to fall back, not throw.
+    @testset "real state under a complex gate falls back" begin
+        g2 = named_grid((3, 3))
+        ψ_real = zerostate(g2)
+        @test scalartype(ψ_real) == Float64          # the premise, in case a default changes
+        circuit = [("Rxx", [(1, 1), (2, 1)], 0.3), ("Rz", [(1, 1)], 0.2)]
+        apply_kwargs = (; maxdim = 4, cutoff = 1.0e-14)
+
+        reference, errs_ref = apply_gates(circuit, ψ_real; apply_kwargs)
+        TNQS.blocked_gates!(true)
+        try
+            got, errs = apply_gates(circuit, ψ_real; apply_kwargs)
+            @test scalartype(got) == ComplexF64
+            @test isapprox(errs, errs_ref; atol = 1.0e-12)
+            for v in vertices(g2)
+                @test isapprox(
+                    expect(got, ("Z", [v]); alg = "exact"),
+                    expect(reference, ("Z", [v]); alg = "exact"); atol = 1.0e-10
+                )
+            end
+        finally
+            TNQS.blocked_gates!(false)
+        end
+    end
+
+    # The environments are absorbed by gemms that rotate each gauged leg from one end of the
+    # storage order to the other, rather than by `contract`. The lattice tests above cover it
+    # end-to-end, but only ever with an environment on *every* row leg, because every bond leaving
+    # `v⃗` carries a message. The cases below drive it directly, against an explicit `contract` as
+    # the reference.
+    @testset "gauging by rotation" begin
+        i, j, k, sph = Index(3, "i"), Index(4, "j"), Index(5, "k"), Index(2, "s")
+        t = ITensors.random_itensor(ComplexF64, i, j, k, sph)
+        allrows = [i, j, k]
+        mats = [ITensors.random_itensor(ComplexF64, x, ITensors.prime(x)) for x in allrows]
+        matof(x) = mats[findfirst(isequal(x), allrows)]
+
+        # One environment per row leg, two row legs, one ungauged row leg, and none at all: the
+        # last two are the paths a lattice cannot produce.
+        for gauged in ([i, j, k], [i, k], [j], Index[])
+            legs = [
+                TNQS.GaugeLeg(ITensors.array(matof(x), x, ITensors.prime(x)), x, ITensors.prime(x)) for x in gauged
+            ]
+            colinds = [sph]
+
+            M, newrows = TNQS._gauge_matrixize(Base.RefValue{Any}(t), allrows, colinds, legs)
+            # Gauged legs rotate to the front, in order; ungauged row legs follow.
+            @test newrows == vcat([ITensors.prime(x) for x in gauged], setdiff(allrows, gauged))
+
+            want = t
+            for x in gauged
+                want = want * matof(x)
+            end
+            @test isapprox(
+                ITensors.itensor(
+                    reshape(M, ITensors.dim.(vcat(newrows, colinds))...),
+                    vcat(newrows, colinds)...
+                ),
+                want; atol = 1.0e-11
+            )
+        end
+
+        # An environment on a column leg is rotated out of the row space by its own gemm, so the
+        # caller must fall back rather than hand the QR a matrix that is not the gauged tensor.
+        @test isnothing(
+            TNQS.blocked_two_site_update(
+                ITensors.random_itensor(ComplexF64, sph, ITensors.prime(sph)),
+                ITensors.ITensor[t, ITensors.random_itensor(ComplexF64, k, sph)];
+                envs = ITensors.ITensor[], normalize_tensors = true, sqrt_cutoff = nothing,
+                consume_inputs = false, maxdim = 4, cutoff = 0.0
+            )
+        )
+    end
+
+    # The QR is split into row blocks once it exceeds `qr_block_limit()` -- on a GPU that limit is
+    # cuSOLVER's 32-bit dense API, which a χ²xS·χ matrix passes at χ > 812 (S = 4). Lowering the
+    # limit here drives the same code path on the host, so the block arithmetic is verified even
+    # though the vendor limit itself cannot be.
+    @testset "tall-skinny QR" begin
+        for (m, n, nb) in [(64, 8, 2), (64, 8, 4), (100, 5, 3), (33, 4, 3), (2048, 16, 7)]
+            M = randn(ComplexF64, m, n)
+            F = TNQS._tall_skinny_qr!(copy(M), nb)
+            R = TNQS._qr_r(F, M)
+            Q = zeros(ComplexF64, m, n)
+            Q[1:size(R, 1), :] = Matrix{ComplexF64}(LinearAlgebra.I, size(R, 1), n)
+            TNQS._apply_q!(F, Q)
+            @test LinearAlgebra.norm(Q' * Q - LinearAlgebra.I) < 1.0e-10   # orthonormal
+            @test LinearAlgebra.norm(Q * R - M) / LinearAlgebra.norm(M) < 1.0e-10   # reconstructs
+        end
+
+        # A wide matrix (a degree-2 vertex) must never be split: its blocks would be rank
+        # deficient and the two-level product would not be a QR.
+        TNQS.qr_block_limit!(16)
+        try
+            @test !(TNQS._qr_tall!(randn(ComplexF64, 4, 8)) isa TNQS.TallSkinnyQR)
+            @test TNQS._qr_tall!(randn(ComplexF64, 64, 8)) isa TNQS.TallSkinnyQR
+        finally
+            TNQS.qr_block_limit!(typemax(Int32))
+        end
+    end
+
+    # Splitting the QR must not change the answer, at any block count.
+    @testset "blocked gate is block-count invariant" begin
+        ψ = random_tensornetworkstate(ComplexF64, g; bond_dimension = 6)
+        bpc = update(BeliefPropagationCache(ψ); maxiter = 4, tolerance = nothing)
+        apply_kwargs = (; maxdim = 6, cutoff = 1.0e-14, normalize_tensors = true)
+        e = first(x for x in TNQS.edges(bpc) if degree(TNQS.graph(bpc), src(x)) == 3)
+        v⃗ = [src(e), dst(e)]
+        gate = TNQS.adapt_gate(
+            first(TNQS.toitensor(("Rxx", v⃗, 0.41), TNQS.graph(bpc), siteinds(network(bpc)))), bpc
+        )
+        envs = TNQS.incoming_messages(bpc, v⃗)
+        ψ⃗ = ITensors.ITensor[network(bpc)[v] for v in v⃗]
+        reference = TNQS.simple_update(gate, copy(ψ⃗); envs, apply_kwargs...)
+
+        split = 0
+        try
+            for limit in (typemax(Int32), 4096, 512, 64)
+                TNQS.qr_block_limit!(limit)
+                TNQS._qr_tall!(randn(ComplexF64, 36, 12)) isa TNQS.TallSkinnyQR && (split += 1)
+                blocked = TNQS.blocked_two_site_update(
+                    gate, copy(ψ⃗); envs, normalize_tensors = true, sqrt_cutoff = nothing,
+                    consume_inputs = false, apply_kwargs...
+                )
+                @test !isnothing(blocked)
+                @test isapprox(
+                    blocked[1][1] * blocked[1][2], reference[1][1] * reference[1][2]; atol = 1.0e-11
+                )
+            end
+        finally
+            TNQS.qr_block_limit!(typemax(Int32))
+        end
+        @test split > 0    # the blocked path was actually taken, not just the single-block one
     end
 
     # And the switch actually routes apply_gates through it.

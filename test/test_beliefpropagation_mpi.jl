@@ -23,6 +23,8 @@ include(joinpath(@__DIR__, "mpi_runner.jl"))
             "host_staging_path", "host_staging_ring",
             # apply_gates_mpi routed through the memory-bounded gate path.
             "blocked_apply_path", "blocked_apply_ring",
+            # Lifecycle of the blocked message scratch: grown, released, regrown.
+            "scratch_release",
         ],
         2
     )

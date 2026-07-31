@@ -22,6 +22,16 @@ using TensorNetworkQuantumSimulator
 const TNQS = TensorNetworkQuantumSimulator
 using TensorNetworkQuantumSimulator: ITensors, Algorithm, adapt, degree, norm
 
+# Minimal stand-in whose `similar` reports what the scratch Ref held at allocation time.
+mutable struct SpyVec{T} <: AbstractVector{T}
+    n::Int
+end
+Base.size(v::SpyVec) = (v.n,)
+Base.getindex(::SpyVec, ::Int) = error("scalar indexing is disallowed")
+const SPY_SEEN = Ref{Any}(nothing)
+const SPY_REF = Ref{Any}(nothing)
+Base.similar(::SpyVec{T}, n::Integer) where {T} = (SPY_SEEN[] = SPY_REF[][]; SpyVec{T}(n))
+
 @testset "Device code paths (JLArray)" begin
     g = named_hexagonal_lattice_graph(2, 2)
     chi = 4
@@ -36,6 +46,32 @@ using TensorNetworkQuantumSimulator: ITensors, Algorithm, adapt, degree, norm
         # device pointers into MPI, which segfaults rather than erroring.
         @test TNQS._is_device_backed(bpc)
         @test !TNQS._is_device_backed(bpc_host)
+    end
+
+    # `scratch_buffer!` must drop the old buffer *before* allocating the replacement, or both are
+    # live across the `similar` -- at S=4, χ=1024 that is 32 GiB held while 36 GiB is requested.
+    # Observed directly rather than inferred: this stand-in's `similar` reads the Ref at the exact
+    # moment of allocation, so the assertion is deterministic and involves no GC.
+    @testset "scratch grows without doubling" begin
+        ref = Base.RefValue{Any}(Bool[])
+        SPY_REF[] = ref
+        proto = SpyVec{ComplexF32}(0)
+
+        TNQS.scratch_buffer!(ref, proto, 100)
+        @test length(ref[]) == 100
+        reused = TNQS.scratch_buffer!(ref, proto, 100)   # fits: must not reallocate
+        @test reused === ref[]
+
+        SPY_SEEN[] = :never_called
+        TNQS.scratch_buffer!(ref, proto, 400)            # grows: must reallocate
+        @test length(ref[]) == 400
+        @test SPY_SEEN[] !== :never_called               # the grow really did allocate
+        @test SPY_SEEN[] == Bool[]                       # ...with the old buffer already dropped
+    end
+
+    # The default hook is a no-op, so nothing in the package depends on CUDA.
+    @testset "free_scratch_buffer! default" begin
+        @test TNQS.free_scratch_buffer!(zeros(ComplexF32, 4)) === nothing
     end
 
     @testset "exchange buffers" begin
@@ -91,6 +127,86 @@ using TensorNetworkQuantumSimulator: ITensors, Algorithm, adapt, degree, norm
         @test out isa TNQS.BeliefPropagationCache
         @test !(ITensors.data(TNQS.network(out)[first(v⃗)]) isa Array)
         @test all(isfinite, errs)
+    end
+
+    # The buffer `_apply_q!` hands to `lmul!` has to be a *concrete* device matrix. CUDA declares
+    # its Q-multiply on `CuVecOrMat`, so a `SubArray` misses it and falls through to host LAPACK,
+    # which throws on a device pointer.
+    #
+    # JLArray cannot catch that by running the code -- it has no GPU `qr!`/`lmul!` override, so
+    # everything below it is host LAPACK and a `SubArray` works fine. The only thing that
+    # generalises is the TYPE, so that is what is asserted. The negative cases are the two
+    # spellings that look right and are not: a row range of a matrix is non-contiguous and stays
+    # a `SubArray` in both.
+    @testset "block buffer stays a concrete device array" begin
+        buf = adapt(JLArray, zeros(ComplexF32, 12 * 5))
+        for rows in (12, 7, 1)                       # full length and two partial prefixes
+            b = TNQS._block_buffer(buf, rows, 5)
+            @test size(b) == (rows, 5)
+            @test !(b isa SubArray)
+            @test !(b isa Array)
+        end
+
+        # The hazard being avoided, stated as a test so it cannot silently stop being true.
+        m = adapt(JLArray, zeros(ComplexF32, 12, 5))
+        @test view(m, 2:6, :) isa SubArray            # row range: not contiguous
+        @test !(view(m, :, 2:4) isa SubArray)         # column range: contiguous, collapses
+    end
+
+    # TSQR on a device array type. This is the check that matters for GPU friendliness: every
+    # block copy in it moves data between strided views, and `copyto!` has no specialised method
+    # for that -- it walks elementwise, which is scalar indexing and throws here. Running it under
+    # JLArray is what proves those are broadcasts.
+    #
+    # Note what this canNOT prove: JLArray has no GPU `qr!`/`lmul!`, so the factorization itself
+    # runs on host LAPACK. Numerical agreement here says nothing about CUSOLVER dispatch.
+    @testset "tall-skinny QR, device array" begin
+        M = adapt(JLArray, randn(ComplexF32, 256, 16))
+        F = TNQS._tall_skinny_qr!(copy(M), 4)
+        R = TNQS._qr_r(F, M)
+        @test !(R isa Array)
+
+        Q = adapt(JLArray, zeros(ComplexF32, 256, 16))
+        Q[1:16, :] .= adapt(JLArray, Matrix{ComplexF32}(one(ComplexF32) * TNQS.LinearAlgebra.I, 16, 16))
+        TNQS._apply_q!(F, Q)
+        @test !(Q isa Array)
+        Qh, Rh, Mh = Array(Q), Array(R), Array(M)
+        @test norm(Qh' * Qh - one(ComplexF32) * TNQS.LinearAlgebra.I) < 1.0f-3
+        @test norm(Qh * Rh - Mh) / norm(Mh) < 1.0f-3
+    end
+
+    # The whole gate, with the QR split, on a device array type.
+    @testset "blocked gate with split QR, device array" begin
+        e = first(x for x in TNQS.edges(bpc) if degree(g, TNQS.src(x)) == 3)
+        v⃗ = [TNQS.src(e), TNQS.dst(e)]
+        gate = TNQS.adapt_gate(
+            first(TNQS.toitensor(("Rxx", v⃗, 0.41), TNQS.graph(bpc), TNQS.siteinds(TNQS.network(bpc)))),
+            bpc
+        )
+        envs = TNQS.incoming_messages(bpc, v⃗)
+        ψ⃗ = [TNQS.network(bpc)[v] for v in v⃗]
+        apply_kwargs = (; maxdim = chi, cutoff = 0.0f0, normalize_tensors = true)
+        reference = TNQS.simple_update(gate, copy(ψ⃗); envs, apply_kwargs...)
+
+        split = 0
+        try
+            for limit in (typemax(Int32), 64)
+                TNQS.qr_block_limit!(limit)
+                TNQS._qr_tall!(adapt(JLArray, randn(ComplexF32, chi^2, 2chi))) isa
+                    TNQS.TallSkinnyQR && (split += 1)
+                blocked = TNQS.blocked_two_site_update(
+                    gate, copy(ψ⃗); envs, normalize_tensors = true, sqrt_cutoff = nothing,
+                    consume_inputs = false, apply_kwargs...
+                )
+                @test !isnothing(blocked)
+                @test !(ITensors.data(blocked[1][1]) isa Array)
+                @test norm(blocked[1][1] * blocked[1][2] - reference[1][1] * reference[1][2]) /
+                    norm(reference[1][1] * reference[1][2]) < 1.0f-3
+            end
+        finally
+            TNQS.qr_block_limit!(typemax(Int32))
+        end
+        @test split > 0
     end
 
     # The memory-bounded gate path drives `qr!` and `lmul!(F.Q, C)` directly rather than going

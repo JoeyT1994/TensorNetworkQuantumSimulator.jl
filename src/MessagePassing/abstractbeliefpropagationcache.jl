@@ -21,10 +21,14 @@ function rescale_vertices!(bp_cache::AbstractBeliefPropagationCache, vertices::V
     for v in vertices
         vn = vertex_scalar(bp_cache, v)
         s = isreal(vn) ? sign(vn) : one(vn)
+        # The scalars are folded before they touch the tensor. `tn[v] * s * inv(...)`
+        # left-associates into two separate whole-tensor products, each one allocating a full
+        # copy of the site tensor -- and the network's own reference is still live, so that is
+        # three factor-sized arrays where one suffices.
         if tn isa TensorNetworkState
-            setindex_preserve!(tn, tn[v] * s * inv(sqrt(vn)), v)
+            setindex_preserve!(tn, tn[v] * (s * inv(sqrt(vn))), v)
         elseif tn isa TensorNetwork
-            setindex_preserve!(tn, tn[v] * s * inv(vn), v)
+            setindex_preserve!(tn, tn[v] * (s * inv(vn)), v)
         else
             error("Don't know how to rescale the vertices of this type")
         end

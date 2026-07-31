@@ -7,7 +7,7 @@ using ITensors: ITensors, ITensor, contract, scalar, state
 using LinearAlgebra: norm
 using MPI
 using NamedGraphs.GraphsExtensions: subgraph
-using NamedGraphs: NamedEdge, rem_vertex!
+using NamedGraphs: NamedEdge, NamedGraph, add_edge!, add_vertex!, rem_vertex!
 using TensorNetworkQuantumSimulator
 const TNQS = TensorNetworkQuantumSimulator
 
@@ -353,6 +353,54 @@ end
 # graph, no hand-conversion to ITensors and no explicit gate_vertices. This is the path that
 # needs `super_graph` to resolve gate supports and lazy per-rank `toitensor` conversion, since
 # no rank holds the site indices of the whole circuit.
+# `update_cache = false` skips the BP re-solve, which is what it is for -- but it must not skip the
+# factor exchange. That exchange is the only thing keeping the two copies of a duplicated shared
+# vertex identical after one holder applies a gate to it, and once they diverge they never
+# reconverge: the tensors end up with different indices and the failure surfaces much later, on a
+# subset of ranks, as a non-scalar out of `vertex_scalar`.
+#
+# Asserted on the tensors themselves rather than on a downstream observable, because the divergence
+# is silent at the point it happens.
+function run_no_cache_update_case(case)
+    g = case.g
+    ψ = global_state(g)
+    my_vertices = case.parts[RANK + 1]
+    bp_update_kwargs = (; maxiter = case.maxiter, tolerance = nothing)
+    apply_kwargs = (; maxdim = 16, cutoff = 0.0, normalize_tensors = false)
+    circuit = trotter_layer(g)
+
+    local_ψ, _ = TNQS.apply_gates_mpi(
+        circuit, local_partition(ψ, my_vertices), g, case.shared;
+        comm = COMM, bp_update_kwargs, apply_kwargs, update_cache = false
+    )
+
+    # Every holder of a shared vertex must end up with the same tensor. Gathered rather than
+    # checked locally, so the assertion is symmetric instead of trusting one rank's copy.
+    #
+    # `pairs(case.shared)` is identical on every rank and the gathers sit outside the "do I hold
+    # it" branch, so all ranks run the same collectives in the same order -- a rank that skipped
+    # one would hang rather than fail.
+    for (v, owners) in pairs(case.shared)
+        mine = v in my_vertices
+        nrm = MPI.Allgather(Float64[mine ? norm(local_ψ[v]) : -1.0], COMM)
+        nd = MPI.Allgather(Int32[mine ? Int32(ndims(local_ψ[v])) : Int32(-1)], COMM)
+        mine || continue
+        other = only(filter(!=(Int32(RANK)), collect(owners)))
+        check(
+            nd[other + 1] == nd[RANK + 1],
+            "shared vertex $v has a different order on its two holders: " *
+                "$(nd[RANK + 1]) on rank $RANK vs $(nd[other + 1]) on rank $other"
+        )
+        check(
+            isapprox(nrm[other + 1], nrm[RANK + 1]; atol = 1.0e-10),
+            "shared vertex $v diverged under update_cache=false: " *
+                "norm $(nrm[RANK + 1]) on rank $RANK vs $(nrm[other + 1]) on rank $other"
+        )
+    end
+
+    return local_ψ
+end
+
 function run_apply_gates_mpi_case(case)
     g = case.g
     ψ = global_state(g)
@@ -551,6 +599,67 @@ function run_blocked_apply_case(case)
     return mpi_bpc
 end
 
+# Two degree-3 centres joined by a degree-2 chain, cut at the middle chain vertex. Same shape as a
+# neighbouring pair of heavy-hex regions, small enough to assert exact buffer sizes against.
+function scratch_case()
+    g = NamedGraph{Int}()
+    for v in 1:9
+        add_vertex!(g, v)
+    end
+    for (a, b) in [(1, 3), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7), (7, 8), (7, 9)]
+        add_edge!(g, NamedEdge(a => b))
+    end
+    parts = [[1, 2, 3, 4, 5], [5, 6, 7, 8, 9]]
+    shared = Dictionary([5], [(Int32(0), Int32(1))])
+    return (; name = "two degree-3 centres, 2 ranks", g, parts, shared, maxiter = 6)
+end
+
+# Records what the release hook is handed, so the release is asserted rather than inferred.
+const RELEASED = Int[]
+TNQS.free_scratch_buffer!(x::Vector{ComplexF64}) = (push!(RELEASED, length(x)); nothing)
+
+# The blocked message scratch is the largest single allocation in a production run (36 GiB at
+# S=4, χ=1024), so its whole lifecycle is pinned here: grown on demand, handed to the release hook
+# at the end of the solve, and the reference dropped -- otherwise it squats through gate
+# application, which needs its own factor-sized buffers.
+function run_scratch_release_case(case)
+    g = case.g
+    ψ = global_state(g)
+    my_vertices = case.parts[RANK + 1]
+    mpi_bpc = TNQS.BeliefPropagationCacheMPI(
+        seeded_cache(local_partition(ψ, my_vertices)), g, case.shared; comm = COMM
+    )
+    alg = TNQS.Algorithm("blocked")
+    solve(c) = update(c; maxiter = case.maxiter, tolerance = nothing, message_update_alg = alg)
+
+    # Both ranks hold a degree-3 centre (3 and 7), so the blocked kernel runs on both.
+    check(
+        count(v -> length(neighbors(g, v)) == 3, my_vertices) == 1,
+        "this rank holds exactly one degree-3 centre"
+    )
+
+    empty!(RELEASED)
+    mpi_bpc = solve(mpi_bpc)
+
+    chi, S, b = 2, 2, 1
+    want = TNQS.message_scratch_length(S, chi, b)
+    check(!isempty(RELEASED), "the release hook was handed the scratch buffer")
+    check(
+        all(==(want), RELEASED),
+        "released lengths $RELEASED != message_scratch_length($S, $chi, $b) = $want"
+    )
+    check(
+        isempty(TNQS.message_scratch(mpi_bpc)[]),
+        "scratch reference dropped after update; got length $(length(TNQS.message_scratch(mpi_bpc)[]))"
+    )
+
+    # A second solve must regrow and release again rather than silently skip.
+    n = length(RELEASED)
+    solve(mpi_bpc)
+    check(length(RELEASED) == n + 1, "second solve released again ($(length(RELEASED)) vs $(n + 1))")
+    return mpi_bpc
+end
+
 const CASES = Dict(
     "path" => (run_case, path_case),
     "ring" => (run_case, ring_case),
@@ -568,7 +677,10 @@ const CASES = Dict(
     "host_staging_path" => (run_host_staging_case, path_case),
     "host_staging_ring" => (run_host_staging_case, ring_case),
     "blocked_apply_path" => (run_blocked_apply_case, apply_path_case),
-    "blocked_apply_ring" => (run_blocked_apply_case, apply_ring_case)
+    "blocked_apply_ring" => (run_blocked_apply_case, apply_ring_case),
+    "no_cache_update_path" => (run_no_cache_update_case, apply_path_case),
+    "no_cache_update_ring" => (run_no_cache_update_case, apply_ring_case),
+    "scratch_release" => (run_scratch_release_case, scratch_case)
 )
 
 # Every case named on the command line runs in this one process. Loading the package and
