@@ -1,7 +1,7 @@
 name = "TensorNetworkQuantumSimulator"
 uuid = "4de3b72a-362e-43dd-83ff-3f381eda9f9c"
 license = "MIT"
-version = "0.4.7"
+version = "0.4.8"
 authors = ["JoeyT1994 <jtindall@flatironinstitute.org>", "and contributors"]
 description = "A Julia package for quantum simulation with tensor networks of near-arbitrary topology."
 
@@ -21,15 +21,8 @@ SplitApplyCombine = "03a91e81-4c3e-53e1-a0a4-9c0c8f19dd66"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 TypeParameterAccessors = "7e5a90cf-f82e-492e-a09b-e3e26432c138"
 
-[weakdeps]
-CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
-
-[extensions]
-TensorNetworkQuantumSimulatorCUDAExt = "CUDA"
-
 [compat]
 Adapt = "4.3.0"
-CUDA = "5, 6"
 Dictionaries = "0.4"
 Graphs = "1.8.0"
 ITensors = "0.9"

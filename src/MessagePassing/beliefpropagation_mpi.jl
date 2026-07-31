@@ -542,21 +542,25 @@ end
 # `geqrf!` leaves R in the upper triangle and the Householder reflectors below; `orgqr!` then
 # overwrites the whole thing with Q, so R has to be copied out in between.
 #
-# THIS IS THE DEVICE SEAM. The CUDA method lives in ext/TensorNetworkQuantumSimulatorCUDAExt.jl
-# and calls cuSOLVER's `geqrf!`/`orgqr!` (`ungqr!` for complex). That is not a portability nicety
-# but a requirement: `LinearAlgebra.qr!` followed by `lmul!(F.Q, ...)` -- and equivalently
-# `CuMatrix(F.Q)`, which CUDA.jl implements via `lmul!` -- routes through cuSOLVER `ormqr`,
-# which fails with CUSOLVER_STATUS_INVALID_VALUE once the matrix exceeds typemax(Int32)
-# elements. Measured on an RTX PRO 6000: fine at χ = 512 (5.4e8 elements), fails at χ = 1024
-# (4.3e9). `orgqr` accepts the same dimensions, and permutedims/gemm/broadcast are all fine at
-# that size, so this one call is the only thing that breaks.
-function thin_qr_matrix!(A::StridedMatrix{<:LinearAlgebra.BlasFloat})
+# Why geqrf!/orgqr! and not `qr!`: `LinearAlgebra.qr!` followed by `lmul!(F.Q, ...)` -- and
+# equivalently `CuMatrix(F.Q)`, which CUDA.jl implements via `lmul!` -- routes through cuSOLVER
+# `ormqr`, which fails with CUSOLVER_STATUS_INVALID_VALUE once the matrix exceeds
+# typemax(Int32) elements. Measured on an RTX PRO 6000: both fine at χ = 512 (5.4e8 elements),
+# both fail at χ = 1024 (4.3e9), while `orgqr` accepts the same dimensions. permutedims, gemm
+# and broadcast are all fine at that size, so this was the only thing that broke.
+#
+# No device-specific method is needed: cuSOLVER.jl itself adds `LAPACK.geqrf!` and
+# `LAPACK.orgqr!` methods for `StridedCuMatrix` (and its `orgqr!` covers complex too, via
+# cusolverDnCungqr -- there is no separate `ungqr!`). Hence the `AbstractMatrix` signature plus
+# an `applicable` check rather than `StridedMatrix`, which would exclude `CuArray`.
+function thin_qr_matrix!(A::AbstractMatrix)
+    eltype(A) <: LinearAlgebra.BlasFloat || return nothing
+    applicable(LAPACK.geqrf!, A) || return nothing
     n = size(A, 2)
     A, tau = LAPACK.geqrf!(A)
     R = triu!(A[1:n, :])                          # n × n; must precede orgqr!
     return LAPACK.orgqr!(A, tau), R
 end
-thin_qr_matrix!(::AbstractMatrix) = nothing
 
 # Thin QR of `T` with `linds` as the row indices. Same contract as `ITensors.qr(T, linds)`.
 #
