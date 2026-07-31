@@ -59,11 +59,6 @@ end
 # the next message update, where the `Bool[]` sentinel fails its `isa typeof(proto)` check.
 function release_message_scratch!(bp_cache::AbstractBeliefPropagationCache)
     ref = message_scratch(bp_cache)
-    s = ref[]
-    # `resize!` on a CuVector returns the device allocation to CUDA's pool here rather than
-    # at the next finalizer run; on a Vector it does nothing that dropping the reference
-    # below would not already do.
-    applicable(resize!, s, 0) && resize!(s, 0)
     ref[] = Bool[]
     return bp_cache
 end
@@ -162,8 +157,10 @@ function updated_message(
     # Orient each message as (l, l') so `transpose` inside the kernel gives (l', l).
     mat(m, l) = array(m, l, only(setdiff(collect(inds(m)), [l])))
 
-    out = blocked_message!(outT, buf1, buf2, Tp, A, perm,
-        mat(ma, la), mat(mb, lb), S, chi, b)
+    out = blocked_message!(
+        outT, buf1, buf2, Tp, A, perm,
+        mat(ma, la), mat(mb, lb), S, chi, b
+    )
 
     # `out` is [l_e', l_e] -- label it rather than transpose. Copy so the message does not
     # alias the scratch that the next edge overwrites.

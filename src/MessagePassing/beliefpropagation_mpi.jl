@@ -2,7 +2,7 @@ using Dictionaries: Dictionary, delete!, set!
 using Graphs: AbstractGraph, connected_components, is_tree
 using ITensors.NDTensors: scalartype
 using ITensors: Algorithm, ITensor, delta, dim
-using LinearAlgebra: normalize
+using LinearAlgebra: LinearAlgebra, LAPACK, normalize, triu!
 using MPI
 using NamedGraphs.GraphsExtensions: a_star, boundary_edges, default_root_vertex,
     forest_cover, forest_cover_edge_sequence, leaf_vertices, post_order_dfs_edges
@@ -494,20 +494,27 @@ function apply_gate!(
 
     1 <= nv <= 2 || error(
         "apply_gate!: only one- and two-site gates are supported; " *
-        "received a gate acting on $nv vertices: $v⃗.",
+            "received a gate acting on $nv vertices: $v⃗.",
     )
 
     if nv == 2
         has_edge(graph(ψ_bpc), NamedEdge(first(v⃗) => last(v⃗))) || error(
             "apply_gate!: cannot apply a two-site gate on the non-adjacent vertices " *
-            "$(first(v⃗)) and $(last(v⃗)). Simple update requires the two sites to share an " *
-            "edge of the tensor-network graph.",
+                "$(first(v⃗)) and $(last(v⃗)). Simple update requires the two sites to share an " *
+                "edge of the tensor-network graph.",
         )
     end
 
     envs = nv == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
 
+
     ψ⃗ = ITensor[network(ψ_bpc)[v] for v in v⃗]
+
+    foreach(v⃗) do v
+        # Allow deallocation.
+        setindex_preserve!(ψ_bpc, ITensor(), v)
+    end
+
     updated_tensors, s_values, err = simple_update_mpi(gate, ψ⃗; envs, apply_kwargs...)
     if nv == 2
         v1, v2 = v⃗
@@ -526,6 +533,60 @@ function apply_gate!(
     end
 
     return ψ_bpc, err
+end
+
+# Thin QR of a tall matrix (m >= n) with Q written into `A`'s own memory, returning `(Q, R)`
+# where `Q === A`. `nothing` means there is no in-place method for this array type, so callers
+# must fall back -- never a silent wrong answer.
+#
+# `geqrf!` leaves R in the upper triangle and the Householder reflectors below; `orgqr!` then
+# overwrites the whole thing with Q, so R has to be copied out in between.
+#
+# THIS IS THE DEVICE SEAM. The CUDA method lives in ext/TensorNetworkQuantumSimulatorCUDAExt.jl
+# and calls cuSOLVER's `geqrf!`/`orgqr!` (`ungqr!` for complex). That is not a portability nicety
+# but a requirement: `LinearAlgebra.qr!` followed by `lmul!(F.Q, ...)` -- and equivalently
+# `CuMatrix(F.Q)`, which CUDA.jl implements via `lmul!` -- routes through cuSOLVER `ormqr`,
+# which fails with CUSOLVER_STATUS_INVALID_VALUE once the matrix exceeds typemax(Int32)
+# elements. Measured on an RTX PRO 6000: fine at χ = 512 (5.4e8 elements), fails at χ = 1024
+# (4.3e9). `orgqr` accepts the same dimensions, and permutedims/gemm/broadcast are all fine at
+# that size, so this one call is the only thing that breaks.
+function thin_qr_matrix!(A::StridedMatrix{<:LinearAlgebra.BlasFloat})
+    n = size(A, 2)
+    A, tau = LAPACK.geqrf!(A)
+    R = triu!(A[1:n, :])                          # n × n; must precede orgqr!
+    return LAPACK.orgqr!(A, tau), R
+end
+thin_qr_matrix!(::AbstractMatrix) = nothing
+
+# Thin QR of `T` with `linds` as the row indices. Same contract as `ITensors.qr(T, linds)`.
+#
+# `ITensors.qr` allocates several factor-sized temporaries; this allocates only the small R,
+# because Q lands in the permuted copy of `T`. On the matrix a degree-3 vertex produces
+# (χ² × dχ, d = 4, ComplexF32) at χ = 128: 0.04 × one vertex tensor against 7.13 × for
+# `ITensors.qr`.
+#
+# `T` is permuted into matrix form, which is the one copy still paid; `geqrf!` then consumes it.
+# Building ψᵥ with the row indices already leading would make the view a plain reshape and
+# remove that too.
+#
+# Requires m >= n so the thin Q fills `A` exactly. A degree-2 vertex gives a wide matrix and
+# falls back to `ITensors.qr`; those tensors are O(χ²) and irrelevant to the peak.
+function thin_qr(T::ITensor, linds)
+    hasqns(T) && return qr(T, linds)              # blocked storage: leave it to ITensors
+    ls = collect(linds)
+    rs = setdiff(collect(inds(T)), ls)            # column indices, in T's own order
+    m = isempty(ls) ? 1 : prod(dim, ls)
+    n = isempty(rs) ? 1 : prod(dim, rs)
+    m >= n || return qr(T, linds)                 # wide: no thin Q to place in A
+
+    A = reshape(ITensors.array(T, ls..., rs...), m, n)
+    factored = thin_qr_matrix!(A)
+    isnothing(factored) && return qr(T, linds)    # no in-place method for this array type
+    Q, R = factored
+
+    qb = Index(n, "Link,qr")
+    return ITensor(reshape(Q, map(dim, ls)..., n), ls..., qb),
+        ITensor(reshape(R, n, map(dim, rs)...), qb, rs...)
 end
 
 # identical to the non-MPI version, but with a different signature so it can be called
@@ -551,14 +612,33 @@ function simple_update_mpi(
         sqrt_envs_v1, inv_sqrt_envs_v1 = first.(sqrt_inv_sqrt_envs_v1), last.(sqrt_inv_sqrt_envs_v1)
         sqrt_envs_v2, inv_sqrt_envs_v2 = first.(sqrt_inv_sqrt_envs_v2), last.(sqrt_inv_sqrt_envs_v2)
 
-        ψᵥ₁ = contract([ψ⃗[1]; sqrt_envs_v1])
-        ψᵥ₂ = contract([ψ⃗[2]; sqrt_envs_v2])
+        # Site indices come off the inputs, so read them before the data is released.
         sᵥ₁ = commoninds(ψ⃗[1], o)
         sᵥ₂ = commoninds(ψ⃗[2], o)
-        Qᵥ₁, Rᵥ₁ = qr(ψᵥ₁, uniqueinds(uniqueinds(ψᵥ₁, ψᵥ₂), sᵥ₁))
-        Qᵥ₂, Rᵥ₂ = qr(ψᵥ₂, uniqueinds(uniqueinds(ψᵥ₂, ψᵥ₁), sᵥ₂))
+
+        # Clearing `ψ⃗` is the one release the compiler cannot make for us. Julia frees a local
+        # at its last use, but a value reachable through a heap-allocated container stays live
+        # for the whole function -- measured: two 300 MiB arrays held as locals peak at 300 MiB,
+        # held in a Vector at 600 MiB. `apply_gate!` has already dropped the network's reference,
+        # so `ψ⃗` is the last holder, and without this the inputs are pinned to the end of the
+        # call. CONSEQUENCE: this function consumes `ψ⃗`; callers must not use it afterwards.
+        ψᵥ₁ = contract([ψ⃗[1]; sqrt_envs_v1])
+        ψ⃗[1] = ITensor()
+        ψᵥ₂ = contract([ψ⃗[2]; sqrt_envs_v2])
+        ψ⃗[2] = ITensor()
+
+        # Both index sets are resolved before either QR runs. Written inline, the second QR's
+        # `uniqueinds(ψᵥ₂, ψᵥ₁)` still references ψᵥ₁, which keeps it alive past its own
+        # factorisation for no reason.
+        linds₁ = uniqueinds(uniqueinds(ψᵥ₁, ψᵥ₂), sᵥ₁)
+        linds₂ = uniqueinds(uniqueinds(ψᵥ₂, ψᵥ₁), sᵥ₂)
+
+        Qᵥ₁, Rᵥ₁ = thin_qr(ψᵥ₁, linds₁)
+        ψᵥ₁ = ITensor()
+        Qᵥ₂, Rᵥ₂ = thin_qr(ψᵥ₂, linds₂)
+        ψᵥ₂ = ITensor()
+
         rᵥ₁ = commoninds(Qᵥ₁, Rᵥ₁)
-        rᵥ₂ = commoninds(Qᵥ₂, Rᵥ₂)
         oR = ITensors.apply(o, Rᵥ₁ * Rᵥ₂)
         singular_values! = Ref(ITensor())
         Rᵥ₁, Rᵥ₂, spec = factorize_svd(
@@ -570,9 +650,15 @@ function simple_update_mpi(
         )
         err = spec.truncerr
         s_values = singular_values![]
+        # One side at a time. `[Qᵥ₁ * Rᵥ₁, Qᵥ₂ * Rᵥ₂]` evaluates both products while both Q's
+        # are still live; finishing side 1 first lets its Q go before side 2's is built.
         Qᵥ₁ = contract([Qᵥ₁; dag.(inv_sqrt_envs_v1)])
+        u₁ = Qᵥ₁ * Rᵥ₁
+        Qᵥ₁ = ITensor()
         Qᵥ₂ = contract([Qᵥ₂; dag.(inv_sqrt_envs_v2)])
-        updated_tensors = [Qᵥ₁ * Rᵥ₁, Qᵥ₂ * Rᵥ₂]
+        u₂ = Qᵥ₂ * Rᵥ₂
+        Qᵥ₂ = ITensor()
+        updated_tensors = ITensor[u₁, u₂]
         if normalize_tensors
             s_values = normalize(s_values)
         end
