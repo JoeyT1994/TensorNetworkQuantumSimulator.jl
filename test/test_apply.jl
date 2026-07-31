@@ -289,7 +289,7 @@ end
             @test !(TNQS._qr_tall!(randn(ComplexF64, 4, 8)) isa TNQS.TallSkinnyQR)
             @test TNQS._qr_tall!(randn(ComplexF64, 64, 8)) isa TNQS.TallSkinnyQR
         finally
-            TNQS.qr_block_limit!(typemax(Int32))
+            TNQS.qr_block_limit!(TNQS.default_qr_block_limit())
         end
     end
 
@@ -322,7 +322,7 @@ end
                 )
             end
         finally
-            TNQS.qr_block_limit!(typemax(Int32))
+            TNQS.qr_block_limit!(TNQS.default_qr_block_limit())
         end
         @test split > 0    # the blocked path was actually taken, not just the single-block one
     end

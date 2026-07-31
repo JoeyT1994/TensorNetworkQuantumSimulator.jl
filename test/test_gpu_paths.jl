@@ -204,7 +204,7 @@ Base.similar(::SpyVec{T}, n::Integer) where {T} = (SPY_SEEN[] = SPY_REF[][]; Spy
                     norm(reference[1][1] * reference[1][2]) < 1.0f-3
             end
         finally
-            TNQS.qr_block_limit!(typemax(Int32))
+            TNQS.qr_block_limit!(TNQS.default_qr_block_limit())
         end
         @test split > 0
     end

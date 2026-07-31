@@ -63,22 +63,39 @@ function blocked_gates!(enabled::Bool)
     return enabled
 end
 
-# cuSOLVER's dense `unmqr`/`ungqr` are indexed with 32-bit ints, so applying Q to a matrix with
-# more than ~2^31 entries fails with CUSOLVER_STATUS_INVALID_VALUE out of the buffer-size query.
-# `geqrf` has a 64-bit variant and succeeds, so without care the failure surfaces one call later,
-# at `lmul!`, with nothing in the trace pointing at the size. For a degree-3 vertex the matrix is
-# χ²×S·χ, so the direct QR runs out at S·χ³ ≈ 2^31 -- χ > 812 when S = 4.
+# cuSOLVER's dense `unmqr`/`ungqr` are indexed with 32-bit ints, so applying Q to a large enough
+# matrix fails with CUSOLVER_STATUS_INVALID_VALUE out of the buffer-size query. `geqrf` has a
+# 64-bit variant and succeeds, so without care the failure surfaces one call later, at `lmul!`,
+# with nothing in the trace pointing at the size. For a degree-3 vertex the matrix is χ²×S·χ, so
+# the quantity at risk is `lda*n = S·χ³`.
 #
-# So the QR is done in row blocks (TSQR) whenever the matrix is too big for one call.
-const _QR_BLOCK_LIMIT = Ref(Int(typemax(Int32)))
+# So the QR is done in row blocks (TSQR) whenever the matrix is too big for one call: `p` blocks
+# divide that product by `p`, which is exactly the right lever.
+#
+# The limit is **not** 2^31. Setting it there says "anything that fits in an int is fine", which
+# assumes cuSOLVER's largest internal index is exactly `lda*n` and never `lda*n + something`.
+# Measured against that assumption: χ=750 (S·χ³ = 1.69e9, 21% below 2^31) runs, χ=800
+# (2.05e9, 4.6% below) fails -- and at 2^31 neither would have been split at all. So the usable
+# ceiling sits below the representable one, and the default keeps a factor of two in hand.
+#
+# Raising it back is a one-liner (`qr_block_limit!`) if a future CUDA stack proves more generous;
+# lowering it costs only a slightly smaller block buffer, since that buffer is F/p.
+default_qr_block_limit() = 1 << 30
+const _QR_BLOCK_LIMIT = Ref(default_qr_block_limit())
 
 """
     qr_block_limit() -> Int
     qr_block_limit!(n::Integer)
 
 Largest number of entries handed to a single QR call by the memory-bounded gate path. Above this
-the QR is split into row blocks (see `_tall_skinny_qr!`). Defaults to `typemax(Int32)`, which is
-the limit of cuSOLVER's 32-bit dense API; lower it to exercise the blocked path on the host.
+the QR is split into row blocks (see `_tall_skinny_qr!`), which divides the count by the number of
+blocks.
+
+Defaults to `2^30`, half of what cuSOLVER's 32-bit dense API can represent. The margin is
+deliberate and was measured: on one CUDA stack a degree-3 vertex at χ=750 (`S·χ³` = 1.69e9, 21%
+below `typemax(Int32)`) runs, while χ=800 (2.05e9, 4.6% below) fails — so the usable ceiling sits
+below the representable one. Raise it if a stack proves more generous; lower it to exercise the
+blocked path on the host, which is what the tests do.
 """
 qr_block_limit() = _QR_BLOCK_LIMIT[]
 qr_block_limit!(n::Integer) = (_QR_BLOCK_LIMIT[] = Int(n); n)
