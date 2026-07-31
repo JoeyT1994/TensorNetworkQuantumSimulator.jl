@@ -38,8 +38,19 @@ using ITensors: Algorithm, array, dim
 # cache type has no such field and falls back to allocating per call: the *peak* is
 # unchanged (same buffer, same size) but it churns the allocator, so the reusing path is
 # what the MPI runs should use.
-message_scratch_length(S, chi, b, nlayers = 1) =
-    nlayers * S * chi^3 + 2 * S * chi^2 * b + chi^2
+# `d = (ka, kb, ke, ba, bb, be)`: the ket-side then bra-side dimensions of the two incoming legs
+# and the outgoing one. The block buffers have to fit the largest of the three intermediates,
+# which change shape as the contraction walks from ket dims to bra dims.
+function message_scratch_length(S, d::NTuple{6, <:Integer}, b, nlayers = 1)
+    ka, kb, ke, ba, bb, be = d
+    blocks = 2 * S * b * max(ka * kb, ka * bb, ba * bb)
+    aligned = S * ka * kb * ke + (nlayers == 1 ? 0 : S * ba * bb * be)
+    return aligned + blocks + be * ke
+end
+
+# Equal-dimension shorthand, which is what a norm network with a saturated bond gives.
+message_scratch_length(S, chi::Integer, b, nlayers = 1) =
+    message_scratch_length(S, (chi, chi, chi, chi, chi, chi), b, nlayers)
 
 message_scratch(::AbstractBeliefPropagationCache) = Base.RefValue{Any}(Bool[])
 
@@ -92,12 +103,13 @@ release_message_scratch!(bpc::AbstractBeliefPropagationCache) = bpc
 const _BLOCKED_MESSAGE_HITS = Ref(0)
 
 function blocked_message!(
-        outT_v, buf1, buf2, Tp, A, perm, ma, mb, S, chi, b, Bp = nothing, Barr = nothing,
+        outT_v, buf1, buf2, Tp, A, perm, ma, mb, S, d, b, Bp = nothing, Barr = nothing,
         Bperm = nothing
     )
     _BLOCKED_MESSAGE_HITS[] += 1
+    ka, kb, ke, ba, bb, be = d          # ket-side then bra-side dims of (l_a, l_b, l_e)
     permutedims!(reshape(Tp, ntuple(i -> size(A, perm[i]), length(perm))), A, perm)
-    Tclose = reshape(Tp, S * chi * chi, chi)   # a matrix: l_e is trailing after the permute
+    Tclose = reshape(Tp, S * ka * kb, ke)   # a matrix: l_e is trailing after the permute
 
     # How the bra reaches the closing gemm is the only difference between a single network's
     # double layer and a form's. When the bra is `conj(ket)` there is nothing to store: `adjoint`
@@ -108,34 +120,39 @@ function blocked_message!(
         adjoint(Tclose)
     else
         permutedims!(reshape(Bp, ntuple(i -> size(Barr, Bperm[i]), length(Bperm))), Barr, Bperm)
-        transpose(reshape(Bp, S * chi * chi, chi))
+        transpose(reshape(Bp, S * ba * bb, be))
     end
-    outT = reshape(outT_v, chi, chi)
-    slab = S * chi * chi
+    outT = reshape(outT_v, be, ke)
+    kslab, bslab = S * ka * kb, S * ba * bb
 
-    for lo in 1:b:chi
-        nb = min(b, chi - lo + 1)
-        n = slab * nb
+    # Each leg carries its own dimension. Insisting they were all equal was not a simplification
+    # worth having: a circuit with a truncation cutoff produces unequal bonds routinely, and the
+    # fallback then costs six factors instead of one on exactly the tensor this kernel exists to
+    # protect. The three intermediates change shape as the contraction walks from ket dims to bra
+    # dims, which is why the buffers are sized from the largest of them rather than from one χ³.
+    for lo in 1:b:ke
+        nb = min(b, ke - lo + 1)
         cols = lo:(lo + nb - 1)
-        blk = reshape(view(Tp, ((lo - 1) * slab + 1):((lo - 1) * slab + n)), S, chi, chi, nb)
+        n1, n2, n3 = kslab * nb, S * ka * bb * nb, bslab * nb
+        blk = reshape(view(Tp, ((lo - 1) * kslab + 1):((lo - 1) * kslab + n1)), S, ka, kb, nb)
 
         # contract l_b, moving the contracted leg first so each step is one plain gemm
-        P1 = reshape(view(buf1, 1:n), chi, S, chi, nb)
+        P1 = reshape(view(buf1, 1:n1), kb, S, ka, nb)
         permutedims!(P1, blk, (3, 1, 2, 4))
-        G1 = reshape(view(buf2, 1:n), chi, S * chi * nb)
-        mul!(G1, transpose(mb), reshape(P1, chi, S * chi * nb))
+        G1 = reshape(view(buf2, 1:n2), bb, S * ka * nb)
+        mul!(G1, transpose(mb), reshape(P1, kb, S * ka * nb))
 
         # contract l_a
-        P2 = reshape(view(buf1, 1:n), chi, chi, S, nb)
-        permutedims!(P2, reshape(G1, chi, S, chi, nb), (3, 1, 2, 4))
-        G2 = reshape(view(buf2, 1:n), chi, chi * S * nb)
-        mul!(G2, transpose(ma), reshape(P2, chi, chi * S * nb))
+        P2 = reshape(view(buf1, 1:n2), ka, bb, S, nb)
+        permutedims!(P2, reshape(G1, bb, S, ka, nb), (3, 1, 2, 4))
+        G2 = reshape(view(buf2, 1:n3), ba, bb * S * nb)
+        mul!(G2, transpose(ma), reshape(P2, ka, bb * S * nb))
 
         # close against the bra: contracted legs leading and in the ket's own order, which is the
         # order the bra was aligned to as well
-        P3 = reshape(view(buf1, 1:n), S, chi, chi, nb)
-        permutedims!(P3, reshape(G2, chi, chi, S, nb), (3, 1, 2, 4))
-        mul!(view(outT, :, cols), closer, reshape(P3, slab, nb))
+        P3 = reshape(view(buf1, 1:n3), S, ba, bb, nb)
+        permutedims!(P3, reshape(G2, ba, bb, S, nb), (3, 1, 2, 4))
+        mul!(view(outT, :, cols), closer, reshape(P3, bslab, nb))
     end
     return outT
 end
@@ -234,11 +251,6 @@ function updated_message(
     # alignment below ambiguous, so it is checked rather than left to `only` to throw.
     all(m -> length(commoninds(m, T)) == 1, ms) || return fallback()
     legs = [only(commoninds(m, T)) for m in ms]
-    chi = dim(le)
-    all(l -> dim(l) == chi, legs) || return fallback()
-    nelt = prod(dim, is)
-    rem(nelt, chi^3) == 0 || return fallback()
-    S = nelt ÷ chi^3
 
     # Incoming legs in stored order: the block permutation and the closing contraction both
     # assume l_a precedes l_b in the aligned copy.
@@ -246,8 +258,18 @@ function updated_message(
     la, lb = legs[ord]
     ma, mb = ms[ord]
 
-    # `clamp` rather than `min`: b must be at least 1 or the block loop gets a zero step.
-    b = clamp(isnothing(alg.kwargs.b) ? default_blocked_blocksize(chi) : alg.kwargs.b, 1, chi)
+    # Each leg keeps its own dimension. Requiring them equal used to be the single biggest reason
+    # this kernel never ran: any circuit with a truncation cutoff leaves most bonds short of
+    # `maxdim`, and one mismatched leg sent a factor-sized vertex down the six-factor `contract`
+    # path -- which is what it exists to avoid.
+    ka, kb, ke = dim(la), dim(lb), dim(le)
+    nelt = prod(dim, is)
+    rem(nelt, ka * kb * ke) == 0 || return fallback()
+    S = nelt ÷ (ka * kb * ke)
+
+    # `clamp` rather than `min`: b must be at least 1 or the block loop gets a zero step. Blocking
+    # is over the outgoing leg, so it is `ke` that bounds it.
+    b = clamp(isnothing(alg.kwargs.b) ? default_blocked_blocksize(ke) : alg.kwargs.b, 1, ke)
     A = array(T)                                  # dims follow inds(T); a view when dense
     sitepos = [i for i in eachindex(is) if is[i] ∉ (la, lb, le)]
     perm = (sitepos..., findfirst(==(la), is), findfirst(==(lb), is), findfirst(==(le), is))
@@ -256,6 +278,7 @@ function updated_message(
     # operator's pairing, and leg-for-leg through each message -- because the closing gemm
     # contracts them as flat matrices and only their storage order relates them.
     Barr, Bperm = nothing, nothing
+    ba, bb, be = ka, kb, ke           # a derived bra mirrors the ket's dimensions exactly
     if !isnothing(Bt)
         bis = collect(inds(Bt))
         all(m -> length(commoninds(m, Bt)) == 1, ms) || return fallback()
@@ -263,28 +286,35 @@ function updated_message(
         bsites = last(layers.sites)[[findfirst(==(is[i]), first(layers.sites)) for i in sitepos]]
         bwanted = Index[bsites; blegs; le_bra]
         all(i -> i ∈ bis, bwanted) && length(bis) == length(bwanted) || return fallback()
-        all(i -> dim(i) == chi, blegs) && dim(le_bra) == chi || return fallback()
+        ba, bb, be = dim(blegs[1]), dim(blegs[2]), dim(le_bra)
+        # The two layers share their site space, so the bra's element count must agree.
+        prod(dim, bis) == S * ba * bb * be || return fallback()
         Barr = array(Bt)
         Bperm = ntuple(i -> findfirst(==(bwanted[i]), bis), length(bwanted))
     end
+    d = (ka, kb, ke, ba, bb, be)
 
     nlayers = isnothing(Bt) ? 1 : 2
     s = scratch_buffer!(
-        message_scratch(bp_cache), vec(A), message_scratch_length(S, chi, b, nlayers)
+        message_scratch(bp_cache), vec(A), message_scratch_length(S, d, b, nlayers)
     )
-    o1 = S * chi^3
-    o2 = o1 + S * chi^2 * b
-    o3 = o2 + S * chi^2 * b
+    # Carved in the same order `message_scratch_length` sums them.
+    nT = S * ka * kb * ke
+    nbuf = S * b * max(ka * kb, ka * bb, ba * bb)
+    o1 = nT
+    o2 = o1 + nbuf
+    o3 = o2 + nbuf
+    o4 = o3 + be * ke
     Tp, buf1, buf2 = view(s, 1:o1), view(s, (o1 + 1):o2), view(s, (o2 + 1):o3)
-    outT = view(s, (o3 + 1):(o3 + chi^2))
-    Bp = isnothing(Bt) ? nothing : view(s, (o3 + chi^2 + 1):(o3 + chi^2 + o1))
+    outT = view(s, (o3 + 1):o4)
+    Bp = isnothing(Bt) ? nothing : view(s, (o4 + 1):(o4 + S * ba * bb * be))
 
     # Orient each message as (ket leg, bra leg) so `transpose` inside the kernel gives the
     # transpose of that.
     mat(m, l) = array(m, l, only(setdiff(collect(inds(m)), [l])))
 
     out = blocked_message!(outT, buf1, buf2, Tp, A, perm,
-        mat(ma, la), mat(mb, lb), S, chi, b, Bp, Barr, Bperm)
+        mat(ma, la), mat(mb, lb), S, d, b, Bp, Barr, Bperm)
 
     # `out` is [bra, ket] -- label it rather than transpose. Copy so the message does not
     # alias the scratch that the next edge overwrites.
