@@ -618,24 +618,36 @@ function apply_env_chain!(cur, spare, mats, chi, n, fwd::Bool)
     return cur, spare
 end
 
-# Absorbs `mats` (one χ×χ per env leg, in `alegs` order) into `T`, laid out as
-# (alegs…, sinds…, lb), and returns the buffer holding the result plus the spare one.
-# `T` is read once, into `first(bufs)`, and is not referenced again.
-function absorb_envs!(bufs, T::ITensor, mats, alegs, sinds, lb, chi)
+# Permutes `T` into `buf` with the layout (alegs…, sinds…, lb). Kept separate from the env
+# absorption so the caller can release `T` in between -- see `buffered_phase1`.
+function permute_into!(buf, T::ITensor, alegs, sinds, lb)
     tgt = Index[alegs...; sinds...; lb]
     src_inds = collect(inds(T))
     perm = ntuple(i -> findfirst(==(tgt[i]), src_inds), length(tgt))
     dims = ntuple(i -> dim(tgt[i]), length(tgt))
+    permutedims!(reshape(view(buf, 1:prod(dims)), dims), ITensors.array(T), perm)
+    return prod(dims)
+end
 
+# Absorbs `mats` (one χ×χ per env leg, in `alegs` order) into `T`, laid out as
+# (alegs…, sinds…, lb), and returns the buffer holding the result plus the spare one.
+function absorb_envs!(bufs, T::ITensor, mats, alegs, sinds, lb, chi)
     cur, spare = bufs
-    n = prod(dims)
-    permutedims!(reshape(view(cur, 1:n), dims), ITensors.array(T), perm)
+    n = permute_into!(cur, T, alegs, sinds, lb)
     return apply_env_chain!(cur, spare, mats, chi, n, true)
 end
 
-# Phase 1 of the buffered chain: absorb the √env factors into `T` and factor it, leaving Q in a
-# buffer. Returns `nothing` when the buffered path does not apply, so the caller falls back.
-function buffered_phase1(T::ITensor, mats, alegs, sinds, lb)
+# Phase 1 of the buffered chain: absorb the √env factors into `ψ⃗[i]` and factor it, leaving Q in
+# a buffer. Returns `nothing` when the buffered path does not apply, so the caller falls back.
+#
+# Takes `ψ⃗` and the position rather than the tensor, because releasing the input is what caps the
+# peak at 2 × one tensor. The order below is deliberate: allocate ONE buffer, permute into it,
+# drop the input, and only then allocate the second. Allocating both up front instead makes the
+# permute step hold input + buf1 + buf2 = 3 ×. `permutedims` cannot work in place for a
+# non-trivial permutation, so input + destination coexisting once is unavoidable -- that pair is
+# what sets the 2 × floor.
+function buffered_phase1(ψ⃗::Vector{<:ITensor}, i::Int, mats, alegs, sinds, lb)
+    T = ψ⃗[i]
     hasqns(T) && return nothing
     isempty(alegs) && return nothing
     chi = dim(first(alegs))
@@ -648,9 +660,17 @@ function buffered_phase1(T::ITensor, mats, alegs, sinds, lb)
     n = m * ncol
     n == prod(dim, collect(inds(T))) || return nothing   # layout must account for every index
 
-    proto = vec(ITensors.array(T))
-    bufs = (similar(proto, n), similar(proto, n))
-    cur, spare = absorb_envs!(bufs, T, mats, alegs, sinds, lb, chi)
+    # `vec(array(T))` is only a prototype for `similar`; it must not outlive this line, or it
+    # would keep the input alive past the release below.
+    cur = similar(vec(ITensors.array(T)), n)
+    permute_into!(cur, T, alegs, sinds, lb)
+    # Last use of `T` was the permute, so the local is already dead (Julia frees at last use);
+    # clearing the vector entry drops the only remaining reference, since a value reachable
+    # through a heap-allocated container stays live for the whole function.
+    ψ⃗[i] = ITensor()
+
+    spare = similar(cur, n)                       # allocated only now: peak stays at 2 ×
+    cur, spare = apply_env_chain!(cur, spare, mats, chi, n, true)
 
     factored = thin_qr_matrix!(reshape(view(cur, 1:n), m, ncol))
     isnothing(factored) && return nothing
@@ -748,10 +768,12 @@ function simple_update_mpi(
         # `buffered` routes the LARGER side through the alternating-buffer chain; the smaller one
         # stays on the ITensor path, where it is O(χ^(deg-1)) and irrelevant to the peak.
         big1 = prod(dim, collect(inds(ψ⃗[1]))) >= prod(dim, collect(inds(ψ⃗[2])))
+        # `buffered_phase1` consumes the entry it is given, releasing it before its second buffer
+        # is allocated; that is what holds the peak at 2 × one tensor.
         st₁ = (buffered && big1) ?
-            buffered_phase1(ψ⃗[1], arrs(sqrt_envs_v1, legs₁), legs₁, collect(sᵥ₁), lb) : nothing
+            buffered_phase1(ψ⃗, 1, arrs(sqrt_envs_v1, legs₁), legs₁, collect(sᵥ₁), lb) : nothing
         st₂ = (buffered && !big1) ?
-            buffered_phase1(ψ⃗[2], arrs(sqrt_envs_v2, legs₂), legs₂, collect(sᵥ₂), lb) : nothing
+            buffered_phase1(ψ⃗, 2, arrs(sqrt_envs_v2, legs₂), legs₂, collect(sᵥ₂), lb) : nothing
 
         # Clearing `ψ⃗` is the one release the compiler cannot make for us. Julia frees a local
         # at its last use, but a value reachable through a heap-allocated container stays live
