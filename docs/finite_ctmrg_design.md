@@ -640,13 +640,52 @@ work. What it does not give is the rank/rectangularity handling, and that is a r
 tracking, which is an architectural change to our environment representation, not a swap of one
 function for another.
 
-**If it is picked up again, the options are:** (a) fixed-χ padded storage with rank tracking, i.e.
-follow their architecture; (b) pre-compress every bond of a plaquette to a common dimension before
-the cycle — but note this is the same "hand the projector a pre-truncated bipartition" move that made
-Gauss-Seidel worse, so it needs its own guard; (c) test the criterion only on deep-interior plaquettes
-where the bonds already match, accepting partial coverage, purely to find out whether it is worth (a).
-(c) is the cheap next probe and needs a lattice big enough for interior plaquettes to be a
-meaningful sample.
+#### RESOLVED: matrix-free Krylov on the rectangular chain — no padding needed
+
+The padding was never necessary. It was an artefact of trying to hand the whole chain to `pschur!`,
+which demands square equal-size factors. **We never need that.** What the projector needs is
+
+1. the dominant `k`-dim invariant subspace of `M = A₄A₃A₂A₁` at one bond, and
+2. the bases at the other three,
+
+and (2) is just propagation, `V_{l+1} = orth(A_l V_l)`, which is rectangular-safe already. For (1)
+only the *action* of `M` on a vector is required — four matvecs through rectangular matrices, well
+defined and never forming the product. So a matrix-free Krylov solve does it:
+
+```julia
+fwd(v) = As[4] * (As[3] * (As[2] * (As[1] * v)))          # W -> W, product never formed
+schursolve(fwd, v0, k, :LM, Arnoldi(; krylovdim = max(4k, 20)))
+```
+
+`schursolve` also returns a real orthonormal basis, which sidesteps the conjugate-pair trap that
+`ordschur!` fails silently on. Measured on real corners:
+
+| | plaquettes passing | residual range | isometry |
+|---|---|---|---|
+| square 4×4 real D=3, χ=8 | **9/9** | 1.3e-15 – 2.9e-14 | ~4e-15 |
+| hex 4×4 complex D=2, χ=8 | **32/32** | 4.6e-16 – 4.4e-14 | ~2e-15 |
+
+Bonds like `[9,72,72,9]` and `[4,16,32,16]` are handled natively. **No padding, no
+`PeriodicSchurDecompositions` dependency, no fixed-χ storage, no architectural change** — and
+KrylovKit is already a dependency. The conditioning objection does not apply either: it was about
+forming the product to resolve *small* eigenvalues, and we only ever want the top χ.
+
+The lesson is that their fixed-χ padded storage with rank tracking is a consequence of needing
+square factors for a *dense* periodic Schur. Our adaptive bond dimensions are a feature, and the
+matrix-free formulation embraces them rather than fighting them.
+
+**Two things still open before this is a projector rather than a subspace.**
+
+* Only the RIGHT bases are validated above. The left/biorthogonal side, and the per-bond whitening
+  that makes `P_B P_A = I`, are not yet checked.
+* `k = min(χ, narrowest bond)` is a real design decision. On hex `[4,16,32,16]` the cycle rank is
+  bottlenecked at 4, so a bond of dimension 32 is truncated to 4 where the pairwise projector keeps
+  8. Physically the loop *is* bottlenecked, but these projectors are also consumed by region
+  contractions that do not go round the loop. This is what per-bond rank tracking manages in their
+  code, and it should be measured, not assumed.
+
+**Next:** finish the left bases, then run the comparison that has been the point all along — cycle
+vs cut at matched χ on `marginal_inconsistency` and observables, never on `F`.
 
 ### EVALUATED, NOTHING TO PORT: `max dV` — we already have it
 
