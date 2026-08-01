@@ -554,9 +554,41 @@ machinery exists to defeat — periodic Schur removes the conditioning, Krylov r
 on the spectral gap. Their 2,200 lines are not incidental.
 
 **So the cost is now known rather than guessed.** Answering "is the cycle criterion better than the
-cut?" requires implementing a periodic (product) eigensolver — KrylovKit has `schursolve` but not the
-periodic variant, so that is a real project, not an afternoon. What this exercise bought is the
-geometry mapping above (free, and reusable) and the certainty that no shortcut answers the question.
+cut?" requires a periodic (product) eigensolver. KrylovKit has `schursolve` but not the periodic
+variant — which is why the collaborator wrote 2200 lines of Cython/SLICOT/JAX-FFI.
+
+#### …but in Julia that solver already exists: `PeriodicSchurDecompositions.jl`
+
+Their own `linalg/periodic_schur/julia_version.py` is a "Julia reference backend" that does
+`using PeriodicSchurDecompositions` and calls `pschur!` / `ordschur!`. They needed the Cython/SLICOT
+path only because they are in Python/JAX and wanted a compiled FFI. **We are in the language their
+reference implementation is written in.** Registered, one small dependency
+(`MatrixFactorizations`), precompiles in 2 s. Validated against what the cycle projector needs:
+
+| check | result |
+|---|---|
+| `pschur!(As, :L; wantZ=true)` eigenvalues vs the explicit product `A4·A3·A2·A1` | 2.4e-13, product never formed |
+| `ordschur!(P, sel; wantZ=true)` moves the dominant χ to the leading block | works (conjugate pairs kept together, as real Schur requires) |
+| `A_l · Z_l[:,1:k]` lies in `span(Z_{l+1}[:,1:k])` | **3.4e-15** |
+
+The last row is the payload: `Z_l[:, 1:k]` is an orthonormal basis at EVERY bond satisfying the
+cyclic invariant-subspace relation exactly — i.e. the four projectors, in one call. Note the
+convention: `:L` means the product `A_p ⋯ A_1`, so our chain must be handed over in reverse.
+
+This defeats both failure modes measured above: no product is formed (kills the 5.4e18 conditioning)
+and it is a direct decomposition (kills the dependence on the 0.869 gap ratio).
+
+**Caveats before anyone gets excited.** The validation above is on well-conditioned random matrices;
+real CTM corners are rank-deficient with condition numbers to 5.4e18, and `pschur!` may struggle
+there too — test that first. And `pschur!` is DENSE, O(n³) per plaquette at n = χ·D_layer; the
+collaborator's Krylov variant exists for taking only the top `k` of a large `n`. Dense is
+nonetheless entirely adequate to answer whether the CRITERION beats the cut, which is the question
+that gates all the rest.
+
+**Revised plan.** (1) Check `pschur!` survives real corners. (2) Build the cycle projector on it,
+reusing the geometry mapping above — only the derivation changes, the keys and consumers do not.
+(3) Compare against the cut at matched χ on `marginal_inconsistency` and observables, never on `F`.
+(4) Only if it wins, worry about Krylov.
 
 ### EVALUATED, NOTHING TO PORT: `max dV` — we already have it
 
