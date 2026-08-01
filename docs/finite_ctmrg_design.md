@@ -508,6 +508,48 @@ every *block* still is.
 Verified unchanged by the deletions, 4×4 D=3: `|F − ln Z|` = 5.203e-3 / 1.556e-3 / 6.455e-6 /
 5.33e-15 at χ = 4 / 6 / 8 / 12, with `marginal_inconsistency` 8.02e-3 / 3.88e-4 / 1.14e-5 / 6e-17.
 
+### TESTED AND REJECTED: Gauss-Seidel sweeping — it breaks the projector's optimality
+
+Ported from the collaborator's JAX code (`joey_ctmrg_bp`), which sweeps plaquette-by-plaquette with
+`lax.scan` so each local update sees the previous one's output, where our sweep derives every
+projector from `S` and rebuilds everything at once (Jacobi).
+
+A full per-plaquette Gauss-Seidel is not available in our geometry — the four corner families grow
+from four different directions, so no single ordering leaves all of them fresh. What the geometry
+does admit is **two stages**: derive the `PH` families from the raw enlarged corners, apply them, then
+derive the `PV` families from the already-horizontally-truncated corners. That is what directional
+CTMRG does, and it is cheaper too (the QR sees a "rest" leg of χ instead of χ·D_layer).
+
+**It is worse on both axes.** Exact at lossless χ (3.55e-15, `marg` 3e-16) so the machinery is right;
+the deficit is entirely the truncation criterion.
+
+| case | χ | jacobi `marg` | GS `marg` | jacobi `⟨Z⟩` err | GS `⟨Z⟩` err |
+|---|---|---|---|---|---|
+| square 4×4 real D=3 | 4 | 1.8e-3 | **1.5e-1** | 2.3e-2 | **7.07e+00** |
+| | 6 | 7.3e-4 | 6.3e-2 | 1.4e-3 | 3.3e-1 |
+| | 8 | 3.0e-4 | 9.8e-2 | 1.1e-3 | 1.4e-2 |
+| | 12 | 8.7e-5 | 5.6e-2 | 5.0e-3 | 4.7e-3 |
+
+Jacobi's `marg` falls monotonically; **Gauss-Seidel's plateaus at 5–15e-2 and does not improve with
+χ** — a degraded fixed point, not a slower one. It also needs MORE sweeps, not fewer (31 vs 13 on hex
+4×4 complex D=2, and it failed to converge in 100 at χ=8). Hex showed an apparent 35× observable win
+at χ=4 that reverses at χ=8 and 16; it was noise.
+
+**Why, and this is the transferable part.** This document already records that the projector
+truncation is *provably optimal for the bipartition it is given*. Deriving the vertical projector
+from a horizontally-truncated corner hands it the WRONG bipartition — it optimises retention of
+`A_truncated Bᵀ` rather than `A Bᵀ`, and cannot see what the horizontal projection already discarded.
+Concretely the block matrix stops being square: "rest" is χ while the interface is still χ·D_layer,
+so `R_A` has rank ≤ χ, `W = R_A R_Bᵀ` is rank-deficient, and its singular vectors do not carry enough
+to choose well.
+
+**So the collaborator's Gauss-Seidel is inseparable from their cycle projector.** Theirs is the
+dominant invariant subspace of the four-corner cycle `C0 C1 C2 C3`, an eigenproblem that is well
+posed against the current state whatever its truncation status. Ours is a two-block cut whose
+optimality argument *requires both blocks untruncated*. The sweep ordering and the projector are
+coupled: porting the ordering alone does not merely fail to help, it removes the property that makes
+our projector good. If Gauss-Seidel is wanted, the cycle projector has to come with it.
+
 ### REMOVED: the `ρ`-route projector (`qr = false`) — one projector now, not two
 
 The density-matrix route (`ρ_L = A†A`, `ρ_R = B†B`, eigendecomposing `ρ_R` back into a square-root
