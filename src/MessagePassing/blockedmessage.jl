@@ -229,27 +229,31 @@ function set_default_kwargs(alg::Algorithm"blocked", bp_cache::AbstractBeliefPro
     return Algorithm("blocked"; normalize, b)
 end
 
-function updated_message(
-        alg::Algorithm"blocked", bp_cache::AbstractBeliefPropagationCache, edge::AbstractEdge
-    )
-    fallback() = updated_message(
-        set_default_kwargs(Algorithm("contract"; normalize = alg.kwargs.normalize), bp_cache),
-        bp_cache, edge
-    )
-
+# The *unnormalised* message along `edge`, or `nothing` when this vertex is not a shape the
+# kernel handles.
+#
+# Split out from `updated_message` because `vertex_scalar` wants the identical contraction and
+# has to know whether it ran: silently receiving the fallback's answer would make it look like
+# the kernel applied when it did not.
+function _blocked_message(alg::Algorithm"blocked", bp_cache::AbstractBeliefPropagationCache, edge)
     v = src(edge)
     tn = network(bp_cache)
     layers = _blocked_layers(tn, v, edge)
-    isnothing(layers) && return fallback()
+    isnothing(layers) && return nothing
     T, Bt, le, le_bra = layers.ket, layers.bra, layers.le_ket, layers.le_bra
 
     ms = incoming_messages(bp_cache, v; ignore_edges = (reverse(edge),))
-    length(ms) == 2 || return fallback()          # only the degree-3 vertex is specialised
+    length(ms) == 2 || return nothing          # only the degree-3 vertex is specialised
+    # Each message has to be a plain rank-2 tensor: the kernel reads them as matrices oriented
+    # (ket leg, bra leg). A boundary-MPS cache stores a message as several tensors, or as one with
+    # more than two indices, and would otherwise reach `only(setdiff(...))` below and throw. That
+    # was unreachable while only `update` called this; `vertex_scalar` routes every cache here.
+    all(m -> m isa ITensor && length(inds(m)) == 2, ms) || return nothing
 
     is = collect(inds(T))
     # One ket leg per incoming message. A message sharing none or several would make the
     # alignment below ambiguous, so it is checked rather than left to `only` to throw.
-    all(m -> length(commoninds(m, T)) == 1, ms) || return fallback()
+    all(m -> length(commoninds(m, T)) == 1, ms) || return nothing
     legs = [only(commoninds(m, T)) for m in ms]
 
     # Incoming legs in stored order: the block permutation and the closing contraction both
@@ -264,7 +268,7 @@ function updated_message(
     # path -- which is what it exists to avoid.
     ka, kb, ke = dim(la), dim(lb), dim(le)
     nelt = prod(dim, is)
-    rem(nelt, ka * kb * ke) == 0 || return fallback()
+    rem(nelt, ka * kb * ke) == 0 || return nothing
     S = nelt ÷ (ka * kb * ke)
 
     # `clamp` rather than `min`: b must be at least 1 or the block loop gets a zero step. Blocking
@@ -281,14 +285,14 @@ function updated_message(
     ba, bb, be = ka, kb, ke           # a derived bra mirrors the ket's dimensions exactly
     if !isnothing(Bt)
         bis = collect(inds(Bt))
-        all(m -> length(commoninds(m, Bt)) == 1, ms) || return fallback()
+        all(m -> length(commoninds(m, Bt)) == 1, ms) || return nothing
         blegs = [only(commoninds(m, Bt)) for m in ms][ord]
         bsites = last(layers.sites)[[findfirst(==(is[i]), first(layers.sites)) for i in sitepos]]
         bwanted = Index[bsites; blegs; le_bra]
-        all(i -> i ∈ bis, bwanted) && length(bis) == length(bwanted) || return fallback()
+        all(i -> i ∈ bis, bwanted) && length(bis) == length(bwanted) || return nothing
         ba, bb, be = dim(blegs[1]), dim(blegs[2]), dim(le_bra)
         # The two layers share their site space, so the bra's element count must agree.
-        prod(dim, bis) == S * ba * bb * be || return fallback()
+        prod(dim, bis) == S * ba * bb * be || return nothing
         Barr = array(Bt)
         Bperm = ntuple(i -> findfirst(==(bwanted[i]), bis), length(bwanted))
     end
@@ -318,7 +322,47 @@ function updated_message(
 
     # `out` is [bra, ket] -- label it rather than transpose. Copy so the message does not
     # alias the scratch that the next edge overwrites.
-    m = itensor(copy(out), le_bra, le)
+    return itensor(copy(out), le_bra, le)
+end
+
+# `vertex_scalar` is the same contraction the message kernel already performs, closed against the
+# one message the kernel leaves free:
+#
+#     Z(v) = Σ_{lₑ,lₑ'} out[lₑ', lₑ] · m_{w→v}[lₑ, lₑ']
+#
+# where `out` is the unnormalised message along any one edge v→w. Routing it here rather than
+# through `contract` matters because `contract` builds a factor-sized `permutedims` scratch per
+# pairwise step -- measured at 5.0–5.4 factors on a degree-3 vertex, against ~1.2 here -- and
+# `vertex_scalar` is the engine under `freenergy`, `norm_sqr(alg="bp")` and `inner`, so it runs
+# far more often than a message update does.
+#
+# Returns `nothing` whenever the kernel does not apply, so the caller keeps the generic path.
+function blocked_vertex_scalar(bp_cache::AbstractBeliefPropagationCache, v)
+    # Same accessor `incoming_messages` uses, so ghost and shared vertices resolve identically.
+    in_edges = NamedGraphs.GraphsExtensions.boundary_edges(
+        messages_graph(bp_cache), [v]; dir = :in
+    )
+    isempty(in_edges) && return nothing
+    back = first(in_edges)
+    out = _blocked_message(
+        Algorithm("blocked"; normalize = false, b = nothing), bp_cache, reverse(back)
+    )
+    isnothing(out) && return nothing
+    closing = message(bp_cache, back)
+    closing isa ITensor || return nothing
+    # Both of `out`'s indices must be contracted, or this is not the scalar it claims to be.
+    isempty(uniqueinds(out, closing)) && isempty(uniqueinds(closing, out)) || return nothing
+    return scalar(out * closing)
+end
+
+function updated_message(
+        alg::Algorithm"blocked", bp_cache::AbstractBeliefPropagationCache, edge::AbstractEdge
+    )
+    m = _blocked_message(alg, bp_cache, edge)
+    isnothing(m) && return updated_message(
+        set_default_kwargs(Algorithm("contract"; normalize = alg.kwargs.normalize), bp_cache),
+        bp_cache, edge
+    )
     if alg.kwargs.normalize
         message_norm = sum(m)
         if !iszero(message_norm)
@@ -327,5 +371,5 @@ function updated_message(
     end
     # No contraction sequence is used, so `seq_changed = false` leaves the sequence cache
     # untouched.
-    return m, (v => edge, nothing, false)
+    return m, (src(edge) => edge, nothing, false)
 end

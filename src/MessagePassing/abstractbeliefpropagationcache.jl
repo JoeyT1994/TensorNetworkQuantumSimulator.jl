@@ -37,6 +37,14 @@ function rescale_vertices!(bp_cache::AbstractBeliefPropagationCache, vertices::V
 end
 
 function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
+    # Mathematically identical to the generic route below and bounded in peak memory, so it is
+    # taken whenever it applies rather than being opt-in: unlike the message update there is no
+    # algorithm keyword reaching here, and this is the call that dominates `freenergy` /
+    # `norm_sqr` / `inner` on a factor-sized vertex. Returns `nothing` on anything it does not
+    # specialise. See `blocked_vertex_scalar`.
+    fast = blocked_vertex_scalar(bp_cache, vertex)
+    isnothing(fast) || return fast
+
     incoming_ms = incoming_messages(bp_cache, vertex)
     state = bp_factors(bp_cache, vertex)
     contract_list = [state; incoming_ms]
