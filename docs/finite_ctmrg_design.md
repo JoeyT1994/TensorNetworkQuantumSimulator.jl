@@ -585,10 +585,68 @@ collaborator's Krylov variant exists for taking only the top `k` of a large `n`.
 nonetheless entirely adequate to answer whether the CRITERION beats the cut, which is the question
 that gates all the rest.
 
-**Revised plan.** (1) Check `pschur!` survives real corners. (2) Build the cycle projector on it,
-reusing the geometry mapping above — only the derivation changes, the keys and consumers do not.
-(3) Compare against the cut at matched χ on `marginal_inconsistency` and observables, never on `F`.
-(4) Only if it wins, worry about Krylov.
+#### Step 1 run: the solver is free, the RANK/RECTANGULARITY handling is not
+
+Gate was "does `pschur!` survive real corners". It does not, as-is, and the reason is architectural
+rather than numerical. Everything below is measured.
+
+**Conventions, pinned empirically (keep these, they are not in the docstrings).** `:L` means the
+product `A_p ⋯ A_1`. Searching all index combinations against the defining relation gives, at 1e-15
+and with every `T` exactly upper triangular:
+
+```
+Z_{l+1}' A_l Z_l = T_l          A_l : space l -> space l+1
+As = [E_SW, E_SE, E_NE, E_NW]   spaces (1,2,3,4) = (W, S, E, N)
+```
+
+so `Z_l[:, 1:k]` is the projector at bond `l`, and `A_l Z_l[:,1:k] ⊆ span(Z_{l+1}[:,1:k])` follows
+from upper-triangularity.
+
+**`ordschur!` needs a conjugate-pair-safe selection, and fails SILENTLY without one.** Cutting
+between the two halves of a 2×2 real-Schur block gave a span residual of 1.7e-1 with no error
+raised; backing `nev` off by one gives 2e-15. Guard the selection.
+
+**Real corners break both routes, for two different reasons.**
+
+* *Dense `pschur!` + `ordschur!`*: `pschur!` succeeds everywhere, but `ordschur!` fails on **every**
+  real plaquette with `unexpected subdiag in triang factor 2 at 70: -6.03e-30` → "ordschur algorithm
+  bug". That is its internal consistency check defeated by dynamic range: the cycle spectrum spans
+  **38 orders** (max 6.93e-01, min nonzero 9.06e-39), because a 4-fold product is roughly the 4th
+  power of one corner's already-wide spectrum. At 1e-30 a "subdiagonal residue" is O(1), not roundoff.
+* *Krylov `partial_pschur`*: needs no reordering, and where the geometry cooperates it is excellent —
+  span residual 3.8e-11, isometry 1.4e-14, zero leakage into padded rows. But it works on **1 of 9**
+  plaquettes.
+
+**Why only 1 of 9: the bonds are RECTANGULAR, and unavoidably so.** A bond's dimension is
+`k_prev · D_layer`. At the lattice boundary `k_prev = 1`, in the interior `k_prev = χ`, so a boundary
+bond is `D²` and an interior one is `χ·D²` — different for any χ > 1. Only plaquettes at least two
+steps from every edge have all four equal: 1/9 on 4×4, 1/25 on 6×6, 9/49 on 8×8. Zero-padding to a
+common size is mathematically exact (dense `pschur!` reproduces the product's eigenvalues to 2.96e-15
+with the padded directions exactly 0) but makes every factor **singular**, which is what breaks the
+Arnoldi recursion — `SingularException`, `convergence failed at level 20`, `PKSFailure`.
+
+**The architectural difference this exposes.** Their `CTMState.init` allocates *every* corner and
+edge at `(chi, chi)` regardless of position, one-hot at the boundary, and carries a separate `rank`
+field for the effective dimension. So their cycle factors are square **by construction** and the rank
+machinery — `active_cols`, rank-masked QR, `_stochastic_expand_range`, the Schur gauge's exact
+structural zeros — exists to track what is actually live inside those fixed-size arrays. We use exact
+ITensor indices that shrink at boundaries, which is cleaner for everything else in this engine and is
+precisely what makes the cycle factors rectangular.
+
+**So the honest cost, third revision.** `PeriodicSchurDecompositions.jl` gives us the eigensolver for
+free — that part of my earlier estimate stands, and both `pschur!` and the Krylov `partial_pschur`
+work. What it does not give is the rank/rectangularity handling, and that is a real slice of their
+2200 lines. Adopting the cycle projector means adopting fixed-χ padded storage with explicit rank
+tracking, which is an architectural change to our environment representation, not a swap of one
+function for another.
+
+**If it is picked up again, the options are:** (a) fixed-χ padded storage with rank tracking, i.e.
+follow their architecture; (b) pre-compress every bond of a plaquette to a common dimension before
+the cycle — but note this is the same "hand the projector a pre-truncated bipartition" move that made
+Gauss-Seidel worse, so it needs its own guard; (c) test the criterion only on deep-interior plaquettes
+where the bonds already match, accepting partial coverage, purely to find out whether it is worth (a).
+(c) is the cheap next probe and needs a lattice big enough for interior plaquettes to be a
+meaningful sample.
 
 ### EVALUATED, NOTHING TO PORT: `max dV` — we already have it
 
