@@ -508,6 +508,29 @@ every *block* still is.
 Verified unchanged by the deletions, 4×4 D=3: `|F − ln Z|` = 5.203e-3 / 1.556e-3 / 6.455e-6 /
 5.33e-15 at χ = 4 / 6 / 8 / 12, with `marginal_inconsistency` 8.02e-3 / 3.88e-4 / 1.14e-5 / 6e-17.
 
+### EVALUATED, NOTHING TO PORT: `max dV` — we already have it
+
+The collaborator converges on `max dV`, the largest change in the projector BASES between sweeps.
+We converge on `_ctm_statedist`, the largest relative change in the C/T BLOCKS. Traced side by side:
+
+| sweep | square 4×4 D=3 χ=8: `\|ΔF\|` / statedist / projdist | hex 4×4 cplx χ=8 |
+|---|---|---|
+| 4 | 6.0e-05 / 4.8e-01 / 4.4e-01 | 2.8e-07 / 8.99e-01 / 8.5e-01 |
+| 6 | 4.7e-05 / 7.1e-03 / 2.3e-02 | 1.2e-10 / 2.4e-02 / 6.1e-02 |
+| 10 | 2.7e-08 / 4.7e-05 / 1.0e-04 | 5.0e-13 / 2.2e-05 / 5.0e-05 |
+
+They agree within a factor of 2–3 at every sweep, become available at the same sweep, and both catch
+what `|ΔF|` misses — at sweep 4 of the square case `|ΔF|` reads 6e-5 while the true error is *rising*
+and both state signals read 0.44. Projector distance is consistently ~2–3× more conservative, so it
+would stop marginally later; there is no failure mode where the block distance misses something.
+
+Conclusion: our criterion IS theirs, measured on the outputs rather than the variables. A second
+redundant signal is complexity for no gain, so nothing was added.
+
+Also visible in the trace, and worth remembering: on the square case the true `|F − ln Z|` is
+2.1e-3 at sweep 2 and 2.9e-3 at convergence — the converged answer is WORSE than an intermediate
+one. Cancellation again, and one more reason never to tune against `F`.
+
 ### TESTED AND REJECTED: Gauss-Seidel sweeping — it breaks the projector's optimality
 
 Ported from the collaborator's JAX code (`joey_ctmrg_bp`), which sweeps plaquette-by-plaquette with
