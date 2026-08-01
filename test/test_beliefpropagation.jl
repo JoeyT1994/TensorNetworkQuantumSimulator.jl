@@ -151,4 +151,44 @@ end
     end
 end
 
+
+# The form path streams the ket one `l_e` slab at a time rather than aligning it whole, and writes
+# each slab through a view with one axis per index. A state with a *single* site index happens to
+# have exactly as many axes as the collapsed `(S, ka, kb, nb)` block, which hid an ndims mismatch;
+# the superket shape this exists for has two. Both layer counts are checked, since only the form
+# streams.
+@testset "Blocked message with multiple site indices" begin
+    g = named_hexagonal_lattice_graph(2, 2)
+    verts = collect(vertices(g))
+    # The element type must be `Vector{<:Index}`, not `Vector{Index}` -- `TensorNetworkState`'s
+    # constructor is written against the covariant form and will not match otherwise.
+    sinds = TNQS.Dictionary{eltype(verts), Vector{<:TNQS.ITensors.Index}}(
+        verts,
+        [TNQS.ITensors.Index[
+            TNQS.ITensors.Index(2, "p$v"), TNQS.ITensors.Index(2, "a$v")
+        ] for v in verts]
+    )
+    psi = random_tensornetworkstate(ComplexF64, g, sinds; bond_dimension = 5)
+    phi = random_tensornetworkstate(ComplexF64, g, sinds; bond_dimension = 5)
+
+    for (label, net) in (("norm network", psi), ("BilinearForm", TNQS.BilinearForm(psi, phi)))
+        bpc = TNQS._seed_default_messages!(TNQS.BeliefPropagationCache(net))
+        hits0 = TNQS._BLOCKED_MESSAGE_HITS[]
+        worst = 0.0
+        for e in TNQS.edges(bpc)
+            b, _ = TNQS.updated_message(
+                TNQS.set_default_kwargs(TNQS.Algorithm("blocked"), bpc), bpc, e
+            )
+            c, _ = TNQS.updated_message(
+                TNQS.set_default_kwargs(TNQS.Algorithm("contract"), bpc), bpc, e
+            )
+            tb, tc = b isa Vector ? only(b) : b, c isa Vector ? only(c) : c
+            @test Set(collect(TNQS.inds(tb))) == Set(collect(TNQS.inds(tc)))
+            worst = max(worst, norm(tb - tc) / norm(tc))
+        end
+        @test worst < 1.0e-12
+        @test TNQS._BLOCKED_MESSAGE_HITS[] > hits0    # the kernel really ran for $label
+    end
+end
+
 end

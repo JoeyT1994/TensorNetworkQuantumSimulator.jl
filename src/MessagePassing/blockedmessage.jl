@@ -44,7 +44,11 @@ using ITensors: Algorithm, array, dim
 function message_scratch_length(S, d::NTuple{6, <:Integer}, b, nlayers = 1)
     ka, kb, ke, ba, bb, be = d
     blocks = 2 * S * b * max(ka * kb, ka * bb, ba * bb)
-    aligned = S * ka * kb * ke + (nlayers == 1 ? 0 : S * ba * bb * be)
+    # A derived bra makes the aligned ket do double duty -- block source *and* closing matrix --
+    # so it is held whole. A separate bra takes over the closing, leaving the ket read one slab at
+    # a time, so only a slab is held. At S=4, χ=800 that is 0.95 GiB where the whole thing is 15.3.
+    aligned = nlayers == 1 ? S * ka * kb * ke :
+        S * ka * kb * min(b, ke) + S * ba * bb * be
     return aligned + blocks + be * ke
 end
 
@@ -108,22 +112,28 @@ function blocked_message!(
     )
     _BLOCKED_MESSAGE_HITS[] += 1
     ka, kb, ke, ba, bb, be = d          # ket-side then bra-side dims of (l_a, l_b, l_e)
-    permutedims!(reshape(Tp, ntuple(i -> size(A, perm[i]), length(perm))), A, perm)
-    Tclose = reshape(Tp, S * ka * kb, ke)   # a matrix: l_e is trailing after the permute
+    kslab, bslab = S * ka * kb, S * ba * bb
 
     # How the bra reaches the closing gemm is the only difference between a single network's
-    # double layer and a form's. When the bra is `conj(ket)` there is nothing to store: `adjoint`
-    # hands the conjugation to BLAS/cuBLAS as a 'C' flag on the ket's own aligned copy. A form's
-    # bra is a different tensor, so it gets its own aligned copy and a plain `transpose` -- its
-    # data is already conjugated, since the bra network is built as `dag(prime(·))`.
-    closer = if isnothing(Bp)
-        adjoint(Tclose)
-    else
+    # double layer and a form's, and it decides whether the ket has to be held whole.
+    #
+    # When the bra is `conj(ket)` there is nothing to store: `adjoint` hands the conjugation to
+    # BLAS/cuBLAS as a 'C' flag on the ket's own aligned copy. That copy is then doing two jobs --
+    # block source and closing matrix -- so it stays resident in full.
+    #
+    # A form's bra is a different tensor and takes over the closing, which frees the ket from its
+    # second job: the loop below reads it one `l_e` slab at a time, so each slab is permuted
+    # straight out of `A` when needed and dropped. Same arithmetic and the same number of permuted
+    # elements -- it just stops holding the slabs it has finished with.
+    stream = !isnothing(Bp)
+    closer = if stream
         permutedims!(reshape(Bp, ntuple(i -> size(Barr, Bperm[i]), length(Bperm))), Barr, Bperm)
-        transpose(reshape(Bp, S * ba * bb, be))
+        transpose(reshape(Bp, bslab, be))
+    else
+        permutedims!(reshape(Tp, ntuple(i -> size(A, perm[i]), length(perm))), A, perm)
+        adjoint(reshape(Tp, kslab, ke))     # l_e is trailing after the permute
     end
     outT = reshape(outT_v, be, ke)
-    kslab, bslab = S * ka * kb, S * ba * bb
 
     # Each leg carries its own dimension. Insisting they were all equal was not a simplification
     # worth having: a circuit with a truncation cutoff produces unequal bonds routinely, and the
@@ -134,7 +144,19 @@ function blocked_message!(
         nb = min(b, ke - lo + 1)
         cols = lo:(lo + nb - 1)
         n1, n2, n3 = kslab * nb, S * ka * bb * nb, bslab * nb
-        blk = reshape(view(Tp, ((lo - 1) * kslab + 1):((lo - 1) * kslab + n1)), S, ka, kb, nb)
+        blk = if stream
+            # `selectdim` restricts A's own `l_e` axis, so the same `perm` still applies and the
+            # destination is contiguous. It has to be written through a view with one axis per
+            # index -- `permutedims!` matches `ndims`, and the site axes are only collapsed into
+            # `S` afterwards, for the block arithmetic.
+            src = selectdim(A, perm[end], cols)
+            permutedims!(
+                reshape(view(Tp, 1:n1), ntuple(i -> size(src, perm[i]), length(perm))), src, perm
+            )
+            reshape(view(Tp, 1:n1), S, ka, kb, nb)
+        else
+            reshape(view(Tp, ((lo - 1) * kslab + 1):((lo - 1) * kslab + n1)), S, ka, kb, nb)
+        end
 
         # contract l_b, moving the contracted leg first so each step is one plain gemm
         P1 = reshape(view(buf1, 1:n1), kb, S, ka, nb)
@@ -303,7 +325,7 @@ function _blocked_message(alg::Algorithm"blocked", bp_cache::AbstractBeliefPropa
         message_scratch(bp_cache), vec(A), message_scratch_length(S, d, b, nlayers)
     )
     # Carved in the same order `message_scratch_length` sums them.
-    nT = S * ka * kb * ke
+    nT = isnothing(Bt) ? S * ka * kb * ke : S * ka * kb * min(b, ke)
     nbuf = S * b * max(ka * kb, ka * bb, ba * bb)
     o1 = nT
     o2 = o1 + nbuf

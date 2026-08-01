@@ -13,10 +13,19 @@ bra_virtualinds(blf::BilinearForm, edge::NamedEdge) = virtualinds(bra(blf), edge
 Base.copy(blf::BilinearForm) = BilinearForm(copy(blf.ket), copy(blf.operator), copy(blf.bra))
 
 #Constructor, bra is taken to be in the vector space of ket so the dual is taken
-function BilinearForm(ket::TensorNetworkState, bra::TensorNetworkState)
+#
+# `consume_bra` swaps the duplicate for an in-place transform: `prime` shares storage, so
+# `dag(prime(·))` costs exactly one conjugation, and doing it in place allocates nothing at all.
+# The caller's `bra` is destroyed in exchange. Worth having because the out-of-place default
+# leaves the original and the conjugate both resident -- 15 GiB apiece at χ=800 with S=4 -- for
+# the whole lifetime of the form, and a caller computing `inner(ψ, ϕ)` usually has no further use
+# for `ϕ`. See [`dag_prime!`](@ref).
+function BilinearForm(
+        ket::TensorNetworkState, bra::TensorNetworkState; consume_bra::Bool = false
+    )
     dtype = datatype(ket)
     @assert graph(ket) == graph(bra)
-    bra = map_tensors(t -> dag(prime(t)), bra)
+    bra = consume_bra ? dag_prime!(bra) : map_tensors(t -> dag(prime(t)), bra)
     sinds = siteinds(ket)
     verts = collect(vertices(ket))
     operator_tensors = [adapt(dtype)(reduce(*, ITensor[denseblocks(delta(sind, prime(dag(sind)))) for sind in sinds[v]])) for v in verts]

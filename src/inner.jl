@@ -62,8 +62,9 @@ function ITensors.inner(alg::Algorithm, cache::AbstractBeliefPropagationCache; m
     return state_error("BilinearForm")
 end
 
-function ITensors.inner(alg::Union{Algorithm"bp", Algorithm"loopcorrections"}, ψ::TensorNetworkState, ϕ::TensorNetworkState; cache_update_kwargs = (;), kwargs...)
-    ψϕ_bpc = BeliefPropagationCache(BilinearForm(ψ, ϕ))
+function ITensors.inner(alg::Union{Algorithm"bp", Algorithm"loopcorrections"}, ψ::TensorNetworkState, ϕ::TensorNetworkState; cache_update_kwargs = (;), consume_bra::Bool = false, kwargs...)
+    # `consume_bra = true` destroys `ϕ` and saves a full copy of it; see `BilinearForm`.
+    ψϕ_bpc = BeliefPropagationCache(BilinearForm(ψ, ϕ; consume_bra))
     ψϕ_bpc = update(ψϕ_bpc; cache_update_kwargs...)
     return inner(alg, ψϕ_bpc; kwargs...)
 end

@@ -1228,9 +1228,14 @@ function inner_mpi(
         shared_vertices::Dictionary;
         comm::MPI.Comm = MPI.COMM_WORLD,
         bp_update_kwargs = nothing,
-        validate::Bool = true
+        validate::Bool = true,
+        consume_bra::Bool = false
     )
-    bpc = _seed_default_messages!(BeliefPropagationCache(BilinearForm(ψ, ϕ)))
+    # `consume_bra` destroys `ϕ` and builds the form's bra from its storage instead of a
+    # conjugated duplicate -- see `BilinearForm`. On a partition holding one factor-sized tensor
+    # that is a whole factor of device memory per rank, and the caller of `inner_mpi` has usually
+    # finished with `ϕ`.
+    bpc = _seed_default_messages!(BeliefPropagationCache(BilinearForm(ψ, ϕ; consume_bra)))
     bpc = BeliefPropagationCacheMPI(bpc, super_graph, shared_vertices; comm, validate)
     bp_update_kwargs =
         isnothing(bp_update_kwargs) ? default_bp_update_kwargs(bpc) : bp_update_kwargs

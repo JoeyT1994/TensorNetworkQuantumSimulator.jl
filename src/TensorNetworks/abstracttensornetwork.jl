@@ -68,6 +68,34 @@ function map_tensors(f::Function, tn::AbstractTensorNetwork)
     return map_tensors!(f, tn)
 end
 
+"""
+    dag_prime!(tn::AbstractTensorNetwork)
+
+Apply `dag(prime(·))` to every tensor of `tn` in place, allocating nothing, and return `tn`.
+
+**`tn` is destroyed.** `prime` only relabels indices — it shares the original's storage — so the
+conjugation is done on that shared storage and every tensor of `tn` is overwritten. Anything else
+still referencing them sees the change.
+
+`copy` does **not** protect against that: it duplicates the container, not the tensors, so
+`dag_prime!(copy(tn))` corrupts `tn` too. To keep a usable copy, deep-copy the storage — e.g.
+`map_tensors(t -> itensor(copy(ITensors.data(t)), inds(t)), tn)` — or simply do not pass a network
+you still need.
+
+The out-of-place spelling, `map_tensors(t -> dag(prime(t)), tn)`, is a second full copy of the
+network: `copy` is pointer-only but each conjugated tensor is new. That is the right default, and
+the wrong one when the caller is handing the network over — at χ=800 with S=4 the duplicate is
+15 GiB of device memory holding a conjugate of something already resident.
+"""
+function dag_prime!(tn::AbstractTensorNetwork)
+    for v in vertices(tn)
+        pt = ITensors.prime(tn[v])
+        conj!(ITensors.data(pt))
+        setindex_preserve!(tn, pt, v)
+    end
+    return tn
+end
+
 function Adapt.adapt_structure(to, tn::AbstractTensorNetwork)
     return map_tensors(x -> adapt(to)(x), tn)
 end
