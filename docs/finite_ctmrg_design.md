@@ -508,6 +508,56 @@ every *block* still is.
 Verified unchanged by the deletions, 4×4 D=3: `|F − ln Z|` = 5.203e-3 / 1.556e-3 / 6.455e-6 /
 5.33e-15 at χ = 4 / 6 / 8 / 12, with `marginal_inconsistency` 8.02e-3 / 3.88e-4 / 1.14e-5 / 6e-17.
 
+### The CYCLE projector — prototyped, and the answer is "it cannot be done cheaply"
+
+The collaborator derives all four of a plaquette's projectors from ONE cyclic problem: the four
+enlarged corners compose into a map on one bond, and its dominant invariant subspace gives the
+projector there, propagated round the loop. Ours solves four independent two-block cuts. Theirs
+enforces consistency AROUND THE LOOP; ours optimises each cut in isolation.
+
+**The geometry maps onto ours exactly**, which is worth recording. At a cut `(X,Y)` each of the four
+enlarged corners has exactly two open interfaces — the two it shares with its cyclic neighbours — so
+with bonds ordered `(W, N, E, S)`:
+
+```
+C0 = E_NW : N -> W    C1 = E_NE : E -> N    C2 = E_SE : S -> E    C3 = E_SW : W -> S
+```
+
+and `M = C0 C1 C2 C3` acts on the west bond. The four projectors land on our existing keys —
+`PH[:N,X-1,Y]`, `PH[:S,X-1,Y]`, `PV[:W,X,Y-1]`, `PV[:E,X,Y-1]` — so only the derivation would change,
+never the consumers. No restructuring needed.
+
+**Two prototypes, both dead, and the diagnostics say why.** Measured on square 4×4 D=3 at χ=8:
+
+| plaquette | cycle dim | gap ratio `\|λ_{χ+1}/λ_χ\|` | condition number |
+|---|---|---|---|
+| (3,3) | 72 | **0.869** | **4.4e+15** |
+| (2,2) | 9 | 0.396 | 1.4e+04 |
+| (4,4) | 72 | 0.509 | **5.4e+18** |
+
+* **Explicit product + `eigen`/Schur**: condition number reaches 5.4e18, past the Float64 limit. Dead.
+* **Periodic subspace iteration** (apply one factor, re-orthogonalise, never form the product,
+  warm-started from our pairwise projector): converges at the gap ratio per cycle, so at 0.869 three
+  iterations buy a factor of 0.66 and ~100 would be needed. Dead.
+
+Measured quality, for the record — `marg` 3.0e-4 (cut) against 3.7e-1 (cycle, 0 iters) and 5.5e-1
+(3 iters) at square χ=8. The tell is that **zero iterations is already ruined**: that is no
+eigensolve at all, just our own pairwise projector propagated round the loop. Propagation only makes
+sense once the basis IS the invariant subspace; short of that it replaces three optimal projectors
+with derived ones.
+
+**This does NOT condemn the criterion.** The prototype omits everything their implementation treats
+as load-bearing: the structured `V_from_Ac` warm start built from the corner solve equations rather
+than from a pairwise projector, rank masking, the Schur gauge with exact structural zeros, and above
+all a periodic Krylov–Schur solver. The two failure modes measured above are *precisely* what that
+machinery exists to defeat — periodic Schur removes the conditioning, Krylov removes the dependence
+on the spectral gap. Their 2,200 lines are not incidental.
+
+**So the cost is now known rather than guessed.** Answering "is the cycle criterion better than the
+cut?" requires implementing a periodic (product) eigensolver — KrylovKit has `schursolve` but not the
+periodic variant, so that is a real project, not an afternoon. What this exercise bought is the
+geometry mapping above (free, and reusable) and the certainty that no shortcut answers the question.
+
 ### EVALUATED, NOTHING TO PORT: `max dV` — we already have it
 
 The collaborator converges on `max dV`, the largest change in the projector BASES between sweeps.
