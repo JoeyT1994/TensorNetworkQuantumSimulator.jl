@@ -749,10 +749,46 @@ magnitude from χ=9 on. There is no qualitative difference between the two schem
 which is a reassuring result for both and is consistent with the four ported ideas all being
 rejected: neither implementation has an accuracy advantage worth importing.
 
-#### DESIGN: stationarity in OUR framework — union of cycle and cut directions
+#### IMPLEMENTED: stationarity in OUR framework — union of cycle and cut directions
 
 Goal: get the observable advantage of the stationary projector while keeping adaptive bond
-dimensions and sparse lattices. Design settled, not yet implemented.
+dimensions and sparse lattices. **Implemented as `CTMOptions(cycle = true)`, default OFF** pending
+the χ crossover below. Results first, then the reasoning that got here.
+
+**Gate 1 — exactness at lossless χ, on BOTH lattices.** This is the one that matters, and hex is the
+load-bearing half: square 3×3 `3.55e-15`, hex 3×3 `1.85e-15`. The earlier single-rank prototype
+passed on square and saturated at 1e-3 on hex forever. Asserted in the test suite.
+
+**Gate 2 — it really is stationary.** `marginal_inconsistency` IS the stationarity residual. Hex
+χ=40: **2.42e-16** for the cycle against `6.80e-11` for the cut, five orders. Asserted.
+
+**Gate 3 — observables, against the Python engine on their own 5×5 Ising PEPS.** `⟨X⟩`, exact
+`0.916900598128483`:
+
+| χ | Julia cut | **Julia CYCLE** | Python (stationary) |
+|---|---|---|---|
+| 4 | 1.515e-04 | **4.169e-05** | 5.218e-05 |
+| 9 | 4.240e-07 | **5.132e-08** | 5.132e-08 |
+| 16 | 6.255e-09 | **9.202e-10** | 9.279e-10 |
+| 32 | **7.403e-12** | 1.448e-10 | 8.149e-14 |
+
+At χ=9 we reproduce their number **to four significant figures**, and at χ=4 and 16 we match or beat
+it — on adaptive bonds, with no padding and no fixed-χ storage. The observable gain over our own cut
+is 3.6× / 8.3× / 6.8×.
+
+**The open crossover at χ=32**, recorded rather than papered over: the union underperforms the plain
+cut there (1.4e-10 against 7.4e-12). Mechanism, most likely: a boundary bond of dimension 9 caps
+`k_cyc` at 9, so 23 of 32 retained directions come from the cut, and forcing the 9 cycle directions
+in *displaces* cut directions that matter more once truncation is no longer the dominant error. The
+route is therefore default-off, and useful where χ binds — which is the regime anyone actually runs.
+Refinement to try: weight or gate the cycle contribution on `k_cyc / k_b` (0.28 at the bad point,
+0.56 and 1.0 at the good ones) — but that is one data point, so it needs its own scan.
+
+**One fix the gates forced.** `_ctm_biorth` originally only floored the overlap singular values at
+`eps`; it must TRUNCATE them. Cycle and cut directions are not naturally biorthogonal, so a merged
+pair can carry near-null overlap directions which `S^(-1/2)` then amplifies — the same failure
+`qr_cutoff` guards against in the cut projector. Adding the cutoff moved hex χ=4 `marg` from 3.4e-3
+to 8.9e-7.
 
 **The reframing.** Stationarity is a LOCAL condition: `∂F/∂B = M_v/Z_v − M_e/Z_e = 0` is per-block,
 the two marginals of each edge block being parallel. That is the CVM/GBP fixed point, and at bond
