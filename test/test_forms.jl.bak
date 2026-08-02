@@ -2,7 +2,6 @@
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test
-const TNQS = TensorNetworkQuantumSimulator
 
 
 @testset "Test forms" begin

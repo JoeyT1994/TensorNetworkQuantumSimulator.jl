@@ -65,6 +65,7 @@ export
     BeliefPropagationCacheMPI,
     apply_gates_mpi,
     inner_mpi,
+    partitionfunction_mpi,
     gpu_direct_mpi,
     gpu_direct_mpi!,
     blocked_gates,

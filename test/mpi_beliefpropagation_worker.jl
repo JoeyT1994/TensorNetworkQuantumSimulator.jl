@@ -69,6 +69,33 @@ function chain3_case()
     return (; name = "7-site path, 3 ranks", g, parts, shared, maxiter = 14)
 end
 
+# Every other graph here is a path or a ring, so no vertex has degree 3 and the blocked message
+# kernel -- and the blocked `vertex_scalar` that rides on it -- have never run under MPI at all.
+# These two put a degree-3 centre on each side of the cut.
+function tee_case()
+    g = NamedGraph{Tuple{Int, Int}}()
+    for v in [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1)]
+        add_vertex!(g, v)
+    end
+    for (a, b) in [((1, 1), (2, 1)), ((1, 1), (3, 1)), ((1, 1), (4, 1)), ((4, 1), (5, 1))]
+        add_edge!(g, NamedEdge(a => b))
+    end
+    # (1,1) is degree 3 with every neighbour local: the kernel runs on a wholly local vertex.
+    parts = [[(1, 1), (2, 1), (3, 1), (4, 1)], [(4, 1), (5, 1)]]
+    shared = Dictionary([(4, 1)], [(Int32(0), Int32(1))])
+    return (; name = "degree-3 centre, local", g, parts, shared, maxiter = 12)
+end
+
+function tee_ghost_case()
+    g = tee_case().g
+    # The cut now runs through the degree-3 centre itself, so on each holder one of its three
+    # incoming messages arrives from a ghost -- a vertex present in `messages_graph` but absent
+    # from the local network.
+    parts = [[(1, 1), (2, 1), (3, 1)], [(1, 1), (4, 1), (5, 1)]]
+    shared = Dictionary([(1, 1)], [(Int32(0), Int32(1))])
+    return (; name = "degree-3 centre split by the cut", g, parts, shared, maxiter = 12)
+end
+
 apply_path_case() = (; path_case()..., name = "6-site path apply, 2 ranks", maxiter = 25)
 apply_ring_case() = (; ring_case()..., name = "6-site ring apply, 2 ranks", maxiter = 100)
 
@@ -401,6 +428,109 @@ function run_no_cache_update_case(case)
     return local_ψ
 end
 
+# `vertex_scalar` takes a blocked fast path automatically. Every other check compares it against
+# *another cache's* `vertex_scalar`, which now takes the same path -- so a systematic error would
+# agree with itself and pass. This compares it against the generic contraction on the very same
+# cache, which is the only comparison that can fail.
+#
+# The MPI cache is the case at risk: its `messages_graph` carries ghost vertices that the local
+# network does not, so the fast path's edge bookkeeping sees a graph the contraction does not.
+# The production configuration: the blocked message kernel, on a degree-3 vertex, under MPI, on a
+# double layer. Each of those is covered separately and the combination is not -- and it is the
+# combination that runs on 12 ranks. Compared against a serial reference built from the whole
+# network, so a protocol error cannot agree with itself.
+function run_blocked_mpi_case(case)
+    g = case.g
+    tn = global_state(g)
+    my_vertices = case.parts[RANK + 1]
+    kw = (; maxiter = case.maxiter, tolerance = nothing)
+
+    serial = update(BeliefPropagationCache(tn); kw...)
+    mpi_bpc = TNQS.BeliefPropagationCacheMPI(
+        seeded_cache(local_partition(tn, my_vertices)), g, case.shared; comm = COMM
+    )
+    hits0 = TNQS._BLOCKED_MESSAGE_HITS[]
+    mpi_bpc = update(mpi_bpc; kw..., message_update_alg = TNQS.Algorithm("blocked"))
+    ran = TNQS._BLOCKED_MESSAGE_HITS[] - hits0
+    check(ran > 0, "the blocked kernel never ran under MPI -- this case proves nothing")
+    println("[rank $RANK] blocked kernel invocations: $ran")
+
+    for e in directed_edges(local_partition(tn, my_vertices))
+        d = TNQS.message_diff(message(mpi_bpc, e), message(serial, e))
+        check(d < 1.0e-12, "blocked MPI message $e differs from serial: diff = $d")
+    end
+    for v in my_vertices
+        a, b = TNQS.vertex_scalar(mpi_bpc, v), TNQS.vertex_scalar(serial, v)
+        check(isapprox(a, b; rtol = 1.0e-8), "blocked MPI vertex_scalar $v: $a vs serial $b")
+    end
+    return mpi_bpc
+end
+
+# Exactly what `inner_mpi` does: a BilinearForm, distributed, with the blocked message kernel, on
+# a graph with a degree-3 vertex. Each ingredient is covered separately -- forms serially, blocked
+# messages under MPI on a *norm network*, degree-3 under MPI -- and this combination is not. It is
+# also the only place the production signal is computed.
+function run_inner_mpi_blocked_case(case)
+    g = case.g
+    psi = global_state(g; seed = 5551212)
+    phi = global_state(g; seed = 909090)
+    my_vertices = case.parts[RANK + 1]
+    kw = (; maxiter = case.maxiter, tolerance = nothing)
+
+    ip_serial = ITensors.inner(psi, phi; alg = "bp", cache_update_kwargs = kw)
+
+    for (label, extra) in (("contract", (;)),
+                           ("blocked ", (; message_update_alg = TNQS.Algorithm("blocked"))))
+        hits0 = TNQS._BLOCKED_MESSAGE_HITS[]
+        ip = TNQS.inner_mpi(
+            local_partition(psi, my_vertices), local_partition(phi, my_vertices),
+            g, case.shared; comm = COMM, bp_update_kwargs = (; kw..., extra...)
+        )
+        ran = TNQS._BLOCKED_MESSAGE_HITS[] - hits0
+        println("[rank $RANK] inner_mpi($label) = $ip   serial = $ip_serial   kernel hits = $ran")
+        check(
+            isapprox(ip, ip_serial; rtol = 1.0e-6),
+            "inner_mpi with $label = $ip but serial inner = $ip_serial " *
+                "(rel $(abs(ip - ip_serial) / abs(ip_serial)))"
+        )
+    end
+    return nothing
+end
+
+function run_vertex_scalar_case(case)
+    g = case.g
+    # A *state*, not a plain network: the blocked path only applies to a double layer, and
+    # `global_network` builds a single-layer one that correctly falls back to `contract`.
+    tn = global_state(g)
+    my_vertices = case.parts[RANK + 1]
+    mpi_bpc = TNQS.BeliefPropagationCacheMPI(
+        seeded_cache(local_partition(tn, my_vertices)), g, case.shared; comm = COMM
+    )
+    mpi_bpc = update(mpi_bpc; maxiter = case.maxiter, tolerance = nothing)
+
+    generic(v) = (cl = [TNQS.bp_factors(mpi_bpc, v); TNQS.incoming_messages(mpi_bpc, v)];
+                  TNQS.scalar(TNQS.contract(cl; sequence = TNQS.contraction_sequence(cl; alg = "optimal"))))
+
+    nfast = 0
+    for v in my_vertices
+        fast = TNQS.blocked_vertex_scalar(mpi_bpc, v)
+        gen = generic(v)
+        isnothing(fast) && continue
+        nfast += 1
+        check(
+            isapprox(fast, gen; rtol = 1.0e-10),
+            "blocked_vertex_scalar($v) = $fast but the generic contraction gives $gen"
+        )
+        # and the public entry point must agree with the generic route too
+        check(
+            isapprox(TNQS.vertex_scalar(mpi_bpc, v), gen; rtol = 1.0e-10),
+            "vertex_scalar($v) disagrees with the generic contraction"
+        )
+    end
+    println("[rank $RANK] vertex_scalar fast path taken on $nfast/$(length(my_vertices)) vertices")
+    return mpi_bpc
+end
+
 function run_apply_gates_mpi_case(case)
     g = case.g
     ψ = global_state(g)
@@ -680,6 +810,17 @@ const CASES = Dict(
     "blocked_apply_ring" => (run_blocked_apply_case, apply_ring_case),
     "no_cache_update_path" => (run_no_cache_update_case, apply_path_case),
     "no_cache_update_ring" => (run_no_cache_update_case, apply_ring_case),
+    "vertex_scalar_path" => (run_vertex_scalar_case, path_case),
+    "vertex_scalar_tee" => (run_vertex_scalar_case, tee_case),
+    "vertex_scalar_tee_ghost" => (run_vertex_scalar_case, tee_ghost_case),
+    "tee" => (run_case, tee_case),
+    "blocked_mpi_tee" => (run_blocked_mpi_case, tee_case),
+    "inner_blocked_tee" => (run_inner_mpi_blocked_case, tee_case),
+    "inner_blocked_tee_ghost" => (run_inner_mpi_blocked_case, tee_ghost_case),
+    "blocked_mpi_tee_ghost" => (run_blocked_mpi_case, tee_ghost_case),
+    "blocked_mpi_ring" => (run_blocked_mpi_case, ring_case),
+    "tee_ghost" => (run_case, tee_ghost_case),
+    "vertex_scalar_ring" => (run_vertex_scalar_case, ring_case),
     "scratch_release" => (run_scratch_release_case, scratch_case)
 )
 

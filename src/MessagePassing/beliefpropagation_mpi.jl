@@ -1244,6 +1244,38 @@ function inner_mpi(
 end
 
 """
+    partitionfunction_mpi(form, super_graph, shared_vertices; comm, bp_update_kwargs, validate)
+
+The BP estimate of a `form`'s scalar value, with `form` distributed across the ranks of `comm`.
+
+Collective: every rank of `comm` must call it.
+
+This is the memory-cheap way to get `⟨O|V|O⟩` when `V` is a product of one-site operators, which
+is what an echo or perturbation calculation asks for. Written as `inner_mpi(O, V*O)` it needs three
+factor-sized tensors resident per rank -- `O`, `V*O`, and the conjugated bra the `BilinearForm`
+builds. Written as `partitionfunction_mpi(QuadraticForm(O, V), ...)` it needs one: `QuadraticForm`
+derives its bra from the ket, and `V*O` is never formed at all.
+
+See also [`inner_mpi`](@ref).
+"""
+function partitionfunction_mpi(
+        form::AbstractForm,
+        super_graph::AbstractGraph,
+        shared_vertices::Dictionary;
+        comm::MPI.Comm = MPI.COMM_WORLD,
+        bp_update_kwargs = nothing,
+        validate::Bool = true
+    )
+    bpc = _seed_default_messages!(BeliefPropagationCache(form))
+    bpc = BeliefPropagationCacheMPI(bpc, super_graph, shared_vertices; comm, validate)
+    bp_update_kwargs =
+        isnothing(bp_update_kwargs) ? default_bp_update_kwargs(bpc) : bp_update_kwargs
+    bpc = update(bpc; bp_update_kwargs...)
+    return partitionfunction(bpc)
+end
+
+
+"""
     expect(cache::BeliefPropagationCacheMPI, observable; alg = "bp")
 
 Expectation value of `observable` on a distributed cache. Unlike [`inner_mpi`](@ref) this is a

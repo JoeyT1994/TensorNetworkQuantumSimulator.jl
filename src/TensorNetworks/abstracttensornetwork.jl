@@ -69,28 +69,34 @@ function map_tensors(f::Function, tn::AbstractTensorNetwork)
 end
 
 """
-    dag_prime!(tn::AbstractTensorNetwork)
+    dag_prime!(tn::AbstractTensorNetwork; protect = nothing)
 
-Apply `dag(prime(·))` to every tensor of `tn` in place, allocating nothing, and return `tn`.
+Apply `dag(prime(·))` to every tensor of `tn`, in place where that is safe, and return `tn`.
 
 **`tn` is destroyed.** `prime` only relabels indices — it shares the original's storage — so the
-conjugation is done on that shared storage and every tensor of `tn` is overwritten. Anything else
-still referencing them sees the change.
+conjugation is done on that shared storage and the tensors of `tn` are overwritten.
 
-`copy` does **not** protect against that: it duplicates the container, not the tensors, so
-`dag_prime!(copy(tn))` corrupts `tn` too. To keep a usable copy, deep-copy the storage — e.g.
-`map_tensors(t -> itensor(copy(ITensors.data(t)), inds(t)), tn)` — or simply do not pass a network
-you still need.
+`protect` is a network whose tensors must survive. Any tensor of `tn` backed by the *same storage*
+as one of its tensors is transformed out of place instead, at the cost of a copy. This is not a
+corner case: `apply_gates` only replaces the tensors a gate touched, so a bra derived from the ket
+(`inner(O, V*O)`, the shape of an echo or perturbation calculation) shares every untouched vertex
+with it, and conjugating those in place silently corrupts the ket.
 
-The out-of-place spelling, `map_tensors(t -> dag(prime(t)), tn)`, is a second full copy of the
-network: `copy` is pointer-only but each conjugated tensor is new. That is the right default, and
-the wrong one when the caller is handing the network over — at χ=800 with S=4 the duplicate is
-15 GiB of device memory holding a conjugate of something already resident.
+`copy` is no defence — it duplicates the container, not the tensors — so pass `protect`, or do not
+pass a network anything else still needs.
 """
-function dag_prime!(tn::AbstractTensorNetwork)
+function dag_prime!(tn::AbstractTensorNetwork; protect = nothing)
+    guarded = isnothing(protect) ? nothing :
+        Set(objectid(ITensors.data(protect[v])) for v in vertices(protect))
     for v in vertices(tn)
-        pt = ITensors.prime(tn[v])
-        conj!(ITensors.data(pt))
+        t = tn[v]
+        pt = if !isnothing(guarded) && objectid(ITensors.data(t)) in guarded
+            dag(prime(t))                       # shared storage: pay for a copy
+        else
+            p = ITensors.prime(t)               # sole owner: free
+            conj!(ITensors.data(p))
+            p
+        end
         setindex_preserve!(tn, pt, v)
     end
     return tn

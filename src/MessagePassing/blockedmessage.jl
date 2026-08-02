@@ -108,7 +108,7 @@ const _BLOCKED_MESSAGE_HITS = Ref(0)
 
 function blocked_message!(
         outT_v, buf1, buf2, Tp, A, perm, ma, mb, S, d, b, Bp = nothing, Barr = nothing,
-        Bperm = nothing
+        Bperm = nothing, opmat = nothing
     )
     _BLOCKED_MESSAGE_HITS[] += 1
     ka, kb, ke, ba, bb, be = d          # ket-side then bra-side dims of (l_a, l_b, l_e)
@@ -174,7 +174,17 @@ function blocked_message!(
         # order the bra was aligned to as well
         P3 = reshape(view(buf1, 1:n3), S, ba, bb, nb)
         permutedims!(P3, reshape(G2, ba, bb, S, nb), (3, 1, 2, 4))
-        mul!(view(outT, :, cols), closer, reshape(P3, bslab, nb))
+        # An on-site operator between the layers acts only on the site axis, which is leading
+        # here, so it is one S×S gemm. `buf2` holds `G2`, dead by now, so this needs no buffer of
+        # its own -- and `mul!` may not alias, which is why it is not done in place.
+        closeblk = if isnothing(opmat)
+            reshape(P3, bslab, nb)
+        else
+            P3o = reshape(view(buf2, 1:n3), S, ba * bb * nb)
+            mul!(P3o, opmat, reshape(P3, S, ba * bb * nb))
+            reshape(P3o, bslab, nb)
+        end
+        mul!(view(outT, :, cols), closer, closeblk)
     end
     return outT
 end
@@ -206,7 +216,33 @@ function _blocked_layers(tns::TensorNetworkState, v, edge)
     les = virtualinds(tns, edge)
     length(les) == 1 || return nothing
     le = only(les)
-    return (; ket = tns[v], bra = nothing, le_ket = le, le_bra = prime(dag(le)), sites = nothing)
+    return (; ket = tns[v], bra = nothing, le_ket = le, le_bra = prime(dag(le)),
+        sites = nothing, op = nothing)
+end
+
+# A `QuadraticForm`'s bra is `dag(prime(ket))` -- literally the ket conjugated -- so it takes the
+# derived-bra route: no second aligned copy, and `adjoint` hands the conjugation to BLAS as a 'C'
+# flag. What is left is the on-site operator sitting between the layers, and that acts only on the
+# site axis, which the block already carries leading. So it folds in as one S×S gemm per block.
+#
+# This is what makes `⟨O|V|O⟩` cost the same as `‖O‖²`: one factor for the aligned ket and nothing
+# else, where routing it through a `BilinearForm` needs the bra materialised *and* aligned.
+function _blocked_layers(qf::QuadraticForm, v, edge)
+    lek, leb = virtualinds(ket(qf), edge), bra_virtualinds(qf, edge)
+    (length(lek) == 1 && length(leb) == 1) || return nothing
+    isempty(virtualinds(operator(qf), edge)) || return nothing
+
+    K, op = ket(qf)[v], operator(qf)[v]
+    sites = collect(commoninds(K, op))
+    isempty(sites) && return nothing
+    partners = [prime(dag(s)) for s in sites]
+    # The operator must map the ket's site space to the bra's, and the bra's indices are the ket's
+    # primed -- anything else is not this form.
+    ndims(op) == 2 * length(sites) || return nothing
+    all(i -> i ∈ inds(op), partners) || return nothing
+
+    return (; ket = K, bra = nothing, le_ket = only(lek), le_bra = only(leb),
+        sites = (sites, partners), op)
 end
 
 function _blocked_layers(form::AbstractForm, v, edge)
@@ -220,7 +256,7 @@ function _blocked_layers(form::AbstractForm, v, edge)
     pairing = _identity_operator_sites(op, sites)
     isnothing(pairing) && return nothing
     return (; ket = K, bra = bra_tensor(form, v), le_ket = only(lek), le_bra = only(leb),
-        sites = (sites, pairing))
+        sites = (sites, pairing), op = nothing)
 end
 
 # The bra-side partner of each ket site index, or `nothing` if `op` is not the identity that
@@ -339,8 +375,26 @@ function _blocked_message(alg::Algorithm"blocked", bp_cache::AbstractBeliefPropa
     # transpose of that.
     mat(m, l) = array(m, l, only(setdiff(collect(inds(m)), [l])))
 
+    # The operator matrix has to follow the *aligned* site order, since that is the order the
+    # block's leading axis carries. Rows are the bra's site indices, columns the ket's, so
+    # `opmat * block` sends the ket's site space to the bra's. Skipped entirely when it is the
+    # identity, which is the `‖O‖²` case and the only one the norm network ever sees.
+    opmat = nothing
+    if !isnothing(layers.op)
+        ksites, bsites = layers.sites
+        ord_s = [findfirst(==(is[i]), ksites) for i in sitepos]
+        any(isnothing, ord_s) && return nothing
+        m = reshape(
+            array(layers.op, bsites[ord_s]..., ksites[ord_s]...), S, S
+        )
+        # S x S -- a handful of elements beside the site tensor, so the host round trip that
+        # `isapprox(·, I)` needs (it forms `A - I` by diagonal scalar index) costs nothing.
+        opmat = isapprox(Array(m), LinearAlgebra.I; atol = sqrt(eps(real(float(eltype(m)))))) ?
+            nothing : m
+    end
+
     out = blocked_message!(outT, buf1, buf2, Tp, A, perm,
-        mat(ma, la), mat(mb, lb), S, d, b, Bp, Barr, Bperm)
+        mat(ma, la), mat(mb, lb), S, d, b, Bp, Barr, Bperm, opmat)
 
     # `out` is [bra, ket] -- label it rather than transpose. Copy so the message does not
     # alias the scratch that the next edge overwrites.

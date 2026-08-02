@@ -25,7 +25,9 @@ function BilinearForm(
     )
     dtype = datatype(ket)
     @assert graph(ket) == graph(bra)
-    bra = consume_bra ? dag_prime!(bra) : map_tensors(t -> dag(prime(t)), bra)
+    # `protect = ket`: a bra derived from the ket shares storage with it at every vertex no
+    # gate touched, and conjugating those in place would corrupt the ket.
+    bra = consume_bra ? dag_prime!(bra; protect = ket) : map_tensors(t -> dag(prime(t)), bra)
     sinds = siteinds(ket)
     verts = collect(vertices(ket))
     operator_tensors = [adapt(dtype)(reduce(*, ITensor[denseblocks(delta(sind, prime(dag(sind)))) for sind in sinds[v]])) for v in verts]
