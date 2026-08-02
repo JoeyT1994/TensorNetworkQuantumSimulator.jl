@@ -739,10 +739,13 @@ Errors in `ln Z`:
 
 | χ | Julia finite CTMRG | Python finite CTMRG | Julia boundary MPS with BP estimator |
 |---|---|---|---|
-| 4 | 2.1e-04 | — | 4.0e-04 |
+| 4 | **2.1e-04** | 2.4e-04 | 4.0e-04 |
 | 9 | **9.3e-09** | 5.8e-08 | 4.8e-06 |
 | 16 | **6.7e-12** | 7.5e-08 | 8.4e-09 |
 | 32 | **2.7e-15** | 7.5e-08 | 3.1e-12 |
+
+All three are comparable at χ=4. The two CTMRGs then separate sharply: the Julia one keeps
+converging, the Python one stops at 7.5e-8 by χ=16.
 
 At matched χ = 9 on their own data the Julia engine is ~6× more accurate, and **the Python error
 saturates at 7.5e-8** — flat from χ=16 to χ=32 — while Julia converges to machine precision. Their
