@@ -724,6 +724,40 @@ the cycle used only to choose the subspace, not the dimension) — but note the 
 criterion is worse even where it is perfectly valid, so the rank rule is not the only problem.
 
 Code reverted. Fourth port attempt from `joey_ctmrg_bp`, fourth rejection.
+### HEAD-TO-HEAD on the collaborator's own 5×5 Ising PEPS
+
+Their code DOES run here (an earlier note in this document said it could not — that was wrong). The
+compiled SLICOT extension is only reached by the periodic-Schur paths; the demo's default
+`"eig one sided"` method never touches it, so `pip install jax einops` in a venv is enough. Their
+demo converges in 3 sweeps to `max dV = 8.9e-16`.
+
+Loading their `isingZZX_5x5_D3_g3.04438.npz` into our engine as a fused double layer, exact
+reference `ln Z = -6.217866772693762` (numpy column sweep and ITensors exact contraction agree to
+1e-15):
+
+| χ | our CVM err | their CTMRG err | boundary MPS err |
+|---|---|---|---|
+| 4 | 2.1e-04 | — | 4.0e-04 |
+| 9 | **9.3e-09** | 5.8e-08 | 4.8e-06 |
+| 16 | **6.7e-12** | 7.5e-08 | 8.4e-09 |
+| 32 | **2.7e-15** | 7.5e-08 | 3.1e-12 |
+
+At matched χ = 9 on their own data we are ~6× more accurate, and **their error saturates at 7.5e-8**
+— flat from χ=16 to χ=32 — while ours converges to machine precision. Their `Z` is definitely
+⟨ψ|ψ⟩: verified to ratio 1.0000000000 against analytic product-state norms on 2×2, 3×3 and 4×4 D=1.
+The floor is therefore in their scheme, not in what they are computing. Worth telling them; the
+additive inclusion-exclusion functional is the obvious suspect, since it has no per-region scale
+cancellation.
+
+**A methodological warning from this exercise.** The first head-to-head said we were RIGHT and they
+were wrong by a factor of 2.1. That was a bug in my data transfer: `ndarray.tofile()` always writes
+C order regardless of the array's memory layout, so `np.asfortranarray(B).tofile(...)` handed Julia
+C-ordered bytes that were then read column-major, transposing every tensor. Our exact contraction,
+our CVM and our boundary MPS all agreed with each other on the wrong answer — because they were all
+correctly contracting the same wrong network. **Agreement among our own methods is no check at all
+on the input.** What caught it was an independent computation in the OTHER language, on the other
+side of the transfer.
+
 ### EVALUATED, NOTHING TO PORT: `max dV` — we already have it
 
 The collaborator converges on `max dV`, the largest change in the projector BASES between sweeps.
