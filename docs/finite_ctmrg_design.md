@@ -778,9 +778,24 @@ the projector criterion.** It also reframes the four earlier rejections: those w
 `marginal_inconsistency` and `Z`, and the cycle projector's own rank rule was broken. The criterion
 itself, implemented properly as they do, buys 1–2 orders on observables.
 
-Caveats before this is load-bearing: one state, one site, one operator, and `⟨Z⟩ ≈ 4e-5` here so both
-methods carry large RELATIVE error at small χ (385% vs 40% at χ=4). Repeat across sites, on an
-observable that is not near zero, and on a second state.
+Repeated with `⟨X⟩`, which is O(1) here rather than nearly zero (exact `0.916900598128483`, numpy
+and ITensors agreeing to 1.2e-14) — so relative and absolute error coincide and the near-zero
+objection does not apply:
+
+| χ | Julia (cut / Corboz SVD) | Python (stationary / eig) | ratio |
+|---|---|---|---|
+| 4 | 1.515e-04 | **5.218e-05** | 2.9× |
+| 9 | 4.240e-07 | **5.132e-08** | 8.3× |
+| 16 | 6.255e-09 | **9.279e-10** | 6.7× |
+| 32 | 7.403e-12 | **8.149e-14** | 91× |
+
+Same direction on both operators, at every χ. The margin is smaller on `⟨X⟩` at small and moderate χ
+(2.9–8.3× rather than 9.5–33×) but widest of all at χ=32, where ours plateaus at 7.4e-12 while theirs
+reaches 8.1e-14 — and our `marginal_inconsistency` is 4.4e-17 there, so that is not a convergence
+failure but the projector extracting less from the same χ.
+
+Remaining caveats: one state, one site. Worth repeating across sites and on a second state before it
+is load-bearing, though two operators agreeing at four χ each makes a reversal unlikely.
 
 **TWO data-transfer bugs, both of which produced confident wrong conclusions.** Recording them
 because each was caught only by an independent computation, never by internal consistency.
