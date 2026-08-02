@@ -684,9 +684,46 @@ matrix-free formulation embraces them rather than fighting them.
   contractions that do not go round the loop. This is what per-bond rank tracking manages in their
   code, and it should be measured, not assumed.
 
-**Next:** finish the left bases, then run the comparison that has been the point all along — cycle
-vs cut at matched χ on `marginal_inconsistency` and observables, never on `F`.
+#### VERDICT: the cycle projector is exact on square, INVALID on hex, and worse where valid
 
+Built it end to end — matrix-free Krylov, both bases, per-bond biorthogonalisation, wired into the
+sweep on the existing keys with fallthrough to the cut. The machinery is right; the criterion loses.
+
+*Left bases and sides, for the record.* The left basis propagates DOWNWARD, `V_L[l] ∝ V_L[l+1] A_l`,
+seeded from `schursolve` on the transposed action `A_1ᵀA_2ᵀA_3ᵀA_4ᵀ`. Per bond, the factor attached
+to the tensor CONSUMING it is the right basis and the one attached to the producer is the left, so
+against our west/north = `P_A` convention W and S take `P_A = V_L` while E and N take `P_A = V_R`.
+Verified by the insertion identity `Bp (P_A P_B) Bc = Bp Bc` at 1.1e-14.
+
+| case | χ | cut `marg` | cycle `marg` | cut `⟨Z⟩` err | cycle `⟨Z⟩` err |
+|---|---|---|---|---|---|
+| square 4×4 D=3 | 4 | **1.8e-3** | 2.5e-1 | 2.3e-2 | 1.6e-2 |
+| | 8 | **3.0e-4** | 1.1e-1 | **1.1e-3** | 2.3e-1 |
+| hex 4×4 cplx D=2 | 4 | 1.1e-8 | **2.6e-10** | 2.5e-5 | **7.2e-7** |
+| | 8 | 9.9e-10 | **1.3e-11** | 3.6e-7 | **1.6e-9** |
+| **hex, correctness gate** | 16 | **2.8e-16** | **6.6e-04** | | |
+| | 40 | **3.5e-16** | **1.2e-03** (worse) | | |
+
+**The hex win is illusory and the gate is what caught it.** At χ = 4–8 the cycle looks 79–222×
+better; at lossless χ it saturates near 1e-3 and DEGRADES with χ — the systematic-error signature,
+exactly as in the complex-projector bug. Square is exact at lossless χ (3.55e-15, matching the cut)
+but 100–400× worse at finite χ.
+
+**Root cause: the rank rule.** `k = min(χ, narrowest bond)` is lossless *for the loop* — a corner's
+rank is bounded by its narrower leg — and the 3×3 exactness test passed on that basis. But hex has
+plaquettes with a bond of dimension **1** (a missing lattice link), so all four bonds there are cut
+to a single direction forever, whatever χ is. The flaw is the one flagged and then talked out of:
+these projectors are also consumed by region contractions that do NOT go round the loop, and the
+loop's rank is not a bound for those.
+
+**What is reusable.** The matrix-free cycle solver itself is correct and cheap: `schursolve` on the
+four-matvec action handles rectangular bonds natively at 1e-15 on 9/9 square and 32/32 hex
+plaquettes, needs no padding, no new dependency and no architectural change. If the criterion is
+ever revisited, the fix to try is a PER-BOND rank rule (each bond keeps `min(χ, its own dim)` with
+the cycle used only to choose the subspace, not the dimension) — but note the square result says the
+criterion is worse even where it is perfectly valid, so the rank rule is not the only problem.
+
+Code reverted. Fourth port attempt from `joey_ctmrg_bp`, fourth rejection.
 ### EVALUATED, NOTHING TO PORT: `max dV` — we already have it
 
 The collaborator converges on `max dV`, the largest change in the projector BASES between sweeps.
