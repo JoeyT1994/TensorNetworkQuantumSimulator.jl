@@ -749,6 +749,61 @@ magnitude from χ=9 on. There is no qualitative difference between the two schem
 which is a reassuring result for both and is consistent with the four ported ideas all being
 rejected: neither implementation has an accuracy advantage worth importing.
 
+#### DESIGN: stationarity in OUR framework — union of cycle and cut directions
+
+Goal: get the observable advantage of the stationary projector while keeping adaptive bond
+dimensions and sparse lattices. Design settled, not yet implemented.
+
+**The reframing.** Stationarity is a LOCAL condition: `∂F/∂B = M_v/Z_v − M_e/Z_e = 0` is per-block,
+the two marginals of each edge block being parallel. That is the CVM/GBP fixed point, and at bond
+dimension 1 it is exactly BP — which works fine on ragged bonds and hex because each message is
+sized by its own edge. **The cycle eigenproblem is one way to achieve that local condition, but it
+imports a GLOBAL constraint the condition does not require: one invariant-subspace dimension shared
+by all four bonds of a plaquette.** That constraint, not stationarity, is what broke hex.
+
+**Option (a) — "cycle where safe, cut elsewhere" — is DEAD.** Using the surveyed hex 4×4 plaquette
+dimensions at χ=8, bonds as (W,N,E,S):
+
+| bonds | cycle rank `min(χ, min bond)` | cut rank at widest bond |
+|---|---|---|
+| `[4,4,4,4]` | 4 | 4 |
+| `[1,16,32,16]` | **1** | 8 |
+| `[4,16,32,16]` | **4** | 8 |
+| `[4,32,32,16]` | **4** | 8 |
+| `[16,16,8,16]` | 8 | 8 |
+
+The cycle under-shoots at 9 of 10 sampled plaquettes — not only the pathological dim-1 one — so (a)
+would fall back to the cut essentially everywhere on hex and buy no stationarity there.
+
+**Option (b), in the form that works: UNION, not choice.** At each bond keep
+`k_b = min(χ, that bond's own dimension)` directions, of which the leading `k_cyc` are the cycle's
+invariant subspace and the rest are filled from the cut projector's dominant directions.
+
+* *Stationarity survives* — if the retained range CONTAINS the invariant subspace, the cycle map
+  still carries that subspace into the retained space, so the loop relation holds. Containing it
+  suffices; equalling it is not required.
+* *No degenerate collapse* — every bond sizes itself, so a dim-1 bond contributes `k_cyc = 1` to the
+  loop while a dim-32 bond still keeps its 8. Hex cannot collapse.
+* *It matches the measured split* — cut wins on `Z`, cycle wins on observables; keeping both sets of
+  directions is the natural way to get both rather than choosing.
+
+**Recipe**, all pieces already validated this session:
+
+1. Build the four rectangular factors `A₁=E_SW, A₂=E_SE, A₃=E_NE, A₄=E_NW` (bonds `W,S,E,N`).
+2. `schursolve` the forward and transposed cycle actions for `k_cyc = min(χ, min bond)` — matrix
+   free, no padding. Verified 9/9 square and 32/32 hex at 1e-15.
+3. Propagate `V_R[l+1] = orth(A_l V_R[l])`, `V_L[l] = orth_rows(V_L[l+1] A_l)`.
+4. Per bond, run the existing pairwise cut projector at `k_b = min(χ, dim b)`.
+5. MERGE: take the `k_cyc` cycle columns, then append cut columns orthogonalised against what is
+   held until `k_b` is reached.
+6. Biorthogonalise the merged pair so `P_B P_A = I`; sides are `P_A = V_L` for W,S and `P_A = V_R`
+   for E,N.
+
+**Gates, in this order** — each has already caught a wrong version of this:
+insertion identity `Bp (P_A P_B) Bc = Bp Bc` at full rank (~1e-14); exactness at lossless χ on BOTH
+square and hex (this is what caught the rank-rule bug); then `⟨X⟩`/`⟨Z⟩` against the Python numbers
+at matched χ.
+
 #### OBSERVABLES: the stationary projector wins, decisively
 
 `Z` is not the whole story. Single-site `⟨Z⟩` at the centre site of the same 5×5, exact
