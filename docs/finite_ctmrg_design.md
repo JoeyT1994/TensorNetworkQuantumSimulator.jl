@@ -735,15 +735,18 @@ Loading their `isingZZX_5x5_D3_g3.04438.npz` into our engine as a fused double l
 reference `ln Z = -6.217866772693762` (numpy column sweep and ITensors exact contraction agree to
 1e-15):
 
-| χ | our CVM err | their CTMRG err | boundary MPS err |
+Errors in `ln Z`:
+
+| χ | Julia finite CTMRG | Python finite CTMRG | Julia boundary MPS with BP estimator |
 |---|---|---|---|
 | 4 | 2.1e-04 | — | 4.0e-04 |
 | 9 | **9.3e-09** | 5.8e-08 | 4.8e-06 |
 | 16 | **6.7e-12** | 7.5e-08 | 8.4e-09 |
 | 32 | **2.7e-15** | 7.5e-08 | 3.1e-12 |
 
-At matched χ = 9 on their own data we are ~6× more accurate, and **their error saturates at 7.5e-8**
-— flat from χ=16 to χ=32 — while ours converges to machine precision. Their `Z` is definitely
+At matched χ = 9 on their own data the Julia engine is ~6× more accurate, and **the Python error
+saturates at 7.5e-8** — flat from χ=16 to χ=32 — while Julia converges to machine precision. Their
+`Z` is definitely
 ⟨ψ|ψ⟩: verified to ratio 1.0000000000 against analytic product-state norms on 2×2, 3×3 and 4×4 D=1.
 The floor is therefore in their scheme, not in what they are computing. Worth telling them; the
 additive inclusion-exclusion functional is the obvious suspect, since it has no per-region scale
