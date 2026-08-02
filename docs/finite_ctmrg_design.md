@@ -749,6 +749,39 @@ magnitude from χ=9 on. There is no qualitative difference between the two schem
 which is a reassuring result for both and is consistent with the four ported ideas all being
 rejected: neither implementation has an accuracy advantage worth importing.
 
+#### OBSERVABLES: the stationary projector wins, decisively
+
+`Z` is not the whole story. Single-site `⟨Z⟩` at the centre site of the same 5×5, exact
+`4.2177326741e-05` (numpy and ITensors agree to 4.4e-16 — an independent cross-check on the
+transfer, after the two bugs below):
+
+| χ | Julia (cut / Corboz SVD) | Python (stationary / eig) | ratio |
+|---|---|---|---|
+| 4 | 1.62e-04 *(wrong sign)* | **1.70e-05** | 9.5× |
+| 9 | 1.90e-07 | **5.72e-09** | 33× |
+| 16 | 5.30e-09 | **3.91e-10** | 14× |
+| 32 | 3.20e-11 | **2.46e-13** | 130× |
+
+**Set against the `ln Z` table, this is a clean split** and it confirms Zaletel's hypothesis:
+
+* `ln Z` — a wash, slightly favouring the CUT projector (2–23× to Julia).
+* 1-point functions — strongly favouring the STATIONARY projector (10–130× to Python).
+
+The mechanism is the one the stationarity discussion predicts. `∂F/∂B = 0` is marginal consistency:
+the marginal read from one region agrees with the marginal read from an overlapping one. Their
+projector has it by construction; ours does not, and our own `marginal_inconsistency` has been
+reporting that all along. `Z` hides the defect because the Möbius sum cancels it (~4000×); a
+single-region ratio cannot.
+
+**This is the first thing from `joey_ctmrg_bp` that is worth taking, and it is not a detail — it is
+the projector criterion.** It also reframes the four earlier rejections: those were all judged on
+`marginal_inconsistency` and `Z`, and the cycle projector's own rank rule was broken. The criterion
+itself, implemented properly as they do, buys 1–2 orders on observables.
+
+Caveats before this is load-bearing: one state, one site, one operator, and `⟨Z⟩ ≈ 4e-5` here so both
+methods carry large RELATIVE error at small χ (385% vs 40% at χ=4). Repeat across sites, on an
+observable that is not near zero, and on a second state.
+
 **TWO data-transfer bugs, both of which produced confident wrong conclusions.** Recording them
 because each was caught only by an independent computation, never by internal consistency.
 
