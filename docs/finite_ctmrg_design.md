@@ -732,28 +732,40 @@ compiled SLICOT extension is only reached by the periodic-Schur paths; the demo'
 demo converges in 3 sweeps to `max dV = 8.9e-16`.
 
 Loading their `isingZZX_5x5_D3_g3.04438.npz` into our engine as a fused double layer, exact
-reference `ln Z = -6.217866772693762` (numpy column sweep and ITensors exact contraction agree to
-1e-15):
+reference `ln Z = -6.217866847854575` (numpy column sweep and ITensors exact contraction agree):
 
 Errors in `ln Z`:
 
 | χ | Julia finite CTMRG | Python finite CTMRG | Julia boundary MPS with BP estimator |
 |---|---|---|---|
-| 4 | **2.1e-04** | 2.4e-04 | 4.0e-04 |
-| 9 | **9.3e-09** | 5.8e-08 | 4.8e-06 |
-| 16 | **6.7e-12** | 7.5e-08 | 8.4e-09 |
-| 32 | **2.7e-15** | 7.5e-08 | 3.1e-12 |
+| 4 | **2.12e-04** | 2.42e-04 | 4.00e-04 |
+| 9 | **9.29e-09** | 1.75e-08 | 4.85e-06 |
+| 16 | **6.71e-12** | 1.55e-10 | 8.45e-09 |
+| 32 | **1.07e-14** | 2.40e-14 | 3.08e-12 |
 
-All three are comparable at χ=4. The two CTMRGs then separate sharply: the Julia one keeps
-converging, the Python one stops at 7.5e-8 by χ=16.
+**Both CTMRG implementations converge cleanly to machine precision.** Julia is consistently ahead —
+1.1× at χ=4, 1.9× at χ=9, 23× at χ=16 — and both beat the boundary-MPS/BP estimator by orders of
+magnitude from χ=9 on. There is no qualitative difference between the two schemes on this benchmark,
+which is a reassuring result for both and is consistent with the four ported ideas all being
+rejected: neither implementation has an accuracy advantage worth importing.
 
-At matched χ = 9 on their own data the Julia engine is ~6× more accurate, and **the Python error
-saturates at 7.5e-8** — flat from χ=16 to χ=32 — while Julia converges to machine precision. Their
-`Z` is definitely
-⟨ψ|ψ⟩: verified to ratio 1.0000000000 against analytic product-state norms on 2×2, 3×3 and 4×4 D=1.
-The floor is therefore in their scheme, not in what they are computing. Worth telling them; the
-additive inclusion-exclusion functional is the obvious suspect, since it has no per-region scale
-cancellation.
+**TWO data-transfer bugs, both of which produced confident wrong conclusions.** Recording them
+because each was caught only by an independent computation, never by internal consistency.
+
+1. *Byte order.* `ndarray.tofile()` always writes C order regardless of the array's memory layout, so
+   `np.asfortranarray(B).tofile(...)` handed Julia C-ordered bytes that were read column-major,
+   transposing every tensor. This produced `ln Z = -6.9713` against the true `-6.2179` — and our
+   exact contraction, our CVM and our boundary MPS ALL AGREED on it, because all three were
+   correctly contracting the same wrong network.
+2. *Silent downcast.* JAX downcasts float64 to float32 on unpickling unless x64 is enabled. Their
+   `configure_jax()` enables it; my dump scripts did not call it, so I exported float32-truncated
+   tensors (`0.02549903` against the true `0.02549904`). The resulting reference was wrong at ~4e-8,
+   and I published a claim that the PYTHON code "saturates at 7.5e-8". **Retracted** — that floor
+   was mine. With the true float64 data their χ=32 error is 2.4e-14.
+
+**Agreement among our own methods is no check at all on the input.** Both bugs were caught by
+recomputing on the far side of the transfer — the first by a numpy contraction, the second by
+comparing dtypes across the x64 boundary.
 
 **A methodological warning from this exercise.** The first head-to-head said we were RIGHT and they
 were wrong by a factor of 2.1. That was a bug in my data transfer: `ndarray.tofile()` always writes
