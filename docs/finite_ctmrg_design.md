@@ -749,96 +749,58 @@ magnitude from χ=9 on. There is no qualitative difference between the two schem
 which is a reassuring result for both and is consistent with the four ported ideas all being
 rejected: neither implementation has an accuracy advantage worth importing.
 
-#### IMPLEMENTED: stationarity in OUR framework — union of cycle and cut directions
+#### RETRACTED: the cycle-augmented projector is NOT robust — code removed
 
-Goal: get the observable advantage of the stationary projector while keeping adaptive bond
-dimensions and sparse lattices. **Implemented as `CTMOptions(cycle = true)`, default OFF** pending
-the χ crossover below. Results first, then the reasoning that got here.
+Implemented the union design, it passed three gates, and then a broader scan destroyed it. Recording
+the whole arc because the failure mode is the one this document keeps re-learning.
 
-**Gate 1 — exactness at lossless χ, on BOTH lattices.** This is the one that matters, and hex is the
-load-bearing half: square 3×3 `3.55e-15`, hex 3×3 `1.85e-15`. The earlier single-rank prototype
-passed on square and saturated at 1e-3 on hex forever. Asserted in the test suite.
+**What passed.** Exactness at lossless χ (square 3×3 `3.55e-15`, hex 3×3 `1.85e-15`); stationarity
+(hex 3×3 χ=40 `marg` **2.42e-16** against the cut's `6.80e-11`); and `⟨X⟩` on the collaborator's 5×5
+Ising PEPS reproducing the Python engine **to four significant figures at χ=9** (5.132e-08 both), with
+4.169e-05 vs their 5.218e-05 at χ=4 and 9.202e-10 vs 9.279e-10 at χ=16. On adaptive bonds, no
+padding. All of that is real and repeatable.
 
-**Gate 2 — it really is stationary.** `marginal_inconsistency` IS the stationarity residual. Hex
-χ=40: **2.42e-16** for the cycle against `6.80e-11` for the cut, five orders. Asserted.
+**What the broader scan showed.** Ratio = cut error / cycle error, so **below 1 means the cycle route
+is WORSE**:
 
-**Gate 3 — observables, against the Python engine on their own 5×5 Ising PEPS.** `⟨X⟩`, exact
-`0.916900598128483`:
+| lattice | χ=2 | 4 | 8 | 16 | 32 |
+|---|---|---|---|---|---|
+| square 4×4 real D=2 | 0.14 | 0.64 | 8.89 | 2.12 | 0.16 |
+| square 4×4 real D=3 | — | 0.64 | 0.34 | 0.74 | 0.54 |
+| hex 4×4 complex D=2 | 1.13 | **74.65** | 0.00 | 0.00 | 0.00 |
 
-| χ | Julia cut | **Julia CYCLE** | Python (stationary) |
-|---|---|---|---|
-| 4 | 1.515e-04 | **4.169e-05** | 5.218e-05 |
-| 9 | 4.240e-07 | **5.132e-08** | 5.132e-08 |
-| 16 | 6.255e-09 | **9.202e-10** | 9.279e-10 |
-| 32 | **7.403e-12** | 1.448e-10 | 8.149e-14 |
+Worse at EVERY χ on square D=3. On hex 4×4 it is catastrophic from χ=8, with `marg` stuck at 1.1e-2,
+7.4e-3, 7.1e-3 — **not converging at all**, the same saturation signature as the pre-union prototype.
+So the union rule fixed hex 3×3 and not hex 4×4, and the 5×5 Ising match plus the 74× win at hex χ=4
+were lucky configurations.
 
-At χ=9 we reproduce their number **to four significant figures**, and at χ=4 and 16 we match or beat
-it — on adaptive bonds, with no padding and no fixed-χ storage. The observable gain over our own cut
-is 3.6× / 8.3× / 6.8×.
+**Why the gates missed it.** All three were single-configuration: one square lattice, one hex lattice,
+at ONE χ each. The failure needs a 4×4 hex at χ≥8 to show up. A gate suite that samples one point per
+axis cannot distinguish "correct" from "correct here".
 
-**The open crossover at χ=32**, recorded rather than papered over: the union underperforms the plain
-cut there (1.4e-10 against 7.4e-12). Mechanism, most likely: a boundary bond of dimension 9 caps
-`k_cyc` at 9, so 23 of 32 retained directions come from the cut, and forcing the 9 cycle directions
-in *displaces* cut directions that matter more once truncation is no longer the dominant error. The
-route is therefore default-off, and useful where χ binds — which is the regime anyone actually runs.
-Refinement to try: weight or gate the cycle contribution on `k_cyc / k_b` (0.28 at the bad point,
-0.56 and 1.0 at the good ones) — but that is one data point, so it needs its own scan.
+**Two mechanisms understood, one not.**
 
-**One fix the gates forced.** `_ctm_biorth` originally only floored the overlap singular values at
-`eps`; it must TRUNCATE them. Cycle and cut directions are not naturally biorthogonal, so a merged
-pair can carry near-null overlap directions which `S^(-1/2)` then amplifies — the same failure
-`qr_cutoff` guards against in the cut projector. Adding the cutoff moved hex χ=4 `marg` from 3.4e-3
-to 8.9e-7.
+* *Fixed:* the merge must use OBLIQUE DEFLATION against the cycle pair, not an independent QR on each
+  side. Independent QR destroys the pairing between column `j` of `A` and row `j` of `B`, so the
+  overlap stops being near-identity and whitening mixes directions. Deflation gives `B_cyc Ad = 0`
+  and `Bd A_cyc = 0` identically, so the merged overlap is block diagonal with the cycle block exactly
+  `I`. This cleaned up `marg` (χ=32 to 9.4e-17) but did NOT change the observable — so it was a real
+  defect and not the dominant one.
+* *Fixed:* `_ctm_biorth` must TRUNCATE the overlap singular values, not floor them at `eps`. Moved
+  hex χ=4 `marg` from 3.4e-3 to 8.9e-7.
+* *NOT understood:* why forcing `k_cyc` cycle directions in costs so much once many cut directions are
+  appended. The damage tracks the ratio: pure cycle at `k_cyc = k_b` (χ=4, 9) is excellent, 9+7 at
+  χ=16 is fine, 9+23 at χ=32 is 20× worse than the plain cut. And separately, why hex 4×4 stops
+  converging at χ≥8 while hex 3×3 is exact.
 
-**The reframing.** Stationarity is a LOCAL condition: `∂F/∂B = M_v/Z_v − M_e/Z_e = 0` is per-block,
-the two marginals of each edge block being parallel. That is the CVM/GBP fixed point, and at bond
-dimension 1 it is exactly BP — which works fine on ragged bonds and hex because each message is
-sized by its own edge. **The cycle eigenproblem is one way to achieve that local condition, but it
-imports a GLOBAL constraint the condition does not require: one invariant-subspace dimension shared
-by all four bonds of a plaquette.** That constraint, not stationarity, is what broke hex.
+**Verdict: code removed.** Leaving it default-off was tempting, but the accompanying tests asserted
+only the passing configurations and would have given the next person false confidence in a route that
+is worse in most of the scan. The design reasoning above and the two mechanism fixes are worth keeping;
+the realization is not.
 
-**Option (a) — "cycle where safe, cut elsewhere" — is DEAD.** Using the surveyed hex 4×4 plaquette
-dimensions at χ=8, bonds as (W,N,E,S):
-
-| bonds | cycle rank `min(χ, min bond)` | cut rank at widest bond |
-|---|---|---|
-| `[4,4,4,4]` | 4 | 4 |
-| `[1,16,32,16]` | **1** | 8 |
-| `[4,16,32,16]` | **4** | 8 |
-| `[4,32,32,16]` | **4** | 8 |
-| `[16,16,8,16]` | 8 | 8 |
-
-The cycle under-shoots at 9 of 10 sampled plaquettes — not only the pathological dim-1 one — so (a)
-would fall back to the cut essentially everywhere on hex and buy no stationarity there.
-
-**Option (b), in the form that works: UNION, not choice.** At each bond keep
-`k_b = min(χ, that bond's own dimension)` directions, of which the leading `k_cyc` are the cycle's
-invariant subspace and the rest are filled from the cut projector's dominant directions.
-
-* *Stationarity survives* — if the retained range CONTAINS the invariant subspace, the cycle map
-  still carries that subspace into the retained space, so the loop relation holds. Containing it
-  suffices; equalling it is not required.
-* *No degenerate collapse* — every bond sizes itself, so a dim-1 bond contributes `k_cyc = 1` to the
-  loop while a dim-32 bond still keeps its 8. Hex cannot collapse.
-* *It matches the measured split* — cut wins on `Z`, cycle wins on observables; keeping both sets of
-  directions is the natural way to get both rather than choosing.
-
-**Recipe**, all pieces already validated this session:
-
-1. Build the four rectangular factors `A₁=E_SW, A₂=E_SE, A₃=E_NE, A₄=E_NW` (bonds `W,S,E,N`).
-2. `schursolve` the forward and transposed cycle actions for `k_cyc = min(χ, min bond)` — matrix
-   free, no padding. Verified 9/9 square and 32/32 hex at 1e-15.
-3. Propagate `V_R[l+1] = orth(A_l V_R[l])`, `V_L[l] = orth_rows(V_L[l+1] A_l)`.
-4. Per bond, run the existing pairwise cut projector at `k_b = min(χ, dim b)`.
-5. MERGE: take the `k_cyc` cycle columns, then append cut columns orthogonalised against what is
-   held until `k_b` is reached.
-6. Biorthogonalise the merged pair so `P_B P_A = I`; sides are `P_A = V_L` for W,S and `P_A = V_R`
-   for E,N.
-
-**Gates, in this order** — each has already caught a wrong version of this:
-insertion identity `Bp (P_A P_B) Bc = Bp Bc` at full rank (~1e-14); exactness at lossless χ on BOTH
-square and hex (this is what caught the rank-rule bug); then `⟨X⟩`/`⟨Z⟩` against the Python numbers
-at matched χ.
+**If revisited:** the gate suite must scan χ AND lattice size AND bond dimension before any positive
+claim, and hex 4×4 at χ ≥ 8 belongs in it as a specific regression case. The unexplained
+`k_cyc / k_b` dependence is the thing to understand first — it is probably the whole story.
 
 #### OBSERVABLES: the stationary projector wins, decisively
 

@@ -27,7 +27,7 @@
 # See docs/finite_ctmrg_design.md for the derivations and the measured comparisons.
 
 using LinearAlgebra: eigen, Hermitian, norm, dot, I, Diagonal, qr, svd
-using KrylovKit: eigsolve, svdsolve, schursolve, Arnoldi
+using KrylovKit: eigsolve, svdsolve
 
 """
     CTMOptions(; kwargs...)
@@ -48,7 +48,6 @@ governs, referenced below.
 | `qr_cutoff` | `1e-13` | relative cutoff on the `S` values the projector inverts. It can sit this low because `S` comes off a triangular product rather than a squared object — see `_ctm_twosided_projector_qr`. |
 | `krylov_min` | `128` | smallest interface at which the Krylov SVD beats a dense one; below it dense LAPACK wins — see `_ctm_svd_topk` for the crossover. |
 | `optimal_max` | `12` | tensor count above which contraction-order search falls back from exhaustive netcon to greedy. A FEASIBILITY gate — see `_ctm_contract`. |
-| `cycle` | `false` | augment each plaquette's four projectors with the dominant invariant subspace of the four-corner cycle, for stationarity of `F` — see `_ctm_cycle_projectors`. |
 """
 Base.@kwdef struct CTMOptions
     gauge::Bool = true
@@ -57,7 +56,6 @@ Base.@kwdef struct CTMOptions
     qr_cutoff::Float64 = 1.0e-13
     krylov_min::Int = 128
     optimal_max::Int = 12
-    cycle::Bool = false
 end
 
 """
@@ -609,121 +607,6 @@ function _ctm_interface_proj2(Bw, Be, ins::Vector{<:Index}, maxdim::Integer, opt
 end
 
 
-
-# --- CYCLE-AUGMENTED projector (`opts.cycle`) ------------------------------------------
-#
-# WHY. Our cut projector is the optimal rank-χ truncation of ONE bipartition, chosen independently
-# per interface. It is NOT a stationary point of `F`: `marginal_inconsistency` measures exactly that
-# residual and is nonzero at finite χ. The collaborator's engine instead takes each projector to be
-# the dominant invariant subspace of the four-corner cycle, which IS stationary — and measured on
-# their 5×5 Ising PEPS that is worth 3–130× on single-site observables while costing a little on
-# `ln Z`. See the head-to-head section of the design doc.
-#
-# THE TRAP, AND WHY THIS IS A UNION. Stationarity is a LOCAL condition (`∂F/∂B = 0` per block, the
-# CVM/GBP fixed point, which at bond dimension 1 is just BP). The cycle eigenproblem achieves it but
-# drags in a GLOBAL constraint the condition does not need: one invariant-subspace dimension shared
-# by all four bonds. On hex that is fatal — plaquettes exist with a bond of dimension 1 (a missing
-# lattice link), so a pure cycle projector collapses all four bonds to one direction forever, and an
-# earlier prototype duly saturated at 1e-3 no matter how large χ grew.
-#
-# So each bond keeps `k_b = min(χ, ITS OWN dimension)` directions: the leading `k_cyc` are the cycle's
-# invariant subspace, the rest are filled from the cut projector. Stationarity survives because
-# CONTAINING the invariant subspace is enough — the cycle map carries it into the retained space —
-# while every bond sizing itself means no collapse. It also matches the measured split: cut wins on
-# `ln Z`, cycle wins on observables, so keep both sets of directions rather than choosing.
-#
-# NO PADDING. The bonds are rectangular in general (`k_prev · D_layer`, and `k_prev = 1` at the
-# boundary). Their engine pads everything to a fixed χ with a separate rank field because a DENSE
-# periodic Schur needs square equal-size factors. We only ever need the ACTION of the cycle on a
-# vector — four matvecs through rectangular matrices, product never formed — so a matrix-free
-# `schursolve` handles adaptive bonds natively and returns a real orthonormal basis, avoiding the
-# complex-conjugate-pair handling a dense `ordschur` needs.
-#
-# GEOMETRY. With bonds ordered (W, S, E, N), each enlarged corner is a map from one bond to the next:
-#   A1 = E_SW : W->S    A2 = E_SE : S->E    A3 = E_NE : E->N    A4 = E_NW : N->W
-# and the four projectors land on the EXISTING keys PH[:N,X-1,Y], PH[:S,X-1,Y], PV[:W,X,Y-1],
-# PV[:E,X,Y-1], so only the derivation changes. Left bases propagate DOWNWARD, `V_L[l] ~ V_L[l+1] A_l`.
-# For each bond the factor on the CONSUMING tensor is the right basis and the one on the producer is
-# the left, so W and S take `P_A = V_L` while E and N take `P_A = V_R`.
-_ctm_orthcols(X, k) = (Q = Matrix(qr(X).Q); Q[:, 1:min(k, size(Q, 2))])
-
-# Whiten a pair so that `B A = I`, via the SVD of their overlap.
-#
-# The overlap MUST be truncated, not merely floored. Cycle and cut directions are not naturally
-# biorthogonal to each other, so a merged pair can have near-null overlap directions; whitening
-# multiplies those by `S^(-1/2)` and amplifies pure noise — the same failure `qr_cutoff` guards
-# against in the cut projector. Measured: without this the union was 1.4e-10 on `⟨X⟩` at χ=32 where
-# the plain cut managed 7.4e-12. Dropping below `cutoff · S[1]` shrinks `k` instead.
-function _ctm_biorth(A::AbstractMatrix, B::AbstractMatrix, cutoff::Real)
-    F = svd(B * A)
-    k = count(>(cutoff * (isempty(F.S) ? one(eltype(F.S)) : F.S[1])), F.S)
-    k < 1 && return nothing
-    isq = Diagonal(1 ./ sqrt.(F.S[1:k]))
-    return A * F.V[:, 1:k] * isq, isq * F.U[:, 1:k]' * B
-end
-
-function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOptions)
-    any(isnothing, (ENW, ENE, ESE, ESW)) && return nothing
-    ins = (collect(commoninds(ENW, ESW)), collect(commoninds(ESW, ESE)),
-           collect(commoninds(ENE, ESE)), collect(commoninds(ENW, ENE)))     # W, S, E, N
-    any(isempty, ins) && return nothing
-    cs = ntuple(l -> combiner(ins[l]...), 4)
-    io = ntuple(l -> combinedind(cs[l]), 4)
-    As = try
-        [Array((ESW * cs[1]) * cs[2], io[2], io[1]), Array((ESE * cs[2]) * cs[3], io[3], io[2]),
-         Array((ENE * cs[3]) * cs[4], io[4], io[3]), Array((ENW * cs[4]) * cs[1], io[1], io[4])]
-    catch
-        return nothing                          # a corner carrying more than its two interfaces
-    end
-    nsp = [ITensors.dim(io[l]) for l in 1:4]
-    kcyc = min(Int(maxdim), minimum(nsp))
-    kcyc < 1 && return nothing
-    fwd(v) = As[4] * (As[3] * (As[2] * (As[1] * v)))
-    bwd(u) = transpose(As[1]) * (transpose(As[2]) * (transpose(As[3]) * (transpose(As[4]) * u)))
-    alg = Arnoldi(; krylovdim = max(4kcyc + 8, 24), tol = 1.0e-13)
-    v0 = randn(eltype(As[1]), nsp[1])
-    local VRv, VLv, iR, iL
-    try
-        _, VRv, _, iR = schursolve(fwd, v0, kcyc, :LM, alg)
-        _, VLv, _, iL = schursolve(bwd, v0, kcyc, :LM, alg)
-    catch
-        return nothing                          # fall through to the pairwise cut
-    end
-    (iR.converged < kcyc || iL.converged < kcyc) && return nothing
-    VR = Vector{Any}(undef, 4); VL = Vector{Any}(undef, 4)
-    VR[1] = reduce(hcat, VRv[1:kcyc]); VL[1] = permutedims(reduce(hcat, VLv[1:kcyc]))
-    for l in 1:3
-        VR[l + 1] = _ctm_orthcols(As[l] * VR[l], kcyc)
-    end
-    for l in (4, 3, 2)
-        VL[l] = permutedims(_ctm_orthcols(transpose(As[l]) * permutedims(VL[mod1(l + 1, 4)]), kcyc))
-    end
-    bnd = ((ENW, ESW), (ESW, ESE), (ENE, ESE), (ENW, ENE))   # (P_A side, P_B side) per bond
-    out = Vector{Any}(undef, 4)
-    for l in 1:4
-        (size(VR[l], 2) == kcyc && size(VL[l], 1) == kcyc) || return nothing
-        Acol = (l <= 2) ? permutedims(VL[l]) : VR[l]         # (dim x kcyc), the P_A side
-        Brow = (l <= 2) ? permutedims(VR[l]) : VL[l]         # (kcyc x dim), the P_B side
-        kb = min(Int(maxdim), nsp[l])
-        if kb > kcyc                                          # UNION: top up from the cut
-            pr = _ctm_twosided_projector_qr(bnd[l][1] * cs[l], bnd[l][2] * cs[l], io[l], kb, opts)
-            if !isnothing(pr)
-                PAc = Array(pr[1], io[l], pr[3]); PBc = Array(pr[2], pr[3], io[l])
-                Acol = _ctm_orthcols(hcat(Acol, PAc), kb)     # QR keeps the cycle span leading
-                Brow = permutedims(_ctm_orthcols(hcat(permutedims(Brow), permutedims(PBc)), kb))
-            end
-        end
-        size(Acol, 2) == size(Brow, 1) || return nothing
-        ab = _ctm_biorth(Acol, Brow, opts.qr_cutoff)
-        isnothing(ab) && return nothing
-        a, b = ab
-        (all(isfinite, a) && all(isfinite, b)) || return nothing
-        w = Index(size(a, 2))
-        out[l] = (ITensor(a, io[l], w) * cs[l], ITensor(b, w, io[l]) * cs[l], w, ins[l])
-    end
-    return (W = out[1], S = out[2], E = out[3], N = out[4])
-end
-
 # --- gauge fixing --------------------------------------------------------------------
 # The pair (P_A, P_B) has an exact gauge freedom  P_A -> P_A R,  P_B -> R⁻¹ P_B: it leaves
 # Π = P_A P_B, hence every region value and `F`, untouched. But the sweep picks that gauge
@@ -901,25 +784,8 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
     E(sym, x, y) = get!(enl, (sym, x, y)) do
         _ctm_enlarged(S, tbl, sym, x, y, opts)
     end
-    # --- CYCLE-augmented projectors: all four of a plaquette's interfaces from ONE cyclic problem,
-    # unioned with the cut so every bond keeps min(χ, its own dim). Same keys as the pairwise route
-    # below, which still owns any plaquette the cycle declines.
-    if opts.cycle
-        for X in 2:Lx, Y in 2:Ly
-            cyc = _ctm_cycle_projectors(E(:NW, X, Y), E(:NE, X, Y), E(:SE, X, Y), E(:SW, X, Y),
-                                        χ, opts)
-            isnothing(cyc) && continue
-            for (fam, isH, key) in ((cyc.N, true, (:N, X - 1, Y)), (cyc.S, true, (:S, X - 1, Y)),
-                                    (cyc.W, false, (:W, X, Y - 1)), (cyc.E, false, (:E, X, Y - 1)))
-                pr = (fam[1], fam[2], fam[3])
-                opts.gauge && (pr = _ctm_align(pr, fam[4], _ctm_nn(isH ? S.PH : S.PV, key)))
-                isH ? (PH[key] = pr) : (PV[key] = pr)
-            end
-        end
-    end
     # --- derive every interface projector pair from its two bounding corners -------
     for x in 1:(Lx - 1), y in 2:Ly            # PH[:N,x,y]: C_NW(x+1,y) | C_NE(x+1,y)
-        haskey(PH, (:N, x, y)) && continue
         Bw = E(:NW, x + 1, y); Be = E(:NE, x + 1, y)
         (isnothing(Bw) || isnothing(Be)) && continue
         ins = commoninds(Bw, Be)
@@ -932,7 +798,6 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
     # (this one, C_SW, C_SE, T_S) must use that range: `1:(Ly-1)` builds a useless `y = 1` and
     # never builds `y = Ly`, leaving the bottom interface of every region unconsumed.
     for x in 1:(Lx - 1), y in 2:Ly            # PH[:S,x,y]: C_SW(x+1,y) | C_SE(x+1,y)
-        haskey(PH, (:S, x, y)) && continue
         Bw = E(:SW, x + 1, y); Be = E(:SE, x + 1, y)
         (isnothing(Bw) || isnothing(Be)) && continue
         ins = commoninds(Bw, Be)
@@ -941,7 +806,6 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         !isnothing(pr) && (PH[(:S, x, y)] = pr)
     end
     for x in 2:Lx, y in 1:(Ly - 1)            # PV[:W,x,y]: C_NW(x,y+1) | C_SW(x,y+1)
-        haskey(PV, (:W, x, y)) && continue
         Bn = E(:NW, x, y + 1); Bs = E(:SW, x, y + 1)
         (isnothing(Bn) || isnothing(Bs)) && continue
         ins = commoninds(Bn, Bs)
@@ -950,7 +814,6 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         !isnothing(pr) && (PV[(:W, x, y)] = pr)
     end
     for x in 1:(Lx - 1), y in 1:(Ly - 1)      # PV[:E,x,y]: C_NE(x,y+1) | C_SE(x,y+1)
-        haskey(PV, (:E, x + 1, y)) && continue
         Bn = E(:NE, x + 1, y + 1); Bs = E(:SE, x + 1, y + 1)
         (isnothing(Bn) || isnothing(Bs)) && continue
         ins = commoninds(Bn, Bs)

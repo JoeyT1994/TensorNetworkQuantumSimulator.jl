@@ -270,41 +270,6 @@ end
     end
 end
 
-@testset "CVM cycle-augmented projector" begin
-    # `cycle = true` unions each plaquette's four cut projectors with the dominant invariant
-    # subspace of the four-corner cycle, which makes the environment a stationary point of `F`.
-    # Measured on the collaborator's 5×5 Ising PEPS it is worth 3-8x on single-site observables at
-    # moderate χ; see the design doc.
-    #
-    # EXACTNESS AT LOSSLESS χ ON BOTH LATTICES is the gate that matters. An earlier prototype used a
-    # single per-plaquette rank `min(χ, narrowest bond)` and passed on square while saturating at
-    # 1e-3 on hex forever, because hex has plaquettes with a bond of dimension 1 (a missing lattice
-    # link) which collapsed all four bonds to one direction. The union rule — every bond keeps
-    # `min(χ, its OWN dimension)` — is what fixes that, so hex is the load-bearing half of this test.
-    Random.seed!(31)
-    gq = named_grid((3, 3)); sqi = siteinds("S=1/2", gq)
-    ψq = random_tensornetworkstate(Float64, gq, sqi; bond_dimension = 2)
-    lnQ = log(abs(real(norm_sqr(ψq; alg = "exact"))))
-    @test cvm_freenergy(update(CTMEnvironmentCache(ψq, 32; cycle = true);
-                               maxiter = 60, tolerance = 1.0e-12)) ≈ lnQ atol = 1.0e-10
-
-    Random.seed!(1234)
-    gh = named_hexagonal_lattice_graph(3, 3); shi = siteinds("S=1/2", gh)
-    ψh = gauge_and_scale(random_tensornetworkstate(ComplexF64, gh, shi; bond_dimension = 2))
-    lnH = log(abs(real(norm_sqr(ψh; alg = "exact"))))
-    @test cvm_freenergy(update(CTMEnvironmentCache(ψh, 40; cycle = true);
-                               maxiter = 60, tolerance = 1.0e-12)) ≈ lnH atol = 1.0e-10
-
-    # The point of the route: it is far closer to stationary. `marginal_inconsistency` IS the
-    # stationarity residual, so the cycle environment must beat the cut on it by a wide margin.
-    let mcut = marginal_inconsistency(update(CTMEnvironmentCache(ψh, 40; cycle = false);
-                                             maxiter = 60, tolerance = 1.0e-12)),
-        mcyc = marginal_inconsistency(update(CTMEnvironmentCache(ψh, 40; cycle = true);
-                                             maxiter = 60, tolerance = 1.0e-12))
-        @test mcyc < mcut / 100
-    end
-end
-
 @testset "CVM on sparse (x,y) grids: hexagonal and heavy-hexagonal" begin
     Random.seed!(2024)
     # Hex and heavy-hex are laid out on an (x,y) grid with vertices AND edges missing. The 4C+4T
