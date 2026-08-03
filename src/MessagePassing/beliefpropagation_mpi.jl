@@ -309,6 +309,12 @@ function apply_gates(
         update_cache = true,
         verbose = false
     )
+    # NOTE for `apply_kwargs = (; buffered = true)`: this `copy` is SHALLOW. It holds the same
+    # ITensor objects and therefore the same data buffers -- verified: a write through one is
+    # visible through the other. The buffered update overwrites the storage of the larger input
+    # tensor, so this copy does NOT protect the caller's cache from it; the first gate touching
+    # each vertex will corrupt the caller's tensor at that vertex. Buffering is safe only when the
+    # caller has no further use for the network it passed in. See `simple_update_mpi`.
     ψ_bpc = copy(ψ_bpc)
 
     # we keep track of the vertices that have been acted on by 2-qubit gates
@@ -749,6 +755,23 @@ function thin_qr(T::ITensor, linds)
 end
 
 # identical to the non-MPI version, but with a different signature so it can be called
+#
+# This function always CONSUMES `ψ⃗`. With `buffered = true` it goes further and OVERWRITES the
+# storage of the larger input tensor, which becomes scratch space -- that is what holds the peak at
+# 2 × one vertex tensor instead of 3.25 × (both measured on device at χ=512), and it is what makes
+# χ=1024 reachable: a degree-3 vertex is then 32 GiB, so 2 × fits a 95 GiB card and 3.25 × does
+# not.
+#
+# BUFFERING REQUIRES SOLE OWNERSHIP OF THE INPUT BUFFERS, which is why it is off by default. It is
+# NOT enough that `apply_gate!` clears the network's entry: `copy` of a network or cache is SHALLOW
+# -- it shares the ITensor objects and hence their data buffers (verified: a write through one is
+# visible through the other) -- so anything the caller still holds that came from the same network
+# is silently corrupted. In particular `apply_gates` copies the cache on entry specifically to
+# leave the caller's intact, and buffering breaks that promise.
+#
+# Turn it on per call, via `apply_kwargs = (; buffered = true, ...)`, when the network being passed
+# in is dead afterwards. If you need it afterwards, duplicate its DATA first (`copy`/`copy` of the
+# cache is not enough; rebuild each tensor with the copying `ITensor(array(t), inds(t)...)`).
 function simple_update_mpi(
         o::ITensor, ψ⃗::Vector{<:ITensor};
         envs, normalize_tensors = true, sqrt_cutoff = nothing, buffered = false,
@@ -839,13 +862,26 @@ function simple_update_mpi(
         rᵥ₁ = isnothing(st₁) ? commoninds(Qᵥ₁, Rᵥ₁) : Index[st₁.qb]
         oR = ITensors.apply(o, Rᵥ₁ * Rᵥ₂)
         singular_values! = Ref(ITensor())
-        Rᵥ₁, Rᵥ₂, spec = factorize_svd(
+        factored = factorize_svd(
             oR,
             unioninds(rᵥ₁, sᵥ₁);
             ortho = "none",
             singular_values!,
             apply_kwargs...,
         )
+        # `factorize_svd` RETURNS `nothing` when the SVD fails to converge -- it prints a long
+        # explanation and hands back nothing rather than throwing. Destructuring that gives
+        # "MethodError: no method matching iterate(::Nothing)", which reads like a bug in this
+        # function and sent us hunting through the QR for a long time. On CUDA the default
+        # algorithm ("qr_algorithm", cuSOLVER gesvd) does fail on the matrices a large-χ update
+        # produces; "jacobi_algorithm" is the robust GPU choice.
+        isnothing(factored) && error(
+            "simple_update_mpi: the SVD did not converge on a tensor of dimensions " *
+                "$(ITensors.dims(oR)). Pass a different algorithm via the `alg` apply kwarg " *
+                "-- on GPU use alg = \"jacobi_algorithm\"; on CPU \"qr_iteration\" or " *
+                "\"recursive\" are the reliable fallbacks.",
+        )
+        Rᵥ₁, Rᵥ₂, spec = factored
         err = spec.truncerr
         s_values = singular_values![]
         # One side at a time. `[Qᵥ₁ * Rᵥ₁, Qᵥ₂ * Rᵥ₂]` evaluates both products while both Q's
