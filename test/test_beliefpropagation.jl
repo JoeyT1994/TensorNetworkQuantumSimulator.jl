@@ -82,21 +82,16 @@ end
 end
 
 
-# The "blocked" message algorithm specialises the degree-3 vertex of a *double-layer* network and
-# must fall back everywhere else. Which layers a vertex has cannot be read off `virtualinds`: a
-# single-layer network and a state's norm network both show one virtual index per edge, and a form
-# shows two. Getting that wrong is silent in one direction and fatal in the other, so each shape is
-# pinned here -- with the hit counter asserted, because "blocked agrees with contract" holds
-# trivially whenever blocked fell back.
+# The kernel must fire on a double layer and fall back everywhere else, and that cannot be read off
+# `virtualinds`: a single-layer network and a norm network both show one virtual index per edge. The
+# hit counter is asserted because "blocked agrees with contract" holds trivially on a fallback, and
+# it must fire on *every* edge, not only where the source has degree 3.
 @testset "Blocked message algorithm, per network shape" begin
     g = named_hexagonal_lattice_graph(2, 2)
     chi = 6
-    deg3 = [e for e in TNQS.edges(TNQS.BeliefPropagationCache(
-        random_tensornetworkstate(ComplexF64, g; bond_dimension = chi)
-    )) if TNQS.degree(g, TNQS.src(e)) == 3]
-    @test !isempty(deg3)
-
     psi = random_tensornetworkstate(ComplexF64, g; bond_dimension = chi)
+    nedges = length(collect(TNQS.edges(TNQS.BeliefPropagationCache(psi))))
+    @test nedges > 0
     # A form is only well-formed when ket and bra share site indices, which is what `inner` builds.
     phi = random_tensornetworkstate(ComplexF64, g, siteinds(psi); bond_dimension = chi)
 
@@ -127,27 +122,80 @@ end
         @test worst < 1.0e-12
         ran = TNQS._BLOCKED_MESSAGE_HITS[] - hits0
         if should_specialise
-            @test ran == length(deg3)   # $label specialised every degree-3 vertex
+            @test ran == nedges         # $label specialised every edge, whatever the degree
         else
             @test ran == 0              # $label must never reach the kernel
         end
     end
 
-    # A form whose operator is not the identity is a different contraction, so it has to fall back
-    # rather than quietly drop the operator.
+    # A non-identity operator is one more tensor in the network, not a fallback. The identity is
+    # still recognised and dropped.
     let sinds = siteinds(psi), verts = collect(vertices(g))
         ops = [TNQS.ITensors.op("Z", only(sinds[v])) for v in verts]
         opnet = TNQS.TensorNetworkState(TNQS.Dictionary(verts, ops))
         braz = TNQS.map_tensors(t -> TNQS.ITensors.dag(TNQS.ITensors.prime(t)), phi)
-        zform = TNQS.BilinearForm(psi, opnet, braz)
-        bpc = TNQS._seed_default_messages!(TNQS.BeliefPropagationCache(zform))
+        forms = [
+            ("BilinearForm with Z", TNQS.BilinearForm(psi, opnet, braz)),
+            ("QuadraticForm with Z", TNQS.QuadraticForm(psi, opnet)),
+        ]
+        for (label, form) in forms
+            bpc = TNQS._seed_default_messages!(TNQS.BeliefPropagationCache(form))
+            hits0 = TNQS._BLOCKED_MESSAGE_HITS[]
+            worst = 0.0
+            for e in TNQS.edges(bpc)
+                b, _ = TNQS.updated_message(
+                    TNQS.set_default_kwargs(TNQS.Algorithm("blocked"), bpc), bpc, e
+                )
+                c, _ = TNQS.updated_message(
+                    TNQS.set_default_kwargs(TNQS.Algorithm("contract"), bpc), bpc, e
+                )
+                worst = max(worst, norm(b - c) / norm(c))
+            end
+            @test worst < 1.0e-12
+            @test TNQS._BLOCKED_MESSAGE_HITS[] - hits0 == nedges   # $label
+        end
+    end
+end
+
+
+# A degree-4 vertex -- what a square lattice is made of -- has three incoming messages, which the
+# hand-written kernel could not express at all.
+@testset "Blocked message on a degree-4 vertex" begin
+    g = named_grid((3, 3))
+    @test any(TNQS.degree(g, v) == 4 for v in vertices(g))
+    chi = 4
+    psi = random_tensornetworkstate(ComplexF64, g; bond_dimension = chi)
+    phi = random_tensornetworkstate(ComplexF64, g, siteinds(psi); bond_dimension = chi)
+
+    for (label, net) in (("norm network", psi), ("BilinearForm", TNQS.BilinearForm(psi, phi)))
+        bpc = TNQS._seed_default_messages!(TNQS.BeliefPropagationCache(net))
         hits0 = TNQS._BLOCKED_MESSAGE_HITS[]
+        worst = 0.0
+        nedges = 0
         for e in TNQS.edges(bpc)
-            TNQS.updated_message(
+            nedges += 1
+            b, _ = TNQS.updated_message(
                 TNQS.set_default_kwargs(TNQS.Algorithm("blocked"), bpc), bpc, e
             )
+            c, _ = TNQS.updated_message(
+                TNQS.set_default_kwargs(TNQS.Algorithm("contract"), bpc), bpc, e
+            )
+            @test Set(collect(TNQS.inds(b))) == Set(collect(TNQS.inds(c)))
+            worst = max(worst, norm(b - c) / norm(c))
         end
-        @test TNQS._BLOCKED_MESSAGE_HITS[] == hits0
+        @test worst < 1.0e-12
+        @test TNQS._BLOCKED_MESSAGE_HITS[] - hits0 == nedges   # $label
+
+        # `vertex_scalar` takes this path unconditionally, so it has to agree here too.
+        for v in vertices(g)
+            fast = TNQS.blocked_vertex_scalar(bpc, v)
+            @test !isnothing(fast)
+            cl = [TNQS.bp_factors(bpc, v); TNQS.incoming_messages(bpc, v)]
+            slow = TNQS.scalar(
+                TNQS.contract(cl; sequence = TNQS.contraction_sequence(cl; alg = "optimal"))
+            )
+            @test abs(fast - slow) / abs(slow) < 1.0e-12
+        end
     end
 end
 

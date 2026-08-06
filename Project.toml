@@ -20,6 +20,7 @@ SimpleGraphAlgorithms = "41400c72-0c58-5c16-8579-4ecbce768449"
 SimpleGraphConverter = "205b04f2-f585-4877-a239-566270b3f673"
 SplitApplyCombine = "03a91e81-4c3e-53e1-a0a4-9c0c8f19dd66"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
+TensorOperations = "6aa20fa7-93e2-5fca-9bc0-fbd0db3c71a2"
 TypeParameterAccessors = "7e5a90cf-f82e-492e-a09b-e3e26432c138"
 
 [compat]
@@ -38,6 +39,7 @@ SimpleGraphConverter = "0.1.0"
 SplitApplyCombine = "1.2.3"
 Statistics = "1.10"
 StatsBase = "0.34.4"
+TensorOperations = "5.7"
 TypeParameterAccessors = "0.3.10, 0.4"
 julia = "1.10"
 
@@ -49,3 +51,8 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
 test = ["Test", "Random", "Statistics", "JLArrays"]
+
+# Temporary, for TensorOperations.jl#293 (`BufferAllocator` device support). Drop this and pin a
+# released version once the PR lands -- `[sources]` must not reach a tagged release.
+[sources]
+TensorOperations = {url = "https://github.com/QuantumKitHub/TensorOperations.jl", rev = "cuda-buffer"}

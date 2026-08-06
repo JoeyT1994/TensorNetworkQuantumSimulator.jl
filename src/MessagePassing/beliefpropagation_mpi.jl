@@ -93,7 +93,7 @@ function _staging!(alloc, store::Dict, peer::Integer, T::Type, n::Integer)
     buf = get(store, key, nothing)
     if buf === nothing || length(buf) < n
         # Drop the old buffer *before* allocating its replacement, the same discipline
-        # `scratch_buffer!` follows. Otherwise both are live across the `alloc`, and since a
+        # `message_allocator!` follows. Otherwise both are live across the `alloc`, and since a
         # circuit grows bond dimensions repeatedly this doubling recurs -- at χ=1024 it is a
         # 32 GiB buffer held while 36 GiB is requested, on the device.
         buf = nothing
@@ -425,10 +425,9 @@ struct BeliefPropagationCacheMPI{
     recv_order::Dictionary{Int32, Vector{NamedEdge{V}}} # peer -> edges, canonically ordered
     buffers::ExchangeBuffers
     comm::MPI.Comm
-    # Flat work buffer for the "blocked" message update (see blockedmessage.jl). Starts
-    # empty and is grown to fit on first use; a `Ref` so it can be replaced from an
-    # immutable struct. It holds no semantic state, so `copy` shares it rather than
-    # reallocating -- `update` copies the cache on every call.
+    # `BufferAllocator` arena for the "blocked" message update (see blockedmessage.jl), built on
+    # first use. A `Ref` so it can be replaced from an immutable struct; holds no semantic state,
+    # so `copy` shares it rather than reallocating.
     scratch::Base.RefValue{Any}
 end
 
@@ -440,11 +439,16 @@ message_scratch(bp_cache::BeliefPropagationCacheMPI) = bp_cache.scratch
 
 function release_message_scratch!(bp_cache::BeliefPropagationCacheMPI)
     ref = message_scratch(bp_cache)
-    # Freed before the reference is dropped, so a GPU gets the memory back now rather than at the
-    # next finalizer run. Safe because the messages `blocked_message!` produced were copied out of
-    # the scratch, so nothing outlives it.
-    free_scratch_buffer!(ref[])
-    ref[] = Bool[]
+    alloc = ref[]
+    ref[] = nothing
+    if alloc isa BufferAllocator
+        @debug "releasing message arena" capacity = length(alloc) high_water =
+            Int(alloc.max_offset) offset = Int(alloc.offset)
+        # A solve that threw mid-contraction leaves a non-zero offset, which `resize!` refuses.
+        empty!(alloc)
+        # Freed eagerly so a GPU gets the memory back now; nothing outlives the arena.
+        free_scratch_buffer!(alloc.buffer)
+    end
     return bp_cache
 end
 
@@ -524,7 +528,7 @@ function Adapt.adapt_structure(to, bpc::BeliefPropagationCacheMPI)
         communicator(adapted),
         # Dropped rather than carried over, for the same reason as the exchange buffers: it was
         # allocated for the device the cache came from.
-        Base.RefValue{Any}(Bool[])
+        Base.RefValue{Any}(nothing)
     )
 end
 
@@ -802,7 +806,7 @@ function BeliefPropagationCacheMPI(
         recv_order,
         ExchangeBuffers(),
         comm,
-        Base.RefValue{Any}(Bool[])
+        Base.RefValue{Any}(nothing)
     )
 
     # Populate the ghost messages, which have no entry in `cache` yet.

@@ -744,11 +744,11 @@ function scratch_case()
     return (; name = "two degree-3 centres, 2 ranks", g, parts, shared, maxiter = 6)
 end
 
-# Records what the release hook is handed, so the release is asserted rather than inferred.
+# Records what the release hook is handed. The arena is a byte buffer, whatever the scalar type is.
 const RELEASED = Int[]
-TNQS.free_scratch_buffer!(x::Vector{ComplexF64}) = (push!(RELEASED, length(x)); nothing)
+TNQS.free_scratch_buffer!(x::Vector{UInt8}) = (push!(RELEASED, length(x)); nothing)
 
-# The blocked message scratch is the largest single allocation in a production run (36 GiB at
+# The blocked message arena is the largest single allocation in a production run (36 GiB at
 # S=4, χ=1024), so its whole lifecycle is pinned here: grown on demand, handed to the release hook
 # at the end of the solve, and the reference dropped -- otherwise it squats through gate
 # application, which needs its own factor-sized buffers.
@@ -771,16 +771,17 @@ function run_scratch_release_case(case)
     empty!(RELEASED)
     mpi_bpc = solve(mpi_bpc)
 
-    chi, S, b = 2, 2, 1
-    want = TNQS.message_scratch_length(S, chi, b)
-    check(!isempty(RELEASED), "the release hook was handed the scratch buffer")
+    # The arena sizes itself, so pin a bound rather than a length: at χ=2, S=2 a whole vertex
+    # tensor is 16 elements, so anything past a few KiB is tracking the wrong thing.
+    bound = 64 * 2^10
+    check(!isempty(RELEASED), "the release hook was handed the arena buffer")
     check(
-        all(==(want), RELEASED),
-        "released lengths $RELEASED != message_scratch_length($S, $chi, $b) = $want"
+        all(n -> 0 < n <= bound, RELEASED),
+        "released arena sizes $RELEASED are not all within $bound bytes"
     )
     check(
-        isempty(TNQS.message_scratch(mpi_bpc)[]),
-        "scratch reference dropped after update; got length $(length(TNQS.message_scratch(mpi_bpc)[]))"
+        isnothing(TNQS.message_scratch(mpi_bpc)[]),
+        "arena reference dropped after update; got $(TNQS.message_scratch(mpi_bpc)[])"
     )
 
     # A second solve must regrow and release again rather than silently skip.
