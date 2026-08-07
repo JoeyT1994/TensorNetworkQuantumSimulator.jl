@@ -1,215 +1,168 @@
 using ITensors: Algorithm, array, dim
+using TensorOperations: TensorOperations, TensorOperations as TO, BufferAllocator
 
-#
-# A memory-bounded message update for the degree-3 vertex of a double-layer (norm)
-# network, registered as the "blocked" message-update algorithm:
-#
-#     update(bpc; maxiter, tolerance, message_update_alg = Algorithm("blocked"; b = 64))
-#
-# It specialises that one case and falls back to "contract" everywhere else, so it is safe
-# to enable globally on a graph with mixed vertex degrees.
-#
-# The stock path holds the ket, the bra, both factor-sized intermediates and two
-# permutedims scratch copies simultaneously -- roughly 6 × one factor, where a "factor" is
-# the S·χ³ elements of one vertex tensor. This holds
-#
-#     the network's own tensor + one aligned copy + two S·χ²·b block buffers
-#         = (2 + 2b/χ) × one factor
-#
-# for two reasons. First, the bra is never materialised: `bp_factors` builds it as
-# `dag(prime(T))` with the site indices replaced back to unprimed, which is exactly
-# `conj(T)` sharing the ket's site legs, so `adjoint` supplies it to the closing gemm as a
-# BLAS/cuBLAS 'C' flag. Second, the contraction is blocked over the outgoing leg, so no
-# factor-sized intermediate is ever formed -- only a block's worth. At χ=1024 in
-# ComplexF32 that is 68 GiB rather than 384 GiB.
-#
-# `b` trades peak against very little: the closing gemm's arithmetic intensity is
-# b flops/byte, so b = 64 is already compute-bound in fp32 and raising it only grows the
-# peak. It is clamped to χ.
-#
-# Runs on CPU or GPU unchanged -- only mul!, permutedims!, reshape and view, all on a flat
-# contiguous buffer, with no scalar indexing.
-#
+# A memory-bounded message update for a double-layer network, reached as
+# `update(bpc; message_update_alg = Algorithm("blocked"; b = 64))` and falling back to "contract"
+# on anything else. One block is an `ncon` network -- one label per bond -- so the kernel is generic
+# in the number of legs, and blocking the outgoing leg keeps peak at ~1 factor plus a self-sizing
+# `BufferAllocator` arena, against the ~6 factors the generic path holds.
 
-# One flat buffer, carved into the aligned copy, two block buffers and the output.
-#
-# `BeliefPropagationCacheMPI` carries it in a `scratch` field, so it is grown once and then
-# reused across every edge and every sweep -- the hot path allocates nothing. Any other
-# cache type has no such field and falls back to allocating per call: the *peak* is
-# unchanged (same buffer, same size) but it churns the allocator, so the reusing path is
-# what the MPI runs should use.
-# `d = (ka, kb, ke, ba, bb, be)`: the ket-side then bra-side dimensions of the two incoming legs
-# and the outgoing one. The block buffers have to fit the largest of the three intermediates,
-# which change shape as the contraction walks from ket dims to bra dims.
-function message_scratch_length(S, d::NTuple{6, <:Integer}, b, nlayers = 1)
-    ka, kb, ke, ba, bb, be = d
-    blocks = 2 * S * b * max(ka * kb, ka * bb, ba * bb)
-    # A derived bra makes the aligned ket do double duty -- block source *and* closing matrix --
-    # so it is held whole. A separate bra takes over the closing, leaving the ket read one slab at
-    # a time, so only a slab is held. At S=4, χ=800 that is 0.95 GiB where the whole thing is 15.3.
-    aligned = nlayers == 1 ? S * ka * kb * ke :
-        S * ka * kb * min(b, ke) + S * ba * bb * be
-    return aligned + blocks + be * ke
-end
+# The arena, reused across edges and sweeps when the cache carries one (`BeliefPropagationCacheMPI`
+# has a `scratch` field); any other cache gets a throwaway per call, same peak but more churn.
+message_scratch(::AbstractBeliefPropagationCache) = Base.RefValue{Any}(nothing)
 
-# Equal-dimension shorthand, which is what a norm network with a saturated bond gives.
-message_scratch_length(S, chi::Integer, b, nlayers = 1) =
-    message_scratch_length(S, (chi, chi, chi, chi, chi, chi), b, nlayers)
+# Byte storage in the prototype's own array family, so a device ket gets a device arena.
+_byte_storage_type(proto::AbstractArray) = typeof(similar(proto, UInt8, 0))
 
-message_scratch(::AbstractBeliefPropagationCache) = Base.RefValue{Any}(Bool[])
-
-# Grow the buffer to fit. The type check also catches a change of element type or device,
-# in which case the old buffer is unusable and is replaced.
-#
-# The old buffer is dropped *before* the replacement is allocated. Otherwise both are live across
-# the `similar`, which at S=4, χ=1024 is 32 GiB held while 36 GiB is requested -- and since the
-# buffer is regrown every time a bond dimension climbs, that doubling happens repeatedly through a
-# circuit. Releasing first lets the allocator hand back the same block.
-function scratch_buffer!(ref::Base.RefValue{Any}, proto::AbstractVector, n::Int)
-    s = ref[]
-    if !(s isa typeof(proto)) || length(s) < n
-        ref[] = Bool[]
-        # Returned to the allocator here, not left for a finalizer. Without this the grow path
-        # leaks on a GPU while `release_message_scratch!` frees eagerly -- and growing is exactly
-        # when the device is most likely to be short, since the replacement is the larger buffer.
-        free_scratch_buffer!(s)
-        s = similar(proto, n)
-        ref[] = s
+function message_allocator!(ref::Base.RefValue{Any}, proto::AbstractArray)
+    S = _byte_storage_type(proto)
+    alloc = ref[]
+    if !(alloc isa BufferAllocator{S})
+        @debug "building message arena" storage = S replacing = typeof(alloc) discarded_bytes =
+            _arena_bytes(alloc)
+        # Drop the old buffer before asking for the replacement, or both are live across the build.
+        ref[] = nothing
+        alloc isa BufferAllocator && free_scratch_buffer!(alloc.buffer)
+        ref[] = BufferAllocator{S}()
     end
-    return s
+    return ref[]::BufferAllocator{S}
 end
 
-# Hook for returning a device buffer to its allocator eagerly, rather than waiting for the
-# finalizer. A no-op by default so nothing here depends on CUDA; a caller on a GPU adds
-#
-#     TensorNetworkQuantumSimulator.free_scratch_buffer!(x::CuArray) = CUDA.unsafe_free!(x)
-#
-# Note `CUDA.reclaim()` is deliberately *not* wanted here: `unsafe_free!` puts the block back in
-# the pool where the next sweep reuses it, whereas `reclaim` returns it to the driver and forces
-# the next allocation to be a fresh `cudaMalloc` of the same size -- the allocation most likely to
-# fail when memory is tight.
+_arena_bytes(alloc::BufferAllocator) = length(alloc)
+_arena_bytes(::Any) = 0
+
+"""
+    message_arena_stats(bp_cache)
+
+Capacity, live offset and high-water mark (bytes) of the arena backing the "blocked" message
+update, or `nothing` when this cache has no arena yet. `offset` is nonzero only mid-contraction, so
+anything else after a solve means a block leaked its temporaries.
+
+`ENV["JULIA_DEBUG"] = "TensorNetworkQuantumSimulator"` reports the same per message.
+"""
+function message_arena_stats(bp_cache::AbstractBeliefPropagationCache)
+    alloc = message_scratch(bp_cache)[]
+    alloc isa BufferAllocator || return nothing
+    return (;
+        capacity = length(alloc), offset = Int(alloc.offset),
+        high_water = Int(alloc.max_offset), storage = typeof(alloc.buffer),
+    )
+end
+
+# Hook for handing a device buffer back eagerly; a GPU caller adds
+# `TensorNetworkQuantumSimulator.free_scratch_buffer!(x::CuArray) = CUDA.unsafe_free!(x)`.
+# Deliberately not `CUDA.reclaim()`, which returns the block to the driver instead of the pool.
 free_scratch_buffer!(x) = nothing
 
-# Called once a BP solve is done. The scratch is only needed between the first and last message
-# update of a sweep sequence; holding it afterwards means a factor-sized buffer squatting while
-# gate application allocates its own.
+# Called once a solve is done, so the arena does not squat through gate application.
 release_message_scratch!(bpc::AbstractBeliefPropagationCache) = bpc
 
-# out[l_e', l_e] = Σ_{s,l_a,l_b} conj(T)[s,l_a',l_b',l_e'] ma[l_a,l_a'] mb[l_b,l_b'] T[s,l_a,l_b,l_e]
-#
-# `A` is the ket tensor's raw array in whatever index order the ITensor happens to have and
-# `perm` takes that order to (sites…, l_a, l_b, l_e). The permutation is folded into the
-# aligned copy, so an arbitrary index order costs nothing beyond the copy made anyway.
-# `ma`/`mb` are χ×χ matrices oriented (l, l') and must be in stored leg order.
-# Bumped whenever the specialised kernel actually runs. Worth having permanently: "blocked agrees
-# with contract" is satisfied trivially whenever the blocked path fell back, so without a counter
-# a specialisation that has silently gone inert looks exactly like one that works.
+# Strided/Base backends contract by permuting into temporaries, so the closing layer must be
+# pre-permuted or `makeblascontractable` copies it once per block. cuTENSOR takes arbitrary index
+# modes, so there the copy is a wasted factor.
+_needs_aligned_closer(::TO.AbstractBackend) = true
+_needs_aligned_closer(::TO.cuTENSORBackend) = false
+
+# "blocked agrees with contract" holds trivially whenever blocked fell back, so a kernel that has
+# gone inert is indistinguishable from one that works without this.
 const _BLOCKED_MESSAGE_HITS = Ref(0)
 
-function blocked_message!(
-        outT_v, buf1, buf2, Tp, A, perm, ma, mb, S, d, b, Bp = nothing, Barr = nothing,
-        Bperm = nothing, opmat = nothing
-    )
-    _BLOCKED_MESSAGE_HITS[] += 1
-    ka, kb, ke, ba, bb, be = d          # ket-side then bra-side dims of (l_a, l_b, l_e)
-    kslab, bslab = S * ka * kb, S * ba * bb
-
-    # How the bra reaches the closing gemm is the only difference between a single network's
-    # double layer and a form's, and it decides whether the ket has to be held whole.
-    #
-    # When the bra is `conj(ket)` there is nothing to store: `adjoint` hands the conjugation to
-    # BLAS/cuBLAS as a 'C' flag on the ket's own aligned copy. That copy is then doing two jobs --
-    # block source and closing matrix -- so it stays resident in full.
-    #
-    # A form's bra is a different tensor and takes over the closing, which frees the ket from its
-    # second job: the loop below reads it one `l_e` slab at a time, so each slab is permuted
-    # straight out of `A` when needed and dropped. Same arithmetic and the same number of permuted
-    # elements -- it just stops holding the slabs it has finished with.
-    stream = !isnothing(Bp)
-    closer = if stream
-        permutedims!(reshape(Bp, ntuple(i -> size(Barr, Bperm[i]), length(Bperm))), Barr, Bperm)
-        transpose(reshape(Bp, bslab, be))
-    else
-        permutedims!(reshape(Tp, ntuple(i -> size(A, perm[i]), length(perm))), A, perm)
-        adjoint(reshape(Tp, kslab, ke))     # l_e is trailing after the permute
+# Compiled once per message, not per block: `ncon` re-derives its tree and index permutations on
+# every call, over runtime-length tuples, which measured 2-3x the whole kernel at chi=16. The
+# network is a chain, so this is a fold. Steps read slots `ia`/`ib` and write `io`; slots
+# `1:length(network)` are inputs and `io == 0` is the caller's destination.
+function _contraction_plan(network, conjs, output)
+    n = length(network)
+    steps = Any[]
+    ia, IA, conjA = 1, tuple(network[1]...), conjs[1]
+    for k in 2:n
+        final = k == n
+        IB, conjB = tuple(network[k]...), conjs[k]
+        IC = final ? tuple(output...) : tuple(symdiff(IA, IB)...)
+        pA, pB, pAB = TO.contract_indices(IA, IB, IC)
+        io = final ? 0 : n + k - 1
+        # Inputs own slots `1:n` and must survive; anything above is an intermediate this step
+        # consumes. Decided here, where the slots are handed out, rather than inferred downstream.
+        push!(steps, (; ia, ib = k, io, conjA, conjB, pA, pB, pAB, free_a = ia > n, free_b = k > n))
+        ia, IA, conjA = io, IC, false
     end
-    outT = reshape(outT_v, be, ke)
-
-    # Each leg carries its own dimension. Insisting they were all equal was not a simplification
-    # worth having: a circuit with a truncation cutoff produces unequal bonds routinely, and the
-    # fallback then costs six factors instead of one on exactly the tensor this kernel exists to
-    # protect. The three intermediates change shape as the contraction walks from ket dims to bra
-    # dims, which is why the buffers are sized from the largest of them rather than from one χ³.
-    for lo in 1:b:ke
-        nb = min(b, ke - lo + 1)
-        cols = lo:(lo + nb - 1)
-        n1, n2, n3 = kslab * nb, S * ka * bb * nb, bslab * nb
-        blk = if stream
-            # `selectdim` restricts A's own `l_e` axis, so the same `perm` still applies and the
-            # destination is contiguous. It has to be written through a view with one axis per
-            # index -- `permutedims!` matches `ndims`, and the site axes are only collapsed into
-            # `S` afterwards, for the block arithmetic.
-            src = selectdim(A, perm[end], cols)
-            permutedims!(
-                reshape(view(Tp, 1:n1), ntuple(i -> size(src, perm[i]), length(perm))), src, perm
-            )
-            reshape(view(Tp, 1:n1), S, ka, kb, nb)
-        else
-            reshape(view(Tp, ((lo - 1) * kslab + 1):((lo - 1) * kslab + n1)), S, ka, kb, nb)
-        end
-
-        # contract l_b, moving the contracted leg first so each step is one plain gemm
-        P1 = reshape(view(buf1, 1:n1), kb, S, ka, nb)
-        permutedims!(P1, blk, (3, 1, 2, 4))
-        G1 = reshape(view(buf2, 1:n2), bb, S * ka * nb)
-        mul!(G1, transpose(mb), reshape(P1, kb, S * ka * nb))
-
-        # contract l_a
-        P2 = reshape(view(buf1, 1:n2), ka, bb, S, nb)
-        permutedims!(P2, reshape(G1, bb, S, ka, nb), (3, 1, 2, 4))
-        G2 = reshape(view(buf2, 1:n3), ba, bb * S * nb)
-        mul!(G2, transpose(ma), reshape(P2, ka, bb * S * nb))
-
-        # close against the bra: contracted legs leading and in the ket's own order, which is the
-        # order the bra was aligned to as well
-        P3 = reshape(view(buf1, 1:n3), S, ba, bb, nb)
-        permutedims!(P3, reshape(G2, ba, bb, S, nb), (3, 1, 2, 4))
-        # An on-site operator between the layers acts only on the site axis, which is leading
-        # here, so it is one S×S gemm. `buf2` holds `G2`, dead by now, so this needs no buffer of
-        # its own -- and `mul!` may not alias, which is why it is not done in place.
-        closeblk = if isnothing(opmat)
-            reshape(P3, bslab, nb)
-        else
-            P3o = reshape(view(buf2, 1:n3), S, ba * bb * nb)
-            mul!(P3o, opmat, reshape(P3, S, ba * bb * nb))
-            reshape(P3o, bslab, nb)
-        end
-        mul!(view(outT, :, cols), closer, closeblk)
-    end
-    return outT
+    return steps, 2n - 2
 end
 
-# The block buffers are the whole overhead above the two factor-sized arrays: 2·S·χ²·b elements,
-# which is 2b/χ of a factor. So `b` has to scale with χ to hold a memory bound -- a constant 64 is
-# 12.5% of a factor at χ=1024 but 200% of one at χ=64, which is how the peak drifts from 2.1× to
-# 3.0×. χ/16 keeps the overhead at 12.5% everywhere, and the cap is where the closing gemm is
-# already compute-bound in fp32 so raising it only grows the peak.
+# Both the checkpoint/reset and the per-step `tensorfree!` are needed: a `BufferAllocator` reclaims
+# on the reset and no-ops the free, a `ManualAllocator` mallocs and no-ops the reset.
+function _run_plan!(dest, slots, steps, backend, alloc)
+    final = length(steps)
+    cp = TO.allocator_checkpoint!(alloc)
+    try
+        for (k, s) in enumerate(steps)
+            A, B = slots[s.ia], slots[s.ib]
+            C = if k == final
+                dest
+            else
+                TC = TO.promote_contract(TO.scalartype(A), TO.scalartype(B))
+                TO.tensoralloc_contract(
+                    TC, A, s.pA, s.conjA, B, s.pB, s.conjB, s.pAB, Val(true), alloc
+                )
+            end
+            TO.tensorcontract!(
+                C, A, s.pA, s.conjA, B, s.pB, s.conjB, s.pAB,
+                TO.One(), TO.Zero(), backend, alloc
+            )
+            s.free_a && TO.tensorfree!(A, alloc)
+            s.free_b && TO.tensorfree!(B, alloc)
+            k == final || (slots[s.io] = C)
+        end
+    finally
+        TO.allocator_reset!(alloc, cp)
+    end
+    return dest
+end
+
+# out[l_e', l_e] = Σ conj(T)[s, l_a', l_b', l_e'] ma[l_a, l_a'] mb[l_b, l_b'] T[s, l_a, l_b, l_e],
+# generalised to any number of legs. `tensors[1]`/`network[1]` is the layer being sliced; `-1` is
+# the bra's outgoing leg and `-2` the ket's.
+function blocked_message!(
+        out, tensors, network, conjs, sliced, slicedim, b, backend, alloc
+    )
+    _BLOCKED_MESSAGE_HITS[] += 1
+    steps, nslots = _contraction_plan(network, conjs, (-1, -2))
+    slots = Vector{Any}(undef, nslots)
+    slots[eachindex(tensors)] .= tensors
+
+    ke = size(sliced, slicedim)
+    @debug "blocked message" backend blocksize = b nblocks = cld(ke, b) outgoing = ke steps =
+        length(steps) arena_bytes = _arena_bytes(alloc)
+    for lo in 1:b:ke
+        cols = lo:min(lo + b - 1, ke)
+        slots[1] = selectdim(sliced, slicedim, cols)
+        # Stride-1 rows, so the closing gemm lands straight in it with no temporary.
+        message_slice = view(out, :, cols)
+        _run_plan!(message_slice, slots, steps, backend, alloc)
+    end
+    return out
+end
+
+# Block scratch is O(b/chi) of a factor, so `b` has to track chi to hold a bound: chi/16 keeps it at
+# 12.5%, and the cap is where the closing gemm is already compute-bound in fp32.
 default_blocked_blocksize(chi::Integer) = clamp(chi ÷ 16, 1, 64)
 default_normalize(::Algorithm"blocked") = true
 
-#
-# Which two layers the kernel closes together at a vertex, and which virtual index of `edge`
-# belongs to each. `nothing` means "not a shape this kernel handles" and the caller falls back.
-#
-# `bra === nothing` is the case where the bra is `conj(ket)` on the ket's own legs, so the closing
-# gemm needs no second aligned copy. A form supplies a genuinely different bra and pays for one.
-#
-# Reading this off the *network type* rather than off `virtualinds` is the point. A single-layer
-# `TensorNetwork` -- a partition function -- has exactly one virtual index per edge and a
-# degree-3 vertex whose element count divides χ³, so it passed every numeric guard the kernel used
-# to have, and then died on `only(setdiff(...))` of its rank-1 message. There is no double layer
-# there to close, so it must never reach the kernel at all.
-#
+# Per-block overhead is fixed while `b` tracks chi, so on a small vertex it is the whole runtime
+# (1.8x at chi=16). Below this much scratch there is no pressure to relieve, so take the leg whole.
+const _BLOCK_MIN_BYTES = 4 * 2^20
+
+# Only ever raises `default_blocked_blocksize`, so its bound still binds wherever it matters.
+# `slabbytes` is one outgoing index's worth of the ket.
+function _blocked_blocksize(ke::Integer, slabbytes::Integer)
+    floor_b = cld(_BLOCK_MIN_BYTES, max(slabbytes, 1))
+    return clamp(max(default_blocked_blocksize(ke), floor_b), 1, ke)
+end
+
+# Which two layers close at a vertex, or `nothing` to fall back. `bra === nothing` is the derived
+# bra (`conj(ket)` on the ket's own array), `sites === nothing` means the layers share their site
+# indices, `op === nothing` means they are joined directly. Dispatch is on the network type because
+# a single-layer `TensorNetwork` shows one virtual index per edge just like a norm network.
 _blocked_layers(::AbstractTensorNetwork, v, edge) = nothing
 
 function _blocked_layers(tns::TensorNetworkState, v, edge)
@@ -220,199 +173,212 @@ function _blocked_layers(tns::TensorNetworkState, v, edge)
         sites = nothing, op = nothing)
 end
 
-# A `QuadraticForm`'s bra is `dag(prime(ket))` -- literally the ket conjugated -- so it takes the
-# derived-bra route: no second aligned copy, and `adjoint` hands the conjugation to BLAS as a 'C'
-# flag. What is left is the on-site operator sitting between the layers, and that acts only on the
-# site axis, which the block already carries leading. So it folds in as one S×S gemm per block.
-#
-# This is what makes `⟨O|V|O⟩` cost the same as `‖O‖²`: one factor for the aligned ket and nothing
-# else, where routing it through a `BilinearForm` needs the bra materialised *and* aligned.
-function _blocked_layers(qf::QuadraticForm, v, edge)
-    lek, leb = virtualinds(ket(qf), edge), bra_virtualinds(qf, edge)
-    (length(lek) == 1 && length(leb) == 1) || return nothing
-    isempty(virtualinds(operator(qf), edge)) || return nothing
+# A `QuadraticForm`'s bra is `dag(prime(ket))`, so it takes the derived route and needs no copy --
+# which is what makes `⟨O|V|O⟩` cost the same as `‖O‖²`.
+_blocked_layers(qf::QuadraticForm, v, edge) = _blocked_form_layers(qf, v, edge, nothing)
 
-    K, op = ket(qf)[v], operator(qf)[v]
-    sites = collect(commoninds(K, op))
-    isempty(sites) && return nothing
-    partners = [prime(dag(s)) for s in sites]
-    # The operator must map the ket's site space to the bra's, and the bra's indices are the ket's
-    # primed -- anything else is not this form.
-    ndims(op) == 2 * length(sites) || return nothing
-    all(i -> i ∈ inds(op), partners) || return nothing
+_blocked_layers(form::AbstractForm, v, edge) =
+    _blocked_form_layers(form, v, edge, bra_tensor(form, v))
 
-    return (; ket = K, bra = nothing, le_ket = only(lek), le_bra = only(leb),
-        sites = (sites, partners), op)
-end
-
-function _blocked_layers(form::AbstractForm, v, edge)
+function _blocked_form_layers(form, v, edge, bra)
     lek, leb = virtualinds(ket(form), edge), bra_virtualinds(form, edge)
     (length(lek) == 1 && length(leb) == 1) || return nothing
-    # An operator carrying its own bond would be a third layer on the edge.
+    # An operator with its own bond on this edge is a third layer, and the message is not rank 2.
     isempty(virtualinds(operator(form), edge)) || return nothing
 
     K, op = ket(form)[v], operator(form)[v]
     sites = collect(commoninds(K, op))
-    pairing = _identity_operator_sites(op, sites)
+    pairing = _operator_site_pairing(op, sites)
     isnothing(pairing) && return nothing
-    return (; ket = K, bra = bra_tensor(form, v), le_ket = only(lek), le_bra = only(leb),
-        sites = (sites, pairing), op = nothing)
+    partners, isidentity = pairing
+    return (; ket = K, bra, le_ket = only(lek), le_bra = only(leb),
+        sites = (sites, partners), op = isidentity ? nothing : op)
 end
 
-# The bra-side partner of each ket site index, or `nothing` if `op` is not the identity that
-# pairs them. Restricting to the identity keeps the kernel's arithmetic exactly as it is: a
-# general operator would have to be applied to the block's site axis, which is a different
-# kernel. `inner`/`inner_mpi` always build the identity, so that is the case worth having.
-#
-# The comparison is on an S×S array -- a few elements beside the site tensor's S·χ³ -- so
-# materialising it costs nothing next to one block of the contraction.
-function _identity_operator_sites(op::ITensor, sites)
+# The bra-side partner of each ket site index, plus whether `op` is the identity pairing them -- in
+# which case the caller drops it from the network. Anything else is carried as one more tensor.
+function _operator_site_pairing(op::ITensor, sites)
     isempty(sites) && return nothing
     partners = [prime(dag(s)) for s in sites]
     ndims(op) == 2 * length(sites) || return nothing
     all(i -> i ∈ inds(op), sites) && all(i -> i ∈ inds(op), partners) || return nothing
     S = prod(dim, sites; init = 1)
-    # Explicitly on the host: `isapprox(A, I)` forms `A - I`, which reaches for the diagonal by
-    # scalar index and would throw on a device array. S×S is a handful of elements, so the
-    # transfer is free next to one block of the contraction.
+    # On the host: `isapprox(A, I)` reaches for the diagonal by scalar index. S x S, so free.
     m = Array(reshape(array(op, sites..., partners...), S, S))
-    isapprox(m, LinearAlgebra.I; atol = sqrt(eps(real(float(eltype(m)))))) || return nothing
-    return partners
+    isid = isapprox(m, LinearAlgebra.I; atol = sqrt(eps(real(float(eltype(m))))))
+    return (partners, isid)
 end
 
 function set_default_kwargs(alg::Algorithm"blocked", bp_cache::AbstractBeliefPropagationCache)
     normalize = get(alg.kwargs, :normalize, default_normalize(alg))
-    # `nothing` defers to χ, which is only known per edge in `updated_message`.
+    # `b` defers to the outgoing dimension, `backend` to TensorOperations' own selection.
     b = get(alg.kwargs, :b, nothing)
-    return Algorithm("blocked"; normalize, b)
+    backend = get(alg.kwargs, :backend, nothing)
+    return Algorithm("blocked"; normalize, b, backend)
 end
 
-# The *unnormalised* message along `edge`, or `nothing` when this vertex is not a shape the
-# kernel handles.
-#
-# Split out from `updated_message` because `vertex_scalar` wants the identical contraction and
-# has to know whether it ran: silently receiving the fallback's answer would make it look like
-# the kernel applied when it did not.
+# Axes in order with `last` moved to the end, or `nothing` when it already is.
+function _closer_align_perm(n::Int, last::Int)
+    last == n && return nothing
+    return (ntuple(i -> i < last ? i : i + 1, n - 1)..., last)
+end
+
+# The bra-side partner of each ket site index, in the ket's stored order.
+function _bra_sites(sites, ksites)
+    isnothing(sites) && return ksites
+    formket, formbra = sites
+    pos = [findfirst(==(s), formket) for s in ksites]
+    any(isnothing, pos) && return nothing
+    return formbra[pos]
+end
+
+# Each axis carries whichever bond its index names. `0` is never a valid `ncon` label, so it marks
+# an index belonging to no bond -- a shape this kernel does not handle.
+function _bond_labels(indices, lab::AbstractDict)
+    labels = [get(lab, x, 0) for x in indices]
+    return all(!=(0), labels) ? labels : nothing
+end
+
+# The *unnormalised* message along `edge`, or `nothing` when the kernel does not apply. Split out
+# because `vertex_scalar` wants the same contraction and has to know whether it ran.
 function _blocked_message(alg::Algorithm"blocked", bp_cache::AbstractBeliefPropagationCache, edge)
     v = src(edge)
-    tn = network(bp_cache)
-    layers = _blocked_layers(tn, v, edge)
+    layers = _blocked_layers(network(bp_cache), v, edge)
     isnothing(layers) && return nothing
-    T, Bt, le, le_bra = layers.ket, layers.bra, layers.le_ket, layers.le_bra
+    K, B, le, le_bra = layers.ket, layers.bra, layers.le_ket, layers.le_bra
 
+    # Messages are read as (ket leg, bra leg); a boundary-MPS cache stores something else.
     ms = incoming_messages(bp_cache, v; ignore_edges = (reverse(edge),))
-    length(ms) == 2 || return nothing          # only the degree-3 vertex is specialised
-    # Each message has to be a plain rank-2 tensor: the kernel reads them as matrices oriented
-    # (ket leg, bra leg). A boundary-MPS cache stores a message as several tensors, or as one with
-    # more than two indices, and would otherwise reach `only(setdiff(...))` below and throw. That
-    # was unreachable while only `update` called this; `vertex_scalar` routes every cache here.
     all(m -> m isa ITensor && length(inds(m)) == 2, ms) || return nothing
+    all(m -> length(commoninds(m, K)) == 1, ms) || return nothing
 
-    is = collect(inds(T))
-    # One ket leg per incoming message. A message sharing none or several would make the
-    # alignment below ambiguous, so it is checked rather than left to `only` to throw.
-    all(m -> length(commoninds(m, T)) == 1, ms) || return nothing
-    legs = [only(commoninds(m, T)) for m in ms]
+    is = collect(inds(K))
+    epos = findfirst(==(le), is)
+    isnothing(epos) && return nothing
+    legs = [only(commoninds(m, K)) for m in ms]
+    bralegs = [only(setdiff(collect(inds(m)), [legs[i]])) for (i, m) in enumerate(ms)]
+    # The layers must stay distinguishable, or the labelling aliases a ket bond onto a bra one.
+    (allunique(legs) && le ∉ legs && isdisjoint(legs, bralegs)) || return nothing
 
-    # Incoming legs in stored order: the block permutation and the closing contraction both
-    # assume l_a precedes l_b in the aligned copy.
-    ord = sortperm([findfirst(==(l), is) for l in legs])
-    la, lb = legs[ord]
-    ma, mb = ms[ord]
+    # Whatever is left on the ket after the message legs and the outgoing leg is a site index.
+    ksites = [i for i in is if i != le && i ∉ legs]
+    isempty(ksites) && return nothing
+    bsites = _bra_sites(layers.sites, ksites)
+    isnothing(bsites) && return nothing
 
-    # Each leg keeps its own dimension. Requiring them equal used to be the single biggest reason
-    # this kernel never ran: any circuit with a truncation cutoff leaves most bonds short of
-    # `maxdim`, and one mismatched leg sent a factor-sized vertex down the six-factor `contract`
-    # path -- which is what it exists to avoid.
-    ka, kb, ke = dim(la), dim(lb), dim(le)
-    nelt = prod(dim, is)
-    rem(nelt, ka * kb * ke) == 0 || return nothing
-    S = nelt ÷ (ka * kb * ke)
-
-    # `clamp` rather than `min`: b must be at least 1 or the block loop gets a zero step. Blocking
-    # is over the outgoing leg, so it is `ke` that bounds it.
-    b = clamp(isnothing(alg.kwargs.b) ? default_blocked_blocksize(ke) : alg.kwargs.b, 1, ke)
-    A = array(T)                                  # dims follow inds(T); a view when dense
-    sitepos = [i for i in eachindex(is) if is[i] ∉ (la, lb, le)]
-    perm = (sitepos..., findfirst(==(la), is), findfirst(==(lb), is), findfirst(==(le), is))
-
-    # The bra is aligned to the *same* axis order as the ket -- site-for-site through the
-    # operator's pairing, and leg-for-leg through each message -- because the closing gemm
-    # contracts them as flat matrices and only their storage order relates them.
-    Barr, Bperm = nothing, nothing
-    ba, bb, be = ka, kb, ke           # a derived bra mirrors the ket's dimensions exactly
-    if !isnothing(Bt)
-        bis = collect(inds(Bt))
-        all(m -> length(commoninds(m, Bt)) == 1, ms) || return nothing
-        blegs = [only(commoninds(m, Bt)) for m in ms][ord]
-        bsites = last(layers.sites)[[findfirst(==(is[i]), first(layers.sites)) for i in sitepos]]
-        bwanted = Index[bsites; blegs; le_bra]
-        all(i -> i ∈ bis, bwanted) && length(bis) == length(bwanted) || return nothing
-        ba, bb, be = dim(blegs[1]), dim(blegs[2]), dim(le_bra)
-        # The two layers share their site space, so the bra's element count must agree.
-        prod(dim, bis) == S * ba * bb * be || return nothing
-        Barr = array(Bt)
-        Bperm = ntuple(i -> findfirst(==(bwanted[i]), bis), length(bwanted))
+    # Ket legs take 1..nm and everything else sits above, matching the order the tensors are listed
+    # in: messages fold into the block one at a time, the bra closes last.
+    nm, ns = length(ms), length(ksites)
+    ketlab, bralab = Dict{Index, Int}(le => -2), Dict{Index, Int}(le_bra => -1)
+    for (i, l) in enumerate(legs)
+        ketlab[l], bralab[bralegs[i]] = i, nm + i
     end
-    d = (ka, kb, ke, ba, bb, be)
+    for (j, s) in enumerate(ksites)
+        # Without an operator the layers are joined directly and share one site bond.
+        ketlab[s] = 2nm + j
+        bralab[bsites[j]] = isnothing(layers.op) ? 2nm + j : 2nm + ns + j
+    end
+    bothlab = merge(ketlab, bralab)   # the messages and the operator straddle both layers
 
-    nlayers = isnothing(Bt) ? 1 : 2
-    s = scratch_buffer!(
-        message_scratch(bp_cache), vec(A), message_scratch_length(S, d, b, nlayers)
+    # A derived bra *is* the ket's array, so it is labelled through the ket's axis order: axis `p`
+    # carries the bra-side partner of `is[p]`. That makes the two bra routes one code path.
+    partner = Dict{Index, Index}(le => le_bra)
+    for (i, l) in enumerate(legs)
+        partner[l] = bralegs[i]
+    end
+    for (j, s) in enumerate(ksites)
+        partner[s] = bsites[j]
+    end
+    bis = isnothing(B) ? [partner[x] for x in is] : collect(inds(B))
+    length(bis) == nm + ns + 1 || return nothing
+    bepos = findfirst(==(le_bra), bis)
+    isnothing(bepos) && return nothing
+
+    ketlabels = _bond_labels(is, ketlab)
+    bralabels = _bond_labels(bis, bralab)
+    mlabels = [_bond_labels(collect(inds(m)), bothlab) for m in ms]
+    oplabels = isnothing(layers.op) ? Int[] :
+        _bond_labels(collect(inds(layers.op)), bothlab)
+    (
+        isnothing(ketlabels) || isnothing(bralabels) || isnothing(oplabels) ||
+            any(isnothing, mlabels)
+    ) && return nothing
+
+    A = array(K)                                  # dims follow inds(K); a view when dense
+    Barr = isnothing(B) ? nothing : array(B)
+    marrays = [array(m) for m in ms]
+    oparr = isnothing(layers.op) ? nothing : array(layers.op)
+
+    # Once per message: it picks the backend *and* whether the closing layer needs aligning.
+    backend = something(
+        get(alg.kwargs, :backend, nothing),
+        TO.select_backend(TO.tensorcontract!, A, A, A)
     )
-    # Carved in the same order `message_scratch_length` sums them.
-    nT = isnothing(Bt) ? S * ka * kb * ke : S * ka * kb * min(b, ke)
-    nbuf = S * b * max(ka * kb, ka * bb, ba * bb)
-    o1 = nT
-    o2 = o1 + nbuf
-    o3 = o2 + nbuf
-    o4 = o3 + be * ke
-    Tp, buf1, buf2 = view(s, 1:o1), view(s, (o1 + 1):o2), view(s, (o2 + 1):o3)
-    outT = view(s, (o3 + 1):o4)
-    Bp = isnothing(Bt) ? nothing : view(s, (o4 + 1):(o4 + S * ba * bb * be))
+    alloc = message_allocator!(message_scratch(bp_cache), A)
 
-    # Orient each message as (ket leg, bra leg) so `transpose` inside the kernel gives the
-    # transpose of that.
-    mat(m, l) = array(m, l, only(setdiff(collect(inds(m)), [l])))
-
-    # The operator matrix has to follow the *aligned* site order, since that is the order the
-    # block's leading axis carries. Rows are the bra's site indices, columns the ket's, so
-    # `opmat * block` sends the ket's site space to the bra's. Skipped entirely when it is the
-    # identity, which is the `‖O‖²` case and the only one the norm network ever sees.
-    opmat = nothing
-    if !isnothing(layers.op)
-        ksites, bsites = layers.sites
-        ord_s = [findfirst(==(is[i]), ksites) for i in sitepos]
-        any(isnothing, ord_s) && return nothing
-        m = reshape(
-            array(layers.op, bsites[ord_s]..., ksites[ord_s]...), S, S
-        )
-        # S x S -- a handful of elements beside the site tensor, so the host round trip that
-        # `isapprox(·, I)` needs (it forms `A - I` by diagonal scalar index) costs nothing.
-        opmat = isapprox(Array(m), LinearAlgebra.I; atol = sqrt(eps(real(float(eltype(m)))))) ?
-            nothing : m
+    # `clamp`, not `min`: b < 1 gives the block loop a zero step.
+    ke = dim(le)
+    bkw = get(alg.kwargs, :b, nothing)
+    b = if isnothing(bkw)
+        _blocked_blocksize(ke, (length(A) ÷ ke) * sizeof(eltype(A)))
+    else
+        clamp(bkw, 1, ke)
     end
 
-    out = blocked_message!(outT, buf1, buf2, Tp, A, perm,
-        mat(ma, la), mat(mb, lb), S, d, b, Bp, Barr, Bperm, opmat)
+    # A non-identity operator and a separate bra are each just one more entry in the network.
+    op_entry = isnothing(oparr) ? () : (oparr,)
+    T = TO.promote_contract(
+        map(eltype, (A, marrays..., op_entry..., (isnothing(Barr) ? () : (Barr,))...))...
+    )
+    out = similar(A, T, (dim(le_bra), ke))
 
-    # `out` is [bra, ket] -- label it rather than transpose. Copy so the message does not
-    # alias the scratch that the next edge overwrites.
-    return itensor(copy(out), le_bra, le)
+    cp = TO.allocator_checkpoint!(alloc)          # the aligned copy is arena-backed too
+    try
+        closer = isnothing(B) ? A : Barr
+        closerlabels = bralabels
+        sliced, slicedim, ketblocklabels = A, epos, ketlabels
+
+        perm = _needs_aligned_closer(backend) ?
+            _closer_align_perm(length(closerlabels), bepos) : nothing
+
+        if !isnothing(perm)
+            pv = collect(perm)
+            closer = _aligned_copy(closer, perm, backend, alloc)
+            closerlabels = bralabels[pv]
+            # A derived bra makes the aligned copy do double duty, so the blocks come out of it. A
+            # separate bra closes instead, leaving the ket to be read one raw slab at a time.
+            if isnothing(B)
+                sliced, slicedim = closer, length(is)
+                ketblocklabels = ketlabels[pv]
+            end
+        end
+
+        tensors = Any[sliced, marrays..., op_entry..., closer]
+        conjs = Bool[false, falses(nm)..., falses(length(op_entry))..., isnothing(B)]
+        net = Vector{Int}[
+            ketblocklabels, mlabels...,
+            (isempty(op_entry) ? () : (oplabels,))..., closerlabels,
+        ]
+
+        blocked_message!(out, tensors, net, conjs, sliced, slicedim, b, backend, alloc)
+    finally
+        TO.allocator_reset!(alloc, cp)
+    end
+
+    # `out` is [bra, ket] -- label it rather than transpose. No copy: it is not arena memory.
+    return itensor(out, le_bra, le)
 end
 
-# `vertex_scalar` is the same contraction the message kernel already performs, closed against the
-# one message the kernel leaves free:
-#
-#     Z(v) = Σ_{lₑ,lₑ'} out[lₑ', lₑ] · m_{w→v}[lₑ, lₑ']
-#
-# where `out` is the unnormalised message along any one edge v→w. Routing it here rather than
-# through `contract` matters because `contract` builds a factor-sized `permutedims` scratch per
-# pairwise step -- measured at 5.0–5.4 factors on a degree-3 vertex, against ~1.2 here -- and
-# `vertex_scalar` is the engine under `freenergy`, `norm_sqr(alg="bp")` and `inner`, so it runs
-# far more often than a message update does.
-#
-# Returns `nothing` whenever the kernel does not apply, so the caller keeps the generic path.
+# `tensoradd!` rather than `permutedims!` so the permute goes through the chosen backend.
+function _aligned_copy(A, perm, backend, alloc)
+    C = TO.tensoralloc_add(eltype(A), A, (perm, ()), false, Val(true), alloc)
+    TO.tensoradd!(C, A, (perm, ()), false, TO.One(), TO.Zero(), backend, alloc)
+    return C
+end
+
+# Z(v) = Σ_{lₑ,lₑ'} out[lₑ', lₑ] · m_{w→v}[lₑ, lₑ'] -- the same contraction, closed against the one
+# message the kernel leaves free. Worth routing here because `contract` holds 5.0-5.4 factors on a
+# degree-3 vertex against ~1.2 here, and this is the engine under `freenergy`/`norm_sqr`/`inner`.
 function blocked_vertex_scalar(bp_cache::AbstractBeliefPropagationCache, v)
     # Same accessor `incoming_messages` uses, so ghost and shared vertices resolve identically.
     in_edges = NamedGraphs.GraphsExtensions.boundary_edges(
@@ -421,7 +387,8 @@ function blocked_vertex_scalar(bp_cache::AbstractBeliefPropagationCache, v)
     isempty(in_edges) && return nothing
     back = first(in_edges)
     out = _blocked_message(
-        Algorithm("blocked"; normalize = false, b = nothing), bp_cache, reverse(back)
+        Algorithm("blocked"; normalize = false, b = nothing, backend = nothing),
+        bp_cache, reverse(back)
     )
     isnothing(out) && return nothing
     closing = message(bp_cache, back)
@@ -436,16 +403,17 @@ function updated_message(
     )
     m = _blocked_message(alg, bp_cache, edge)
     isnothing(m) && return updated_message(
-        set_default_kwargs(Algorithm("contract"; normalize = alg.kwargs.normalize), bp_cache),
+        set_default_kwargs(
+            Algorithm("contract"; normalize = get(alg.kwargs, :normalize, true)), bp_cache
+        ),
         bp_cache, edge
     )
-    if alg.kwargs.normalize
+    if get(alg.kwargs, :normalize, true)
         message_norm = sum(m)
         if !iszero(message_norm)
             m = m / message_norm
         end
     end
-    # No contraction sequence is used, so `seq_changed = false` leaves the sequence cache
-    # untouched.
+    # No contraction sequence is used, so `seq_changed = false` leaves that cache untouched.
     return m, (src(edge) => edge, nothing, false)
 end

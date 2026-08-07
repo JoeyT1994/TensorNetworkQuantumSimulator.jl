@@ -71,6 +71,7 @@ export
     blocked_gates,
     blocked_gates!,
     free_scratch_buffer!,
+    message_arena_stats,
     qr_block_limit,
     qr_block_limit!,
     rescale!,

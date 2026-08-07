@@ -22,7 +22,7 @@ using TensorNetworkQuantumSimulator
 const TNQS = TensorNetworkQuantumSimulator
 using TensorNetworkQuantumSimulator: ITensors, Algorithm, adapt, degree, norm
 
-# Minimal stand-in whose `similar` reports what the scratch Ref held at allocation time.
+# Minimal stand-in whose buffer constructor reports what the scratch Ref held at allocation time.
 mutable struct SpyVec{T} <: AbstractVector{T}
     n::Int
 end
@@ -30,7 +30,9 @@ Base.size(v::SpyVec) = (v.n,)
 Base.getindex(::SpyVec, ::Int) = error("scalar indexing is disallowed")
 const SPY_SEEN = Ref{Any}(nothing)
 const SPY_REF = Ref{Any}(nothing)
-Base.similar(::SpyVec{T}, n::Integer) where {T} = (SPY_SEEN[] = SPY_REF[][]; SpyVec{T}(n))
+# The storage type comes from `similar(_, UInt8, 0)`, the buffer from `Storage(undef, n)`.
+Base.similar(::SpyVec, ::Type{S}, dims::Dims{1}) where {S} = SpyVec{S}(dims[1])
+SpyVec{T}(::UndefInitializer, n::Integer) where {T} = (SPY_SEEN[] = SPY_REF[][]; SpyVec{T}(n))
 
 @testset "Device code paths (JLArray)" begin
     g = named_hexagonal_lattice_graph(2, 2)
@@ -48,30 +50,45 @@ Base.similar(::SpyVec{T}, n::Integer) where {T} = (SPY_SEEN[] = SPY_REF[][]; Spy
         @test !TNQS._is_device_backed(bpc_host)
     end
 
-    # `scratch_buffer!` must drop the old buffer *before* allocating the replacement, or both are
-    # live across the `similar` -- at S=4, χ=1024 that is 32 GiB held while 36 GiB is requested.
-    # Observed directly rather than inferred: this stand-in's `similar` reads the Ref at the exact
-    # moment of allocation, so the assertion is deterministic and involves no GC.
-    @testset "scratch grows without doubling" begin
-        ref = Base.RefValue{Any}(Bool[])
+    # The arena lives in the network's memory space, is reused while it still matches, and on a
+    # rebuild drops the old buffer *before* allocating the replacement. The stand-in's constructor
+    # reads the Ref at the moment of allocation, so that last one is observed, not inferred.
+    @testset "message arena follows the device and is reused" begin
+        ref = Base.RefValue{Any}(nothing)
         SPY_REF[] = ref
-        proto = SpyVec{ComplexF32}(0)
 
-        TNQS.scratch_buffer!(ref, proto, 100)
-        @test length(ref[]) == 100
-        reused = TNQS.scratch_buffer!(ref, proto, 100)   # fits: must not reallocate
-        @test reused === ref[]
+        device = TNQS.message_allocator!(ref, adapt(JLArray, zeros(ComplexF32, 4)))
+        @test device isa TNQS.TensorOperations.BufferAllocator
+        @test !(device.buffer isa Array)                 # device prototype -> device arena
+        @test TNQS.message_allocator!(ref, adapt(JLArray, zeros(ComplexF32, 8))) === device
 
+        host = TNQS.message_allocator!(ref, zeros(ComplexF32, 4))
+        @test host !== device
+        @test host.buffer isa Vector{UInt8}
+
+        # A third storage family forces one more rebuild, and that is the one the spy watches.
         SPY_SEEN[] = :never_called
-        TNQS.scratch_buffer!(ref, proto, 400)            # grows: must reallocate
-        @test length(ref[]) == 400
-        @test SPY_SEEN[] !== :never_called               # the grow really did allocate
-        @test SPY_SEEN[] == Bool[]                       # ...with the old buffer already dropped
+        spied = TNQS.message_allocator!(ref, SpyVec{ComplexF32}(0))
+        @test spied.buffer isa SpyVec{UInt8}
+        @test SPY_SEEN[] !== :never_called               # the rebuild really did allocate
+        @test SPY_SEEN[] === nothing                     # ...with the old arena already dropped
     end
 
     # The default hook is a no-op, so nothing in the package depends on CUDA.
     @testset "free_scratch_buffer! default" begin
         @test TNQS.free_scratch_buffer!(zeros(ComplexF32, 4)) === nothing
+    end
+
+    # Pre-permuting the closing layer is a property of the backend, not of the network.
+    @testset "closer alignment follows the backend" begin
+        TO = TNQS.TensorOperations
+        @test TNQS._needs_aligned_closer(TO.StridedBLAS())
+        @test TNQS._needs_aligned_closer(TO.StridedNative())
+        @test !TNQS._needs_aligned_closer(TO.cuTENSORBackend())
+        @test TO.select_backend(
+            TO.tensorcontract!, zeros(ComplexF32, 2, 2), zeros(ComplexF32, 2, 2),
+            zeros(ComplexF32, 2, 2)
+        ) isa TO.StridedBackend
     end
 
     @testset "exchange buffers" begin
