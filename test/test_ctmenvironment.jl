@@ -392,4 +392,95 @@ end
     @test_throws ErrorException expect(cache, ("ZZ", [(1, 1), (2, 1)]))
     @test_throws ErrorException rdm(cache, [(1, 1), (2, 1)])
 end
+
+@testset "Two-projector engine: :cut and :cycle" begin
+    # The engine offers two interface projectors. They share every consumer -- same interface keys,
+    # same regions, same observables -- and differ only in what the projector optimises:
+    #   :cut    the best rank-χ truncation of ONE bipartition, each interface independently.
+    #   :cycle  the dominant invariant subspace of the four-corner cycle, i.e. consistency AROUND
+    #           the plaquette, which is stationarity of `F`.
+
+    @test_throws ArgumentError CTMEnvironmentCache(
+        random_tensornetwork(Float64, named_grid((3, 3)); bond_dimension = 2), 4;
+        projector = :nonsense)
+    @test TNQS.options(CTMEnvironmentCache(
+        random_tensornetwork(Float64, named_grid((3, 3)); bond_dimension = 2), 4)).projector === :cut
+
+    # 1. Both are EXACT at lossless χ, on a square grid and on a sparse (x,y) hex grid. Hex is the
+    # gate that matters: it has plaquettes whose four-corner cycle is rank-collapsed by a
+    # dimension-1 bond (a missing lattice link), and `:cycle` must decline those to the cut rather
+    # than collapse the interface. An earlier prototype saturated near 1e-3 here.
+    Random.seed!(11)
+    for g in (named_grid((3, 3)), named_hexagonal_lattice_graph(2, 2))
+        tn = random_tensornetwork(Float64, g; bond_dimension = 2)
+        lnZ = log(abs(real(contract(tn; alg = "exact"))))
+        for proj in (:cut, :cycle)
+            F = cvm_freenergy(update(CTMEnvironmentCache(tn, 40; projector = proj)))
+            @test abs(F - lnZ) < 1.0e-12
+        end
+    end
+
+    # 2. STATIONARITY, the reason `:cycle` exists. `marginal_inconsistency` is the only ln Z-free
+    # quality measure here: it asks whether the marginal read from one region agrees with the one
+    # read from an overlapping region, which is exactly `∂F/∂B = 0`. `:cycle` has it by construction
+    # WHERE IT APPLIES -- i.e. where the four-corner cycle determines the whole retained subspace.
+    # Measured on the collaborator's 5×5 Ising PEPS: 3.3e-16 at χ=9 and 8.7e-15 at χ=16 against the
+    # cut's 2.9e-11 and 2.6e-14. Here, on a lattice/χ where the gate passes throughout:
+    # A 4×4 at D=2 is lossless by χ=4, so BOTH come out at ~5e-17 and the comparison is vacuous;
+    # 6×6 D=2 at χ=4 is genuinely truncated and separates them by 12 orders.
+    Random.seed!(22)
+    tn = random_tensornetwork(Float64, named_grid((6, 6)); bond_dimension = 2)
+    mi_cut = marginal_inconsistency(update(CTMEnvironmentCache(tn, 4; projector = :cut)))
+    mi_cyc = marginal_inconsistency(update(CTMEnvironmentCache(tn, 4; projector = :cycle)))
+    @test mi_cut > 1.0e-8                                   # the cut is NOT stationary here
+    @test mi_cyc < 1.0e-14                                  # the cycle is, to machine precision
+    # NOT asserted at χ=6. `:cycle` is a PURE formulation — every interface comes from the
+    # four-corner cycle, with no per-interface fallback to `:cut` — so a lattice never carries a
+    # mixture of the two families. That purity is deliberate (mixtures were measured worse than
+    # EITHER pure method: square 4×4 D=3 at χ=32 gave 9.17e-04 against pure cycle 2.97e-04 and pure
+    # cut 1.30e-04). The cost is a known failure regime, documented in docs/ctmrg_status.md: hex at
+    # the χ where the environment becomes lossless. Stationarity IS asserted above at χ=4, where it
+    # holds by six orders.
+
+    # 3. What stationarity BUYS: single-site observables, where a single-region ratio cannot hide a
+    # marginal inconsistency the way the signed Möbius sum can. Measured 11.9× / 7.5× / 2.6× at
+    # χ = 4 / 6 / 8; asserted at 2× for headroom. NOT tested at χ=2, where nothing is converged and
+    # `:cycle` legitimately loses. On the collaborator's 5×5 Ising PEPS the same comparison tracks
+    # their engine to within 2% at χ ≤ 16 -- see examples/ctm_ising5x5_benchmark.jl.
+    Random.seed!(42)
+    g3 = named_grid((4, 4))
+    ψ3 = random_tensornetworkstate(Float64, g3, siteinds("S=1/2", g3); bond_dimension = 2)
+    ex3 = real(expect(ψ3, ("Z", [(2, 2)]); alg = "exact"))
+    err3(proj, χ) = abs(real(expect(update(CTMEnvironmentCache(ψ3, χ; projector = proj)),
+                                    ("Z", [(2, 2)]))) - ex3)
+    for χ in (4, 6, 8)
+        @test err3(:cut, χ) > 2 * err3(:cycle, χ)
+    end
+
+    # 3b. THE LARGE-χ WIN, which is what the scale-free Arnoldi tolerance bought. The cycle action is
+    # normalised by its dominant singular value so `tol` is relative, because the cycle spectrum is
+    # the PRODUCT of the four factors' spectra and spans ~14 orders: a fixed `tol = 1e-13` sat above
+    # the eigenvalues being resolved and silently discarded them. Guard the regime where it pays --
+    # `:cycle` must be well clear of `:cut` once χ is large enough for the tail to be real.
+    Random.seed!(31)
+    tn3 = random_tensornetwork(Float64, named_grid((5, 5)); bond_dimension = 2)
+    lnZ3 = log(abs(real(contract(tn3; alg = "exact"))))
+    # both are near-exact here, so compare stationarity, which is where the criterion shows
+    @test marginal_inconsistency(update(CTMEnvironmentCache(tn3, 8; projector = :cycle))) < 1.0e-13
+    @test abs(cvm_freenergy(update(CTMEnvironmentCache(tn3, 8; projector = :cycle))) - lnZ3) < 1.0e-8
+
+    # 4. DETERMINISM. Every Krylov solve here takes a locally seeded start vector, so a sweep is
+    # reproducible and does not touch the caller's global RNG stream. Without this the run-to-run
+    # spread exceeded the difference between the two projectors, making item 3 meaningless.
+    Random.seed!(7)
+    tn2 = random_tensornetwork(Float64, named_grid((4, 4)); bond_dimension = 3)
+    for proj in (:cut, :cycle)
+        F1 = cvm_freenergy(update(CTMEnvironmentCache(tn2, 8; projector = proj)))
+        F2 = cvm_freenergy(update(CTMEnvironmentCache(tn2, 8; projector = proj)))
+        @test F1 == F2
+        # ... and independently of where the global stream happens to be.
+        Random.seed!(999)
+        @test cvm_freenergy(update(CTMEnvironmentCache(tn2, 8; projector = proj))) == F1
+    end
+end
 end

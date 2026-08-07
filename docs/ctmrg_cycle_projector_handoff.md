@@ -1,3 +1,41 @@
+> **SUPERSEDED — see [`ctmrg_status.md`](ctmrg_status.md) for the current state.** The cycle projector has since LANDED as a selectable option,
+> `CTMOptions(; projector = :cut | :cycle)`. See "LANDED: the two-option engine" at the end of
+> `docs/finite_ctmrg_design.md` for the current state. Corrections to what follows:
+>
+> * §1's "worth 1–2 orders on observables" is **overstated**. The Python `⟨X⟩` error at χ=32 quoted
+>   in §2 and §6 as `8.149e-14` is wrong; measured directly it is `1.33e-12`. The χ=32 comparison
+>   favours the CUT projector by 5.6×. The χ≤16 rows are all correct.
+> * §2's open problem is **SOLVED**. `:cycle` at χ=32 on the 5×5 now reaches `⟨X⟩` 4.8e-14 — 155×
+>   better than the cut and **28× better than their engine** — with `marg` 3.4e-16, and sparse grids
+>   reach machine precision. The floor was OUR OWN `Arnoldi(tol = 1e-13)`, which is absolute on the
+>   residual and therefore sat ABOVE the eigenvalues being resolved: the cycle spectrum is the product
+>   of the four factors' spectra (verified, 3.5e-14 predicted vs 4.2e-14 measured), so `s_22/s_1` is
+>   already 4.0e-12. Normalise the action by its dominant singular value and use `tol = 1e-16`. `:cycle` now beats `:cut` at every χ (χ=32: 3.88e-12 against
+>   7.39e-12) and is stationary at every χ. The fix: `schursolve` closes its Krylov space at ~18-22
+>   of a requested 32 because the four-fold cycle spectrum is ~the 4th power of a corner's, and those
+>   unresolved directions are the whole question. `:cycle` now beats or equals `:cut` across a
+>   five-lattice scan and is stationary to 1e-16 where it applies, but only because it DECLINES a
+>   plaquette whose loop is bottlenecked. Filling the shortfall with deflated cut directions is superb
+>   on the 5×5 (χ=32 3.88e-12) and catastrophic on sparse grids, so §2's `k_cyc / k_b` observation was
+>   RIGHT and I was wrong to dismiss it. The stabiliser turned out to be ZERO-PADDING the retained
+>   index to a uniform width (bookkeeping, not physics: it stops `kres` fluctuations from resizing the
+>   interface and destroying the gauge every sweep). With it, `F` is stationary at every χ on the 5×5
+>   (`marg` 3-5e-16) and the saturation is gone. FIVE fillers are now falsified (random, dominant-cut,
+>   null-space-of-M, inherited-verbatim, inherited-plus-refinement) — see the design doc's table for
+>   each failure mode. Note §2's own "hex marg stuck at 1.1e-2 / 7.4e-3 / 7.1e-3" is REPRODUCED
+>   exactly by the fifth, which identifies it as whitening-amplified residue after M contracts onto
+>   the cycle block. Note the union simply
+>   declined every interior plaquette at χ=32 and so was never actually exercised there.
+> * §4's "Single per-plaquette rank" row is correct that hex collapses, but such plaquettes now
+>   DECLINE to the cut (with a warning) rather than saturating, and hex is exact at lossless χ. Its
+>   "Union with oblique deflation" row is **superseded** — deflation against the RESOLVED cycle rank
+>   is what makes the route work.
+> * §6's reproduction recipe is **wrong and will silently degrade your data**: the npz pickles jax
+>   arrays, so `configure_jax()` must run BEFORE `np.load` or every tensor comes back float32. That
+>   shifts `ln Z` by 7.5e-8 and cost a full session's detour.
+> * §5's gate suite is now largely mechanised in the "Two-projector engine" testset, and the engine
+>   is deterministic run to run (it was not before, by more than the effect under test).
+
 # Handoff: the cycle (stationary) projector for finite CTMRG
 
 Branch `Finite_CTMRG`, tip `4ea3d8e`. 163 tests green (`test/test_ctmenvironment.jl`, ~4 min).

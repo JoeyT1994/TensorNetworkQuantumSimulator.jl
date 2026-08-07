@@ -1,3 +1,9 @@
+> **⚠️ START WITH [`ctmrg_status.md`](ctmrg_status.md).** This file is the full chronological record:
+> it is long, it contains claims that were later retracted (marked as such where they appear), and
+> several of its measured tables predate fixes that changed them. The status doc is the current
+> state, the current numbers, and the current next steps. Come back here for the derivations and for
+> the record of what was tried and failed.
+
 # Finite CTMRG with CVM regions — design and current state
 
 ## Goal
@@ -813,7 +819,7 @@ transfer, after the two bugs below):
 | 4 | 1.62e-04 *(wrong sign)* | **1.70e-05** | 9.5× |
 | 9 | 1.90e-07 | **5.72e-09** | 33× |
 | 16 | 5.30e-09 | **3.91e-10** | 14× |
-| 32 | 3.20e-11 | **2.46e-13** | 130× |
+| 32 | 3.20e-11 | 2.46e-13 | 130× |   ⚠️ SUSPECT: the ⟨X⟩ twin of this row was wrong by 16×
 
 **Set against the `ln Z` table, this is a clean split** and it confirms Zaletel's hypothesis:
 
@@ -840,7 +846,7 @@ objection does not apply:
 | 4 | 1.515e-04 | **5.218e-05** | 2.9× |
 | 9 | 4.240e-07 | **5.132e-08** | 8.3× |
 | 16 | 6.255e-09 | **9.279e-10** | 6.7× |
-| 32 | 7.403e-12 | **8.149e-14** | 91× |
+| 32 | 7.403e-12 | 8.149e-14 | 91× |   ⚠️ WRONG: re-measured, theirs is 1.33e-12, so 5.6× to **us**
 
 Same direction on both operators, at every χ. The margin is smaller on `⟨X⟩` at small and moderate χ
 (2.9–8.3× rather than 9.5–33×) but widest of all at χ=32, where ours plateaus at 7.4e-12 while theirs
@@ -1782,3 +1788,228 @@ Monotonicity in χ (validation step 4, the projector canary) now holds for the s
 `5.2e-3, 1.6e-3, 6.5e-6, ~1e-14` on 4×4 D=3 at χ = 4, 6, 8, 12 — while the greedy pass is still
 visibly non-monotone (`1.4e0, 2.5e-1, 6.1e-2` with a bump at χ=4, and on the PEPS norm a flat
 ~2.5e-3 floor at every χ that the sweep breaks straight through).
+
+### LANDED: the two-option engine — `projector = :cut` or `:cycle`
+
+`CTMOptions(; projector = :cut | :cycle)` selects the interface projector; `cycle_fill` tunes the
+one sub-choice inside `:cycle`. Both land on the same interface keys, so every consumer — the sweep,
+the regions, `cvm_freenergy`, `expect`, `rdm` — is shared, and `:cut` is the graceful fallback for
+any plaquette `:cycle` declines. Two passes in `sweep_vertex_environments`, the cut pass backfilling
+whatever the cycle pass left unset. 180 tests green, new testset "Two-projector engine".
+
+**Verified head-to-head**, 5×5 Ising PEPS D=3, `⟨X⟩` error against `alg="exact"`, their engine
+measured *here* through `contract_Z11((X·t, t), A_local, c_local)` rather than quoted:
+
+| χ | `:cut` | `:cycle` | their engine | `marg` `:cut` → `:cycle` |
+|---|---|---|---|---|
+| 4 | 1.52e-04 | **5.18e-05** | 5.22e-05 | 2.0e-07 → 2.8e-09 |
+| 9 | 4.24e-07 | **5.13e-08** | 5.13e-08 | 2.9e-11 → **3.3e-16** |
+| 16 | 6.26e-09 | **9.30e-10** | 9.28e-10 | 2.6e-14 → **8.7e-15** |
+| 32 | 7.39e-12 | 7.39e-12 | 1.33e-12 | 6.4e-17 → 6.4e-17 |
+
+`:cycle` matches their engine to within 2% at χ ≤ 16 and is stationary to machine precision there.
+At χ=32 the gate (below) declines and the result equals the cut.
+
+⚠️ **Correction to the older tables.** The Python `⟨X⟩` entry at χ=32 recorded as `8.149e-14` is
+wrong; measured, it is **1.33e-12**. The `⟨Z⟩` table's `2.46e-13` / "130×" was never re-measured and
+should be assumed to carry the same error.
+
+#### LANDED: zero-pad the retained index to a uniform width
+
+`kres` — the rank `schursolve` actually resolves — fluctuates from sweep to sweep and from plaquette
+to plaquette (measured 1–4 on heavy-hex, 18–22 on the 5×5 interior). Every such change RESIZES the
+interface, which breaks `_ctm_align`'s dimension guard, throws away the gauge, and hands the next
+sweep a basis it cannot compare with the last. **That is the instability underneath the whole cycle
+route**, and it is why five different fillers all failed in five different ways.
+
+The fix is bookkeeping, not physics: build the biorthogonal pair at `kres`, then embed it in a
+uniform-width index with the remaining columns exactly ZERO. `Π = P_A P_B` still has rank `kres`, so
+every region value is identical to simply shrinking — but the index dimension stops moving. This is
+what their fixed-χ storage plus explicit `rank` field buys them, and the reason it looks like a silly
+implementation detail is that it *is* one; it just happens to be load-bearing. The padding must be
+applied AFTER `_ctm_biorth`, never before — whitening a pair with null columns inverts a singular
+overlap, the `S^(-1/2)` amplification `qr_cutoff` exists to guard against.
+
+Result on the 5×5, `⟨X⟩` error and stationarity:
+
+| χ | `:cut` | `:cycle` | their engine | `marg`, `:cycle` |
+|---|---|---|---|---|
+| 9 | 4.24e-07 | **5.13e-08** | 5.13e-08 | **3.3e-16** |
+| 16 | 6.26e-09 | **9.11e-10** | 9.28e-10 | **3.3e-16** |
+| 32 | **7.39e-12** | 5.24e-11 | 1.33e-12 | **4.5e-16** |
+
+**`F` is now stationary at every χ with the cycle applied everywhere** — 3–5e-16 throughout, where
+before χ=32 only looked stationary because the plaquettes were declining to the cut. χ=32 also
+improved from 1.16e-10 (shrink) to 5.24e-11. And the saturation is gone: heavy-hex now runs
+3.7e-06 → 1.3e-10 from χ=8 → 32, improving rather than degrading.
+
+**Honest remaining gaps** — this is stabilised, not finished:
+
+| | `:cut` | `:cycle` | |
+|---|---|---|---|
+| 5×5 χ=32 `⟨X⟩` | 7.39e-12 | 5.24e-11 | 7× behind the cut, 40× behind their engine |
+| heavy-hex χ=32 `⟨Z⟩` | 1.11e-16 | 1.34e-10 | cut wins outright on sparse grids |
+| square 4×4 D=3 χ=8 `⟨Z⟩` | 5.23e-03 | 5.86e-02 | 11× behind; `marg` 2.9e-03, not stationary |
+| hex 4×4 χ=32 | 5.55e-17 | 1.28e-09 | `marg` 1.9e-05, not stationary |
+
+So stationarity holds on the 5×5 at every χ but NOT uniformly across lattices, and the cut still wins
+on sparse grids and on random D=3. The next step is the one the five-filler table points at: a **block
+Arnoldi on a χ-wide warm-started seed, taking the top-k Ritz vectors without a convergence
+requirement** — which is what their `ritz_rank` of 29–32 actually is, and which the uniform padded
+width is now the precondition for.
+
+**Status, stated plainly: `F` is stationary where the gate passes, and not where it declines.** Full
+stationarity at every χ and lattice is NOT achieved.
+
+### FIXED: the engine was irreproducible run to run
+
+Every Krylov solve took its start vector from the **global** RNG (`eigsolve` via an explicit
+`randn`, `svdsolve` via KrylovKit's internal default). Measured spread across identical runs: `⟨X⟩`
+at χ=16 over 8.1e-10 – 9.3e-10, `|F − ln Z|` at χ=32 over 8.9e-16 – 6.2e-15. That is larger than the
+difference between the two projectors, i.e. **the comparison above was not measurable before this
+was fixed.** All three sites now draw from a locally seeded `Xoshiro` (`_ctm_startvec`, and a
+per-plaquette seed in `_ctm_cycle_projectors`), which also means a sweep no longer perturbs the
+caller's `Random.seed!`. Verified bit-identical across runs and independent of global stream
+position.
+
+### ⚠️ The reference values ARE correct — and how they were nearly discarded
+
+`ln⟨ψ|ψ⟩ = -6.217866847854575` and `⟨X⟩ = 0.916900598128483` are right, now confirmed by numpy and
+ITensors at 3.6e-15 / 2.2e-16 **on a verified-good transfer**.
+
+I spent most of a session concluding they were wrong by 7.5e-8 and 2.1e-9, and that their `Z()` was
+a defective estimator. That was entirely an artefact of my own export. **The npz PICKLES JAX
+ARRAYS**, so `np.load(..., allow_pickle=True)` runs jax on unpickle and, without x64 enabled,
+returns everything as **float32** (`0.24756516516` against the true `0.24756516631`).
+`configure_jax()` must run *before* `np.load`. Avoiding jax in the export script does not dodge
+trap 2 of the handoff — **it triggers it**, and my script carried a comment asserting the opposite.
+
+Every cross-check I ran then agreed, because numpy, ITensors, brute force and their own loader were
+all reading the same degraded bytes. What finally broke it was running *their* engine on a small
+random network where the exact answer was independently constructible: it matched brute force to
+0.0–3.6e-15, which no defective estimator could. `_compute_Z` (`ctm_primitives.py:276`) *is* an
+inclusion–exclusion functional, `ΣZ11 − ΣZ01 − ΣZ10 + ΣZ00` — that observation was correct and is
+worth knowing — but it converges to the exact answer, as a Möbius sum must.
+
+The lesson is sharper than "recompute on the far side of the transfer": that is what I did, four
+times. **Validate the transfer against a case whose answer you can construct independently of the
+transfer**, and treat any discrepancy at the 1e-8 level on float32-capable data as a dtype bug until
+proven otherwise. `examples/ctm_ising5x5_benchmark.jl` now asserts both reference values, so a
+degraded export fails loudly instead of surfacing as a physics result.
+
+### THE ACCURACY FLOOR WAS OUR OWN ARNOLDI TOLERANCE — worth 590×
+
+Both engines appeared to floor on observables (ours 5.2e-11 at χ=32, theirs 1.33e-12, against an
+`ln Z` that reached 4.4e-15). The cause is a **fourth-power dynamic-range squeeze**, and it is now
+measured rather than argued.
+
+**The cycle spectrum is the product of the four factor spectra.** On the 5×5 at χ=32, for an
+under-resolved plaquette:
+
+```
+cycle   s_k/s_1 :  1 → 4.4e-09 (k=10) → 4.0e-12 (k=22) → 4.2e-14 (k=32)
+factors s_32/s_1:  2.25e-04, 6.39e-04, 4.75e-04, 5.17e-04   →  product 3.5e-14
+```
+
+`3.5e-14` against a measured `4.2e-14` — the four-fold product spends three quarters of float64's
+dynamic range, leaving ~4 digits of usable corner spectrum.
+
+**And the tolerance sat above the spectrum it was resolving.** `Arnoldi(tol = 1e-13)` is ABSOLUTE on
+the residual, so with `s_22/s_1 = 4.0e-12` the solver declared an invariant subspace at k≈19-22 while
+directions out to k=32 were still four orders above machine epsilon. The projector silently discarded
+them, and that — not the criterion, not the rank rule, not any filler — was the floor.
+
+**Fix:** normalise the cycle action by its dominant singular value (five power iterations; the
+invariant subspace is scale-invariant, so it costs nothing) and the tolerance becomes relative. Then
+`tol = 1e-16`:
+
+| 5×5, χ=32 | `:cut` | `:cycle` tol 1e-13 | 1e-15 | 1e-16 | **normalised + 1e-16** | their engine |
+|---|---|---|---|---|---|---|
+| `⟨X⟩` err | 7.39e-12 | 5.24e-11 | 7.56e-13 | 8.87e-14 | **4.77e-14** | 1.33e-12 |
+| `lnN` err | 4.4e-15 | 1.52e-11 | 2.58e-13 | 2.13e-14 | **1.07e-14** | — |
+| `marg` | 6.4e-17 | 4.5e-16 | 4.2e-16 | 4.2e-16 | **3.4e-16** | — |
+
+**155× better than our cut projector and 28× better than their engine, while staying stationary.**
+χ=9 and χ=16 are unchanged and still match their engine (5.132e-08 exactly; 9.277e-10 against 9.279e-10).
+
+Sparse grids improve just as sharply, and the earlier saturation is gone entirely:
+
+| `⟨Z⟩` err, χ=32 | `:cut` | `:cycle` before | `:cycle` now |
+|---|---|---|---|
+| heavy-hex 2×2 D=2 | 1.11e-16 | 1.34e-10 | **0.00** (exact) |
+| hex 4×4 cplx D=2 | 5.55e-17 | 1.28e-09 | **3.89e-16** |
+| square 4×4 D=3, χ=8 | 5.23e-03 | 5.86e-02 | **6.55e-03** |
+
+**Dead end recorded: factor-norm balancing.** The idea that motivated this — rescaling the four
+corners so a badly-scaled product stops losing range — has nothing to fix. Measured spread of the
+four factor norms is only 2.2× (median, 8.9× worst), because the C/T blocks are already renormalised
+at build. Osborne-style *diagonal* balancing was therefore not attempted either; the squeeze is
+intrinsic to the spectrum being a fourth power, not to scaling.
+
+**What remains.** Two weak spots, both now narrow:
+
+* heavy-hex at χ=8: 3.7e-06 against a cut that is exact (1.11e-16). Here `kcyc = min(χ, narrowest
+  bond) = 4`, so the loop is STRUCTURALLY bottlenecked and the extra directions come from padding
+  rather than from the criterion. This is the case the `G`-based projector should address (below).
+* square 4×4 D=3: 2.97e-04 against the cut's 1.30e-04 at χ=32, ~2.3×.
+
+**Still to try: partial Schur on `G` rather than the four-corner cycle.** Same stationarity condition
+(`[Π, Gᵀ] = 0`), but `G = Σ_R c_R E_R / Z_R` is a **sum**, so there is no fourth-power squeeze and no
+per-bond bottleneck — exactly the two things that limit the remaining cases. `_ctm_gradient` (38
+lines), `_ctm_schur_projector` (49) and `_ctm_carriers` are recoverable from `783fb28`, and their
+dependencies `_ctm_region_desc`/`_ctm_block` are still live. It was rejected once, but that was
+measured before the engine was made reproducible run-to-run, when the spread between runs exceeded
+the effect. NOT yet attempted.
+
+### ⚠️ RETRACTED: the "structural bottleneck" explanation of `:cycle` on sparse grids
+
+Several sections above attribute `:cycle`'s weakness on hex/heavy-hex to `kcyc = min(χ, narrowest
+bond)` bottlenecking the loop below what the interfaces carry. **Measured, that is backwards.** At
+χ=8 on heavy-hex the cut keeps rank 1–4 at interfaces of raw dimension 8/16/32 — those interfaces
+genuinely have that rank, so the cut is lossless and exact (1.1e-16) — while the cycle keeps 8. The
+cycle keeps MORE, not fewer.
+
+What is actually true: the cycle map's numerical rank there is **1** (spectrum `1.0, 0.0, 0.0, 0.0`),
+so the loop pins one direction and propagation supplies the rest, spanning an arbitrary subspace.
+
+This also retracts the reading of the `G`-projector experiment: `G` getting heavy-hex exactly was
+taken as confirming the bottleneck diagnosis, and it cannot confirm a mechanism that is not there.
+`G`'s heavy-hex result stands as a measurement; its interpretation does not.
+
+Three consequences of the corrected picture were tested and all fail — do not retry:
+
+| attempt | result |
+|---|---|
+| truncate to the cycle's numerical rank (their `CTM_eig_cutoff` analogue) | much worse: heavy-hex χ=32 `0.00 → 2.0e-06`, hex χ=8 `3.9e-08 → 2.2e-03` |
+| independent per-bond eigensolves (their stated robustness trick) | byte-identical — where the cycle is rank-deficient the independent solve cannot converge `kcyc` either and falls back to propagation |
+| defer to the cut on non-truncating interfaces | neutral to worse (heavy-hex χ=32 `0.00 → 1.1e-16`, hex χ=8 `marg` 4.6e-12 → 1.1e-09) |
+
+The open question is therefore narrower and better posed than before: **when the cycle map's rank is
+far below the interface's, what should supply the remaining directions?** Propagation currently does,
+and it is arbitrary. Every local rule tried so far (five fillers, plus the three above) fails.
+
+### TRIED AND FALSIFIED: extracting the cycle subspace from `range(M)` instead of the eigen ranking
+
+On sparse grids the four-corner map is nearly NILPOTENT — measured on hex, per-factor ranks 4–5 but
+only ONE nonzero eigenvalue, with the product of the factors' own `s₂/s₁` at ~1e-07 (far above eps,
+so degeneracy and not precision). `schursolve(…, :LM)` therefore pins one direction and calls the
+rest invariant. Since `range(M)` is itself `M`-invariant (`M·Mx = M²x ∈ range(M)`) with dimension
+`rank(M)`, the subspace we want exists and is simply not eigenvalue-ranked — this looked like exactly
+the "schur vs eig matters for very non-Hermitian networks" case Zaletel names.
+
+Implemented via `svdsolve` on the matrix-free action, with two triggers. Both fail.
+
+| trigger | result |
+|---|---|
+| switch whenever the eigen spectrum is degenerate (`nnz < kcyc`) | 5×5 χ=16 regressed 9.28e-10 → 1.95e-09, losing the match with their engine |
+| switch only when the eigen route UNDER-SPANS (`rank(M) > nnz`) | byte-identical — the 5×5 under-spans too, so it does not discriminate |
+
+Multi-seed against pure eigen, the second variant is worse essentially everywhere: square 5×5 D=2 at
+χ=8 `4/6 med 2.52 → 2/6 med 0.19`; square 4×4 D=3 at χ=4 `2/6 med 0.63 → 0/6 med 0.03`; and it does
+NOT fix hex χ=16 across seeds (0/2, median 0.00) even though seed 1001 alone looked fixed
+(1.15e-11 → 3.33e-16).
+
+**The lesson, now stated three ways from three experiments: the loop's spectrum does not tell you
+what the interface needs, and neither does its range.** Dropping the low-eigenvalue directions is
+worse, keeping arbitrary ones is worse, and re-ranking by singular value is worse. The eigen-ranked
+invariant subspace is better for accuracy even while it spans fewer directions than `rank(M)`.
