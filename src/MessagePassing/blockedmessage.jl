@@ -126,6 +126,12 @@ function blocked_message!(
         out, tensors, network, conjs, sliced, slicedim, b, backend, alloc
     )
     _BLOCKED_MESSAGE_HITS[] += 1
+    # Checked here rather than left to the backend: Strided and Base promote mixed operands quietly,
+    # so a caller that stops promoting still passes every CPU test and only fails on cuTENSOR, which
+    # dispatches on the exact eltype triple and throws a `KeyError` naming no tensor. Once per
+    # message over a handful of operands, not once per block.
+    @assert allequal(eltype, (out, tensors...)) "blocked message got mixed eltypes \
+        $(eltype.((out, tensors...))); operands must be promoted before they reach the backend"
     steps, nslots = _contraction_plan(network, conjs, (-1, -2))
     slots = Vector{Any}(undef, nslots)
     slots[eachindex(tensors)] .= tensors
@@ -239,6 +245,11 @@ function _bond_labels(indices, lab::AbstractDict)
     return all(!=(0), labels) ? labels : nothing
 end
 
+# `===` so an operand already at `T` is returned untouched rather than copied. Broadcast rather than
+# `convert(AbstractArray{T}, x)` so this stays on whatever device the operand lives on and
+# materialises views and reshapes into something cuTENSOR will accept.
+_to_eltype(::Type{T}, x::AbstractArray) where {T} = eltype(x) === T ? x : convert.(T, x)
+
 # The *unnormalised* message along `edge`, or `nothing` when the kernel does not apply. Split out
 # because `vertex_scalar` wants the same contraction and has to know whether it ran.
 function _blocked_message(alg::Algorithm"blocked", bp_cache::AbstractBeliefPropagationCache, edge)
@@ -309,6 +320,36 @@ function _blocked_message(alg::Algorithm"blocked", bp_cache::AbstractBeliefPropa
     marrays = [array(m) for m in ms]
     oparr = isnothing(layers.op) ? nothing : array(layers.op)
 
+    # A non-identity operator and a separate bra are each just one more entry in the network.
+    T = TO.promote_contract(
+        map(
+            eltype,
+            (
+                A, marrays..., (isnothing(oparr) ? () : (oparr,))...,
+                (isnothing(Barr) ? () : (Barr,))...,
+            )
+        )...
+    )
+
+    # Every operand has to *arrive* at `T`, not just the output. cuTENSOR dispatches on the exact
+    # `(eltype(A), eltype(B), eltype(C))` triple and defines no mixed real/complex contraction, so
+    # one real tensor anywhere in the network -- a message seeded from a `delta`, an identity
+    # operator, a site tensor no complex gate has touched yet -- fails as
+    # `KeyError: (ComplexF32, Float32, ComplexF32)` from inside the backend, naming nothing.
+    #
+    # The `mul!`/`permutedims!` kernel this replaced promoted implicitly, so the requirement is new
+    # and nothing upstream enforces it. Converting is free in the common case (`===` returns the
+    # argument untouched) and only ever copies the operands that are actually narrower, which are
+    # normally the small ones: messages are chi^2, an on-site operator is S x S.
+    #
+    # Ahead of the block-size estimate below, which reads `sizeof(eltype(A))`: promoting after it
+    # would leave every slab twice the size it budgeted for.
+    A = _to_eltype(T, A)
+    marrays = [_to_eltype(T, m) for m in marrays]
+    oparr = isnothing(oparr) ? nothing : _to_eltype(T, oparr)
+    Barr = isnothing(Barr) ? nothing : _to_eltype(T, Barr)
+    op_entry = isnothing(oparr) ? () : (oparr,)
+
     # Once per message: it picks the backend *and* whether the closing layer needs aligning.
     backend = something(
         get(alg.kwargs, :backend, nothing),
@@ -325,11 +366,6 @@ function _blocked_message(alg::Algorithm"blocked", bp_cache::AbstractBeliefPropa
         clamp(bkw, 1, ke)
     end
 
-    # A non-identity operator and a separate bra are each just one more entry in the network.
-    op_entry = isnothing(oparr) ? () : (oparr,)
-    T = TO.promote_contract(
-        map(eltype, (A, marrays..., op_entry..., (isnothing(Barr) ? () : (Barr,))...))...
-    )
     out = similar(A, T, (dim(le_bra), ke))
 
     cp = TO.allocator_checkpoint!(alloc)          # the aligned copy is arena-backed too

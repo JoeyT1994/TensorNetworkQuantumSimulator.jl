@@ -239,4 +239,83 @@ end
     end
 end
 
+
+# cuTENSOR dispatches on the exact `(eltype(A), eltype(B), eltype(C))` triple and defines no mixed
+# real/complex contraction, so the kernel has to promote every operand before handing it over. This
+# is invisible without a deliberate test: Strided and Base promote quietly, so a network that is
+# real in one place and complex everywhere else contracts fine on CPU and dies on a GPU as
+# `KeyError: (ComplexF32, Float32, ComplexF32)` from inside the backend, naming no tensor.
+#
+# The mix is reachable in practice. `datatype(tn)` reduces with `promote_type`, which has no rule
+# for storage types, so `promote_type(Vector{ComplexF32}, Vector{Float64})` falls back to `typejoin`
+# and yields a bare `Vector` -- and `adapt` to a free eltype is a no-op, so `default_message` seeds
+# a real `delta` into an otherwise complex network. A real on-site operator does the same.
+@testset "Blocked message promotes mixed eltypes" begin
+    g = named_hexagonal_lattice_graph(2, 2)
+    verts = collect(vertices(g))
+    sinds = TNQS.Dictionary{eltype(verts), Vector{<:TNQS.ITensors.Index}}(
+        verts,
+        [TNQS.ITensors.Index[
+            TNQS.ITensors.Index(2, "p$v"), TNQS.ITensors.Index(2, "a$v")
+        ] for v in verts]
+    )
+    psi = random_tensornetworkstate(ComplexF32, g, sinds; bond_dimension = 4)
+
+    # A real identity operator layer against a complex ket -- what a `QuadraticForm` holds on any
+    # vertex the perturbation does not touch.
+    identnet = TNQS.TensorNetworkState(
+        TNQS.Dictionary(
+            verts,
+            [reduce(
+                    *,
+                    TNQS.ITensors.ITensor[
+                        TNQS.ITensors.denseblocks(TNQS.ITensors.delta(s, TNQS.prime(s)))
+                            for s in sinds[v]
+                    ]
+                ) for v in verts]
+        )
+    )
+    psir = random_tensornetworkstate(Float32, g, sinds; bond_dimension = 4)
+
+    cases = [
+        ("complex net, real messages", psi, true),
+        ("real operator, complex ket", TNQS.QuadraticForm(psi, identnet), false),
+        ("real op + real messages", TNQS.QuadraticForm(psi, identnet), true),
+        # The promotion falling the other way: a real ket under a real operator stays real, so the
+        # kernel must not gratuitously widen either.
+        ("real ket throughout", TNQS.QuadraticForm(psir, identnet), false),
+    ]
+
+    for (label, net, realise_messages) in cases
+        bpc = TNQS._seed_default_messages!(TNQS.BeliefPropagationCache(net))
+        if realise_messages
+            for e in TNQS.edges(bpc)
+                m = message(bpc, e)
+                m isa TNQS.ITensors.ITensor || continue
+                TNQS.setmessages!(
+                    bpc, [e],
+                    [TNQS.ITensors.itensor(real.(TNQS.array(m)), TNQS.inds(m)...)]
+                )
+            end
+        end
+        hits0 = TNQS._BLOCKED_MESSAGE_HITS[]
+        worst, nedges = 0.0, 0
+        for e in TNQS.edges(bpc)
+            nedges += 1
+            # Without the promotion this throws the kernel's own mixed-eltype assertion, which is
+            # the CPU-visible stand-in for the backend's `KeyError`.
+            b, _ = TNQS.updated_message(
+                TNQS.set_default_kwargs(TNQS.Algorithm("blocked"), bpc), bpc, e
+            )
+            c, _ = TNQS.updated_message(
+                TNQS.set_default_kwargs(TNQS.Algorithm("contract"), bpc), bpc, e
+            )
+            tb, tc = b isa Vector ? only(b) : b, c isa Vector ? only(c) : c
+            worst = max(worst, norm(tb - tc) / norm(tc))
+        end
+        @test TNQS._BLOCKED_MESSAGE_HITS[] - hits0 == nedges    # $label never fell back
+        @test worst < 1.0e-5                                    # $label agrees with contract
+    end
+end
+
 end
