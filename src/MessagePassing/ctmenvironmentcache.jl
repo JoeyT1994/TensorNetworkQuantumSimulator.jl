@@ -67,15 +67,20 @@ engine measured here through `contract_Z11` at matched χ:
 
 | χ | `:cut` | `:cycle` | their engine | `marg`, `:cut` → `:cycle` |
 |---|---|---|---|---|
-| 4 | 1.52e-04 | **8.28e-05** | 5.22e-05 | 2.0e-07 → 1.8e-04 |
+| 4 | 1.52e-04 | **4.77e-05** | 5.22e-05 | 2.0e-07 → 1.8e-04 |
 | 9 | 4.24e-07 | **5.13e-08** | 5.13e-08 | 2.9e-11 → **3.0e-16** |
 | 16 | 6.26e-09 | **9.28e-10** | 9.28e-10 | 2.6e-14 → **2.4e-16** |
 | 32 | 7.39e-12 | **4.86e-14** | 1.33e-12 | 6.4e-17 → **1.8e-16** |
 
-`:cycle` beats `:cut` at every χ here, matches their engine at χ=9 and 16, and is **27× ahead at
-χ=32**. It is stationary to machine precision for χ ≥ 9 — but NOT at χ=4, where a fully resolved
-rank-4 invariant subspace is a worse projector than an under-resolved one. The criterion loses at
-severe truncation; that is a property of the criterion, not a bug.
+`:cycle` beats `:cut` at every χ here (3.2× / 8.3× / 6.7× / 152×) and matches or beats their engine
+at every χ, by 27× at χ=32. It is stationary to machine precision for χ ≥ 9 — but NOT at χ=4, where a
+fully resolved rank-4 invariant subspace is a worse stationary point than an under-resolved one. That
+is a property of the criterion at severe truncation, not a bug; restricting `krylovdim` fixes it at
+χ=4 but costs accuracy at χ=8, so it is deliberately not done (see docs/ctmrg_status.md).
+
+`:cycle` is also markedly CHEAPER: at 8×8 D=3 it is 15.7× faster per sweep than `:cut` for identical
+retained dimensions, because it is matrix-free where `:cut` forms dense QR factors of the enlarged
+corners.
 
 ⚠️ **This is one physical state. On random states the picture is far more mixed** — measured over 6
 seeds per cell, `:cycle` is a large win on hex (median 86× at χ=4, 531× at χ=8) and roughly a coin
@@ -907,15 +912,27 @@ function _ctm_align(pr, ins, prev)
     return (ITensor(Am * R, io, wo) * co, ITensor(R' * Bm, wo, io) * co, wo)
 end
 
-# Largest relative change of any block between two states, over blocks that share an index set.
-# Meaningful only with `opts.gauge` on; returns `nothing` while the bases are still bootstrapping
-# (the first ~3 sweeps), since `ins` carries the lower level's index and stability propagates up.
+# Largest relative change of any block between two states. `nothing` means NO DISTANCE EXISTS, not
+# "converged" — `update` refuses to certify on it. Meaningful only with `opts.gauge` on.
+#
+# A block that appeared, vanished, or changed index set has DEFINITIVELY changed, so it aborts the
+# comparison instead of being dropped from the sample. Skipping structurally-changed blocks silently
+# measured a subset, and the subset is biased: interface widths stabilise from the bulk outward, so
+# the blocks that compare early are exactly the ones that settled early. Measured, square 6×6 D=2 at
+# χ=16 with `:cycle`: sweep 2 compared 28 of 220 blocks, found them equal to 1.0e-15, and stopped —
+# while sweep 3, at 64 of 220, still moved by 1.0e-1. Full coverage arrived only at sweep 6. That
+# stop left the whole boundary ring ~3 orders wrong (corner ⟨Z⟩ error 3e-3 against 5e-6 once allowed
+# to run), χ-INDEPENDENTLY, which is what made it read as a projector defect rather than an early
+# exit. `:cut` escaped only by chance — its 28-block subset still read 2.6e-1 at sweep 2 — and
+# `:cycle` walked into it precisely BECAUSE it settles the bulk in one sweep.
 function _ctm_statedist(a::CTMVertexEnvironments, b::CTMVertexEnvironments)
     n = 0; worst = 0.0
+    (length(a.C) == length(b.C) && length(a.T) == length(b.T)) || return nothing
     for (d1, d2) in ((a.C, b.C), (a.T, b.T)), (k, ta) in d1
         tb = _ctm_nn(d2, k)
-        (isnothing(ta) || isnothing(tb)) && continue
-        Set(inds(ta)) == Set(inds(tb)) || continue
+        isnothing(ta) && isnothing(tb) && continue
+        (isnothing(ta) || isnothing(tb)) && return nothing
+        Set(inds(ta)) == Set(inds(tb)) || return nothing
         na = norm(ta)
         na > 0 && (worst = max(worst, norm(ta - tb) / na))
         n += 1

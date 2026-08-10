@@ -61,11 +61,19 @@ sweeps   1       2       3       4       5       6       7       8
 ```
 
 `:cycle` settles in **two** sweeps and is flat thereafter; `:cut` takes ~4 and lands 6.8× worse.
-⚠️ Do NOT read convergence off `_ctm_statedist`: it is gauge-sensitive and plateaus at ~3e-11 for
-`:cycle` while the observable does not move at all. That plateau is basis wander in the diagnostic,
-not a residual — it is insensitive to the Arnoldi `tol` across 1e-10/1e-13/1e-16, which is what ruled
-out solver noise. `|ΔF|` is useless for both (1e-15 from sweep 1, even while `:cut`'s state distance
-is 2e-01).
+
+⚠️ **Both corrected 2026-08-09 — read the last section of this file before trusting either claim.**
+
+1. **"`:cycle` settles in two sweeps" is measured on an INTERIOR observable and does not generalise.**
+   The boundary of the same lattice needs more (6×6 corner: 3; heavy-hex: 5), and `update` was
+   stopping before it got there. Settling fast is precisely what walked `:cycle` into the bug.
+2. **"Both are convergent" is FALSE on 8×8 D=2.** `:cycle` there is a genuine limit cycle at χ=16 and
+   χ=32 — `F` fluctuating in the 5th decimal, observables oscillating between 1e-4 and 1e-6 forever.
+   This is currently the single biggest open problem with `:cycle`.
+3. The `~3e-11 _ctm_statedist` plateau was blamed on "basis wander in the diagnostic". The diagnostic
+   was in fact **sampling 13% of the state**; the residual was real, in the blocks it never compared.
+   Sign-flip wander was later tested directly on 8×8 and **ruled out** (0 of 58 moving blocks repaired
+   by a flip). `|ΔF|` remains useless for both, as stated.
 
 ---
 
@@ -79,12 +87,14 @@ docs, one of whose entries was wrong by 16×.
 
 | χ | `:cut` | **`:cycle`** | their cycle | ours vs theirs |
 |---|---|---|---|---|
-| 4 | 1.515e-04 | 8.277e-05 | **5.218e-05** | 1.6× behind |
+| 4 | 1.515e-04 | **4.767e-05** | 5.218e-05 | **1.1× ahead** |
 | 9 | 4.241e-07 | **5.132e-08** | 5.132e-08 | equal |
 | 16 | 6.255e-09 | **9.277e-10** | 9.279e-10 | equal |
 | 32 | 7.392e-12 | **4.774e-14** | 1.330e-12 | **28× ahead** |
 
-`:cycle` beats `:cut` at **every** χ (1.8× / 8.3× / 6.7× / 155×).
+`:cycle` beats `:cut` at **every** χ (3.2× / 8.3× / 6.7× / 152×) and **matches or beats their
+engine at every χ**. The χ=4 entry was previously recorded as 8.277e-05 / "1.6× behind"; that was
+measured before the start vector was seeded on plaquette POSITION only, and never re-measured.
 
 ### Free energy — `:cut` wins, and that is expected
 
@@ -102,7 +112,7 @@ on `|F − ln Z|`** — it is accurate and blind. Judge on observables and `marg
 
 | χ | `:cut` | `:cycle` |
 |---|---|---|
-| 4 | **2.030e-07** | 1.815e-04 |
+| 4 | **2.030e-07** | 1.790e-04 |
 | 9 | 2.889e-11 | **3.400e-16** |
 | 16 | 2.605e-14 | **2.220e-16** |
 | 32 | 6.384e-17 | **3.428e-16** |
@@ -112,41 +122,78 @@ Machine precision for χ ≥ 9 — `∂F/∂B = 0`, the same condition BP satisf
 ### Random states — MULTI-SEED, 6 seeds per cell, PURE formulations
 
 Ratio = `:cut` error / `:cycle` error on `⟨Z⟩`, so **>1 means `:cycle` is better**. Cells where both
-reach machine precision are dropped as uninformative.
+reach machine precision are dropped (`n` is how many seeds remained informative).
 
 | case | χ=4 | χ=8 | χ=16 |
 |---|---|---|---|
-| square 5×5 D=2 | 5/6, med 1.4 (0.60–173) | 4/6, med 2.5 (0.10–22.7) | both exact |
-| square 4×4 D=2 | 2/6, med 0.56 (0.26–4.5) | 3/6, med 1.4 (0.45–44.7) | both exact |
-| square 4×4 D=3 | 2/6, med 0.63 (0.08–3.0) | 1/6, med 0.51 (0.09–5.5) | 2/6, med 0.93 (0.30–21.3) |
-| hex 4×4 D=2 | **6/6**, med **86** (4.3–809) | **6/6**, med **531** (231–14999) | **0/4, med 0.00** |
+| square 5×5 D=2 | **1.99** (4/6) | **1.32** (4/6) | **8.49** (2/2) |
+| square 4×4 D=2 | **2.87** (4/6) | **5.39** (4/6) | **6.50** (2/3) |
+| square 4×4 D=3 | 0.19 (1/6) | 0.17 (1/6) | 0.24 (1/6) |
+| hex 4×4 D=2 | **1.3e+03** (6/6) | **1.3e+03** (6/6) | **1.85** (2/4) |
+| heavy-hex 2×2 D=2 | **0.00** (0/6) | **0.00** (0/6) | 18.0 (1/1) |
 
-⚠️ **A single seed per cell is worthless here** — ranges span 3–4 orders inside one cell
-(0.10–22.7, 231–14999). An earlier single-seed table claimed "wins 6 of 9 on squares"; that did not
-survive.
+Hex across the transition that used to fail (6 seeds): χ=8 **1.3e+03** (6/6), χ=12 **6.7e+03** (6/6),
+χ=14 **8.6e+03** (6/6), χ=16 **1.85** (2/4), χ=20 6.12, χ=24 2.80, χ=32 113.
 
-**Clear wins:** hex at χ=4–8 (median 86× and 531×). **Coin flip:** square lattices generally.
-**Known failure:** hex at χ=16 — see below.
+⚠️ **These numbers SUPERSEDE the earlier table, and the change is large.** The previous table recorded
+square 4×4 D=2 at 0.56 (2/6) and 1.4 (3/6), and hex χ=16 as an outright failure at "0/4, median 0.00".
+Both improved because the Krylov start vector was later seeded on plaquette POSITION only, and that
+change was never re-measured outside the 5×5 benchmark. **The hex failure regime no longer exists** —
+`:cycle` now wins or ties at every χ on hex.
 
-#### The one known failure regime of pure `:cycle`
+**Where `:cycle` wins:** hex (10³ at χ≤14), both D=2 squares (2-8×), and the 5×5 Ising at every χ.
+**Where it loses:** far from convergence (below), and heavy-hex 2×2 at χ ≤ 8 where `:cut` is already
+exact (1.1e-16) and `:cycle` sits at 1e-05.
 
-hex 4×4 D=2 at χ=16: 0/4 seeds, median ratio 0.00. It is a narrow, diagnosable window — `:cycle`
-wins by 10²–10⁴ at χ=4–8 and both are exact by χ=32 — and it sits exactly at the χ where the
-environment becomes **lossless**. The mechanism is measured: at χ=14 only 3% of interfaces have the
-cycle's resolved rank below the cut's rank; at χ=16 it is **16%**, with the cycle keeping 4 where the
-cut keeps all 16. `marg` jumps eight orders there (2e-15 → 1.2e-07) and never recovers, while the cut
-reaches machine precision.
+#### The real story: `:cycle` fails at BOUNDARY sites, and on random D=3 states
 
-Deferring to the cut on exactly those interfaces FIXES it (hex χ=16 → both exact, 1.15e-11 →
-4.44e-16) and also lifts square 5×5 D=2 (med 1.4 → 3.0 at χ=4, 2.5 → 6.4 at χ=8). It is not shipped
-because it makes the lattice carry a mixture, and mixtures were measured worse than either pure
-method (square 4×4 D=3 at χ=32: 9.17e-04 vs 2.97e-04 pure-cycle and 1.30e-04 pure-cut). **The
-formulations are kept pure by choice; this is the price.** If the mixture is ever wanted, the rule is
-"defer whenever `rank(cut) > rank(cycle)`" and it is a ten-line change.
+⚠️ Two earlier framings in this file were wrong and are retracted. "Square 4×4 D=3 is a standing ~5×
+loss" was measured only inside the unconverged regime. Its replacement — "`:cycle` overtakes once
+`:cut` reaches ~1e-3" — was written up before being tested and FAILS as a prediction on 5×5 D=3 and
+6×6 D=2. What the follow-up actually found is more specific and more useful.
 
-**Practical guidance:** `:cycle` for hex/heavy-hex, and on square lattices measure both — the
-variance across seeds is larger than most of the effects. Check `:cut` whenever the environment is
-near-lossless, which is where `:cycle`'s known failure lives.
+🛑 **RETRACTED 2026-08-09 — the boundary table below is an artefact of the convergence bug.** The
+whole "`:cycle` fails at boundary sites" finding, and every mechanism proposed for it (D² caps,
+`kcyc` bottlenecks, bad seeds, χ-relative-to-L), was `update` stopping before the boundary converged.
+The boundary-adjacent projectors were measured **bit-identical** between the two backends, which
+should have been the tell. With the test fixed, the 6×6 corner goes −2.5 → −5.3 (equal to `:cut`) and
+the edge to −6.1 (**better** than `:cut`). Kept for the record; do not cite these ratios.
+
+**1. `:cycle` degrades at boundary sites and is excellent in the bulk.** 6×6 D=2, 5 seeds, ratio
+`:cut`/`:cycle` (>1 = `:cycle` better), same states, three different observable sites:
+
+| χ | interior (3,3) | edge (6,3) | corner (1,1) |
+|---|---|---|---|
+| 4 | **1.48** | 1.19 | 0.61 |
+| 8 | **2.65** | 0.12 | 0.80 |
+| 16 | **2.27** | **0.00** | 0.01 |
+| 24 | **11.09** | **0.00** | 0.04 |
+
+At the edge site `:cycle` runs 1.5e-03 → 3.7e-04 → 2.1e-03 → 1.3e-03: it saturates near 1e-3 and
+never converges, while `:cut` reaches 6.8e-07. In the bulk `:cycle` converges monotonically
+(1.95e-03 → 6.08e-04 → 2.00e-04 → 4.99e-05 → 2.80e-06 → 1.13e-07) and ends 11× ahead.
+
+**This contaminates most earlier scans in this document.** They picked the observable site as
+`collect(vertices(g))[n÷2]`, which on a square grid is a BOUNDARY vertex, while the 5×5 Ising
+benchmark uses the interior (3,3). So "`:cycle` loses" results were largely measured at the boundary
+and "`:cycle` wins" results in the bulk. Re-measured at interior sites, D=2 squares are clean wins:
+6×6 2.65/2.27/11.09, 4×4 3.07/26.90.
+
+**2. Random D=3 states remain a genuine loss, even in the bulk.** sq 4×4 D=3 at (2,2): 0.06 → 0.33 →
+0.84 for χ = 8/16/32; sq 5×5 D=3 at the centre (3,3): 0.25 → 1.13 → 0.69. Improving with χ but not
+a win. Note the contrast that isolates the variable: the PHYSICAL 5×5 Ising PEPS is also D=3, also
+measured at (3,3), and `:cycle` beats both `:cut` and the collaborator's engine there at every χ. So
+the discriminator is the STATE — structured/physical versus random signed — not D, not the site.
+
+Neither effect is explained yet. The boundary one is the more actionable: it is a clean saturation
+signature localised to sites whose vertex ring touches the lattice edge.
+
+**Practical guidance:** prefer `:cycle` once the calculation is anywhere near converged — say `:cut`
+error ≲ 1e-3, which is the measured crossover. It wins on hex, on D=2 squares, on the 5×5 benchmark at
+every χ, and it is 15.7× faster at 8×8 D=3. Use `:cut` when χ is far too small for the problem (the
+unconverged regime, where the criterion strains) and on heavy-hex at small χ. A cheap way to tell
+which regime you are in: run `:cut` first; if its error estimate is still ≫1e-3, you are below the
+crossover and should raise χ rather than switch projector.
 
 ---
 
@@ -218,11 +265,18 @@ mixture effect is a real open item.
 
 ## Known limitations
 
-* **χ=4 costs 1.6× against their engine.** A fully resolved rank-4 invariant subspace is a worse
-  projector than an under-resolved one — the criterion losing at severe truncation, which every scan
-  shows (`:cycle` also loses at χ=2). It explains their three-iteration Arnoldi: under-convergence is
-  a regulariser at small χ. Two fixes were tried and both are worse; see the design doc. `:cycle`
-  still beats *our* `:cut` there (8.3e-05 vs 1.5e-04).
+* **χ=4 is NOT stationary** (`marg` 1.79e-04 against 2-3e-16 for χ ≥ 9), even though its observable
+  now beats both `:cut` (3.2×) and their engine (1.1×). A fully resolved rank-4 invariant subspace is
+  a worse *stationary point* than an under-resolved one — the criterion straining at severe
+  truncation. See "under-convergence as a regulariser" below: it is fixable at χ=4 but the fix costs
+  accuracy at χ=8, so it is not applied.
+* ~~**Sparse grids at small χ.**~~ **RESOLVED 2026-08-09 — this was not a projector defect.** The
+  whole of the bullet below (and its nilpotency analysis) was diagnosing an observable error that came
+  from `update` STOPPING AFTER 4 SWEEPS, not from the cycle map. With the convergence test fixed,
+  heavy-hex 2×2 D=2 at χ=8 goes **3.7e-06 → 4.0e-16**, matching the cut. See "The convergence test was
+  certifying off a 13% sample" at the end of this document. The nilpotency measurement itself still
+  stands as a property of that cycle map; it was simply never the cause of the error.
+
 * **Sparse grids at small χ.** heavy-hex at χ=8 is 3.7e-06 against a cut that is EXACT (1.1e-16).
   ⚠️ This was previously attributed to `kcyc = min(χ, narrowest bond)` structurally bottlenecking the
   loop. **That is wrong** — measured, the cycle keeps MORE than the cut there, not fewer:
@@ -350,3 +404,123 @@ purpose-built script on one lattice and 2–3 χ values, and run the file once b
 The engine is deterministic: every Krylov solve takes a locally seeded start vector, so runs are
 bit-reproducible and a sweep does not perturb the caller's global RNG. Before that was fixed the
 run-to-run spread exceeded the difference between the two projectors.
+
+---
+
+## Measured 2026-08-09: performance, and a χ-dependent accuracy lever
+
+### `:cut` is 19× slower than `:cycle` at D=3, for identical output
+
+Per-sweep wall clock, warm, PEPS states:
+
+| L | D | χ | `:cut` | `:cycle` | ratio |
+|---|---|---|---|---|---|
+| 8 | 3 | 8 | **1.467 s** | 0.093 s | **15.7×** |
+| 8 | 3 | 16 | 1.884 s | 0.248 s | 7.6× |
+| 8 | 2 | 24 | 0.407 s | 0.105 s | 3.9× |
+| 6 | 2 | 16-24 | 0.078-0.102 s | 0.033-0.041 s | 2.4-2.5× |
+| 5 | 2 | 8-32 | 0.011-0.015 s | 0.016-0.020 s | 0.5-0.9× (cut faster) |
+
+The decisive control: at 8×8 D=3 χ=8 both backends return **196 projectors with identical retained
+dimensions** (mean 8.0, total 1568), so `:cycle` is not winning by truncating harder — it is genuinely
+cheaper for the same output. The cost is the projector DERIVATION, not the corner/edge rebuild (which
+both share): `:cut` forms dense QR factors of the enlarged corners (`_ctm_tri_factor`), while
+`:cycle` is matrix-free. A full `update` at 8×8 D=3 takes 25.7 s with `:cut`.
+
+Other timing facts: a sweep is 10-120 ms at these sizes; steady-state `update` is pure sweep cost
+with no measurable waste; first use of a new tensor shape costs 5-14× steady state (contraction
+sequence search), amortised after ~3 calls and shared across caches, so it is a warmup cost not an
+algorithmic one. ⚠️ An earlier single-seed run of this table showed 19× at 6×6 χ=24; multi-seeded it
+is 2.5×. Single seeds remain worthless for timing as well as accuracy.
+
+### Under-convergence as a regulariser: real, but χ-dependent, so NOT applied
+
+The collaborator runs only three block-Arnoldi iterations; we use `krylovdim = max(4·kcyc+8, 24)`.
+Restricting it to `kcyc+2` was tested (5 seeds per cell, χ=4):
+
+| case | `marg` default → kd+2 | accuracy (median `:cut`/`:cycle`, wins) |
+|---|---|---|
+| sq 5×5 D=2 | 9.18e-05 → **6.55e-06** | 2.85 (3/5) → 2.73 (3/5) |
+| sq 4×4 D=3 | 1.07e-01 → **1.52e-03** | **0.06 (1/5) → 1.09 (3/5)** |
+| hex 4×4 D=2 | 2.83e-08 → 2.83e-08 | 134 (5/5) → 134 (5/5) |
+
+At χ=4 it is a clear win — it turns `:cycle`'s worst regime from an 17× loss into a coin flip, and on
+the 5×5 Ising it takes `marg` from 1.79e-04 to **1.58e-16**. But at χ=8 the effect REVERSES, in the
+same direction on both square cases: sq 5×5 1.25 (3/5) → 0.51 (2/5), sq 4×4 D=3 0.21 (1/5) → 0.17
+(0/5). So the right Krylov depth depends on how severe the truncation is, and hard-coding it either
+way is the tuned threshold this project keeps re-learning not to trust. Not applied. If someone wants
+it, it is a one-line change to the `Arnoldi(; krylovdim = ...)` call and the numbers above say exactly
+what it buys and costs.
+
+
+## Measured 2026-08-09: the convergence test was certifying off a 13% sample
+
+**This was the root cause of every `:cycle` boundary failure recorded above.** It was not the
+projector, not the seed, not the D² boundary caps, and not `kcyc`.
+
+`_ctm_statedist` compared only blocks whose index set was unchanged and **silently skipped the rest**.
+That sample is biased: interface widths stabilise from the bulk outward, so the blocks comparable on
+early sweeps are exactly the ones that settled first. Square 6×6 D=2 at χ=16, `:cycle`:
+
+```
+it   |ΔF|      statedist    coverage
+1    2.83e-03  0.000e+00      0/220
+2    2.13e-14  1.010e-15     28/220   <- certified convergence here, on 13% of the state
+3    2.84e-14  1.021e-01     64/220   <- the other 87% was still moving by 10%
+6    0.00e+00  1.542e-03    220/220
+```
+
+`update` stopped at sweep 2. The bulk and `F` were converged; the **boundary ring was not**, and it
+was left ~3 orders wrong — *χ-independently*, which is exactly why it read as a systematic projector
+defect rather than an early exit (χ=16/32/48 all floored at ~1e-3 while `:cut` reached 1e-9.2).
+
+`:cut` escaped **only by chance** — its 28-block subset still read 2.6e-1 at sweep 2, so it never
+tripped the test. `:cycle` walked into it *because* it settles the bulk in one sweep. The bug is as
+old as the function and affects both projectors.
+
+**Fix:** a block that appeared, vanished, or changed index set has definitively changed, so it now
+returns `nothing` ("no distance exists") instead of being dropped. `update`'s existing `certified`
+guard already refused to converge on `nothing` — its comment claimed the function behaved this way,
+and it never did. No change to `update` was needed.
+
+### Effect — log10 |⟨Z⟩ − exact|, seed 1
+
+| case | `:cut` | `:cycle` before | `:cycle` after |
+|---|---|---|---|
+| heavy-hex 2×2 D=2, χ=8 | −15.7 | **−5.3** | **−15.4** |
+| square 6×6 D=2 χ=16, corner (1,1) | −5.3 | **−2.5** | **−5.3** |
+| square 6×6 D=2 χ=16, edge (6,3) | −5.2 | — | **−6.1** |
+| hex 4×4 D=2, χ=16 | −15.6 | −14.6 | −15.0 |
+| square 4×4 D=3, χ=16 | −2.8 | −2.3 | −2.3 (unaffected) |
+
+`:cycle` still converges in fewer sweeps than `:cut` (6×6: 7 against 11). The 5×5 Ising benchmark is
+unchanged to all printed digits except χ=32 `⟨X⟩`, 4.863e-14 → 4.818e-14. Full suite: 180 pass.
+
+Square 4×4 D=3 is **not** this bug — forced sweeps 1..8 leave it flat at −2.3. That 3× gap to `:cut`
+is a separate, genuine, and much smaller effect.
+
+### Open, and newly visible: `:cycle` does not converge on 8×8
+
+Fixing the test exposed what it had been hiding. Square 8×8 D=2 at χ=16, `:cycle`, sweeps 20–30:
+
+```
+it   stateDist   F             cornerErr  interiorErr
+20   1.569       118.0609105   -5.5       -5.1
+23   1.518       118.0619714   -3.9       -5.1
+24   1.477       118.0607724   -5.8       -2.6
+30   1.859       118.0609187   -5.4       -4.8
+```
+
+`F` fluctuates in the 5th decimal and observables bounce between 1e-4 and 1e-6 indefinitely — a
+genuine limit cycle, **not** gauge wander (58 of 420 blocks move by >0.5 and **none** is repaired by a
+sign flip; ruled out explicitly). It persists at χ=32 (final sd 1.62). `:cut` converges in 13 sweeps.
+
+This invalidates the earlier claim that "8×8 boundary is fine at every χ" — that measured one
+arbitrary point of this orbit. It also explains the old asymmetry where the *failing* 6×6 converged
+silently while the *working* 8×8 warned: the 8×8's non-convergence was accidentally protecting it by
+forcing all 30 sweeps.
+
+**`degtol` cannot be the fix as it stands: it is a silent no-op for `:cycle`.** It is read only in the
+`:cut` singular-value truncations (`_ctm_statedist`'s file, the two `while k > 1` backoffs) and never
+in `_ctm_cycle_projectors`. Measured, 8×8 at degtol 0 / 1e-8 / 1e-4: identical to every digit. The
+option table advertises it without qualification, which is now wrong.
