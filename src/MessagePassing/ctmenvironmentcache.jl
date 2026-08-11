@@ -97,11 +97,20 @@ heavy-hex exact both ways — but square 4×4 **D=3 is 0.04**, i.e. `:cycle` los
 recovering only to 0.35 by χ=16. The discriminator is the STATE (structured versus random signed),
 not D and not the observable site. Never choose between these on a single configuration.
 
-⚠️ **`:cycle` is NOT a convergent algorithm on larger lattices.** Square 8×8 D=2 at χ=16 and χ=32 is a
-genuine limit cycle: `F` fluctuating in the 5th decimal, observables oscillating between 1e-4 and 1e-6
-indefinitely, and `update` exhausting `maxiter` with a state distance near 1.6 (gauge/sign wander was
-ruled out — 0 of 58 moving blocks are repaired by a sign flip). `:cut` converges there in 13 sweeps.
-This is the top open problem; see `docs/ctmrg_status.md`.
+⚠️ **At 8×8 `:cycle`'s sweep does not settle — trust `F`, not observables.** The state distance
+plateaus at a nonzero residual that MORE SWEEPS DO NOT REDUCE (measured to sweep 40: Ising β=0.44
+holds 8.4e-04, a positive random network 5e-01; 6×6 converges in 6). Whether `update` reports
+convergence is just whether that plateau happens to fall below `√(tolerance·max(1,|F|))`.
+`:cut` converges in 8–15 sweeps on the same networks.
+
+`F` IS NOT AFFECTED — `|F − ln Z|` stays at 2e-14 even where the state distance is 0.5, because the
+retained subspace remains invariant and merely rotates, and the Möbius sum cancels ~4000× of the
+residue. A single-site observable reads ONE region with no such cancellation and moves at ~1e-4. So
+at this size `:cycle` is sound for free energies and unreliable for observables; use `:cut` for the
+latter. Not a random-state artefact: random SIGNED networks are the ones that converge, and the
+failures are the positive ones including the physical Ising. Top open problem — see
+`docs/ctmrg_status.md` for the falsified fixes (pivoted QR, under-relaxation) and the live hypothesis
+(the Krylov solve is cold-started from a fixed position-hashed vector every sweep).
 
 `:cut` remains the default because it has no known failure regime and is the longer-tested path.
 It is NOT the cheaper option — see the timing note above.

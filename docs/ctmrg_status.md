@@ -218,15 +218,32 @@ it   stateDist   F             cornerErr  interiorErr
 30   1.859       118.0609187   -5.4       -4.8
 ```
 
-`F` fluctuates in the 5th decimal and observables oscillate between 1e-4 and 1e-6 indefinitely: a
-genuine limit cycle, **not** gauge wander — ruled out explicitly, 58 of 420 blocks move by >0.5 and
-**none** is repaired by a sign flip. It persists at χ=32 (final sd 1.62). `:cut` converges in 13
+(That trace is a `random_tensornetworkstate`, i.e. a DOUBLE-LAYER PEPS norm.) `:cut` converges in 13
 sweeps. This violates the requirement that both formulations be convergent algorithms.
 
-This was previously masked: an earlier note that "8×8 boundary is fine at every χ" was reading one
-arbitrary point of this orbit. The old asymmetry where the *failing* 6×6 converged silently while the
-*working* 8×8 warned is explained — the 8×8's non-convergence was accidentally forcing all 30 sweeps
-and thereby protecting it.
+**It is a PLATEAU, not slow convergence, and not a size threshold.** Measured 2026-08-09 across
+network types at 8×8, χ=16, single layer, state distance by sweep out to 40:
+
+```
+                       sweep 10    20      30      40      verdict
+8×8 random SIGNED       8.7e-10  4.8e-10 1.3e-09 8.2e-10  plateau BELOW tolerance -> "converges" (9 sweeps)
+8×8 random POSITIVE     3.0e-01  7.0e-01 7.1e-01 5.3e-01  plateau
+8×8 Ising β=0.44        9.5e-04  7.2e-04 8.4e-04 8.4e-04  plateau
+8×8 Ising β=0.20        2.5e-03  7.9e-04 1.3e-03 1.1e-03  plateau
+6×6 (all three types)                                     converges, 6 sweeps
+```
+
+Every case plateaus at a nonzero residual; none decreases, so more sweeps never help. The only
+difference between "converges" and "doesn't" is where the plateau sits relative to
+`√(tolerance·max(1,|F|))`. ⚠️ **This kills the hypothesis that it is a random-signed-state pathology**
+(the sister of the D=3 weakness): random signed is the case that *works*, and the failures are the
+POSITIVE networks, including the physical Ising at two temperatures.
+
+**`F` is unaffected throughout** — `|F − ln Z|` is 2e-14 even where the state distance is 0.5. A
+genuine 50% change in the environments could not leave `F` at machine precision, so the wander is in a
+direction `F` barely sees: the retained subspace is still invariant, just rotated, and the Möbius sum
+cancels ~4000× of what is left. A single-region observable has no such cancellation, which is why it
+moves at 1e-4. **So `:cycle` at 8×8 is sound for free energies and unreliable for observables.**
 
 `degtol` cannot be the fix as it stands (see 4).
 
@@ -259,12 +276,38 @@ region weight the loop's spectrum knows nothing about*. The 5×5 control was una
 artefact of picking the observable site as `vertices(g)[n÷2]`, which is a BOUNDARY vertex. At an
 interior site over 8 seeds the effect reverses sign. Same trap as every other retraction in this file.
 
-**Next candidate: under-relaxation.** `:cut` truncates each interface independently; `:cycle` couples
-four interfaces per plaquette through one eigenproblem whose inputs are the previous sweep's
-projectors — a much stronger feedback loop. Persistent oscillation with `F` moving in the 5th decimal
-is the classic signature of an under-damped self-consistent iteration rather than an absent fixed
-point. Mixing the new environment with the old would distinguish the two: if damping converges it, the
-fixed point exists and the iteration was simply unstable. Not yet tried.
+#### TRIED AND FALSIFIED: under-relaxation
+
+Mixing the new environment with the old (`env ← α·new + (1−α)·old` on the C/T blocks, new projectors
+kept). 8×8 Ising β=0.44, χ=16, `:cycle`, state distance by sweep:
+
+| α | sd@10 | sd@20 | sd@30 | sd@40 | \|F−lnZ\| |
+|---|---|---|---|---|---|
+| 1.0 | 9.5e-04 | 7.2e-04 | 8.4e-04 | 8.4e-04 | 2.1e-14 |
+| 0.7 | 2.2e-04 | 3.6e-04 | 4.7e-04 | 2.5e-04 | 7.1e-15 |
+| 0.5 | 5.1e-04 | 8.4e-04 | 4.5e-04 | 6.0e-04 | 7.1e-15 |
+| 0.3 | 1.3e-04 | 1.5e-04 | 2.2e-04 | 2.0e-04 | 7.1e-15 |
+| 0.1 | 7.5e-05 | 5.6e-05 | 5.4e-05 | 3.8e-05 | 2.1e-14 |
+
+Every α plateaus — but the plateau **scales with α** (22× down for a 10× smaller mixing; noisy in the
+middle, clear at the endpoints). **This rules out an unstable feedback loop**, which damping would
+have converged. A residual proportional to the step size is the signature of a FIXED-SIZE
+PERTURBATION INJECTED EVERY SWEEP, which damping attenuates but never eliminates.
+
+#### The remaining hypothesis: the Krylov solve is cold-started
+
+`_ctm_cycle_projectors` seeds `schursolve` from a vector hashed on plaquette POSITION only — identical
+every sweep, by design, because that is what made the engine deterministic. But the cycle matrix
+drifts from sweep to sweep, so a cold restart from a fixed vector can return a different basis for a
+near-degenerate invariant subspace each time: a constant-amplitude kick, exactly what the α-scaling
+shows. It also explains the otherwise puzzling pair of facts — `F` stays exact to 7e-15 (the subspace
+is still invariant, merely rotated, and the Möbius sum cancels the rest) while a single-region
+observable moves at 1e-4 because it reads one region with no cancellation.
+
+**Test:** warm-start each sweep's `schursolve` from the previous sweep's converged subspace instead of
+the position-hashed vector, falling back to the hash on the first sweep and whenever the index width
+changed. This keeps determinism (the seed is still a pure function of the run) while making the
+derivation continuous in the sweep. Not yet tried.
 
 ### 2. Random D=3 states
 
