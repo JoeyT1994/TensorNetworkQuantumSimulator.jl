@@ -216,15 +216,8 @@ _ctm_setenv(cache::CTMEnvironmentCache, env) =
 
 # THE interface projector, via a TRIANGULAR (QR) factorization of each block.
 #
-# There used to be a second, `ρ`-based route (`ρ_L = A†A`, `ρ_R = B†B`, eigendecomposing `ρ_R` back
-# into a square-root factor) selected by a `qr` option, kept as the long-standing reference path.
-# It is GONE. It was sesquilinear by construction — it needs `ρ = A†A` Hermitian PSD to have a
-# square root at all — while the sweep contracts the corners bilinearly, so it was simply wrong for
-# complex tensors and could not be repaired without replacing its machinery (`Aᵀ A` is complex
-# SYMMETRIC and has no PSD root). Its value had been as an independent cross-check, and that job is
-# now done better by the full-rank identity test below, which checks the pair against what it is
-# supposed to satisfy rather than against another implementation that might be wrong the same way.
-# Its `pinv_cutoff` option went with it; `opts.qr_cutoff` is now the only cutoff.
+# A second `ρ`-based route was removed (it was sesquilinear by construction and therefore wrong for
+# complex tensors); `opts.qr_cutoff` is now the only cutoff. See docs/finite_ctmrg_design.md.
 #
 # THE PAIRING IS BILINEAR, NOT SESQUILINEAR. The sweep contracts the two enlarged corners plainly:
 # `Bw * Be` conjugates nothing. So with `A`, `B` the blocks as (rest × interface) matrices, the
@@ -250,16 +243,11 @@ _ctm_setenv(cache::CTMEnvironmentCache, env) =
 # It is NOT an svd of a squared object: `S` is resolved to ~eps relatively rather than ~√eps, which
 # is why `opts.qr_cutoff` can sit at 1e-13.
 #
-# WHY QR AND NOT AN EIGENDECOMPOSITION — GPU / BATCHING, NOT ACCURACY. Measured accuracy-NEUTRAL
-# against the (now removed) ρ route: on 18 moderate-χ configurations (3 seeds single-layer D=3, 2
-# double-layer D=2, 1 double-layer D=3; χ = 4/6/8) and 10 near-lossless ones it matched to 3
-# significant figures, at cutoffs 1e-8/1e-11/1e-13/1e-15 alike. Precision is not the binding
-# constraint: the RETAINED spectrum has median `S_k/S_1` of 1e-1…1e-2 (measured over 200–384 solves
-# per sweep) and 0% of retained directions fall below 1e-8. **χ is the binding constraint, not
-# arithmetic** — and as the removed-symmetry section of the design doc records, that extends to
-# structure too, not just precision. The win is that geqrf/gesvd have batched GPU implementations
-# where batched Hermitian eig support is thin, and a sweep is 200–384 INDEPENDENT tiny
-# factorizations (n ≤ 128) — a batching problem, not a big-linear-algebra one.
+# WHY QR AND NOT AN EIGENDECOMPOSITION — GPU BATCHING, NOT ACCURACY. Measured accuracy-neutral
+# against the removed ρ route across 28 configurations and four cutoffs. χ is the binding constraint,
+# not arithmetic (retained spectrum median `S_k/S_1` ~1e-1…1e-2; 0% below 1e-8). The win is that
+# geqrf/gesvd batch well on GPU where batched Hermitian eig support is thin, and a sweep is 200–384
+# INDEPENDENT tiny factorizations (n ≤ 128) — a batching problem, not a big-linear-algebra one.
 #
 # Remaining GPU blocker: `_ctm_block_matrix` materialises a host `Array`, so every projector
 # round-trips through the CPU. Fixing that is separate work.
@@ -708,91 +696,37 @@ end
 # CONSUMING tensor is the right basis and the one on the producer is the left, so against our
 # west/north = `P_A` convention W and S take `P_A = V_L` while E and N take `P_A = V_R`.
 #
-# NO PADDING. Bonds are rectangular in general (`k_prev · D_layer`, and `k_prev = 1` at the
-# boundary). Their engine pads everything to a fixed χ with a separate `rank` field because a DENSE
-# periodic Schur needs square equal-size factors. We only ever need the ACTION of the cycle on a
-# vector — four matvecs, product never formed — so a matrix-free `schursolve` handles adaptive bonds
-# natively and, ON REAL INPUTS, returns a real orthonormal basis, sidestepping the conjugate-pair
-# handling a dense
-# `ordschur` fails silently on.
+# MATRIX-FREE, so bonds may be rectangular. Bonds are `k_prev · D_layer` in general, and `k_prev = 1`
+# at the boundary. Their engine pads every corner to a fixed χ with a separate `rank` field because a
+# DENSE periodic Schur needs square equal-size factors; we only need the cycle's ACTION on a vector —
+# four matvecs, product never formed — so `schursolve` handles adaptive bonds natively and, on real
+# inputs, returns a real orthonormal basis (no conjugate-pair handling to get wrong).
 #
-# RANK, AND THE HONEST DOMAIN LIMIT. `schursolve` terminates when its Krylov space closes, so the
-# RESOLVED cycle rank `kres` can fall well short of what a bond could hold: the four-fold product's
-# spectrum is roughly the 4th power of one corner's, and on a bottlenecked loop `kcyc` itself is
-# capped by the narrowest bond. Directions past `kres` carry no cycle weight and the criterion says
-# nothing about them.
+# RANK. `schursolve` stops when its Krylov space closes, so the resolved rank `kres` can fall short of
+# what a bond could hold — the four-fold spectrum is ~the 4th power of one corner's. A shortfall is
+# ZERO-PADDED, never declined: `Π = P_A P_B` keeps rank `kres` while the index width stays stable
+# across sweeps (see the padding note in `_ctm_cycle_finish`). Filling the shortfall instead was tried
+# two ways and both degrade with χ — see "the falsified fillers" in docs/finite_ctmrg_design.md.
 #
-# ⚠️ A SHORTFALL IS ZERO-PADDED, NOT DECLINED. An earlier version of this comment described a "gate"
-# that used the cycle only where `kres` fills every bond's target and fell back to the cut otherwise.
-# NO SUCH GATE EXISTS — no decline path compares `kres` against `target(l)`; the padding block below
-# embeds the pair at its resolved rank in a uniform-width index with zero columns, so `Π = P_A P_B`
-# keeps rank `kres` while the index width stays stable across sweeps. The stale text also claimed
-# "at χ=32 most plaquettes decline and the result equals the cut", which the benchmark refutes
-# outright: at χ=32 `:cycle` gives `⟨X⟩` 4.8e-14 against the cut's 7.4e-12.
+# Consequently `F` is stationary only in the subspace the cycle RESOLVES. Measured on the 5×5 that
+# suffices for machine-precision stationarity at every χ ≥ 9 (`marginal_inconsistency` 3.2e-16 /
+# 2.4e-16 / 3.9e-16 at χ = 9 / 16 / 32); χ=4 reads 1.8e-04, where a fully resolved rank-4 invariant
+# subspace is a worse stationary point than an under-resolved one.
 #
-# The shortfall is a real restriction, and filling it is the open problem. Filling it was
-# tried two ways and BOTH are destructive on random states, in the pattern the retracted union
-# showed — `⟨Z⟩` error rising with χ, the systematic-error signature:
+# DOMAIN. A hex/heavy-hex plaquette can have a bond of dimension 1 (a missing lattice link), pinning
+# `kcyc = 1` at every χ. Those plaquettes decline to the cut rather than collapse the interface.
 #
-#   filler                     heavy-hex 2×2 D=2, χ = 2 / 8 / 32        (cut: 5.8e-05 / 1.1e-16 / 1.1e-16)
-#   random (their _stochastic_expand_range)   —                          cold-started here, re-drawn
-#                                                                        every sweep, never settles
-#   deflated cut directions    4.2e-08 / 3.5e-06 / 3.2e-04               DEGRADES with χ
-#
-# The deflated-cut filler is excellent on the collaborator's 5×5 Ising PEPS (χ=32 `⟨X⟩` 3.9e-12
-# against the cut's 7.4e-12, their engine's 1.3e-12) and catastrophic on sparse grids, so it is not
-# landed. Diagnosed mechanism: the merged pair becomes severely ill-conditioned — relative leakage of
-# `M v` outside the kept space reaches 6e12, i.e. `a b` stops being a projector at all — which is the
-# `S^(-1/2)` amplification `qr_cutoff` guards against, not a failure of invariance. A filler chosen
-# INSIDE the numerical null space of `M` (minimising `‖M v‖` over the deflated cut span) would keep
-# invariance without that amplification and is the thing to try next; it is not yet validated.
-#
-# CONSEQUENCE, stated plainly: `F` is stationary only in the subspace the cycle actually RESOLVES.
-# Measured on the 5×5, that is enough for machine-precision stationarity at every χ ≥ 9
-# (`marginal_inconsistency` 3.2e-16 / 2.4e-16 / 3.9e-16 at χ = 9 / 16 / 32). Full stationarity at
-# every χ and every lattice is NOT achieved: χ=4 reads 1.8e-04, where a fully resolved rank-4
-# invariant subspace is a worse stationary point than an under-resolved one.
-#
-# RELATION TO THE RETRACTED UNION. That also merged cut directions in and was withdrawn as
-# unreliable; two things differ and both matter. (1) It seeded the cycle block at
-# `min(χ, narrowest bond)` — 9 at χ=32 — forcing in 9 cycle directions and taking 23 from the cut.
-# Here the cycle block is the rank the eigensolve actually RESOLVED, so the cut only ever supplies
-# directions the cycle genuinely does not span. (2) It was never exercised at the χ where it was
-# judged: it demanded the full requested rank and so DECLINED every interior plaquette at χ=32,
-# falling back to the cut — which is why later removing the union appeared to change nothing.
-#
-# DOMAIN. A hex/heavy-hex plaquette can have a bond of dimension 1 (a missing lattice link), which
-# pins `kcyc = 1` at every χ. Such plaquettes decline and fall back to the cut rather than
-# collapsing the interface; their engine never meets this, requiring all four T-space dims equal.
-#
-# DETERMINISM. `schursolve` needs a start vector, drawn from an RNG seeded PER PLAQUETTE from its
-# POSITION ONLY (`hash((X, Y))`) — never the bond dimensions, which would let the seed move whenever
-# a rank shifted, reintroducing the irreproducibility this exists to remove. Without this the sweep is
-# irreproducible run to run (measured: ⟨X⟩ at χ=16 wandered over 8.1e-10 – 9.3e-10, which is larger
-# than the gap between the two projectors) and useless as a regression target. The local RNG also
-# leaves the caller's global stream untouched.
+# DETERMINISM. The start vector is seeded per plaquette from POSITION ONLY (`hash((X, Y))`) — never
+# the bond dimensions, which would move the seed whenever a rank shifted. Without this the sweep is
+# irreproducible run to run (⟨X⟩ at χ=16 wandered 8.1e-10 – 9.3e-10, wider than the gap between the
+# two projectors). The local RNG leaves the caller's global stream untouched.
+
 # Orthonormal columns for the propagated cycle basis.
 #
-# ⚠️ KNOWN, DELIBERATE, AND MEASURED. `qr` here is UNPIVOTED and there is no rank check, so for a
-# rank-deficient `X` this returns a full-width `Q` whose surplus columns are arbitrary orthogonal
-# completions lying entirely OUTSIDE `range(X)` (a 10×3 matrix of rank 2 gives a third column with
-# `‖(I−P)q₃‖ = 1.0000`). The `size(VR[l], 2) == kres` guard below cannot catch it, because the WIDTH
-# is right regardless of the rank — so the plaquette does not decline and nothing is reported.
-#
-# Replacing it with `qr(X, ColumnNorm())` + truncation to the numerical rank was implemented and
-# measured (2026-08-09, 8 seeds, interior sites, both projectors). NOT LANDED:
-#
-#   * it does NOT fix the 8×8 limit cycle, which was the reason to try it (still 30 sweeps,
-#     final state distance 1.44 against 1.86);
-#   * it is bit-identical on square 4×4 D=3 χ=12, square 5×5 D=3 χ=8 and square 4×4 D=2 χ=8, i.e.
-#     the deficiency essentially never fires;
-#   * where it DOES fire (square 4×4 D=3 at χ=8) it is slightly WORSE — median ratio 0.289 → 0.268,
-#     wins 3/8 → 1/8.
-#
-# That last point is the same result the deflated-cut filler gave above: the out-of-range directions
-# are not junk, they carry region weight the loop's spectrum knows nothing about. Truncating to the
-# cycle's numerical rank belongs to a family already falsified. Kept unpivoted for simplicity, with
-# the risk recorded rather than papered over.
+# ⚠️ `qr` is UNPIVOTED with no rank check: for rank-deficient `X` the surplus columns are arbitrary
+# completions outside `range(X)`, and the width-based guard below cannot detect it. Deliberate —
+# pivoting it was measured (8 seeds) to be bit-identical where the deficiency never fires and slightly
+# WORSE where it does, and it does not fix the 8×8 plateau. See docs/ctmrg_status.md.
 _ctm_orthcols(X, k) = (Q = Matrix(qr(X).Q); Q[:, 1:min(k, size(Q, 2))])
 
 # Whiten a pair so that `B A = I`, via the SVD of their overlap.

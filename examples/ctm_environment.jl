@@ -6,6 +6,7 @@
 # whole-lattice chain: this is meant to supersede boundary MPS, not reuse it.
 #
 #   cache = update(CTMEnvironmentCache(net, χ))   # two-sided sweep to stationarity
+#   CTMEnvironmentCache(net, χ; projector = :cut | :cycle)   # selectable interface projector
 #   cvm_freenergy(cache)                          # F = Σ_v lnZ_v − Σ_e lnZ_e + Σ_p lnZ_p
 #   expect(cache, ("Z", v))                       # single-site observable from v's own ring
 #
@@ -94,12 +95,68 @@ function cvm_vs_boundarymps(; L = 4, D = 3, seed = 5, χs = (4, 6, 8, 12))
     end
 end
 
+# --- 5. THE TWO INTERFACE PROJECTORS ---------------------------------------------
+# Everything above used the default `:cut`. The projector is selectable:
+#
+#     CTMEnvironmentCache(net, χ; projector = :cut)     # default
+#     CTMEnvironmentCache(net, χ; projector = :cycle)
+#
+# `:cut`   optimal rank-χ truncation of ONE bipartition per interface, independently. Not a
+#          stationary point of `F`, so `marginal_inconsistency` stays nonzero.
+# `:cycle` dominant invariant subspace of the four-corner cycle — consistency AROUND the
+#          plaquette, which IS stationarity: the condition BP satisfies.
+#
+# ⚠️ WHICH IS MORE ACCURATE IS DECIDED BY THE STATE, NOT BY χ. So this runs two panels and
+# lets them disagree rather than picking a flattering case. See ctm_projector_survey.jl for
+# the breadth measurement and docs/ctmrg_status.md for multi-seed tables.
+function two_projectors(; L = 6, χs = (2, 3, 4))
+    g = named_grid((L, L))
+
+    # A. What `:cycle` reliably buys: STATIONARITY, on a genuinely truncated network.
+    Random.seed!(22)
+    tn = random_tensornetwork(Float64, g; bond_dimension = 2)
+    lnZ = log(abs(real(contract(tn; alg = "exact"))))
+    @printf("\nA. STATIONARITY — random single-layer %dx%d D=2 (the property `:cycle` exists for)\n", L, L)
+    @printf("   %-4s %-12s %-12s %-12s %-12s\n", "χ", "lnZ cut", "lnZ cyc", "marg cut", "marg cyc")
+    for χ in χs
+        r = map((:cut, :cycle)) do p
+            c = update(CTMEnvironmentCache(tn, χ; projector = p))
+            (abs(cvm_freenergy(c) - lnZ), marginal_inconsistency(c))
+        end
+        @printf("   %-4d %-12.3e %-12.3e %-12.3e %-12.3e\n", χ, r[1][1], r[2][1], r[1][2], r[2][2])
+    end
+    @printf("   ^ note the TRANSITION: below the χ at which the cycle resolves, nothing is\n")
+    @printf("     converged and `:cycle` is legitimately worse. Once it resolves, `marg` drops to\n")
+    @printf("     machine precision while `:cut` plateaus — that gap is the whole point.\n")
+
+    # B. Observable accuracy on a RANDOM SIGNED state, where `:cycle` has no such advantage.
+    Random.seed!(22)
+    ψ = random_tensornetworkstate(Float64, g, siteinds("S=1/2", g); bond_dimension = 2)
+    v = (3, 3)                                   # interior: boundary sites behave differently
+    ex = real(expect(ψ, ("Z", [v]); alg = "exact"))
+    @printf("\nB. OBSERVABLE ACCURACY — random signed PEPS %dx%d D=2, ⟨Z⟩ at %s (exact %.10f)\n",
+            L, L, string(v), ex)
+    @printf("   %-4s %-12s %-12s %-12s %-12s\n", "χ", "⟨Z⟩ cut", "⟨Z⟩ cyc", "marg cut", "marg cyc")
+    for χ in χs
+        r = map((:cut, :cycle)) do p
+            c = update(CTMEnvironmentCache(ψ, χ; projector = p))
+            (abs(real(expect(c, ("Z", [v]))) - ex), marginal_inconsistency(c))
+        end
+        @printf("   %-4d %-12.3e %-12.3e %-12.3e %-12.3e\n", χ, r[1][1], r[2][1], r[1][2], r[2][2])
+    end
+
+    @printf("\n   Both are EXACT once χ makes the environment lossless — the correctness property,\n")
+    @printf("   asserted for both projectors in test/test_ctmenvironment.jl.\n")
+    @printf("   `:cut` is the default: no known failure regime, and the longer-tested path.\n")
+end
+
 function main()
     ising_free_energy()
     ising_free_energy(; aniso = true)
     peps_norm()
     single_site_observables()
     cvm_vs_boundarymps()
+    two_projectors()
 end
 
 main()

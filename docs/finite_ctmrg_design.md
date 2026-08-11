@@ -2013,3 +2013,31 @@ NOT fix hex χ=16 across seeds (0/2, median 0.00) even though seed 1001 alone lo
 what the interface needs, and neither does its range.** Dropping the low-eigenvalue directions is
 worse, keeping arbitrary ones is worse, and re-ranking by singular value is worse. The eigen-ranked
 invariant subspace is better for accuracy even while it spans fewer directions than `rank(M)`.
+
+---
+
+## Filling the unresolved cycle rank — the falsified fillers (moved here from the source, 2026-08-11)
+
+`schursolve` resolves a cycle rank `kres` that can fall short of what a bond could hold, because the
+four-fold product's spectrum is ~the 4th power of one corner's. A shortfall is ZERO-PADDED, not
+declined. Two ways of *filling* it instead were implemented and both are destructive on random
+states, showing the systematic-error signature of `⟨Z⟩` error RISING with χ:
+
+```
+filler                                   heavy-hex 2x2 D=2, χ = 2 / 8 / 32
+                                         (cut baseline: 5.8e-05 / 1.1e-16 / 1.1e-16)
+random (their _stochastic_expand_range)  cold-started here, re-drawn every sweep, never settles
+deflated cut directions                  4.2e-08 / 3.5e-06 / 3.2e-04   -- DEGRADES with χ
+```
+
+The deflated-cut filler is excellent on the collaborator's 5×5 Ising PEPS (χ=32 `⟨X⟩` 3.9e-12 against
+the cut's 7.4e-12 and their engine's 1.3e-12) and catastrophic on sparse grids, so it is not landed.
+
+**Diagnosed mechanism**, which is the part worth keeping: the merged pair becomes severely
+ill-conditioned — relative leakage of `M v` outside the kept space reaches **6e12**, i.e. `a b` stops
+being a projector at all. That is the `S^(-1/2)` amplification `qr_cutoff` guards against, NOT a
+failure of invariance. A filler chosen INSIDE the numerical null space of `M` (minimising `‖M v‖` over
+the deflated cut span) would keep invariance without that amplification; never validated.
+
+This is the same lesson as the pivoted-QR experiment recorded in `ctrmg_status.md`: the out-of-range
+directions are not junk, they carry region weight the loop's spectrum knows nothing about.
