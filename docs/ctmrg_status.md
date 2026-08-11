@@ -304,10 +304,40 @@ shows. It also explains the otherwise puzzling pair of facts — `F` stays exact
 is still invariant, merely rotated, and the Möbius sum cancels the rest) while a single-region
 observable moves at 1e-4 because it reads one region with no cancellation.
 
-**Test:** warm-start each sweep's `schursolve` from the previous sweep's converged subspace instead of
-the position-hashed vector, falling back to the hash on the first sweep and whenever the index width
-changed. This keeps determinism (the seed is still a pure function of the run) while making the
-derivation continuous in the sweep. Not yet tried.
+**Tested 2026-08-09 and FALSIFIED — in one specific form.** Warm-starting `schursolve` from the
+previous sweep's projector on the same bond (`P_A`'s leading column, plus a 1e-3 hashed admixture to
+avoid landing exactly inside an invariant subspace and closing the Krylov space early), falling back
+to the hash on the first sweep and on any index mismatch:
+
+| case | cold | warm |
+|---|---|---|
+| 8×8 Ising β=0.44 | 8.4e-04 | **4.6e-02** (55× worse) |
+| 8×8 random positive | 5.3e-01 | 6.2e-01 |
+
+`|F − ln Z|` unchanged at 2.1e-14 either way. Reverted.
+
+⚠️ **Scope this correctly.** The vector used was column 1 of `P_A`, which is the WHITENED projector
+`A·V·S^{-1/2}` — its columns are deliberately not orthonormal and the inverse square root can scale
+them badly, so it is a poor representative of the previous subspace. What is falsified is
+"warm-start from the stored projector", NOT "warm-starting cannot work". The principled version starts
+from the previous sweep's orthonormal Schur basis `VR[1]`, which is **not stored anywhere** and would
+need a new field on `CTMVertexEnvironments`. That remains untested and is the natural next attempt.
+
+### Where this leaves the 8×8 problem
+
+Three candidate causes falsified: rank-blind QR in `_ctm_orthcols`, an under-damped iteration, and a
+cold-started Krylov solve seeded from the stored projector. What is established:
+
+* it is a PLATEAU, not slow convergence — flat to sweep 40, so `maxiter` cannot help;
+* it is not a size threshold and not a random-state artefact — 6×6 converges on all three network
+  types, 8×8 fails on the POSITIVE ones (including physical Ising) and succeeds on random signed;
+* the residual scales with the damping factor, so it is a per-sweep injected perturbation rather than
+  an unstable feedback loop;
+* `F` is unaffected at 2e-14 throughout, so the perturbation lies almost entirely in directions the
+  Möbius sum cancels — the retained subspace stays invariant and rotates.
+
+The last two together still point at the projector derivation being discontinuous in the sweep. The
+untested lever is storing the orthonormal cycle basis and starting from it.
 
 ### 2. Random D=3 states
 
