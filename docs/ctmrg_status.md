@@ -323,10 +323,51 @@ them badly, so it is a poor representative of the previous subspace. What is fal
 from the previous sweep's orthonormal Schur basis `VR[1]`, which is **not stored anywhere** and would
 need a new field on `CTMVertexEnvironments`. That remains untested and is the natural next attempt.
 
-### Where this leaves the 8×8 problem
+#### How the collaborator's engine differs — and what that rules in
 
-Three candidate causes falsified: rank-blind QR in `_ctm_orthcols`, an under-damped iteration, and a
-cold-started Krylov solve seeded from the stored projector. What is established:
+Their code (`examples/python_ctmrg`) does **not** solve the cycle from a random vector. Every sweep it
+builds a **χ-wide block basis in closed form from the current corners**, `V_from_Ac`, by solving the
+defining cyclic relations with a padded pseudo-inverse:
+
+```
+VL[j] = c_{j-1,int}⁻¹ · A_{j-1} · c_{j-1,ext}
+VR[j] = c_{j,ext} · A_{j+1} · c_{j,int}⁻¹
+```
+
+then refines it with `krylov_eig_one_sided`, patching only rank-deficient columns stochastically and
+only for the first two sweeps (`V_guess_stochastic_num_iter = 2`). The start is therefore a pure
+function of the CURRENT state — history-free, deterministic, and continuous as the state drifts.
+
+Two corrections to earlier readings of their code. (1) They **compose the four-corner product too**
+(`for k in 3:-1:0: V = C[k] @ V`), so composition is not the distinguishing feature; the periodic
+Krylov-Schur in `linalg/periodic_krylov_schur.py` is a SELECTABLE method, not their default
+(`DEFAULT_PROJECTOR_METHOD = "eig one sided"`). (2) Their convergence criterion is `dVL`, the change
+in the projector bases themselves, not a state distance over environment blocks.
+
+#### TRIED AND FALSIFIED: a state-derived SINGLE start vector
+
+The cheap analogue of the above: the power iteration that computes the scale factor already produces
+a state-derived direction, and it was being thrown away while `schursolve` got the raw hashed random
+vector. Feeding the power-iterated direction in instead (8×8, χ=16, plateau = min state distance over
+the last 10 of 30 sweeps):
+
+| start | Ising β=0.44 | positive | `|F−lnZ|` positive |
+|---|---|---|---|
+| cold (current) | 6.10e-04 | 1.55e-01 | 4.97e-14 |
+| pure power | 1.25e-02 | 2.48e-01 | **4.43e-04** |
+| mix, 1.0 random | 9.32e-04 | 2.64e-01 | 7.11e-15 |
+| mix, 0.1 random | 2.63e-04 | 3.26e-01 | 7.11e-15 |
+
+Nothing clears the plateau; the best is 2.3× on one case and worse on the other. **The pure-power row
+is the useful result**: `|F − ln Z|` degrades by TEN ORDERS. A start already converged onto the
+dominant eigenvector closes the Krylov space immediately, collapsing `kres` and losing the projector
+silently. That is direct evidence the **block width is load-bearing**, not an implementation detail —
+a single vector cannot stand in for a χ-wide basis however well it is chosen. Reverted.
+
+#### Where this leaves the 8×8 problem
+
+Four candidate causes falsified: rank-blind QR in `_ctm_orthcols`, an under-damped iteration, a warm
+start from the stored projector, and a state-derived single start vector. What is established:
 
 * it is a PLATEAU, not slow convergence — flat to sweep 40, so `maxiter` cannot help;
 * it is not a size threshold and not a random-state artefact — 6×6 converges on all three network
@@ -336,8 +377,14 @@ cold-started Krylov solve seeded from the stored projector. What is established:
 * `F` is unaffected at 2e-14 throughout, so the perturbation lies almost entirely in directions the
   Möbius sum cancels — the retained subspace stays invariant and rotates.
 
-The last two together still point at the projector derivation being discontinuous in the sweep. The
-untested lever is storing the orthonormal cycle basis and starting from it.
+The last two together still point at the projector derivation being discontinuous in the sweep.
+
+**The one untested lever left is the real thing: a χ-wide BLOCK start basis built in closed form from
+the current corners**, i.e. a port of `V_from_Ac`. Every cheap single-vector surrogate for it has now
+failed, and the pure-power collapse shows why. This is a substantial change, not a tweak:
+`KrylovKit.schursolve` takes a single start vector, so it needs either block Arnoldi / subspace
+iteration or a different solver, plus an analogue of their `A`/`c` split (our `As[l]` are the fused
+corners, with no separate small-`c` factor to invert). Budget it as real work.
 
 ### 2. Random D=3 states
 
