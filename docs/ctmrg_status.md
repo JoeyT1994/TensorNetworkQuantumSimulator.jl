@@ -364,6 +364,43 @@ dominant eigenvector closes the Krylov space immediately, collapsing `kres` and 
 silently. That is direct evidence the **block width is load-bearing**, not an implementation detail —
 a single vector cannot stand in for a χ-wide basis however well it is chosen. Reverted.
 
+#### TRIED: periodic Schur via `PeriodicSchurDecompositions.jl` — blocked by a REPRESENTATION mismatch
+
+Julia already has the tool their 2000-line `periodic_krylov_schur.py` implements:
+`PeriodicSchurDecompositions.partial_pschur(As, nev, which; u1, maxdim, vrand!, ...)` returns a
+partial periodic Schur of the product `Aₚ⋯A₁` **without forming it**, giving an orthonormal basis at
+EVERY site. That would replace both the composed-product `schursolve` and the propagation loop with
+`_ctm_orthcols` in one step. ⚠️ Note the package's own default `which = LM()` references a name it
+does not import — pass `ArnoldiMethod.LM()` explicitly.
+
+Validated first on synthetic factors: the site convention is `As[l]·span(Z[l]) ⊆ span(Z[l+1])`
+(residual 1e-15), matching our `As[l] : io[l] → io[l+1]` exactly, and on CTM-like strongly-decaying
+spectra the cycle invariance at site 1 is **3.7e-17**. (Comparing against `eigen` of the *formed*
+product is meaningless in that regime — the product spans ~1e-21 — which is the whole argument for
+periodic Schur.)
+
+**It does not fit our data structure.** `partial_pschur` requires four SQUARE factors of equal size.
+Measured over 48 plaquettes of a 5×5 D=2 at χ=8:
+
+```
+raw interface dims per plaquette: [4,32,32,4]  [4,32,32,16]  [4,16,32,32]  [16,32,32,16] ...
+square: 0 of 48        padded-and-failed: 48 of 48        999x "NaN in ujl"
+```
+
+**No plaquette is square.** Zero-padding a rank-4 block into a 32×32 factor makes it severely
+singular and the periodic Arnoldi breaks down. Every plaquette then declined and the run silently
+became pure `:cut` — which "converged" and made the 8×8 plateau look 8 orders better (6.10e-04 →
+7.83e-12) while the 5×5 control returned *exactly* the `:cut` value, 4.657e-04. **That is the
+canonical false positive for this project: a fix that converges by ceasing to be `:cycle`.** Only the
+paired control caught it.
+
+Root cause is architectural, not a bug: their engine stores every corner at uniform `(χ,χ)` with an
+explicit `rank` field, so square periodic Schur is natural for them; our raw interfaces are genuinely
+rectangular. Two ways forward, both real work: (a) pre-compress each bond to a common `kcyc` square
+block and run periodic Schur on that — the cycle is already capped at `kcyc = min(χ, narrowest bond)`
+so nothing is lost in principle, but the pre-compression must not smuggle the cut back in; or
+(b) adopt uniform-width storage plus a rank field throughout the cache.
+
 #### Where this leaves the 8×8 problem
 
 Four candidate causes falsified: rank-blind QR in `_ctm_orthcols`, an under-damped iteration, a warm
