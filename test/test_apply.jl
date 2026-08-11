@@ -106,3 +106,243 @@ end
 end
 
 end
+
+@eval module $(gensym())
+using LinearAlgebra: Diagonal, I, istriu, norm, svd, transpose
+using Random: Random
+using TensorNetworkQuantumSimulator: absorb_chain!, absorb_matrices!, absorb_matrices_mul!,
+    absorb_matrices_qr!, mul_strided_batched!, simple_update_dense!
+using Test: @test, @testset, @test_throws
+
+# Contract `matrices[k]`'s first index with axis `inds[k]`, then permute to (inds..., qrinds...).
+# Built from `mapslices` so it shares no machinery with the code under test.
+function absorb_reference(tensor, matrices, inds, qrinds; op = identity)
+    t = copy(tensor)
+    for (k, matrix) in enumerate(matrices)
+        M = transpose(op(matrix))
+        t = mapslices(v -> M * v, t; dims = inds[k])
+    end
+    return permutedims(t, (inds..., qrinds...))
+end
+
+# Contract the two vertex tensors over their shared (last) axis, then apply `gate` to the two site
+# axes. With invertible environments and their inverses the gauging cancels, so an untruncated
+# simple update has to reproduce this exactly.
+function pair_reference(t1, t2, gate, n1, n2, d1, d2, b)
+    M1, M2 = prod(size(t1)[1:(end - 1)]), prod(size(t2)[1:(end - 1)])
+    T = reshape(
+        reshape(t1, M1, b) * transpose(reshape(t2, M2, b)),
+        size(t1)[1:(end - 1)]..., size(t2)[1:(end - 1)]...
+    )
+    perm = (n1 + 1, n1 + n2 + 2, ntuple(identity, n1)..., ntuple(i -> n1 + 1 + i, n2)...)
+    P = permutedims(T, perm)
+    P = reshape(gate * reshape(P, d1 * d2, :), size(P)...)
+    return permutedims(P, invperm(perm))
+end
+
+# A `middle!` for `simple_update_dense!`: contract the shared bond, apply the gate to the site
+# axes, and split with an SVD keeping `maxdim` values. Splits the singular values evenly between
+# the two factors, matching `factorize_svd`'s `ortho = "none"`.
+function gate_middle(gate, d1, d2, maxdim)
+    return function (R1, R2)
+        q1, b, q2 = size(R1, 1), size(R1, 3), size(R2, 1)
+        M = reshape(R1, q1 * d1, b) * transpose(reshape(R2, q2 * d2, b))
+        P = permutedims(reshape(M, q1, d1, q2, d2), (2, 4, 1, 3))
+        P = reshape(gate * reshape(P, d1 * d2, q1 * q2), d1, d2, q1, q2)
+        M = reshape(permutedims(P, (3, 1, 4, 2)), q1 * d1, q2 * d2)
+        F = svd(M)
+        k = isnothing(maxdim) ? length(F.S) : min(maxdim, length(F.S))
+        w = abs2.(F.S)
+        rs = sqrt.(F.S[1:k])
+        return reshape(F.U[:, 1:k] * Diagonal(rs), q1, d1, k),
+            reshape(transpose(Diagonal(rs) * F.Vt[1:k, :]), q2, d2, k),
+            F.S[1:k], sum(w[(k + 1):end]) / sum(w)
+    end
+end
+
+# Runs one two-site update and compares against `pair_reference`. Environment legs all have
+# dimension `a`, so the QR side lengths are a^n vs d*b -- keep a^n >= d*b or the thin QR has no
+# tall matrix to work with.
+function update_vs_reference(; a1, a2, n1, n2, d1 = 2, d2 = 2, b = 3, maxdim = nothing, normalize_tensors = false)
+    t1 = randn(ComplexF64, ntuple(_ -> a1, n1)..., d1, b)
+    t2 = randn(ComplexF64, ntuple(_ -> a2, n2)..., d2, b)
+    envs1 = ntuple(_ -> randn(ComplexF64, a1, a1), n1)
+    envs2 = ntuple(_ -> randn(ComplexF64, a2, a2), n2)
+    gate = randn(ComplexF64, d1 * d2, d1 * d2)
+    want = pair_reference(t1, t2, gate, n1, n2, d1, d2, b)
+
+    (u1, u2), svals, err = simple_update_dense!(
+        (copy(t1), copy(t2)), (envs1, envs2),
+        (map(m -> transpose(inv(m)), envs1), map(m -> transpose(inv(m)), envs2)),
+        ((n1 + 1, n1 + 2), (n2 + 1, n2 + 2)), gate_middle(gate, d1, d2, maxdim);
+        normalize_tensors,
+    )
+
+    k = size(u1)[end]
+    got = reshape(
+        reshape(u1, prod(size(u1)[1:(end - 1)]), k) * transpose(reshape(u2, prod(size(u2)[1:(end - 1)]), k)),
+        size(u1)[1:(end - 1)]..., size(u2)[1:(end - 1)]...
+    )
+    return (; got, want, u1, u2, svals, err, k)
+end
+
+@testset "Dense simple update" begin
+    Random.seed!(1234)
+
+    @testset "mul_strided_batched! covers every slice, trail = $trail" for trail in (1, 2, 5)
+        lead, chi = 3, 4
+        A = randn(lead, chi, trail)
+        B = randn(chi, chi)
+        C = similar(A)
+        mul_strided_batched!(C, A, B)
+        @test all(C[:, :, t] ≈ A[:, :, t] * B for t in 1:trail)
+        Ct = similar(A)
+        mul_strided_batched!(Ct, A, transpose(B))
+        @test all(Ct[:, :, t] ≈ A[:, :, t] * transpose(B) for t in 1:trail)
+    end
+
+    # `absorb_chain!` hands back the buffer holding the result and the one left free, whichever way
+    # the alternation happened to land.
+    @testset "absorb_chain! returns (result, free) for $k matrices" for k in 0:3
+        A = randn(3, 3, 3, 2)
+        matrices = ntuple(_ -> randn(3, 3), k)
+        want = absorb_reference(A, matrices, ntuple(identity, k), Tuple((k + 1):4))
+        live, free = absorb_chain!(copy(A), similar(A), matrices)
+        @test live ≈ want
+        @test pointer(free) != pointer(live)
+        @test length(free) == length(live)
+    end
+
+    # A caller that lends out part of a larger buffer needs all of it back, so a supplied `scratch`
+    # always comes back free with the result in the input's own storage -- including for an even
+    # matrix count, where the bare alternation would end the other way round.
+    @testset "absorb_matrices! honours a supplied scratch, $k matrices" for k in 1:3
+        tensor = randn(ComplexF64, ntuple(_ -> 8, k)..., 2, 3)
+        matrices = ntuple(_ -> randn(ComplexF64, 8, 8), k)
+        inds = ntuple(identity, k)
+        qrinds = (k + 1, k + 2)
+        want = absorb_reference(tensor, matrices, inds, qrinds)
+
+        input = copy(tensor)
+        base = pointer(input)
+        scratch = Vector{ComplexF64}(undef, length(tensor))
+        live, free = absorb_matrices!(input, matrices, inds, qrinds; scratch)
+        @test live ≈ want
+        @test pointer(live) == base
+        @test pointer(free) == pointer(scratch)
+    end
+
+    @testset "absorb_matrices_qr!: $elt, op = $op" for elt in (Float64, ComplexF64),
+            op in (identity, transpose)
+
+        dims, qrdims = (4, 3), (2, 3)          # deliberately unequal leading dims
+        A = randn(elt, dims..., qrdims...)
+        matrices = (randn(elt, 4, 4), randn(elt, 3, 3))
+        m, n = prod(dims), prod(qrdims)
+
+        want = absorb_reference(A, matrices, (1, 2), (3, 4); op)
+        Q, R, free = absorb_matrices_qr!(copy(A), matrices, (1, 2), (3, 4); op)
+
+        @test size(Q) == (dims..., n)
+        @test size(R) == (n, qrdims...)
+        Qm, Rm = reshape(Q, m, n), reshape(R, n, n)
+        @test Qm * Rm ≈ reshape(want, m, n)
+        @test Qm' * Qm ≈ I                     # the QR's Q is isometric
+        @test istriu(Rm)
+        # `free` is meant to be handed straight to `absorb_matrices_mul!` as its scratch.
+        @test length(free) == length(Q)
+        @test pointer(free) != pointer(Q)
+    end
+
+    @testset "absorb_matrices_qr! index handling" begin
+        A = randn(4, 3, 2, 3)
+        matrices = (randn(4, 4), randn(3, 3))
+        Q1, R1, _ = absorb_matrices_qr!(copy(A), matrices, (1, 2))
+        Q2, R2, _ = absorb_matrices_qr!(copy(A), matrices, (1, 2), (3, 4))
+        @test Q1 ≈ Q2                          # default qrinds is the complement of inds
+        @test R1 ≈ R2
+
+        # A non-ascending `qrinds` is honoured rather than sorted.
+        B = randn(4, 3, 2, 5)
+        want = absorb_reference(B, matrices, (1, 2), (4, 3))
+        Q, R, _ = absorb_matrices_qr!(copy(B), matrices, (1, 2), (4, 3))
+        @test size(R) == (10, 5, 2)
+        @test reshape(Q, 12, 10) * reshape(R, 10, 10) ≈ reshape(want, 12, 10)
+
+        @test_throws DimensionMismatch absorb_matrices_qr!(
+            copy(A), matrices, (1, 2), (3, 4); scratch = Vector{Float64}(undef, 5)
+        )
+    end
+
+    # Absorbing the inverse environments and multiplying `R` back must undo the first half. The
+    # inverse direction contracts each matrix's second index, which is what `op = transpose` does.
+    @testset "absorb_matrices_mul! inverts absorb_matrices_qr!, $k env legs" for k in 1:3
+        a = 8
+        A = randn(ComplexF64, ntuple(_ -> a, k)..., 2, 3)
+        envs = ntuple(_ -> randn(ComplexF64, a, a), k)
+        inv_envs = map(m -> transpose(inv(m)), envs)
+        inds, qrinds = ntuple(identity, k), (k + 1, k + 2)
+
+        Q, R, free = absorb_matrices_qr!(copy(A), envs, inds, qrinds)
+        u, spare = absorb_matrices_mul!(Q, inv_envs, R; op = transpose, scratch = free)
+        @test u ≈ A
+        @test length(spare) == length(Q)
+        @test pointer(spare) != pointer(u)
+    end
+
+    # `R`'s trailing extent is not `chi`: a truncating SVD makes it smaller and one that grows the
+    # bond makes it larger, and only the first case fits in the buffer left over.
+    @testset "absorb_matrices_mul! handles R narrower and wider than chi" begin
+        Q = randn(ComplexF64, 8, 8, 6)
+        envs = (randn(ComplexF64, 8, 8), randn(ComplexF64, 8, 8))
+        for cols in (2, 6, 9)
+            R = randn(ComplexF64, 6, 2, cols)
+            absorbed = absorb_chain!(copy(Q), similar(Q), envs; op = transpose)[1]
+            want = reshape(reshape(absorbed, 64, 6) * reshape(R, 6, 2cols), 8, 8, 2, cols)
+            u, spare = absorb_matrices_mul!(copy(Q), envs, R; op = transpose)
+            @test u ≈ want
+            @test size(u) == (8, 8, 2, cols)
+            @test length(spare) == length(Q)
+        end
+    end
+
+    # Sides differ in size and in environment-leg count, so the larger-side-first reordering has to
+    # carry each side's matrices and axis labels with it or these fail on shape.
+    shapes = [
+        ("side 1 larger, 1 v 1 legs", (a1 = 16, a2 = 8, n1 = 1, n2 = 1)),
+        ("side 2 larger, 1 v 1 legs", (a1 = 8, a2 = 16, n1 = 1, n2 = 1)),
+        ("equal sides,   1 v 1 legs", (a1 = 8, a2 = 8, n1 = 1, n2 = 1)),
+        ("side 1 larger, 2 v 2 legs", (a1 = 6, a2 = 4, n1 = 2, n2 = 2)),
+        ("side 2 larger, 2 v 2 legs", (a1 = 4, a2 = 6, n1 = 2, n2 = 2)),
+        ("side 1 larger, 2 v 1 legs", (a1 = 6, a2 = 8, n1 = 2, n2 = 1)),
+        ("side 2 larger, 1 v 2 legs", (a1 = 8, a2 = 6, n1 = 1, n2 = 2)),
+    ]
+
+    @testset "simple_update_dense! is exact untruncated: $label" for (label, kw) in shapes
+        r = update_vs_reference(; kw...)
+        @test r.got ≈ r.want
+        @test r.err ≈ 0 atol = 1.0e-12
+        @test size(r.u1)[1:(end - 1)] == (ntuple(_ -> kw.a1, kw.n1)..., 2)
+        @test size(r.u2)[1:(end - 1)] == (ntuple(_ -> kw.a2, kw.n2)..., 2)
+    end
+
+    @testset "simple_update_dense! truncates: $label" for (label, kw) in shapes[1:4]
+        for maxdim in (3, 2)
+            r = update_vs_reference(; kw..., maxdim)
+            @test r.k == maxdim
+            @test 0 < r.err < 1
+        end
+    end
+
+    @testset "simple_update_dense! normalizes: $label" for (label, kw) in shapes[1:4]
+        r = update_vs_reference(; kw..., normalize_tensors = true)
+        @test norm(r.u1) ≈ 1
+        @test norm(r.u2) ≈ 1
+        @test norm(r.svals) ≈ 1
+        # Normalizing rescales the pair by a scalar, so directions still agree.
+        s = r.got[1] / r.want[1]
+        @test r.got ≈ s .* r.want
+    end
+end
+
+end

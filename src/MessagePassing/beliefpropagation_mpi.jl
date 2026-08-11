@@ -612,9 +612,8 @@ end
 
 # Walks `mats` over the leading env legs of a buffer laid out (env legs…, rest), alternating
 # `cur` and `spare`. Returns them in their new roles.
-# `cur`/`spare` must have length exactly `n` and are passed WHOLE, never as views: on the GPU
-# `reshape(view(v, 1:n), …)` is a `ReshapedArray`, which is not a `StridedCuMatrix`, so cuSOLVER
-# and cuBLAS methods do not apply to it. `reshape` of a whole `CuVector` is a `CuArray`.
+# Both buffers must be exactly `n` long: every extent below is derived from `n`. Contiguous slices
+# are safe to pass -- `GPUArrays` routes those through `derive`, which returns another `CuArray`.
 function apply_env_chain!(cur, spare, mats, chi, n, fwd::Bool)
     @assert length(cur) == n && length(spare) == n
     for (k, M) in enumerate(mats)
@@ -689,8 +688,10 @@ function buffered_phase1(ψ⃗::Vector{<:ITensor}, i::Int, mats, alegs, sinds, l
     cur, spare = apply_env_chain!(cur, spare, mats, chi, n, true)
 
     factored = thin_qr_matrix!(reshape(cur, m, ncol))
-    isnothing(factored) && error("in-place QR declined after the input was released; the " *
-        "applicability probe above should have caught this")
+    isnothing(factored) && error(
+        "in-place QR declined after the input was released; the " *
+            "applicability probe above should have caught this"
+    )
     _, Rm = factored                              # Q is in `cur`
     qb = Index(ncol, "Link,qr")
     R = ITensors.itensor(reshape(Rm, ncol, map(dim, sinds)..., dim(lb)), qb, sinds..., lb)
@@ -707,8 +708,8 @@ function buffered_phase2(st, mats, Rp::ITensor)
     rcols = isempty(rest) ? 1 : prod(dim, rest)
     Rarr = reshape(ITensors.array(Rp, st.qb, rest...), ncol, rcols)
     outlen = st.m * rcols
-    # Whole arrays, not views, for the same StridedCuMatrix reason as above. When the SVD
-    # truncated, `spare` is larger than the result, so use a right-sized array (<= one tensor).
+    # The `similar` is unnecessary: `view(vec(spare), 1:outlen)` is contiguous, so on the GPU it is
+    # a `CuArray` and cuBLAS still dispatches. `absorb_matrices_mul!` takes the front instead.
     out = outlen == length(spare) ? spare : similar(spare, outlen)
     mul!(reshape(out, st.m, rcols), reshape(cur, st.m, ncol), Rarr)
 
