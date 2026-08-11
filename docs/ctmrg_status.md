@@ -557,3 +557,50 @@ Kept deliberately: each was believed, written down, and falsified. Do not re-der
 | "`:cycle` settles in two sweeps" | Measured on an *interior* observable. Boundaries need more (6×6 corner: 3; heavy-hex: 5), and settling fast is what walked it into the early-stop bug. |
 | "`_ctm_statedist`'s ~3e-11 plateau is basis wander in the diagnostic" | The diagnostic was sampling 13% of the state; the residual was real, in the blocks it never compared. |
 | their engine's `⟨X⟩` at χ=32 = 8.149e-14 | Measured directly it is 1.330e-12. |
+
+## Measured 2026-08-11: why the periodic-Schur ADAPTER cannot work, and what that implies
+
+`PeriodicSchurDecompositions.jl` (`pschur`, `partial_pschur`, `ordschur!`) is the right tool and it
+works: on synthetic CTM-like factors the cycle invariance at site 1 is 3.7e-17. Julia has it; nothing
+needs writing. Four attempts to use it via an ADAPTER around the current representation all failed,
+and the reason is structural rather than a bug to be found.
+
+**The killer measurement.** Capture real plaquette factors (6×6 D=2, χ=8), zero-pad to square, run
+dense `pschur`, `ordschur!` to the dominant `k`, truncate rows back to the true bond dimensions, and
+test whether the cyclic relation `As[l]·span(VR[l]) ⊆ span(VR[l+1])` still holds:
+
+```
+plaquette nsp=[4,32,32,4]        relative residual
+  As[1]*VR[1] -> VR[2]           8.44e-01     VIOLATED
+  As[2]*VR[2] -> VR[3]           6.92e-01     VIOLATED
+  As[3]*VR[3] -> VR[4]           1.52e-16     ok
+  As[4]*VR[4] -> VR[1]           3.37e-16     ok
+```
+
+The relations that break are exactly those leaving a bond that had to be row-truncated (bonds 1 and 4
+are `nsp=4` inside `n=32`; bonds 2 and 3 need no truncation). Measured directly, the Schur vectors
+carry norm **1.4–1.75 outside the true rows** — the invariant subspace of the padded operator really
+does live in the padded coordinates, and its projection onto the true coordinates is NOT an invariant
+subspace of the rectangular problem. No choice of left-bond mapping repairs this; all four candidates
+were tested and none is clean.
+
+⚠️ An earlier check reported "subspace agreement 0.000" and was used to conclude the mathematics was
+fine. That measured ONE bond (bond 1) on plaquettes where `kcyc = min(nsp)` made selection trivial. It
+did not generalise. Also note a genuine bug found along the way and worth keeping: row-truncated Schur
+vectors are **not orthonormal** (‖ZᵀZ−I‖ ≈ 1.3) and must be re-orthonormalised by SVD with a rank
+check — but fixing that did not rescue the approach.
+
+**Implication: option (b) is not the expensive alternative, it is the only one that can work.** Their
+engine does not pad-then-unpad; it NEVER un-pads. Every corner and edge is stored at uniform width
+with an explicit `rank`, so the four cycle factors are square by construction and the invariant
+subspace is computed and consumed in the same space, with no projection step to destroy the relations.
+Any attempt to keep our rectangular storage and adapt at the call site reintroduces the truncation
+that this measurement shows is fatal.
+
+**Also established, and independent of periodic Schur:** the 8×8 plateau is a CONTINUITY problem. A
+propagation-derived subspace (a smooth function of the state) converges the sweep to machine precision
+— but to a NON-stationary point (`marg` 1e-16 → 5e-7, χ=32 `⟨X⟩` 2500× worse). So the target is a
+solve that is continuous in the state AND stationary; propagation gives the first without the second,
+the cycle eigensolve gives the second without the first. Under the stated priorities — stationarity
+and observable/partition-function accuracy first — a plateau fix that costs stationarity is strictly
+bad, and was rejected on that basis.
