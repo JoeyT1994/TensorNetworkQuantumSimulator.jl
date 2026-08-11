@@ -604,3 +604,42 @@ solve that is continuous in the state AND stationary; propagation gives the firs
 the cycle eigensolve gives the second without the first. Under the stated priorities — stationarity
 and observable/partition-function accuracy first — a plateau fix that costs stationarity is strictly
 bad, and was rejected on that basis.
+
+### FALSIFIED 2026-08-11: the plateau is NOT a projector discontinuity, and option (b) is dead
+
+Direct measurement, not inference. Capture real plaquette factors (8×8 Ising β=0.44, χ=16), perturb
+all four along a fixed random direction by relative size ε, and measure how far the retained subspace
+moves (‖ΔP‖) for the current solver and for dense periodic Schur:
+
+```
+plaquette nsp=[2,32,32,2] k=2   spectral gap at the cut  lam[k]/lam[k+1] = 1.8e+13
+ eps      dP pschur     dP schursolve (current)
+ 1e-10    2.614e-10     7.07e-16
+ 1e-08    2.614e-08     1.08e-15
+ 1e-06    2.614e-06     4.10e-16
+ 1e-04    2.614e-04     2.36e-16
+ 1e-02    2.613e-02     2.51e-16
+```
+
+Same on all three plaquettes sampled. **Both solvers are continuous** — `pschur` scales linearly
+(‖ΔP‖ ≈ 2.6ε) — so there is no discontinuity for a periodic-Schur rewrite to remove. Worse for the
+hypothesis: **the current `schursolve` is INSENSITIVE**, ‖ΔP‖ ~ 1e-16 at every ε including a 1%
+perturbation, because the spectral gap at the truncation cut is 1e12–1e13. By this measure the
+existing solver is *more* stable than the replacement would be.
+
+**Consequences.**
+
+* **Option (b) — uniform-width storage plus a rank field — is not justified.** Its entire purpose was
+  to enable periodic Schur, whose value rested on supplying continuity the current solve lacks. It
+  does not lack it. (b) would be a representation-wide refactor with real performance cost, buying
+  cleanliness only. Do not start it on this rationale.
+* **The plateau's cause is again unknown.** The under-relaxation α-scaling is solid and still says a
+  fixed-size perturbation enters every sweep — but it does NOT come from the cycle eigensolve.
+  Remaining suspects, in the sweep but outside the solve: `_ctm_biorth`'s `S^{-1/2}` whitening, the
+  zero-padding, `_ctm_align`'s Procrustes gauge fixing, and `_ctm_orthcols`' unpivoted QR (which IS a
+  discontinuous operation, though pivoting it was separately measured not to fix the plateau).
+
+⚠️ Three mechanisms have now been proposed for this plateau and rejected by measurement: rank-blind
+QR, an under-damped iteration, and projector discontinuity. Propose the next one only with a cheap
+falsifying test attached, as here — this check cost twenty minutes and prevented a multi-session
+refactor built on a false premise.
