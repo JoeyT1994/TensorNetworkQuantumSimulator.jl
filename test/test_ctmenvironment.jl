@@ -436,11 +436,13 @@ end
     @test mi_cyc < 1.0e-14                                  # the cycle is, to machine precision
     # NOT asserted at χ=6. `:cycle` is a PURE formulation — every interface comes from the
     # four-corner cycle, with no per-interface fallback to `:cut` — so a lattice never carries a
-    # mixture of the two families. That purity is deliberate (mixtures were measured worse than
-    # EITHER pure method: square 4×4 D=3 at χ=32 gave 9.17e-04 against pure cycle 2.97e-04 and pure
-    # cut 1.30e-04). The cost is a known failure regime, documented in docs/ctmrg_status.md: hex at
-    # the χ where the environment becomes lossless. Stationarity IS asserted above at χ=4, where it
-    # holds by six orders.
+    # mixture of the two families. That purity is a DESIGN choice, not a measured one: a mixed
+    # lattice is not stationary, which makes the one question `:cycle` exists to answer ill-posed,
+    # and the switch would be a discontinuous rank comparison that can flip on a small change in the
+    # environment. (An earlier version of this comment justified it by "mixtures measured worse than
+    # either pure method" — that rested on ONE seed at ONE χ and is retracted; see the retraction
+    # table in docs/ctmrg_status.md.) Stationarity IS asserted above at χ=4, where it holds by six
+    # orders.
 
     # 3. What stationarity BUYS: single-site observables, where a single-region ratio cannot hide a
     # marginal inconsistency the way the signed Möbius sum can. Measured 11.9× / 7.5× / 2.6× at
@@ -481,6 +483,40 @@ end
         # ... and independently of where the global stream happens to be.
         Random.seed!(999)
         @test cvm_freenergy(update(CTMEnvironmentCache(tn2, 8; projector = proj))) == F1
+    end
+
+    # 5. REGRESSION: `update` must not certify convergence from a PARTIAL state comparison.
+    #
+    # `_ctm_statedist` used to skip blocks whose index set had changed rather than counting them as
+    # changed. Interface widths stabilise from the bulk outward, so the comparable blocks on early
+    # sweeps are exactly the ones that settled first — a biased sample. On square 6×6 D=2 at χ=16,
+    # `:cycle` compared 28 of 220 blocks on sweep 2, found them equal to 1.0e-15, and STOPPED, while
+    # sweep 3 (64 of 220) still moved by 1.0e-1. `F` and the bulk were converged; the boundary ring
+    # was left ~3 orders wrong, χ-INDEPENDENTLY, which read as a projector defect for two sessions.
+    # `:cut` escaped only by chance -- its 28-block subset still read 2.6e-1.
+    #
+    # (a) The contract, directly: while the interface widths are still growing there is NO state
+    # distance to be had, and the function must say so rather than return a number measured on
+    # whatever happened to match.
+    Random.seed!(1)
+    tn4 = random_tensornetwork(Float64, named_grid((6, 6)); bond_dimension = 2)
+    c4 = CTMEnvironmentCache(tn4, 16; projector = :cycle)
+    e1 = TNQS.sweep_vertex_environments(c4, TNQS.vertex_environments(c4))
+    e2 = TNQS.sweep_vertex_environments(c4, e1)
+    @test isnothing(TNQS._ctm_statedist(e2, e1))        # structurally unstable => cannot certify
+
+    # (b) End to end, on the case that showed the largest error: heavy-hex at χ=8 was 3.7e-06 with
+    # `:cycle` against a `:cut` that is exact, and is now exact too. Ten orders of headroom, so this
+    # fails loudly if partial-coverage certification ever returns.
+    Random.seed!(1)
+    ghh = heavy_hexagonal_lattice(2, 2)
+    ψhh = random_tensornetworkstate(Float64, ghh, siteinds("S=1/2", ghh); bond_dimension = 2)
+    vhh = collect(vertices(ghh))[max(1, length(vertices(ghh)) ÷ 2)]
+    exhh = real(expect(ψhh, ("Z", [vhh]); alg = "exact"))
+    for proj in (:cut, :cycle)
+        err = abs(real(expect(update(CTMEnvironmentCache(ψhh, 8; projector = proj)),
+                              ("Z", [vhh]))) - exhh)
+        @test err < 1.0e-12
     end
 end
 end

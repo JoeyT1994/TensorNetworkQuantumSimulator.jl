@@ -9,11 +9,17 @@
 #
 #   F = Σ_v ln Z_v − Σ_e ln Z_e + Σ_p ln Z_p     (Möbius numbers +1 / −1 / +1)
 #
-# Each shared interface is truncated to `maxdim` by a biorthogonal projector PAIR built from
-# BOTH bounding corners, via a thin QR of each block and one SVD of the small triangular product —
-# never squaring, and batching well on GPU (see `_ctm_twosided_projector_qr`). The pair needs the
-# complement environment, so the build is a fixed-point iteration: `update` sweeps it to
-# stationarity. Works for anisotropic / non-square grids and free boundaries.
+# Each shared interface is truncated to `maxdim` by a biorthogonal projector PAIR built from BOTH
+# bounding corners. TWO projectors are selectable via `CTMOptions.projector` (see below):
+#
+#   :cut    (default) the optimal rank-χ truncation of that one bipartition, from a thin QR of each
+#           block and one SVD of the small triangular product — never squaring, batches well on GPU
+#           (`_ctm_twosided_projector_qr`).
+#   :cycle  the dominant invariant subspace of the four-corner cycle, solved matrix-free
+#           (`_ctm_cycle_projectors`). This makes `F` stationary; `:cut` is not stationary.
+#
+# Either way the pair needs the complement environment, so the build is a fixed-point iteration:
+# `update` sweeps it to stationarity. Works for anisotropic / non-square grids and free boundaries.
 #
 # Entry points: `update` (run it), `cvm_freenergy` (ln Z), `vertex_ring` / `expect` / `rdm`
 # (single-site observables from a vertex's own ring).
@@ -24,7 +30,8 @@
 # contracts the flat list [environment; factors…] in a netcon-optimal order, so the fat
 # ket⊗bra site tensor is never materialised.
 #
-# See docs/finite_ctmrg_design.md for the derivations and the measured comparisons.
+# See docs/ctmrg_status.md for the current numbers and the open problems;
+# docs/finite_ctmrg_design.md for the derivations and the full record of what was tried.
 
 using LinearAlgebra: eigen, Hermitian, norm, dot, I, Diagonal, qr, svd
 using Random: Xoshiro
@@ -44,18 +51,20 @@ governs, referenced below.
 | field | default | what it selects |
 |---|---|---|
 | `gauge` | `true` | fix the projector pair's gauge to the previous sweep by orthogonal Procrustes, making iterates comparable — see `_ctm_align`. Prerequisite for any accelerator. |
-| `arnoldi` | `true` | use Krylov (Arnoldi/Lanczos) for top-`k` eigen/singular triplets where it pays; `false` forces dense — see `_ctm_eigsolve`. |
-| `degtol` | `0.0` | relative gap below which a truncation is judged to split a near-degenerate multiplet, and is backed off. `0` disables. Matters for double-layer corners (ket↔bra exchange gives `λ_ij = λ_ji`). |
+| `arnoldi` | `true` | use Krylov (Arnoldi/Lanczos) for top-`k` eigen/singular triplets where it pays; `false` forces dense — see `_ctm_twosided_projector_qr`. ⚠️ **`:cut` (and the greedy seed pass) only** — `_ctm_cycle_projectors` calls `schursolve` unconditionally and has no dense path, so `false` does not force dense there. |
+| `degtol` | `0.0` | relative gap below which a truncation is judged to split a near-degenerate multiplet, and is backed off. `0` disables. Matters for double-layer corners (ket↔bra exchange gives `λ_ij = λ_ji`). ⚠️ **`:cut` only** — it is read solely in the singular-value truncations and never in `_ctm_cycle_projectors`, so under `projector = :cycle` it is a NO-OP (verified: 8×8 at 0 / 1e-8 / 1e-4 is identical to every digit). |
 | `qr_cutoff` | `1e-13` | relative cutoff on the `S` values the projector inverts. It can sit this low because `S` comes off a triangular product rather than a squared object — see `_ctm_twosided_projector_qr`. |
-| `krylov_min` | `128` | smallest interface at which the Krylov SVD beats a dense one; below it dense LAPACK wins — see `_ctm_svd_topk` for the crossover. |
+| `krylov_min` | `128` | smallest interface at which the Krylov SVD beats a dense one; below it dense LAPACK wins — see `_ctm_svd_topk` for the crossover. ⚠️ **`:cut` only** — never consulted on the `:cycle` path. |
 | `optimal_max` | `12` | tensor count above which contraction-order search falls back from exhaustive netcon to greedy. A FEASIBILITY gate — see `_ctm_contract`. |
 | `projector` | `:cut` | which interface projector to derive: `:cut` (optimal rank-χ truncation of one bipartition) or `:cycle` (four-corner cycle, which makes `F` stationary). See "Choosing a projector" below. |
 
 ## Choosing a projector
 
 Both are two-sided and biorthogonal, both land on the same interface keys, both are exact at lossless
-χ, and both are PURE — no per-interface mixing (see `sweep_vertex_environments`). They differ in what
-they optimise:
+χ, and both are PURE *per plaquette* — `:cycle` never mixes the two families on a single plaquette
+(see `sweep_vertex_environments`). A plaquette whose cycle is undefined declines WHOLESALE and its
+four interfaces are backfilled by the cut pass, so a `:cycle` lattice can still carry both families
+across different plaquettes; `update` warns when that happens. They differ in what they optimise:
 
 * `:cut` optimises **each interface in isolation** — the best rank-χ truncation of that one
   bipartition. It is not a stationary point of `F`, so `marginal_inconsistency` stays nonzero.
@@ -70,7 +79,7 @@ engine measured here through `contract_Z11` at matched χ:
 | 4 | 1.52e-04 | **4.77e-05** | 5.22e-05 | 2.0e-07 → 1.8e-04 |
 | 9 | 4.24e-07 | **5.13e-08** | 5.13e-08 | 2.9e-11 → **3.0e-16** |
 | 16 | 6.26e-09 | **9.28e-10** | 9.28e-10 | 2.6e-14 → **2.4e-16** |
-| 32 | 7.39e-12 | **4.86e-14** | 1.33e-12 | 6.4e-17 → **1.8e-16** |
+| 32 | 7.39e-12 | **4.82e-14** | 1.33e-12 | 6.4e-17 → **3.9e-16** |
 
 `:cycle` beats `:cut` at every χ here (3.2× / 8.3× / 6.7× / 152×) and matches or beats their engine
 at every χ, by 27× at χ=32. It is stationary to machine precision for χ ≥ 9 — but NOT at χ=4, where a
@@ -82,14 +91,20 @@ is a property of the criterion at severe truncation, not a bug; restricting `kry
 retained dimensions, because it is matrix-free where `:cut` forms dense QR factors of the enlarged
 corners.
 
-⚠️ **This is one physical state. On random states the picture is far more mixed** — measured over 6
-seeds per cell, `:cycle` is a large win on hex (median 86× at χ=4, 531× at χ=8) and roughly a coin
-flip on square lattices, with seed-to-seed ranges spanning 3–4 orders. It also has one known failure
-regime: hex at the χ where the environment becomes lossless. Do not choose between these on a single
-configuration; see `docs/ctmrg_status.md` for the multi-seed tables and the failure analysis.
+⚠️ **This is one physical state.** On random states, multi-seed, `⟨Z⟩` ratio `:cut`/`:cycle` at χ=8
+(>1 means `:cycle` better): hex 4×4 **1208×**, square 4×4 D=2 **4.5×**, square 5×5 D=2 1.2×,
+heavy-hex exact both ways — but square 4×4 **D=3 is 0.04**, i.e. `:cycle` loses by 25× there,
+recovering only to 0.35 by χ=16. The discriminator is the STATE (structured versus random signed),
+not D and not the observable site. Never choose between these on a single configuration.
 
-`:cut` remains the default because it is cheaper, has no known failure regime, and is the
-longer-tested path.
+⚠️ **`:cycle` is NOT a convergent algorithm on larger lattices.** Square 8×8 D=2 at χ=16 and χ=32 is a
+genuine limit cycle: `F` fluctuating in the 5th decimal, observables oscillating between 1e-4 and 1e-6
+indefinitely, and `update` exhausting `maxiter` with a state distance near 1.6 (gauge/sign wander was
+ruled out — 0 of 58 moving blocks are repaired by a sign flip). `:cut` converges there in 13 sweeps.
+This is the top open problem; see `docs/ctmrg_status.md`.
+
+`:cut` remains the default because it has no known failure regime and is the longer-tested path.
+It is NOT the cheaper option — see the timing note above.
 
 """
 Base.@kwdef struct CTMOptions
@@ -559,7 +574,6 @@ function vertex_environments(cache::CTMEnvironmentCache)
     tbl = _ctm_factor_table(cache)
     hl(x, y) = _ctm_links(tbl, (x, y), (x + 1, y))      # horizontal link cols x|x+1 at row y
     vl(x, y) = _ctm_links(tbl, (x, y), (x, y + 1))      # vertical link rows y|y+1 at col x
-    a(x, y) = get(tbl, (x, y), ITensor[])
 
     C = Dict{Tuple{Symbol, Int, Int}, Any}()
     T = Dict{Tuple{Symbol, Int, Int}, Any}()
@@ -689,17 +703,25 @@ end
 # boundary). Their engine pads everything to a fixed χ with a separate `rank` field because a DENSE
 # periodic Schur needs square equal-size factors. We only ever need the ACTION of the cycle on a
 # vector — four matvecs, product never formed — so a matrix-free `schursolve` handles adaptive bonds
-# natively and returns a real orthonormal basis, sidestepping the conjugate-pair handling a dense
+# natively and, ON REAL INPUTS, returns a real orthonormal basis, sidestepping the conjugate-pair
+# handling a dense
 # `ordschur` fails silently on.
 #
 # RANK, AND THE HONEST DOMAIN LIMIT. `schursolve` terminates when its Krylov space closes, so the
 # RESOLVED cycle rank `kres` can fall well short of what a bond could hold: the four-fold product's
 # spectrum is roughly the 4th power of one corner's, and on a bottlenecked loop `kcyc` itself is
 # capped by the narrowest bond. Directions past `kres` carry no cycle weight and the criterion says
-# nothing about them, so this projector is used ONLY where `kres` already fills every bond's target
-# (the gate below). Elsewhere the plaquette declines to the cut.
+# nothing about them.
 #
-# That gate is a real restriction, and lifting it is the open problem. Filling the shortfall was
+# ⚠️ A SHORTFALL IS ZERO-PADDED, NOT DECLINED. An earlier version of this comment described a "gate"
+# that used the cycle only where `kres` fills every bond's target and fell back to the cut otherwise.
+# NO SUCH GATE EXISTS — no decline path compares `kres` against `target(l)`; the padding block below
+# embeds the pair at its resolved rank in a uniform-width index with zero columns, so `Π = P_A P_B`
+# keeps rank `kres` while the index width stays stable across sweeps. The stale text also claimed
+# "at χ=32 most plaquettes decline and the result equals the cut", which the benchmark refutes
+# outright: at χ=32 `:cycle` gives `⟨X⟩` 4.8e-14 against the cut's 7.4e-12.
+#
+# The shortfall is a real restriction, and filling it is the open problem. Filling it was
 # tried two ways and BOTH are destructive on random states, in the pattern the retracted union
 # showed — `⟨Z⟩` error rising with χ, the systematic-error signature:
 #
@@ -716,9 +738,11 @@ end
 # INSIDE the numerical null space of `M` (minimising `‖M v‖` over the deflated cut span) would keep
 # invariance without that amplification and is the thing to try next; it is not yet validated.
 #
-# CONSEQUENCE, stated plainly: `F` is stationary only where the gate passes. On the 5×5 that is
-# χ ≤ 16 (`marginal_inconsistency` 3.3e-16 at χ=9, 8.7e-15 at χ=16); at χ=32 most plaquettes decline
-# and the result equals the cut. Full stationarity at every χ and every lattice is NOT yet achieved.
+# CONSEQUENCE, stated plainly: `F` is stationary only in the subspace the cycle actually RESOLVES.
+# Measured on the 5×5, that is enough for machine-precision stationarity at every χ ≥ 9
+# (`marginal_inconsistency` 3.2e-16 / 2.4e-16 / 3.9e-16 at χ = 9 / 16 / 32). Full stationarity at
+# every χ and every lattice is NOT achieved: χ=4 reads 1.8e-04, where a fully resolved rank-4
+# invariant subspace is a worse stationary point than an under-resolved one.
 #
 # RELATION TO THE RETRACTED UNION. That also merged cut directions in and was withdrawn as
 # unreliable; two things differ and both matter. (1) It seeded the cycle block at
@@ -733,10 +757,33 @@ end
 # collapsing the interface; their engine never meets this, requiring all four T-space dims equal.
 #
 # DETERMINISM. `schursolve` needs a start vector, drawn from an RNG seeded PER PLAQUETTE from its
-# position and bond dimensions; the fill is deterministic already. Without this the sweep is
+# POSITION ONLY (`hash((X, Y))`) — never the bond dimensions, which would let the seed move whenever
+# a rank shifted, reintroducing the irreproducibility this exists to remove. Without this the sweep is
 # irreproducible run to run (measured: ⟨X⟩ at χ=16 wandered over 8.1e-10 – 9.3e-10, which is larger
 # than the gap between the two projectors) and useless as a regression target. The local RNG also
 # leaves the caller's global stream untouched.
+# Orthonormal columns for the propagated cycle basis.
+#
+# ⚠️ KNOWN, DELIBERATE, AND MEASURED. `qr` here is UNPIVOTED and there is no rank check, so for a
+# rank-deficient `X` this returns a full-width `Q` whose surplus columns are arbitrary orthogonal
+# completions lying entirely OUTSIDE `range(X)` (a 10×3 matrix of rank 2 gives a third column with
+# `‖(I−P)q₃‖ = 1.0000`). The `size(VR[l], 2) == kres` guard below cannot catch it, because the WIDTH
+# is right regardless of the rank — so the plaquette does not decline and nothing is reported.
+#
+# Replacing it with `qr(X, ColumnNorm())` + truncation to the numerical rank was implemented and
+# measured (2026-08-09, 8 seeds, interior sites, both projectors). NOT LANDED:
+#
+#   * it does NOT fix the 8×8 limit cycle, which was the reason to try it (still 30 sweeps,
+#     final state distance 1.44 against 1.86);
+#   * it is bit-identical on square 4×4 D=3 χ=12, square 5×5 D=3 χ=8 and square 4×4 D=2 χ=8, i.e.
+#     the deficiency essentially never fires;
+#   * where it DOES fire (square 4×4 D=3 at χ=8) it is slightly WORSE — median ratio 0.289 → 0.268,
+#     wins 3/8 → 1/8.
+#
+# That last point is the same result the deflated-cut filler gave above: the out-of-range directions
+# are not junk, they carry region weight the loop's spectrum knows nothing about. Truncating to the
+# cycle's numerical rank belongs to a family already falsified. Kept unpivoted for simplicity, with
+# the risk recorded rather than papered over.
 _ctm_orthcols(X, k) = (Q = Matrix(qr(X).Q); Q[:, 1:min(k, size(Q, 2))])
 
 # Whiten a pair so that `B A = I`, via the SVD of their overlap.
@@ -782,7 +829,8 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
     # resolved: Arnoldi declared an invariant subspace at k≈19-22 while directions out to k=32 were
     # still orders above machine epsilon, and the projector silently lost them.
     #
-    # Normalising the action by its dominant singular value (five power iterations — the invariant
+    # Normalising the action by its dominant EIGENVALUE MAGNITUDE — the spectral radius, which is
+    # what power iteration converges to, NOT σ_max (five power iterations — the invariant
     # subspace is scale-invariant, so it is free) makes the tolerance relative. Measured `⟨X⟩` at
     # χ=32: tol 1e-13 → 5.2e-11, 1e-15 → 7.6e-13, 1e-16 → 4.9e-14.
     #
@@ -1081,9 +1129,12 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         # Silence here would read as "the cycle projector was used everywhere", which is the one
         # thing a reader must not assume when comparing the two options.
         ndec > 0 && @warn "projector = :cycle declined $ndec of $(ncyc + ndec) plaquettes, whose \
-            cycle is undefined (a corner carrying more than its two interfaces, a rank-collapsed \
-            hex plaquette, or a `schursolve` that threw). Those interfaces used the cut, so this \
-            run is NOT a pure `:cycle` result — see `_ctm_cycle_projectors`." maxlog = 1
+            cycle is undefined. Causes are GEOMETRIC (a corner carrying more than its two \
+            interfaces, a rank-collapsed hex plaquette, an empty interface) or NUMERICAL (a \
+            `schursolve` that threw, an orthonormalisation shortfall, no above-cutoff overlap \
+            direction in `_ctm_biorth`, or a non-finite whitened pair) — do not assume geometry. \
+            Those interfaces used the cut, so this run is NOT a pure `:cycle` result — see \
+            `_ctm_cycle_projectors`." maxlog = 1
     end
     # --- projector pass 2 of 2: the CUT projector, from each interface's two bounding corners.
     # Under `:cut` this owns everything; under `:cycle` it backfills whatever pass 1 declined.
@@ -1332,9 +1383,13 @@ end
 """
     marginal_inconsistency(cache::CTMEnvironmentCache) -> Real
 
-How far the cache is from a genuine CVM/BP fixed point, as `mean(1 − cos(M_v, M_e))` over the
+How far the cache is from a genuine CVM/BP fixed point, as `mean(1 − |cos(M_v, M_e)|)` over the
 edge-like blocks. **This is the only `ln Z`-free quality measure available, and the only one safe
 to optimise against.**
+
+The absolute value is deliberate: `_ctm_rescale` leaves a sign gauge, so anti-parallel marginals are
+as consistent as parallel ones. Returns `NaN` — never `0.0` — when no block could be measured, since
+`0.0` is this metric's BEST value and would report perfect stationarity from an empty sample.
 
 Each edge-like block sits in exactly two regions with Möbius weights `+1, −1`, so `Z_R` being
 linear in it gives `∂F/∂B = M_v/Z_v − M_e/Z_e`, which vanishes iff `M_v ∥ M_e` — the parent and
@@ -1394,7 +1449,13 @@ function marginal_inconsistency(cache::CTMEnvironmentCache)
         # clamp: `cos` can marginally exceed 1 in roundoff, and this is a distance
         push!(gaps, max(zero(Float64), 1 - abs(dot(va, vb)) / (na * nb)))
     end
-    return isempty(gaps) ? 0.0 : sum(gaps) / length(gaps)
+    # NOT `0.0` when nothing was measured. `0` is this metric's BEST value, so an empty sample would
+    # report PERFECT stationarity — and the sample is self-selected: the `continue`s above (including
+    # the swallowed contraction failure) each drop a block silently. That is exactly the defect that
+    # let `_ctm_statedist` certify convergence off 13% of the state, in the metric this file calls
+    # the only one safe to optimise against. `NaN` makes every `<` threshold test evaluate `false`,
+    # so a caller fails loudly instead of reading "perfectly stationary".
+    return isempty(gaps) ? NaN : sum(gaps) / length(gaps)
 end
 
 """
@@ -1415,7 +1476,8 @@ needs the complement environment, which needs the other corners, so this is a ge
 fixed-point map rather than a one-shot build. The first sweep does almost all the work (it is
 what replaces the greedy pass's one-sided cuts), but the tail is slow: `|ΔF|` typically needs
 ~8–12 sweeps to reach 1e-8. Stopping at 2–3, as an earlier iteration did, lands mid-transient
-and reads as a limit cycle. Warns if `tol` is not met within `maxiter`.
+and reads as a limit cycle. Warns if `tolerance` is not met within `maxiter` — except under
+`verbose = true`, where the same message is `println`ed rather than warned.
 """
 function update(cache::CTMEnvironmentCache; maxiter::Integer = 30,
                 tolerance::Real = 1.0e-10, verbose::Bool = false)
@@ -1437,7 +1499,9 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30,
         # Compare `sd²`, not `sd`. `F` is stationary in the state at the fixed point, so
         # `|ΔF| ~ sd²` — holding both to the same tolerance is dimensionally inconsistent and
         # measured ~3x the sweeps for no accuracy (5×5 D=2 χ=8: 30 sweeps / 21 s against 11
-        # sweeps / 2.2 s, same `F` to 12 digits). This is equivalent to `sd ≤ √tolerance`.
+        # sweeps / 2.2 s, same `F` to 12 digits). Equivalent to `sd ≤ √(tolerance · max(1, |F|))` —
+        # note the `max(1, |F|)`: `F` is an EXTENSIVE free energy, so on a large lattice the
+        # effective state tolerance is looser than a bare `√tolerance` by `√|F|`.
         sd = opts.gauge ? _ctm_statedist(env, prev) : nothing
         crit = isnothing(sd) ? Δ : max(Δ, sd^2)
         verbose && @info "CVM sweep $it: F = $F, |ΔF| = $Δ, state Δ = $(something(sd, NaN))"
