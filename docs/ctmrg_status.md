@@ -643,3 +643,44 @@ existing solver is *more* stable than the replacement would be.
 QR, an under-damped iteration, and projector discontinuity. Propose the next one only with a cheap
 falsifying test attached, as here — this check cost twenty minutes and prevented a multi-session
 refactor built on a false premise.
+
+## Measured 2026-08-11: performance audit — the defaults are validated, not improved
+
+**Where a `:cut` sweep goes.** Timed inside the projector (6×6 D=3): the two thin QRs plus the SVD
+are **>80% of the sweep**; the combiner contractions are 0.7%, and everything shared with `:cycle`
+(enlarged-corner build, block rebuild) is the rest. Enlarged corners are already memoised per sweep
+(`get!(enl, …)`), so there is no recomputation to remove. `:cut` is 9.3× slower than `:cycle` on the
+same lattice (2.457 s against 0.264 s per sweep) and essentially all of that gap is the QR+SVD the
+cycle path does not do. **The speed lever is choosing `:cycle`, not tuning `:cut`.**
+
+**`krylov_min = 128` — verified, do NOT lower.** In isolation a top-k Krylov SVD beats a dense one
+well below 128, with singular values agreeing to ~1e-15:
+
+```
+n     k    dense      topk       speedup
+48    8    5.75e-04   1.45e-04   3.97
+72    8    5.99e-04   3.43e-04   1.75
+144   8    2.65e-03   9.78e-04   2.71
+288   8    1.80e-01   3.65e-03   49.17
+144/200/288 at k=32          FAILED (info.converged < k)
+```
+
+and 40–48 of 100 interfaces at χ=8/16 are blocked from that path *only* by `krylov_min`. Nevertheless
+**end to end `krylov_min = 48` is a net LOSS**: 3.3× slower at χ=8, 2.2× slower at χ=32, 1.36× faster
+only at χ=16. The isolated benchmark skipped the failures; in the engine a failed Krylov attempt costs
+the attempt *plus* the dense fallback, and the real `W` has a decaying spectrum that synthetic
+triangular test matrices do not. Accuracy is bit-identical either way, so this is purely a speed
+question and the answer is no.
+
+**`qr_cutoff = 1e-13` — inert.** Over 4 seeds, both projectors, 5×5 D=2 at χ=4 and 8, `⟨Z⟩` is
+identical to every digit for cutoffs from 1e-15 to 1e-7. No retained direction ever falls below the
+threshold, matching the source's own note that the retained spectrum has median `S_k/S_1` ~1e-1…1e-2.
+It is insurance against `S^(-1/2)` amplification, not a lever.
+
+⚠️ **Methodology note, since it produced a wrong answer here.** A synthetic micro-benchmark of a
+kernel is not evidence about the engine: it excluded the failure path and used matrices with the wrong
+spectral profile, and pointed the opposite way from the end-to-end measurement. Benchmark the sweep.
+
+⚠️ **Instrumentation can dominate what it measures.** A first pass recorded block sizes by calling
+`_ctm_block_matrix` a second time per interface; that inflated the sweep ~9× and made the QR/SVD
+percentages read low. The qualitative conclusion survived, the percentages did not.
