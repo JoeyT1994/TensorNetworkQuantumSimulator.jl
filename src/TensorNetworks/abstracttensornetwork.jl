@@ -24,6 +24,10 @@ NamedGraphs.vertextype(tn::AbstractTensorNetwork) = NamedGraphs.vertextype(graph
 virtualinds(tn::AbstractTensorNetwork, e::NamedEdge) = ITensors.commoninds(tn[src(e)], tn[dst(e)])
 virtualind(tn::AbstractTensorNetwork, e::NamedEdge) = only(virtualinds(tn, e))
 
+# The indices `virtualinds` intersects, for one endpoint alone, so a partitioned network can derive a
+# cut edge's bond by intersecting with the peer's. Never built from `bp_factors`, which would copy.
+factor_inds(tn::AbstractTensorNetwork, v) = collect(inds(tn[v]))
+
 function maxvirtualdim(tn::AbstractTensorNetwork)
     return maximum(maximum.([dim.(virtualinds(tn, e)) for e in edges(tn)]))
 end

@@ -22,7 +22,18 @@ function virtualinds(form::AbstractForm, edge::NamedEdge)
 end
 
 function default_message(form::AbstractForm, edge::AbstractEdge)
-    return adapt_like(form, denseblocks(delta(virtualinds(form, edge))))
+    return default_message(form, edge, virtualinds(form, edge))
+end
+
+# `linds` explicit, for a partitioned network deriving them across a cut. See `factor_inds`.
+function default_message(form::AbstractForm, ::AbstractEdge, linds)
+    return adapt_like(form, denseblocks(delta(collect(linds))))
+end
+
+# `bra_factor_inds` rather than `inds(bra_tensor(...))`: a QuadraticForm's bra tensor is derived, and
+# building it copies the ket.
+function factor_inds(form::AbstractForm, v)
+    return Index[factor_inds(ket(form), v); factor_inds(operator(form), v); bra_factor_inds(form, v)]
 end
 
 function bp_factors(form::AbstractForm, verts::Vector)

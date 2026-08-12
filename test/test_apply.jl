@@ -110,8 +110,9 @@ end
 @eval module $(gensym())
 using LinearAlgebra: Diagonal, I, istriu, norm, svd, transpose
 using Random: Random
-using TensorNetworkQuantumSimulator: absorb_chain!, absorb_matrices!, absorb_matrices_mul!,
-    absorb_matrices_qr!, mul_strided_batched!, simple_update_dense!
+using TensorNetworkQuantumSimulator: absorb_boundary_in!, absorb_boundary_out!, absorb_chain!,
+    absorb_matrices!, absorb_matrices_mul!, absorb_matrices_qr!, mul_strided_batched!,
+    simple_update_dense!
 using Test: @test, @testset, @test_throws
 
 # Contract `matrices[k]`'s first index with axis `inds[k]`, then permute to (inds..., qrinds...).
@@ -304,6 +305,55 @@ end
             @test size(u) == (8, 8, 2, cols)
             @test length(spare) == length(Q)
         end
+    end
+
+    # Across a cut edge there is no partner tensor to fall back on, so the wide case must be carried.
+    @testset "absorb_boundary_in! delegates when the matrix is tall, $k env legs" for k in 1:3
+        a = 8
+        A = randn(ComplexF64, ntuple(_ -> a, k)..., 2, 3)
+        envs = ntuple(_ -> randn(ComplexF64, a, a), k)
+        inds, qrinds = ntuple(identity, k), (k + 1, k + 2)
+        @assert a^k >= 6                       # tall, so this must take the QR branch
+
+        Qw, Rw, _ = absorb_matrices_qr!(copy(A), envs, inds, qrinds)
+        Q, R, free = absorb_boundary_in!(copy(A), envs, inds, qrinds)
+        @test !isnothing(Q)
+        @test Q ≈ Qw
+        @test R ≈ Rw
+
+        # `absorb_boundary_out!` is then the same round trip as the pair it wraps.
+        inv_envs = map(m -> transpose(inv(m)), envs)
+        @test absorb_boundary_out!(Q, inv_envs, R, free; op = transpose) ≈ A
+    end
+
+    # One environment leg against a site and a bond is wide, so the whole absorbed tensor stands in
+    # for `R` and comes back with the environment legs still attached.
+    @testset "absorb_boundary_in! carries the wide case, $b bond" for b in (3, 5)
+        a, d = 2, 2
+        A = randn(ComplexF64, a, d, b)
+        envs = (randn(ComplexF64, a, a),)
+        inv_envs = map(m -> transpose(inv(m)), envs)
+        @assert a < d * b                      # wide, so this must take the no-QR branch
+
+        Q, R, free = absorb_boundary_in!(copy(A), envs, (1,), (2, 3))
+        @test isnothing(Q)
+        @test R ≈ absorb_reference(A, envs, (1,), (2, 3))
+        @test size(R) == (a, d, b)
+
+        # A truncation that shrank the bond, and one that grew it past the buffer left behind.
+        for newb in (2, b, 3b)
+            Rp = randn(ComplexF64, a, d, newb)
+            want = absorb_reference(Rp, inv_envs, (1,), (2, 3); op = transpose)
+            @test absorb_boundary_out!(nothing, inv_envs, copy(Rp), free; op = transpose) ≈ want
+        end
+    end
+
+    @testset "absorb_boundary_in! with no environment legs" begin
+        A = randn(ComplexF64, 2, 3)
+        Q, R, free = absorb_boundary_in!(copy(A), (), (), (1, 2))
+        @test isnothing(Q)
+        @test R ≈ A
+        @test absorb_boundary_out!(nothing, (), copy(A), free) ≈ A
     end
 
     # Sides differ in size and in environment-leg count, so the larger-side-first reordering has to
