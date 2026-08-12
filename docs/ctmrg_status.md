@@ -684,3 +684,43 @@ spectral profile, and pointed the opposite way from the end-to-end measurement. 
 ⚠️ **Instrumentation can dominate what it measures.** A first pass recorded block sizes by calling
 `_ctm_block_matrix` a second time per interface; that inflated the sweep ~9× and made the QR/SVD
 percentages read low. The qualitative conclusion survived, the percentages did not.
+
+### FIXED 2026-08-11: `_ctm_svd_topk` threw on every large interface
+
+`KrylovDefaults.krylovdim` is 30, and `svdsolve(W, x0, k, :LR)` **THROWS** for `k ≥ 30` rather than
+returning unconverged. `_ctm_svd_topk` caught it and returned `nothing`, so every interface with
+`kw ≥ 30` paid a doomed Krylov attempt AND the dense SVD — worst on the largest blocks, which are
+exactly what the top-k path exists to accelerate. That is why the χ=32 instrumentation read
+"topk fired 0, DENSE 100": the gate was passing and the solve was failing, not declining.
+
+Fixed by passing `krylovdim = max(2k + 10, 30)`. That alone would make things WORSE, because with the
+solve now succeeding the old `nW > 4kw` gate admits cases where top-k loses badly. Measured
+(min-of-N, triangular products like the real `W`):
+
+```
+n     k    dense      topk       speedup
+288   8    4.01e-02   3.19e-03   12.56x
+288   16   3.24e-02   4.67e-03    6.94x
+288   32   1.05e-01   1.65e-02    6.34x
+200   32   2.25e-02   6.03e-03    3.74x
+144   8    2.72e-03   8.55e-04    3.18x
+144   16   2.76e-03   1.55e-03    1.79x
+144   32   2.82e-03   2.07e-02    0.14x   <- 7x SLOWER
+288   48   1.80e-02   6.32e-02    0.28x   <- slower
+```
+
+The win needs `nW/kw ≳ 8`, so the gate is now `nW > 8kw`. It retains every large speedup above and
+declines both losing cases. `krylov_min = 128` is unchanged (re-verified separately: lowering it is a
+net loss because of the failure-path cost).
+
+**Accuracy is bit-identical** — `⟨Z⟩`, `marg` and `F` match to every digit across both projectors at
+χ = 4/8/16, which is expected since top-k returns the same singular triplets (agreement ~1e-15). 183
+assertions pass.
+
+⚠️ **The end-to-end speed gain is NOT verified.** Sweep timings on this machine varied 7× for
+identical work (6×6 D=3 χ=16 measured at 0.392 s, 1.034 s, 1.210 s, 2.150 s, 2.892 s across the
+session) because three unrelated Julia processes were running throughout; two benchmark runs were also
+OOM-killed. The χ=8 arm flipped from "2× slower" to "2× faster" between two runs of the same code.
+**Re-measure on a quiet machine before quoting any sweep-level number.** What is defensible without a
+stopwatch: the old code did work that could not possibly succeed, and the new gate is backed by
+repeated millisecond-scale microbenchmarks that are far less load-sensitive than sweep timings.

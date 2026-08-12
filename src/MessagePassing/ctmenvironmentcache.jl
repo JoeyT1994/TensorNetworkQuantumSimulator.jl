@@ -384,7 +384,11 @@ _ctm_tri_factor(B::ITensor, io::Index) = Matrix(qr(_ctm_block_matrix(B, io)).R)
 function _ctm_svd_topk(W::AbstractMatrix, k::Integer)
     try
         x0 = _ctm_startvec(eltype(W), size(W, 2), :svd)
-        vals, lvecs, rvecs, info = svdsolve(W, x0, k, :LR)
+        # `krylovdim` MUST exceed `k`: KrylovKit's default is 30, and `svdsolve` THROWS for k ≥ 30
+        # rather than returning unconverged. Before this was set, every interface with kw ≥ 30 paid
+        # a doomed Krylov attempt and then the dense SVD anyway — worst on the largest blocks, which
+        # are exactly the ones the top-k path exists to accelerate.
+        vals, lvecs, rvecs, info = svdsolve(W, x0, k, :LR; krylovdim = max(2k + 10, 30))
         (info.converged >= k && length(lvecs) >= k && length(rvecs) >= k) || return nothing
         U = reduce(hcat, @view(lvecs[1:k])); V = reduce(hcat, @view(rvecs[1:k]))
         eltype(W) <: Real && (U = real.(U); V = real.(V))
@@ -402,7 +406,13 @@ function _ctm_twosided_projector_qr(Bw::ITensor, Be::ITensor, io::Index, maxdim:
     W = RA * RBt
     kw = min(Int(maxdim), min(size(W)...))
     nW = min(size(W)...)
-    F = (opts.arnoldi && nW >= opts.krylov_min && nW > 4kw) ? _ctm_svd_topk(W, kw) : nothing
+    # Gate measured 2026-08-11, not guessed. Top-k beats a dense SVD only when the block is large
+    # AND we keep a small fraction of it; the old `nW > 4kw` was too permissive — at n=144, k=32 the
+    # Krylov path is 7× SLOWER than dense, while at n=288, k=32 it is 6.3× faster. The win appears
+    # around nW/kw ≳ 8. Measured speedups retained under this gate: 12.6× (n=288,k=8), 6.9×
+    # (288,16), 6.3× (288,32), 2.4× (144,8), 1.8× (144,16). Cases it now correctly declines:
+    # (144,32) 0.14×, (288,48) 0.28×.
+    F = (opts.arnoldi && nW >= opts.krylov_min && nW > 8kw) ? _ctm_svd_topk(W, kw) : nothing
     isnothing(F) && (F = svd(W))            # ONE decomposition → consistent U, S, V
     S = F.S
     k = min(Int(maxdim), length(S))
