@@ -1,441 +1,42 @@
-using Dictionaries: Dictionary, set!
-using Graphs: AbstractGraph, is_tree, nv
-using ITensors.NDTensors: NDTensors, scalartype
-using ITensors: Algorithm, ITensor, itensor, dim, id, plev, permute
+using Dictionaries: Dictionary, delete!, set!
+using Graphs: AbstractGraph, connected_components, is_tree
+using ITensors.NDTensors: scalartype
+using ITensors: Algorithm, ITensor, delta
 using MPI
-using NamedGraphs.GraphsExtensions: boundary_edges
+using NamedGraphs.GraphsExtensions: a_star, boundary_edges, default_root_vertex,
+    forest_cover, forest_cover_edge_sequence, leaf_vertices, post_order_dfs_edges
 
-# ---------------------------------------------------------------------------------------------
-# Transport
-# ---------------------------------------------------------------------------------------------
-#
-# Tensors are moved as a small serialised header describing the index structure followed by the
-# raw storage as one contiguous buffer, one pair of messages per peer per exchange. The point of
-# splitting them is the payload: handing MPI a bare array (rather than `MPI.isend`ing the
-# ITensor, which runs it through Julia's serialiser) means a CUDA-aware MPI moves device memory
-# straight from one GPU to another, and a host-side run reuses the same buffer every sweep
-# instead of allocating a serialisation blob per message.
-#
-# The header cannot be dropped: `apply_gate!` truncates bonds, which mints new `Index` objects,
-# so neither the dimensions nor the index identities of a boundary tensor are known ahead of
-# time by the receiver.
-
-const TAG_MESSAGE_HEADER = Cint(11)
-const TAG_MESSAGE_PAYLOAD = Cint(12)
-const TAG_FACTOR_HEADER = Cint(13)
-const TAG_FACTOR_PAYLOAD = Cint(14)
-
-# One per peer per exchange. `counts` records how many tensors each logical item (an edge for
-# messages, a vertex for factors) contributed, so a message stored as a `Vector{ITensor}`
-# survives the round trip.
-struct TensorBatch
-    inds::Vector{Vector{Index}}
-    counts::Vector{Int}
-    eltype::DataType
-end
-
-_batch_lengths(b::TensorBatch) = [prod(dim, is; init = 1) for is in b.inds]
-
-# Sender and receiver have to agree on the memory layout of a tensor without having exchanged
-# it, so indices are always permuted into ascending `(id, plev)` order before the storage is
-# read, and reinterpreted in that same order on arrival. Index ids are globally unique and
-# byte-identical across ranks (they are drawn once and broadcast), so both sides sort alike.
-_canonical_inds(t::ITensor) = sort(collect(inds(t)); by = i -> (id(i), plev(i)))
-
-function _canonical_permute(t::ITensor)
-    cinds = _canonical_inds(t)
-    # `permute` has no zero-index method, and a scalar tensor needs no permuting anyway.
-    isempty(cinds) && return t
-    return permute(t, cinds...; allow_alias = true)
-end
-
-# Only dense storage has a flat buffer whose length is the product of the dimensions. Anything
-# else (block-sparse, diagonal) falls back to serialising the tensors themselves.
-function _is_raw_transferable(t::ITensor)
-    ITensors.storage(t) isa NDTensors.Dense || return false
-    return length(ITensors.data(t)) == prod(dim, inds(t); init = 1)
-end
-
-# An array that already lives wherever the network's tensors do, used only as a `similar` template
-# for the exchange buffers. Taken from a real tensor rather than from `datatype`, which can come
-# back as a UnionAll with the element type still free (`CuArray{T,1,DeviceMemory} where T`) and so
-# cannot be constructed directly.
-#
-# Reads the stored tensor directly rather than going through `bp_factors`: for a state that builds
-# `dag(prime(T))`, a full conjugated copy of a site tensor, which this would allocate and throw
-# away on every call -- and it is called once per peer per exchange.
-_prototype_tensor(tn::AbstractTensorNetwork, v) = tn[v]
-_prototype_tensor(form::AbstractForm, v) = ket(form)[v]
-
-function _storage_prototype(bp_cache)
-    tn = network(bp_cache)
-    for v in vertices(tn)
-        return ITensors.data(_prototype_tensor(tn, v))
-    end
-    return nothing
-end
-
-# Allocate on whichever device the network lives on. A partition with no tensors has nothing to
-# exchange, so the host fallback is never actually sent from.
-function _alloc_buffer(bp_cache, T::Type, n::Integer)
-    prototype = _storage_prototype(bp_cache)
-    return isnothing(prototype) ? Vector{T}(undef, n) : similar(prototype, T, n)
-end
-
-_device_alloc(bp_cache) = (T, n) -> _alloc_buffer(bp_cache, T, n)
-_host_alloc(T::Type, n::Integer) = Vector{T}(undef, n)
-
-# Payload buffers are pure scratch, so they are grown rather than reallocated. Keyed by element
-# type as well as peer because messages and factors need not share a scalar type. `alloc` picks
-# the memory space: device-side for the payload proper, host-side for the staging mirrors.
-function _staging!(alloc, store::Dict, peer::Integer, T::Type, n::Integer)
-    key = (Int32(peer), T)
-    buf = get(store, key, nothing)
-    if buf === nothing || length(buf) < n
-        # Drop the old buffer *before* allocating its replacement, the same discipline
-        # `message_allocator!` follows. Otherwise both are live across the `alloc`, and since a
-        # circuit grows bond dimensions repeatedly this doubling recurs -- at χ=1024 it is a
-        # 32 GiB buffer held while 36 GiB is requested, on the device.
-        buf = nothing
-        delete!(store, key)
-        buf = alloc(T, max(n, 1))
-        store[key] = buf
-    end
-    return buf
-end
-
-# All bulk data movement goes through this. `copyto!(dest, src)` between two `SubArray`s that
-# live in different memory spaces has no specialised method -- CUDA.jl's two-argument methods are
-# defined on `Array`/`DenseCuArray`, and a host `SubArray` is not an `Array` -- so it falls back
-# to Base's elementwise loop, which is scalar indexing on a device array and throws. The
-# five-argument form on the *parent* buffers has methods for every host/device combination, so
-# offsets are passed explicitly here rather than baked into views.
-function _copy_range!(dest, doffset::Integer, src, soffset::Integer, n::Integer)
-    iszero(n) && return dest
-    copyto!(dest, doffset, src, soffset, n)
-    return dest
-end
-
-# Scratch space for the raw payload exchange. Shared by reference across `copy`, like `comm`:
-# the contents are only meaningful for the duration of one exchange, and exchanges are
-# collective so they never interleave. Sharing is what keeps a BP sweep from reallocating a
-# device buffer per boundary edge.
-struct ExchangeBuffers
-    send::Dict{Tuple{Int32, DataType}, Any}
-    recv::Dict{Tuple{Int32, DataType}, Any}
-    send_host::Dict{Tuple{Int32, DataType}, Any}
-    recv_host::Dict{Tuple{Int32, DataType}, Any}
-end
-function ExchangeBuffers()
-    D() = Dict{Tuple{Int32, DataType}, Any}()
-    return ExchangeBuffers(D(), D(), D(), D())
-end
-
-# `true` once the network's tensors live on an accelerator. Asks an actual storage array rather
-# than reasoning about `datatype`, which can be a UnionAll on a GPU and does not survive type
-# arithmetic reliably; a wrong answer here would silently disable host staging. Nothing depends on
-# CUDA.jl -- anything that is not a host `Array` counts as device memory. An empty partition has
-# nothing to exchange, so its answer does not matter.
-function _is_device_backed(bp_cache)
-    prototype = _storage_prototype(bp_cache)
-    return isnothing(prototype) ? false : !(prototype isa Array)
-end
-
-# Device tensors are copied to host memory before MPI sees them, and copied back on arrival.
-# This is the default, and deliberately so, even though it costs a device->host->device round
-# trip per message. Passing device pointers to MPI instead fails in two ways that are both worse
-# than the copy:
-#
-#  * An MPI not built against CUDA/ROCm does not reject a device pointer. Its transport layer
-#    (UCX, say) assumes host memory and issues a plain CPU memcpy, segfaulting inside the MPI
-#    library with a stack trace pointing at `MPI_Isend` rather than at anything here.
-#    `MPI.has_cuda()` is not a reliable guard: it reports a capability flag, and builds that
-#    report `true` while UCX lacks `cuda_copy`/`cuda_ipc` still crash.
-#  * Even with a genuinely GPU-aware MPI, the buffer handed over has just been written by a
-#    device-to-device `copyto!`, which is queued on a stream and does not synchronise with the
-#    host. MPI can read it before the copy lands, which corrupts messages silently and
-#    intermittently rather than failing. Staging through the host avoids this for free, because
-#    `copyto!(::Array, ::CuArray)` blocks and is ordered behind previously queued stream work.
-#
-# `gpu_direct_mpi!(true)` opts into the direct path for a verified setup; see its docstring for
-# what "verified" has to mean.
-const _GPU_DIRECT = Ref(false)
-
-# Test hook: forces the staging path so its offset and copy bookkeeping is exercised on the host,
-# where both mirrors happen to be plain arrays, without needing a GPU.
-const _FORCE_HOST_STAGING = Ref(false)
-
-"""
-    gpu_direct_mpi() -> Bool
-    gpu_direct_mpi!(enabled::Bool)
-
-Whether boundary tensors held on a GPU are handed to MPI as device pointers (`true`) or copied
-through host memory first (`false`, the default).
-
-The default is the safe one. Enabling this is only correct when **both** hold:
-
-  * MPI is genuinely GPU-aware -- built against CUDA/ROCm, with the transport layer configured
-    for it (for UCX, `ucx_info -d` showing `cuda_copy`/`cuda_ipc`, and `UCX_TLS` either unset or
-    including them). `MPI.has_cuda()` returning `true` is necessary but not sufficient.
-  * The device queue is synchronised before MPI reads a buffer. Define a method for
-    [`mpi_device_synchronize`](@ref) to do that, e.g. `mpi_device_synchronize() =
-    CUDA.synchronize()`; without it, sends can race the device-to-device copy that fills them.
-
-Getting either wrong produces a segfault inside MPI or silent message corruption, not an error
-from this package.
-"""
-gpu_direct_mpi() = _GPU_DIRECT[]
-
-function gpu_direct_mpi!(enabled::Bool)
-    if enabled && !(MPI.has_cuda() || MPI.has_rocm())
-        @warn """
-        gpu_direct_mpi!(true) with an MPI that reports no CUDA/ROCm support. Sending a device
-        pointer to it will segfault inside the MPI library. Point MPI.jl at a GPU-aware system
-        MPI (`MPIPreferences.use_system_binary()`) -- the JLL binaries installed by default are
-        not GPU-aware -- or leave this disabled to stage through host memory.
-        """
-    end
-    _GPU_DIRECT[] = enabled
-    return enabled
-end
-
-"""
-    mpi_device_synchronize()
-
-Hook called before a device-resident payload is handed to MPI and after one is received, to wait
-for queued device work. The default does nothing, which is correct while payloads are staged
-through host memory. Override it when enabling [`gpu_direct_mpi!`](@ref):
-
-    TensorNetworkQuantumSimulator.mpi_device_synchronize() = CUDA.synchronize()
-"""
-mpi_device_synchronize() = nothing
-
-function _needs_host_staging(bp_cache)
-    _FORCE_HOST_STAGING[] && return true
-    return _is_device_backed(bp_cache) && !_GPU_DIRECT[]
-end
-
-function _flatten_values(values)
-    tensors, counts = ITensor[], Int[]
-    for m in values
-        if m isa ITensor
-            push!(tensors, m)
-            push!(counts, 1)
-        else
-            append!(tensors, m)
-            push!(counts, length(m))
-        end
-    end
-    return tensors, counts
-end
-
-# Returns `(header, payload)`. A `nothing` payload means the header carries the tensors itself,
-# in which case it holds the per-item values rather than the flattened list, so that a message
-# stored as a `Vector{ITensor}` is reassembled correctly on the far side.
-function _prepare_send(bp_cache, peer, values)
-    tensors, counts = _flatten_values(values)
-    (isempty(tensors) || !all(_is_raw_transferable, tensors)) && return values, nothing
-
-    T = promote_type(map(eltype, tensors)...)
-    canonical = ITensor[
-        _canonical_permute(eltype(t) === T ? t : adapt(T, t)) for t in tensors
-    ]
-    header = TensorBatch([collect(inds(t)) for t in canonical], counts, T)
-
-    lengths = [length(ITensors.data(t)) for t in canonical]
-    host_staging = _needs_host_staging(bp_cache)
-
-    # One tensor is the common case (a partition boundary is usually one edge per peer): hand its
-    # storage straight to MPI with no staging copy at all. Not available when the payload has to
-    # be mirrored to the host first.
-    if isone(length(canonical)) && !host_staging
-        return header, ITensors.data(only(canonical))
-    end
-
-    n = sum(lengths)
-    buf = _staging!(_device_alloc(bp_cache), bp_cache.buffers.send, peer, T, n)
-    offset = 0
-    for (t, len) in zip(canonical, lengths)
-        _copy_range!(buf, offset + 1, ITensors.data(t), 1, len)
-        offset += len
-    end
-    if !host_staging
-        # The packing copies above are queued on a device stream; MPI must not read the buffer
-        # until they land.
-        _is_device_backed(bp_cache) && mpi_device_synchronize()
-        return header, view(buf, 1:n)
-    end
-
-    hbuf = _staging!(_host_alloc, bp_cache.buffers.send_host, peer, T, n)
-    _copy_range!(hbuf, 1, buf, 1, n)
-    return header, view(hbuf, 1:n)
-end
-
-# `payload` is the whole staging buffer, not a view of the filled prefix: slicing it here would
-# make the copies below `SubArray`-to-`SubArray`, which is the case that has no method.
-function _scatter!(setter, items, header::TensorBatch, payload)
-    lengths = _batch_lengths(header)
-    offset, k = 0, 0
-    for (item, count) in zip(items, header.counts)
-        ts = ITensor[]
-        for _ in 1:count
-            k += 1
-            len = lengths[k]
-            data = similar(payload, header.eltype, len)
-            _copy_range!(data, 1, payload, offset + 1, len)
-            push!(ts, itensor(NDTensors.Dense(data), Tuple(header.inds[k])))
-            offset += len
-        end
-        setter(item, isone(count) ? only(ts) : ts)
-    end
-    return nothing
-end
-
-# `send_items`/`recv_items` map a peer rank to the items going to / coming from it, in an order
-# both ranks derive from `super_graph`. Distinct tags per phase plus that shared ordering are
-# what make matching explicit: it no longer depends on the two ranks happening to walk
-# `shared_vertices` in step.
-function _exchange!(
-        bp_cache, send_items, recv_items, getter, setter, header_tag, payload_tag
-    )
-    comm = communicator(bp_cache)
-    requests = MPI.Request[]
-
-    # Headers. Non-blocking sends are posted before the blocking receives so this cannot
-    # deadlock however the peers are ordered.
-    send_payloads = Pair{Int32, Any}[]
-    for (peer, items) in pairs(send_items)
-        isempty(items) && continue
-        header, payload = _prepare_send(bp_cache, peer, [getter(item) for item in items])
-        push!(requests, MPI.isend(header, comm; dest = peer, tag = header_tag))
-        isnothing(payload) || push!(send_payloads, Int32(peer) => payload)
-    end
-
-    recv_headers = Pair{Int32, Any}[]
-    for (peer, items) in pairs(recv_items)
-        isempty(items) && continue
-        push!(
-            recv_headers,
-            Int32(peer) => MPI.recv(comm; source = peer, tag = header_tag)
-        )
-    end
-
-    # Payloads. Receives are posted first so an eagerly-sent message always has somewhere to
-    # land. `recv_payloads` and `send_payloads` also keep every buffer reachable until
-    # `Waitall`, so none of them can be collected while MPI is reading or writing it.
-    # Keyed rather than positional: a peer whose header took the serialised fallback has no
-    # payload, so a parallel array here would slip out of step with `recv_headers`.
-    # `recv_payloads` holds whole staging buffers, always the ones in the same memory space as the
-    # network's tensors; when MPI cannot write there the data lands in a host mirror and is copied
-    # across after `Waitall`. Views are built only where MPI needs them.
-    host_staging = _needs_host_staging(bp_cache)
-    recv_payloads = Dict{Int32, Any}()
-    recv_mirrors = Dict{Int32, Any}()
-    recv_lengths = Dict{Int32, Int}()
-    for (peer, header) in recv_headers
-        header isa TensorBatch || continue
-        n = sum(_batch_lengths(header); init = 0)
-        buffer = _staging!(_device_alloc(bp_cache), bp_cache.buffers.recv, peer, header.eltype, n)
-        recv_payloads[peer] = buffer
-        recv_lengths[peer] = n
-        if host_staging
-            mirror = _staging!(_host_alloc, bp_cache.buffers.recv_host, peer, header.eltype, n)
-            recv_mirrors[peer] = mirror
-            push!(requests, MPI.Irecv!(view(mirror, 1:n), comm; source = peer, tag = payload_tag))
-        else
-            push!(requests, MPI.Irecv!(view(buffer, 1:n), comm; source = peer, tag = payload_tag))
-        end
-    end
-    for (peer, payload) in send_payloads
-        push!(requests, MPI.Isend(payload, comm; dest = peer, tag = payload_tag))
-    end
-    MPI.Waitall(requests)
-    for (peer, mirror) in recv_mirrors
-        _copy_range!(recv_payloads[peer], 1, mirror, 1, recv_lengths[peer])
-    end
-    # On the direct path MPI wrote into device memory; wait for that before reading it back out
-    # into tensors. (Staged receives need no barrier: the host->device copies just above are
-    # ordered ahead of the reads in `_scatter!` on the same stream.)
-    if !host_staging && _is_device_backed(bp_cache) && !isempty(recv_payloads)
-        mpi_device_synchronize()
-    end
-
-    for (peer, header) in recv_headers
-        items = recv_items[peer]
-        if header isa TensorBatch
-            _scatter!(setter, items, header, recv_payloads[peer])
-        else
-            for (item, t) in zip(items, header)
-                setter(item, t)
-            end
-        end
-    end
-    return bp_cache
-end
-
-# ---------------------------------------------------------------------------------------------
-# Cache
-# ---------------------------------------------------------------------------------------------
-
-"""
-    BeliefPropagationCacheMPI(cache::BeliefPropagationCache, super_graph, shared_vertices; comm, validate = true)
-
-A `BeliefPropagationCache` holding one partition of a tensor network distributed across the
-ranks of `comm`, so that no rank ever stores the whole network.
-
-`super_graph` is the graph of the *global* network (the same on every rank -- only its tensors
-are distributed, not its connectivity). `shared_vertices` maps each vertex that sits on a
-partition boundary to the pair of ranks holding it; a boundary vertex's tensor is duplicated on
-both, and the neighbours it has on the far side become ghost vertices carrying the incoming
-boundary messages. Local BP then runs unchanged, with one message exchange per sweep.
-
-`cache` is adopted, not copied: its message dictionary gains an entry per incoming boundary
-edge.
-
-The partition must satisfy:
-
-  * every shared vertex is shared by exactly two ranks, and is held by exactly those two;
-  * shared vertices are pairwise non-adjacent in `super_graph`, so that every edge lies inside
-    exactly one partition;
-  * each rank's local network is the subgraph `super_graph` induces on the rank's vertices;
-  * every rank passes an identical, identically-ordered `shared_vertices`.
-
-These are checked unless `validate = false` (two `Allreduce`s over the global vertex and edge
-lists, worth skipping only for very large graphs). Violating them otherwise tends to hang
-rather than fail, because the exchange schedule stops matching up.
-
-This constructor is collective: every rank of `comm` must call it.
-
-See also [`apply_gates_mpi`](@ref), [`inner_mpi`](@ref).
-"""
+# An EDGE CUT partitioning: every vertex is owned by one rank and no tensor is duplicated. For a cut
+# edge, this rank computes the outgoing message and receives the incoming one, hence `edge_sequence`.
 struct BeliefPropagationCacheMPI{
         V,
         BPC <: BeliefPropagationCache{V},
         G <: AbstractGraph,
-        SG <: AbstractGraph,
     } <: AbstractBeliefPropagationCache{V}
     local_cache::BPC
     messages_graph::G # local graph plus a ghost vertex per remote neighbour
-    super_graph::SG # connectivity of the global network; needed for the exchange order
-    vertex_order::Dictionary{V, Int} # deterministic vertex numbering, identical on every rank
-    shared_vertices::Dictionary{V, Int32} # duplicated vertex -> the peer rank
-    edges_to_send::Dictionary{NamedEdge{V}, Int32} # edge -> mpi rank
-    edges_to_recv::Dictionary{NamedEdge{V}, Int32} # edge -> mpi rank
-    send_order::Dictionary{Int32, Vector{NamedEdge{V}}} # peer -> edges, canonically ordered
-    recv_order::Dictionary{Int32, Vector{NamedEdge{V}}} # peer -> edges, canonically ordered
-    buffers::ExchangeBuffers
+    ghost_ranks::Dictionary{V, Int32} # remote neighbour of a local vertex -> its owning rank
+    edges_to_send::Dictionary{NamedEdge{V}, Int32} # local -> ghost: computed here, sent there
+    edges_to_recv::Dictionary{NamedEdge{V}, Int32} # ghost -> local: computed there, received here
     comm::MPI.Comm
-    # `BufferAllocator` arena for the "blocked" message update (see blockedmessage.jl), built on
-    # first use. A `Ref` so it can be replaced from an immutable struct; holds no semantic state,
-    # so `copy` shares it rather than reallocating.
+    # Arena for the blocked message update (blockedmessage.jl), built on first use. A `Ref`
+    # so an immutable struct can replace it; holds no semantic state, so `copy` shares it.
     scratch::Base.RefValue{Any}
 end
 
 local_cache(bp_cache::BeliefPropagationCacheMPI) = bp_cache.local_cache
 messages_graph(bp_cache::BeliefPropagationCacheMPI) = bp_cache.messages_graph
-super_graph(bp_cache::BeliefPropagationCacheMPI) = bp_cache.super_graph
 communicator(bp_cache::BeliefPropagationCacheMPI) = bp_cache.comm
 message_scratch(bp_cache::BeliefPropagationCacheMPI) = bp_cache.scratch
+
+function BeliefPropagationCacheMPI(
+        local_cache, messages_graph, ghost_ranks, edges_to_send, edges_to_recv, comm
+    )
+    return BeliefPropagationCacheMPI(
+        local_cache, messages_graph, ghost_ranks, edges_to_send, edges_to_recv, comm,
+        Base.RefValue{Any}(nothing)
+    )
+end
 
 function release_message_scratch!(bp_cache::BeliefPropagationCacheMPI)
     ref = message_scratch(bp_cache)
@@ -459,13 +60,32 @@ for f in [
         :(network),
         :(graph),
         :(contraction_sequences),
-        :(edge_sequence),
         :(default_update_alg),
         :(default_message_update_alg),
+        :(default_bp_update_kwargs),
     ]
     @eval begin
         $f(bp_cache::BeliefPropagationCacheMPI) = $f(local_cache(bp_cache))
     end
+end
+
+# The local forest cover omits the outgoing cut edges, which no other rank can compute.
+function edge_sequence(bp_cache::BeliefPropagationCacheMPI)
+    return [edge_sequence(local_cache(bp_cache)); collect(keys(bp_cache.edges_to_send))]
+end
+
+function set_default_kwargs(alg::Algorithm"bp", bp_cache::BeliefPropagationCacheMPI)
+    # Not left to the local cache, whose edge set is incomplete and whose `maxiter` varies by rank.
+    maxiter = haskey(alg.kwargs, :maxiter) ? alg.kwargs.maxiter : default_bp_maxiter(bp_cache)
+    kwargs = merge((; edge_sequence = edge_sequence(bp_cache)), alg.kwargs, (; maxiter))
+    return set_default_kwargs(Algorithm("bp"; kwargs...), local_cache(bp_cache))
+end
+
+# Sweep counts must agree: `update_iteration!` ends in `communicate_messages!`, so a rank stopping
+# early leaves its peers blocked in `MPI.recv`. The local default varies with `is_tree`.
+function default_bp_maxiter(bp_cache::BeliefPropagationCacheMPI)
+    local_maxiter = default_bp_maxiter(local_cache(bp_cache))
+    return MPI.Allreduce(local_maxiter, MPI.MAX, communicator(bp_cache))
 end
 
 function edge_scalar(bp_cache::BeliefPropagationCacheMPI, edge::AbstractEdge)
@@ -477,58 +97,11 @@ function Base.copy(bp_cache::BeliefPropagationCacheMPI)
     return BeliefPropagationCacheMPI(
         copy(local_cache(bp_cache)),
         copy(messages_graph(bp_cache)),
-        # Shared, not duplicated: the graph and the derived exchange schedule are never
-        # mutated, the buffers are scratch, and a copy stays on the same communicator.
-        super_graph(bp_cache),
-        bp_cache.vertex_order,
-        copy(bp_cache.shared_vertices),
+        copy(bp_cache.ghost_ranks),
         copy(bp_cache.edges_to_send),
         copy(bp_cache.edges_to_recv),
-        bp_cache.send_order,
-        bp_cache.recv_order,
-        bp_cache.buffers,
         communicator(bp_cache), # shared, not duplicated: a copy stays on the same comm
-        message_scratch(bp_cache) # also shared: pure scratch, and `update` copies per call
-    )
-end
-
-# Both orientations of every edge, and an empty vector (rather than a `reduce` error) for a
-# partition that holds a single vertex.
-function _directed_edges(x)
-    es = collect(edges(x))
-    return isempty(es) ? es : reduce(vcat, [[e, reverse(e)] for e in es])
-end
-
-# Seed deltas, not a serial update: that update's `incoming_messages` sees only local edges, so it
-# never contracts the cut bonds' dangling indices and they survive as free indices in the boundary
-# messages, which then have ndims > 2.
-function _seed_default_messages!(bpc::AbstractBeliefPropagationCache)
-    es = _directed_edges(bpc)
-    return setmessages!(bpc, es, [default_message(bpc, e) for e in es])
-end
-
-# Moving the cache to a GPU is how the raw-payload exchange becomes GPU-direct: once the
-# tensors are `CuArray`-backed, `_alloc_buffer` allocates device staging buffers and MPI is
-# handed device pointers. The buffers have to be dropped rather than carried over, though --
-# they are keyed by element type only, so host scratch would otherwise be reused for a device
-# cache and quietly stage every message through the wrong memory space.
-function Adapt.adapt_structure(to, bpc::BeliefPropagationCacheMPI)
-    adapted = adapt_factors(to, adapt_messages(to, bpc))
-    return BeliefPropagationCacheMPI(
-        local_cache(adapted),
-        messages_graph(adapted),
-        super_graph(adapted),
-        adapted.vertex_order,
-        adapted.shared_vertices,
-        adapted.edges_to_send,
-        adapted.edges_to_recv,
-        adapted.send_order,
-        adapted.recv_order,
-        ExchangeBuffers(),
-        communicator(adapted),
-        # Dropped rather than carried over, for the same reason as the exchange buffers: it was
-        # allocated for the device the cache came from.
-        Base.RefValue{Any}(nothing)
+        message_scratch(bp_cache)
     )
 end
 
@@ -546,10 +119,8 @@ function shared_bond_inds(
     return Dictionary([es; reverse.(es)], [ls; ls])
 end
 
-# Unlike insert_virtualinds!, this works w.r.t `super_graph`, so an edge leaving `tn`
-# (connecting to a vertex on a different rank) needs to get a dangling leg. These legs
-# are generated once on root and broadcast as to be consistent across all ranks, and
-# passed in as `bond_inds`.
+# Unlike insert_virtualinds!, this works w.r.t `super_graph`, so an edge leaving `tn` for a vertex
+# on another rank gets a dangling leg. `bond_inds` must agree across ranks -- see `shared_bond_inds`.
 function insert_partition_virtualinds!(
         tn::AbstractTensorNetwork, super_graph::AbstractGraph, bond_inds
     )
@@ -566,227 +137,71 @@ function insert_partition_virtualinds!(
     return tn
 end
 
-# ---------------------------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------------------------
-
-# Every check below *records* what is wrong instead of throwing, and `_validate_partition` runs
-# all of them on every rank before anyone throws. Bailing out early on a rank-local condition
-# would leave the other ranks waiting in a collective their peer has already abandoned -- which
-# is the hang this validation exists to replace.
-
-# True on every rank, or false on every rank: safe to branch on.
-function _ranks_agree(value, comm)
-    h = hash(repr(value))
-    return MPI.Allreduce(h, MPI.MIN, comm) == MPI.Allreduce(h, MPI.MAX, comm)
+# Cut edges in an order every rank agrees on, so that within a rank pair the k-th send meets the
+# k-th receive without tagging. Sorted, so agreement does not rest on how the graph was built.
+function cut_edges(super_graph::AbstractGraph, vertex_ranks::Dictionary)
+    es = filter(e -> vertex_ranks[src(e)] != vertex_ranks[dst(e)], collect(edges(super_graph)))
+    return sort(es; by = repr)
 end
 
-function _check_local!(problems, cache, sgraph, shared_vertices, comm, is_local)
-    nranks = MPI.Comm_size(comm)
-    me = MPI.Comm_rank(comm)
-    local_graph = graph(cache)
-
-    for (v, ranks) in pairs(shared_vertices)
-        if !has_vertex(sgraph, v)
-            push!(problems, "shared vertex $v is not a vertex of `super_graph`.")
-            continue
-        end
-        if length(ranks) != 2
-            push!(
-                problems,
-                "shared vertex $v is listed as shared between $(length(ranks)) ranks ($ranks). " *
-                    "A shared vertex is duplicated on exactly two ranks; separating three or " *
-                    "more partitions at one vertex needs an edge-cut partition instead."
-            )
-            continue
-        end
-        first(ranks) == last(ranks) &&
-            push!(problems, "shared vertex $v lists rank $(first(ranks)) twice.")
-        all(r -> 0 <= r < nranks, ranks) || push!(
-            problems,
-            "shared vertex $v refers to ranks $ranks, outside 0:$(nranks - 1) for this " *
-                "communicator."
-        )
-        if me in ranks
-            is_local(v) || push!(
-                problems,
-                "`shared_vertices` says this rank holds $v, but it is not in the local network."
-            )
-        else
-            is_local(v) && push!(
-                problems,
-                "this rank holds $v, but `shared_vertices` lists it as shared between $ranks."
-            )
-        end
-    end
-
-    shared = Set(keys(shared_vertices))
-    for v in shared, w in neighbors(sgraph, v)
-        w in shared && push!(
-            problems,
-            "shared vertices $v and $w are adjacent in `super_graph`. Both holders would own " *
-                "the edge between them, so its message would be sent by both and received by " *
-                "neither, and `freenergy` would count it twice. Pick a separator whose " *
-                "vertices are pairwise non-adjacent."
-        )
-    end
-
-    for v in vertices(local_graph)
-        has_vertex(sgraph, v) ||
-            push!(problems, "local vertex $v is not a vertex of `super_graph`.")
-    end
-    for e in edges(sgraph)
-        (is_local(src(e)) && is_local(dst(e))) || continue
-        has_edge(local_graph, e) || push!(
-            problems,
-            "`super_graph` has the edge $e between two vertices this rank holds, but the local " *
-                "network does not. Pass the subgraph induced on the rank's vertices."
-        )
-    end
-    return problems
-end
-
-# Every edge must lie inside exactly one partition. An edge in none is never updated; an edge in
-# two has its message updated twice per sweep and is double-counted by `freenergy`.
-function _check_edge_cover!(problems, sgraph, is_local, comm)
-    es = collect(edges(sgraph))
-    held = Int32[(is_local(src(e)) && is_local(dst(e))) ? Int32(1) : Int32(0) for e in es]
-    total = MPI.Allreduce(held, MPI.SUM, comm)
-    bad = findfirst(!isequal(Int32(1)), total)
-    isnothing(bad) && return problems
-    n = total[bad]
-    push!(
-        problems,
-        iszero(n) ?
-            "edge $(es[bad]) of `super_graph` is inside no rank's partition, so belief " *
-            "propagation would never update its messages. Partitions must cover every edge." :
-            "edge $(es[bad]) of `super_graph` lies inside $n partitions. Every edge must be " *
-            "held by exactly one rank; adjacent shared vertices are the usual cause."
-    )
-    return problems
-end
-
-function _check_vertex_cover!(problems, sgraph, is_local, shared_vertices, comm)
-    vs = collect(vertices(sgraph))
-    held = Int32[is_local(v) ? Int32(1) : Int32(0) for v in vs]
-    total = MPI.Allreduce(held, MPI.SUM, comm)
-    for (v, n) in zip(vs, total)
-        expected = haskey(shared_vertices, v) ? 2 : 1
-        n == expected && continue
-        push!(
-            problems,
-            iszero(n) ?
-                "vertex $v of `super_graph` is held by no rank." :
-                "vertex $v of `super_graph` is held by $n ranks but `shared_vertices` implies " *
-                "$expected. A vertex is either local to one rank or shared by exactly two."
-        )
-    end
-    return problems
-end
-
-function _validate_partition(cache, sgraph, shared_vertices, comm)
-    local_vertices = Set(vertices(graph(cache)))
-    is_local = v -> v in local_vertices
-    problems = String[]
-
-    _check_local!(problems, cache, sgraph, shared_vertices, comm, is_local)
-    _ranks_agree(collect(pairs(shared_vertices)), comm) || push!(
-        problems,
-        "ranks were given different `shared_vertices`. Every rank must pass an identical, " *
-            "identically-ordered dictionary: the message exchange schedule is derived from it."
-    )
-
-    # The cover checks reduce one entry per global vertex/edge, so their buffer sizes have to
-    # match. Guard them with a fixed-size agreement test first -- and branch on its (globally
-    # identical) result, never on anything rank-local.
-    if _ranks_agree((nv(sgraph), length(collect(edges(sgraph)))), comm)
-        _check_edge_cover!(problems, sgraph, is_local, comm)
-        _check_vertex_cover!(problems, sgraph, is_local, shared_vertices, comm)
-    else
-        push!(problems, "ranks were given `super_graph`s of different sizes.")
-    end
-
-    nbad = MPI.Allreduce(isempty(problems) ? 0 : 1, MPI.SUM, comm)
-    iszero(nbad) && return nothing
-    throw(
-        ArgumentError(
-            isempty(problems) ?
-                "the partition was rejected on $nbad other rank(s); see their errors." :
-                "invalid partition on rank $(MPI.Comm_rank(comm)):\n  - " *
-                join(problems, "\n  - ")
-        )
-    )
-end
-
-# ---------------------------------------------------------------------------------------------
-# Construction
-# ---------------------------------------------------------------------------------------------
-
+# `cache` is adopted, not copied: it gains a message entry per cut edge, in both directions.
 function BeliefPropagationCacheMPI(
         cache::BeliefPropagationCache,
-        sgraph::AbstractGraph,
-        shared_vertices::Dictionary; # vertex -> (rank, rank)
-        comm::MPI.Comm = MPI.COMM_WORLD,
-        validate::Bool = true
+        super_graph::AbstractGraph,
+        vertex_ranks::Dictionary; # vertex -> the mpi rank owning it
+        comm::MPI.Comm = MPI.COMM_WORLD
     )
-    MPI.Initialized() || error(
-        "MPI has not been initialised. Call `MPI.Init()` before building a " *
-            "BeliefPropagationCacheMPI."
-    )
-    validate && _validate_partition(cache, sgraph, shared_vertices, comm)
-
-    V = vertextype(sgraph)
-    me = MPI.Comm_rank(comm)
+    V = vertextype(super_graph)
+    me = Int32(MPI.Comm_rank(comm))
     local_graph = graph(cache)
-    local_vertices = Set(vertices(local_graph))
+    local_vertices = collect(vertices(local_graph))
+    tn = network(cache)
+    ms = messages(cache)
+
+    wrong = filter(v -> vertex_ranks[v] != me, local_vertices)
+    isempty(wrong) || error(
+        "BeliefPropagationCacheMPI: rank $me holds $(wrong), which `vertex_ranks` assigns to " *
+            "$(map(v -> vertex_ranks[v], wrong)). Each vertex must be held by its owner and no " *
+            "one else.",
+    )
 
     edges_to_send = Dictionary{NamedEdge{V}, Int32}()
     edges_to_recv = Dictionary{NamedEdge{V}, Int32}()
+    ghost_ranks = Dictionary{V, Int32}()
 
-    # Only this rank's shared vertices, so callers can trust keys() when deciding which
-    # factors to exchange.
-    shared_vertices_other = Dictionary{V, Int32}()
-
-    for (shared_vertex, involved_ranks) in pairs(shared_vertices)
-        # Checked even when `validate` is off: destructuring a longer tuple would silently drop
-        # the extra ranks and build a partition that is quietly wrong rather than rejected.
-        length(involved_ranks) == 2 || throw(
-            ArgumentError(
-                "shared vertex $shared_vertex is shared between $(length(involved_ranks)) " *
-                    "ranks ($involved_ranks); exactly two are supported."
-            )
-        )
-        rank1, rank2 = involved_ranks
-        if me == rank1
-            other_rank = Int32(rank2)
-        elseif me == rank2
-            other_rank = Int32(rank1)
-        else
-            continue
-        end
-        insert!(shared_vertices_other, shared_vertex, other_rank)
-
-        for neighbor in neighbors(sgraph, shared_vertex)
-            edge = NamedEdge{V}(neighbor => shared_vertex)
-            if neighbor in local_vertices
-                # This rank owns the neighbour, so it owns the message flowing out of it.
-                insert!(edges_to_send, edge, other_rank)
-            else
-                insert!(edges_to_recv, edge, other_rank)
-            end
-        end
+    # Oriented away from this rank, one per cut edge it touches, in the agreed order.
+    my_cut_edges = NamedEdge{V}[]
+    for e in cut_edges(super_graph, vertex_ranks)
+        vertex_ranks[src(e)] == me && push!(my_cut_edges, NamedEdge{V}(src(e) => dst(e)))
+        vertex_ranks[dst(e)] == me && push!(my_cut_edges, NamedEdge{V}(dst(e) => src(e)))
     end
 
-    # A deterministic global vertex numbering. Both ends of every exchange sort their batch by
-    # it, so the sender's k-th tensor is the receiver's k-th tensor no matter what order the
-    # two ranks discovered their boundary in.
-    vertex_order = Dictionary(collect(vertices(sgraph)), 1:nv(sgraph))
-    edge_key = e -> (vertex_order[src(e)], vertex_order[dst(e)])
-    send_order = _order_by_peer(edges_to_send, edge_key)
-    recv_order = _order_by_peer(edges_to_recv, edge_key)
+    # Both sides send and both receive, so the sends have to be non-blocking.
+    requests = MPI.Request[]
+    for e in my_cut_edges
+        peer = vertex_ranks[dst(e)]
+        push!(requests, MPI.isend(factor_inds(tn, src(e)), comm; dest = peer))
+    end
+    for e in my_cut_edges
+        peer = vertex_ranks[dst(e)]
+        remote_inds = MPI.recv(comm; source = peer)
+        linds = intersect(factor_inds(tn, src(e)), remote_inds)
+        isempty(linds) && error(
+            "BeliefPropagationCacheMPI: the endpoints of the cut edge $e share no index, so there " *
+                "is no bond to pass a message along. $(src(e)) needs a dangling leg for it -- see " *
+                "`insert_partition_virtualinds!`.",
+        )
+        # The two-argument `default_message` would need both endpoints of the edge.
+        set!(ms, e, default_message(tn, e, linds))
+        set!(ms, reverse(e), default_message(tn, reverse(e), linds))
+        insert!(edges_to_send, e, peer)
+        insert!(edges_to_recv, reverse(e), peer)
+        haskey(ghost_ranks, dst(e)) || insert!(ghost_ranks, dst(e), peer)
+    end
+    MPI.Waitall(requests)
 
-    # Ghost vertices hold the incoming boundary messages. They live only here, so
-    # graph(network) stays ghost-free and vertex iteration is unaffected.
+    # Ghosts live only here, so `graph(network)` stays ghost-free. `add_edge!` is undirected, which
+    # also gives `incoming_messages` the direction it needs when updating an outgoing cut edge.
     _messages_graph = copy(local_graph)
     for edge in keys(edges_to_recv)
         ghost = src(edge)
@@ -794,376 +209,209 @@ function BeliefPropagationCacheMPI(
         add_edge!(_messages_graph, edge)
     end
 
-    bp_cache = BeliefPropagationCacheMPI(
+    return BeliefPropagationCacheMPI(
         cache,
         _messages_graph,
-        sgraph,
-        vertex_order,
-        shared_vertices_other,
+        ghost_ranks,
         edges_to_send,
         edges_to_recv,
-        send_order,
-        recv_order,
-        ExchangeBuffers(),
-        comm,
-        Base.RefValue{Any}(nothing)
+        comm
     )
-
-    # Populate the ghost messages, which have no entry in `cache` yet.
-    return communicate_messages!(bp_cache)
 end
 
-function _order_by_peer(items::Dictionary, key)
-    K = keytype(items)
-    out = Dictionary{Int32, Vector{K}}()
-    for (item, peer) in pairs(items)
-        haskey(out, peer) || insert!(out, peer, K[])
-        push!(out[peer], item)
-    end
-    for peer in keys(out)
-        sort!(out[peer]; by = key)
-    end
-    return out
-end
-
-# ---------------------------------------------------------------------------------------------
-# Exchange
-# ---------------------------------------------------------------------------------------------
-
+# A cut edge is keyed by the same directed edge on both sides, so the dictionaries line up. Untagged:
+# matching relies on per-peer ordering, which holds because both lists came from `cut_edges`.
 #TODO: use MPI graph communication primatives.
 function communicate_messages!(bp_cache::BeliefPropagationCacheMPI)
-    return _exchange!(
-        bp_cache,
-        bp_cache.send_order,
-        bp_cache.recv_order,
-        e -> message(bp_cache, e),
-        (e, m) -> setmessage!(bp_cache, e, m),
-        TAG_MESSAGE_HEADER,
-        TAG_MESSAGE_PAYLOAD
-    )
-end
-
-# Assumes each vertex is on one side of the exchange only. should_apply_gate keeps that true by
-# never electing a single rank for a one-site gate.
-function communicate_factors!(
-        bp_cache::BeliefPropagationCacheMPI,
-        vertices_to_send,
-        vertices_to_recv
-    )
-    tn = network(bp_cache)
-    key = v -> bp_cache.vertex_order[v]
-    _exchange!(
-        bp_cache,
-        _order_by_peer(_peer_map(bp_cache, vertices_to_send), key),
-        _order_by_peer(_peer_map(bp_cache, vertices_to_recv), key),
-        v -> tn[v],
-        # Not tn[v] = ...: that goes through add_tensor!, which rewires the graph from index
-        # overlap.
-        (v, t) -> setindex_preserve!(bp_cache, t, v),
-        TAG_FACTOR_HEADER,
-        TAG_FACTOR_PAYLOAD
-    )
-
-    # A received factor carries the sender's index on every bond it truncated, so refresh the
-    # boundary messages to match. Otherwise the message and the factor share no index on that
-    # bond and BP contracts them into an outer product, adding two free indices per sweep.
-    return communicate_messages!(bp_cache)
-end
-
-function _peer_map(bp_cache::BeliefPropagationCacheMPI, vs)
-    shared = bp_cache.shared_vertices
-    out = Dictionary{keytype(shared), Int32}()
-    for v in vs
-        haskey(out, v) || insert!(out, v, shared[v])
-    end
-    return out
-end
-
-# ---------------------------------------------------------------------------------------------
-# Belief propagation
-# ---------------------------------------------------------------------------------------------
-
-# Boundary messages advance one partition per sweep, so a rank's own subgraph does not say how
-# many sweeps are needed: `is_tree` on a partition of a tree is true, but a chain of P
-# partitions still needs P sweeps for information to cross it. Worse, if two ranks disagree
-# about their local tree-ness they pick different sweep counts, and the one that finishes first
-# stops calling `communicate_messages!` and leaves the others blocked in `MPI.Recv`.
-function default_bp_maxiter(bp_cache::BeliefPropagationCacheMPI)
-    nparts = MPI.Comm_size(communicator(bp_cache))
-    serial_maxiter = is_tree(super_graph(bp_cache)) ? 1 : _default_bp_update_maxiter
-    return serial_maxiter + nparts - 1
-end
-
-function default_bp_update_kwargs(bp_cache::BeliefPropagationCacheMPI)
-    return (;
-        maxiter = default_bp_maxiter(bp_cache),
-        tolerance = default_tolerance(scalartype(bp_cache)),
-        verbose = false,
-    )
-end
-
-# Collective: harmonises the loop bounds so that ranks handed different kwargs (or relying on
-# partition-dependent defaults) still run the same number of sweeps instead of deadlocking.
-function set_default_kwargs(alg::Algorithm"bp", bp_cache::BeliefPropagationCacheMPI)
-    cache = local_cache(bp_cache)
     comm = communicator(bp_cache)
+    ms = messages(bp_cache)
+    requests = MPI.Request[]
 
-    verbose = get(alg.kwargs, :verbose, default_verbose(alg))
-    maxiter = get(alg.kwargs, :maxiter, default_bp_maxiter(bp_cache))
-    _edge_sequence = get(alg.kwargs, :edge_sequence, edge_sequence(cache))
-    tolerance = get(alg.kwargs, :tolerance, default_tolerance(alg))
-    message_update_alg = set_default_kwargs(
-        get(alg.kwargs, :message_update_alg, Algorithm(default_message_update_alg(cache))),
-        cache
-    )
-
-    maxiter = Int(MPI.Allreduce(Int(maxiter), MPI.MAX, comm))
-    # Whether the error is computed at all has to agree too: a rank with no tolerance never
-    # breaks out early, so mixing the two hangs just as surely as mismatched `maxiter`.
-    any_tolerance = !iszero(
-        MPI.Allreduce(isnothing(tolerance) ? Int32(0) : Int32(1), MPI.MAX, comm)
-    )
-    tolerance = if any_tolerance
-        MPI.Allreduce(isnothing(tolerance) ? Inf : Float64(tolerance), MPI.MIN, comm)
-    else
-        nothing
+    for (edge, rank) in pairs(bp_cache.edges_to_send)
+        push!(requests, MPI.isend(ms[edge], comm; dest = rank))
     end
 
-    return Algorithm(
-        "bp"; verbose, maxiter, edge_sequence = _edge_sequence, tolerance, message_update_alg
+    for (edge, rank) in pairs(bp_cache.edges_to_recv)
+        ms[edge] = MPI.recv(comm; source = rank)
+    end
+
+    MPI.Waitall(requests)
+    return bp_cache
+end
+
+# Boundary messages arrive on ghost edges, which only messages_graph knows about.
+function incoming_messages(
+        bp_cache::BeliefPropagationCacheMPI, vertices::Vector{<:Any}; ignore_edges = []
     )
+    b_edges = boundary_edges(messages_graph(bp_cache), vertices; dir = :in)
+    b_edges = !isempty(ignore_edges) ? setdiff(b_edges, ignore_edges) : b_edges
+    return messages(bp_cache, b_edges)
 end
 
-# The three deltas from the generic BP loop. Everything else -- the sweep, the convergence test,
-# the reporting -- is the shared implementation in abstractbeliefpropagationcache.jl.
-sync_messages!(bpc::BeliefPropagationCacheMPI) = communicate_messages!(bpc)
-
-# Every graph edge lies inside exactly one partition (the constructor checks this), so the local
-# counts sum to the global one. Allreduce returns the same value on every rank, so the tolerance
-# test below breaks the loop at the same sweep everywhere -- and dividing once after the reduction
-# keeps a rank holding no edges from computing 0/0 and never converging.
-function diff_denominator(bpc::BeliefPropagationCacheMPI, edges)
-    return MPI.Allreduce(length(edges), MPI.SUM, communicator(bpc))
-end
-
-reduce_diff(bpc::BeliefPropagationCacheMPI, diff) =
-    MPI.Allreduce(diff, MPI.SUM, communicator(bpc))
-
-# Otherwise the non-convergence warning fires once per rank.
-reports_convergence(bpc::BeliefPropagationCacheMPI) = iszero(MPI.Comm_rank(communicator(bpc)))
-
-# Local edges only -- every edge lies inside exactly one partition. Rescaling one changes a
-# message the peer holds a copy of, hence the refresh.
-function rescale_messages!(
-        bp_cache::BeliefPropagationCacheMPI, edges::Vector{<:AbstractEdge}
+# Cannot forward to the local cache: updated_message() must dispatch on this type for
+# incoming_messages() to pick up the ghost edges.
+function update_message!(
+        message_update_alg::Algorithm, bp_cache::BeliefPropagationCacheMPI, edge::AbstractEdge
     )
-    rescale_messages!(local_cache(bp_cache), edges)
-    return communicate_messages!(bp_cache)
+    m, (cache_key, sequence, seq_changed) =
+        updated_message(message_update_alg, bp_cache, edge)
+    seq_changed && set!(contraction_sequences(bp_cache), cache_key, sequence)
+    return setmessage!(bp_cache, edge, m)
 end
 
-# A shared vertex is rescaled on both holders. They divide by the same `vertex_scalar` -- same
-# factor, same incoming messages -- so the duplicated tensors stay identical without any
-# exchange. This cannot delegate to the local cache, whose `vertex_scalar` would miss the ghost
-# half of a shared vertex's environment.
-function rescale_vertices!(bp_cache::BeliefPropagationCacheMPI, vertices::Vector)
-    @invoke rescale_vertices!(bp_cache::AbstractBeliefPropagationCache, vertices::Vector)
-    return communicate_messages!(bp_cache)
+function update_iteration!(
+        alg::Algorithm"bp",
+        bpc::BeliefPropagationCacheMPI,
+        edges::Vector;
+        (update_diff!) = nothing
+    )
+    for e in edges
+        prev_message = !isnothing(update_diff!) ? message(bpc, e) : nothing
+        update_message!(alg.kwargs.message_update_alg, bpc, e)
+        if !isnothing(update_diff!)
+            update_diff![] += message_diff(message(bpc, e), prev_message)
+        end
+    end
+    communicate_messages!(bpc)
+    if !isnothing(update_diff!)
+        # `update` divides this by this rank's edge count, so scaling the global sum by
+        # nlocal/nglobal gives every rank the serial all-edge average, hence a common exit sweep.
+        comm = communicator(bpc)
+        total = MPI.Allreduce(update_diff![], MPI.SUM, comm)
+        nglobal = MPI.Allreduce(length(edges), MPI.SUM, comm)
+        update_diff![] = total * length(edges) / nglobal
+    end
+    return bpc
 end
 
-# Edge terms partition cleanly, since every edge lies inside one region. Vertex terms do not: a
-# shared vertex is held by two ranks, so it is counted on the lower-ranked one.
-function freenergy(bp_cache::BeliefPropagationCacheMPI)
-    comm = communicator(bp_cache)
+# The scratch buffer is read only within a sweep, so releasing it here frees the memory for
+# `apply_gate!`'s SVD. Every copy of the cache shares it, so the release reaches the caller's too.
+function update(alg::Algorithm"bp", bp_cache::BeliefPropagationCacheMPI)
+    bp_cache = @invoke update(alg::Algorithm"bp", bp_cache::AbstractBeliefPropagationCache)
+    return release_message_scratch!(bp_cache)
+end
+
+# A gate on a cut edge carries the site index of both its vertices, and a rank knows only its own.
+# One broadcast per rank, carrying `Index` objects only.
+function allgather_siteinds(ψ::TensorNetworkState, comm::MPI.Comm)
     me = MPI.Comm_rank(comm)
-    shared = bp_cache.shared_vertices
-    owned = filter(v -> !haskey(shared, v) || me < shared[v], collect(vertices(bp_cache)))
-
-    numerator_terms = vertex_scalars(bp_cache, owned)
-    denominator_terms = edge_scalars(bp_cache, collect(edges(bp_cache)))
-
-    # The reduction needs one scalar type across all ranks, so the choice is made collectively.
-    # It can only ever promote: the terms are already complex for a complex network, and a
-    # negative term in a real one forces a complex logarithm. Demoting would throw an
-    # InexactError on the small imaginary parts a complex network leaves behind.
-    S = float(real(scalartype(bp_cache)))
-    negative =
-        any(t -> real(t) < 0, numerator_terms) || any(t -> real(t) < 0, denominator_terms)
-    complex_here = scalartype(bp_cache) <: Complex || negative
-    T = iszero(MPI.Allreduce(complex_here ? Int32(1) : Int32(0), MPI.MAX, comm)) ? S : Complex{S}
-    return MPI.Allreduce(_local_freenergy(T, numerator_terms, denominator_terms), MPI.SUM, comm)
+    all_sinds = Dictionary{vertextype(ψ), Vector{<:Index}}()
+    for rank in 0:(MPI.Comm_size(comm) - 1)
+        part = MPI.bcast(me == rank ? siteinds(ψ) : nothing, comm; root = rank)
+        for (v, is) in pairs(part)
+            set!(all_sinds, v, is)
+        end
+    end
+    return all_sinds
 end
 
-# -Inf rather than an early return: every rank must reach the Allreduce.
-function _local_freenergy(::Type{T}, numerator_terms, denominator_terms) where {T}
-    any(iszero, denominator_terms) && return T(-Inf)
-    return sum(log.(T.(numerator_terms)); init = zero(T)) -
-        sum(log.(T.(denominator_terms)); init = zero(T))
-end
-
-# ---------------------------------------------------------------------------------------------
-# Gate application
-# ---------------------------------------------------------------------------------------------
-
-"""
-    apply_gates_mpi(circuit, ψ, super_graph, shared_vertices; comm, kwargs...)
-
-Apply `circuit` to a tensor network state distributed across the ranks of `comm`, where `ψ` is
-this rank's partition and `super_graph` the graph of the global state.
-
-`circuit` and `shared_vertices` must be identical on every rank; gate supports are resolved
-against `super_graph`, so a gate may straddle a partition boundary. Returns this rank's updated
-partition and the truncation errors, which are reduced across ranks so that every rank sees the
-error of every gate.
-
-Collective: every rank of `comm` must call it.
-
-See also [`BeliefPropagationCacheMPI`](@ref).
-"""
+# Converted here rather than in `apply_gates`, whose conversion uses the rank-local graph and so
+# cannot reach the far endpoint of a gate on a cut edge.
 function apply_gates_mpi(
         circuit::Vector,
         ψ::TensorNetworkState,
         super_graph::AbstractGraph,
-        shared_vertices::Dictionary;
+        vertex_ranks::Dictionary;
         comm::MPI.Comm = MPI.COMM_WORLD,
-        bp_update_kwargs = nothing,
-        validate::Bool = true,
         kwargs...
     )
-    ψ_bpc = _seed_default_messages!(BeliefPropagationCache(ψ))
-    ψ_bpc = BeliefPropagationCacheMPI(ψ_bpc, super_graph, shared_vertices; comm, validate)
-    # Resolved here rather than as a keyword default: the defaults have to be read off the
-    # distributed cache, since the local partition's tree-ness says nothing about the global
-    # network's.
-    bp_update_kwargs =
-        isnothing(bp_update_kwargs) ? default_bp_update_kwargs(ψ_bpc) : bp_update_kwargs
+    gates = toitensor(circuit, super_graph, allgather_siteinds(ψ, comm))
+    return apply_gates_mpi(
+        ITensor[gate[1] for gate in gates], ψ, super_graph, vertex_ranks;
+        comm, gate_vertices = [gate[2] for gate in gates], kwargs...
+    )
+end
+
+# `gate_vertices` must be resolved against `super_graph`: the default in `apply_gates` reads the local
+# network, silently reducing a gate on a cut edge to one vertex.
+function apply_gates_mpi(
+        circuit::Vector{<:ITensor},
+        ψ::TensorNetworkState,
+        super_graph::AbstractGraph,
+        vertex_ranks::Dictionary;
+        comm::MPI.Comm = MPI.COMM_WORLD,
+        bp_update_kwargs = default_bp_update_kwargs(ψ; istree = is_tree(super_graph)),
+        kwargs...
+    )
+    ψ_bpc = BeliefPropagationCache(ψ)
+    # Seed deltas, not a serial update: that update's incoming_messages sees only local edges, so the
+    # cut bonds' dangling indices stay uncontracted and the boundary messages end up with ndims > 2.
+    es = reduce(vcat, [[e, reverse(e)] for e in edges(ψ)])
+    setmessages!(ψ_bpc, es, [default_message(ψ_bpc, e) for e in es])
+    ψ_bpc = BeliefPropagationCacheMPI(ψ_bpc, super_graph, vertex_ranks; comm)
     ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
     ψ_bpc, truncation_errors = apply_gates(circuit, ψ_bpc; bp_update_kwargs, kwargs...)
     return network(ψ_bpc), truncation_errors
 end
 
+# Requires every gate to act on vertices this rank holds, since toitensor() gets the rank-local graph
+# and site indices. A circuit spanning partitions must go through `apply_gates_mpi` instead.
 function apply_gates(
         circuit::Vector,
         ψ_bpc::BeliefPropagationCacheMPI;
         kwargs...
     )
-    # Resolved against `super_graph`, so every rank agrees on the support of every gate --
-    # including the gates it does not hold. Reading supports off the local network instead would
-    # silently shrink a boundary-straddling two-site gate to one vertex, and desynchronise the
-    # cache-update points in `_apply_gates`.
-    sgraph = super_graph(ψ_bpc)
-    gate_vertices = [collect_vertices(gate[2], sgraph) for gate in circuit]
-    return _apply_gates(circuit, ψ_bpc; gate_vertices, kwargs...)
+    g = graph(ψ_bpc)
+    circuit = toitensor(circuit, g, siteinds(network(ψ_bpc)))
+    gate_vertices = [gate[2] for gate in circuit]
+    itensors = [gate[1] for gate in circuit]
+    return apply_gates(itensors, ψ_bpc; gate_vertices, kwargs...)
 end
 
 function apply_gates(
         circuit::Vector{<:ITensor},
         ψ_bpc::BeliefPropagationCacheMPI;
-        gate_vertices::Vector = _gate_vertices_required(),
-        kwargs...
-    )
-    return _apply_gates(circuit, ψ_bpc; gate_vertices, kwargs...)
-end
-
-function _gate_vertices_required()
-    return error(
-        "apply_gates on a BeliefPropagationCacheMPI needs an explicit `gate_vertices`, resolved " *
-            "against the super graph. A gate's ITensor only names the site indices of the " *
-            "partition it came from, so the support of a gate that crosses a boundary cannot be " *
-            "recovered from it. Either pass the circuit as tuples, which are resolved against " *
-            "the super graph automatically, or pass `gate_vertices` yourself."
-    )
-end
-
-# Tuples are converted to ITensors lazily, per rank, because `toitensor` needs the site index of
-# every vertex the gate acts on and only a rank holding all of them has them. A rank that skips
-# a gate never needs its ITensor.
-_gate_itensor(gate::ITensor, ψ_bpc) = gate
-function _gate_itensor(gate, ψ_bpc)
-    return first(toitensor(gate, graph(ψ_bpc), siteinds(network(ψ_bpc))))
-end
-
-function _apply_gates(
-        circuit::Vector,
-        ψ_bpc::BeliefPropagationCacheMPI;
-        gate_vertices::Vector,
+        gate_vertices::Vector = vertices.(circuit, (network(ψ_bpc),)),
         apply_kwargs = (;),
         bp_update_kwargs = default_bp_update_kwargs(ψ_bpc),
         update_cache = true,
         verbose = false
     )
-    comm = communicator(ψ_bpc)
-    isroot = iszero(MPI.Comm_rank(comm))
+    # This `copy` is SHALLOW: it shares the ITensor objects and hence their buffers, so it does not
+    # protect the caller's network from the consuming apply paths overwriting each vertex tensor.
     ψ_bpc = copy(ψ_bpc)
 
-    V = eltype(vertices(network(ψ_bpc)))
-    # Hoisted out of the loop: `vertices(...)` is a lazy view whose `in` is linear in the
-    # partition size, and `should_apply_gate` tests it once per gate vertex.
-    my_vertices = Set{V}(vertices(network(ψ_bpc)))
-    shared_vertices_dict = ψ_bpc.shared_vertices
-
-    # we keep track of the vertices that have been acted on by 2-qubit gates
-    # only they increase the counter
-    # this is the set that keeps track.
-    affected_vertices = Set{V}()
+    affected_vertices = Set{eltype(vertices(network(ψ_bpc)))}()
     truncation_errors = zeros((length(circuit)))
 
-    vertices_to_send = V[]
-    vertices_to_recv = V[]
+    # EVERY DECISION BELOW MUST COME OUT THE SAME ON EVERY RANK: `update` and the boundary factor
+    # exchange both block, so a rank skipping one its peers reach deadlocks rather than erroring.
 
     # If the circuit is applied in the Heisenberg picture, the circuit needs to already be reversed
     for (ii, gate) in enumerate(circuit)
         v⃗ = gate_vertices[ii]
 
-        # check if the gate is a 2-qubit gate and whether it affects the counter
-        # we currently only increment the counter if the gate affects vertices that have already been affected
-        # This depends only on the circuit and the gate index, both identical on every rank, so
-        # all ranks reach the exchange below on the same gate. That is why `affected_vertices`
-        # is updated for every gate, not just the ones this rank applies.
+        # A two-site gate hitting an already-affected vertex is acting on stale messages.
         cache_update_required =
             length(v⃗) >= 2 &&
             any(vert in affected_vertices for vert in v⃗)
 
-        if cache_update_required
-            # Unconditional, and deliberately outside the `update_cache` guard below: exchanging
-            # factors is not part of the cache update. It is the only thing keeping the two copies
-            # of a duplicated shared vertex identical after one holder applied a gate to it.
-            # Gating it lets the copies diverge silently and permanently -- they end up with
-            # different indices, and the failure surfaces much later, on a subset of ranks, as a
-            # non-scalar out of `vertex_scalar`.
-            communicate_factors!(ψ_bpc, vertices_to_send, vertices_to_recv)
-            empty!(affected_vertices)
-            empty!(vertices_to_send)
-            empty!(vertices_to_recv)
+        if update_cache && cache_update_required
+            if verbose
+                println("Updating BP cache")
+            end
 
-            if update_cache
-                if verbose && isroot
-                    println("Updating BP cache")
-                end
-                t = @timed ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
-                if verbose && isroot
-                    println("Done in $(t.time) secs")
-                end
+            t = @timed ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
+
+            empty!(affected_vertices)
+
+            if verbose
+                println("Done in $(t.time) secs")
             end
         end
 
-        # Only apply the gate if *all* gate vertices are local/shared.
-        iapply, shared_vertex = should_apply_gate(v⃗, my_vertices, shared_vertices_dict)
+        role = gate_role(v⃗, vertices(network(ψ_bpc)), ψ_bpc.ghost_ranks)
 
-        if iapply
-            gate = adapt_gate(_gate_itensor(gate, ψ_bpc), ψ_bpc)
+        if role.kind !== :skip
+            gate = adapt_gate(gate, ψ_bpc)
 
-            ψ_bpc, truncation_errors[ii] = apply_gate!(
+            @timed ψ_bpc, truncation_errors[ii] = apply_gate!(
                 gate,
                 ψ_bpc;
                 v⃗,
+                role,
                 apply_kwargs
             )
-
-            # We did this, so we must send the shared vertices (if any)
-            isnothing(shared_vertex) || push!(vertices_to_send, shared_vertex)
-        elseif !isnothing(shared_vertex) && shared_vertex ∈ my_vertices
-            # Someone else did this, so make sure to later get the shared vertex
-            push!(vertices_to_recv, shared_vertex)
         end
 
         for v in v⃗
@@ -1171,145 +419,178 @@ function _apply_gates(
         end
     end
 
-    # Same reasoning as above: the copies of a shared vertex must agree when this returns,
-    # whatever the caller asked about the cache.
-    communicate_factors!(ψ_bpc, vertices_to_send, vertices_to_recv)
     if update_cache
         ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
     end
 
-    # Each gate is applied by one rank -- or by both holders of a shared vertex for a one-site
-    # gate, which truncate identically -- so the ranks that skipped it contribute 0. Without
-    # this, `maximum(truncation_errors)` would be a partition-local answer.
-    truncation_errors = MPI.Allreduce(truncation_errors, MPI.MAX, comm)
-
     return ψ_bpc, truncation_errors
 end
 
-function should_apply_gate(gate_vertices, local_vertices, shared_vertices)
-    touched = filter(in(keys(shared_vertices)), gate_vertices)
-
-    isempty(touched) && return all(in(local_vertices), gate_vertices), nothing
-
-    # Two shared vertices would have to be adjacent, which the constructor rejects.
-    shared_vertex = only(touched)
-
-    if shared_vertex ∈ local_vertices
-        if length(gate_vertices) == 1
-            # Both holders apply it and nothing is exchanged: a one-site gate preserves indices,
-            # so the copies stay identical. Electing one rank instead puts the vertex in both
-            # holders' send and recv lists, because a one-site gate never sets
-            # cache_update_required and so shares a batch with a two-site gate on the same
-            # vertex; communicate_factors! then swaps the two tensors rather than propagating
-            # one, leaving the shared vertex's bond index disagreeing with its neighbour's.
-            return true, nothing
-        elseif length(gate_vertices) == 2
-            all(in(local_vertices), gate_vertices) && return (true, shared_vertex)
-        else
-            throw(ArgumentError("got gate on more than 2 vertices: $gate_vertices"))
-        end
+function adapt_gate(gate::ITensor, ψ_bpc::BeliefPropagationCacheMPI)
+    gate = if scalartype(gate) <: Complex
+        adapt(complex(scalartype(ψ_bpc)), gate)
+    else
+        adapt(scalartype(ψ_bpc), gate)
     end
-
-    return false, shared_vertex
+    return adapt(unspecify_type_parameters(datatype(ψ_bpc)), gate)
 end
 
-# ---------------------------------------------------------------------------------------------
-# Observables
-# ---------------------------------------------------------------------------------------------
+# `:local`, `:boundary` or `:skip`, decided from the circuit and the partitioning alone so that the
+# two ranks of a cut edge agree without exchanging anything. The gate's vertex order picks `compute`.
+function gate_role(gate_vertices, local_vertices, ghost_ranks)
+    nlocal = count(in(local_vertices), gate_vertices)
 
-"""
-    inner_mpi(ψ, ϕ, super_graph, shared_vertices; comm, bp_update_kwargs)
+    nlocal == length(gate_vertices) && return (; kind = :local, peer = nothing, compute = true)
+    iszero(nlocal) && return (; kind = :skip, peer = nothing, compute = false)
 
-⟨ψ|ϕ⟩ over a network distributed across the ranks of `comm`, with `ψ` and `ϕ` this rank's
-partitions. Returns the same global scalar on every rank.
+    length(gate_vertices) == 2 || throw(
+        ArgumentError(
+            "gate on $(length(gate_vertices)) vertices $gate_vertices straddles a partition " *
+                "boundary; only one- and two-site gates are supported."
+        )
+    )
 
-Collective: every rank of `comm` must call it.
-"""
+    remote = only(filter(!in(local_vertices), gate_vertices))
+    haskey(ghost_ranks, remote) || error(
+        "gate_role: $remote is neither local nor a neighbour of this partition, so this rank " *
+            "cannot reach it. A two-site gate must act on an edge of the super graph.",
+    )
+
+    return (;
+        kind = :boundary,
+        peer = ghost_ranks[remote],
+        compute = first(gate_vertices) in local_vertices,
+    )
+end
+
+# Vertex terms partition cleanly; a cut edge's message pair is held by both ranks, so it is counted on
+# the lower-ranked one. Terms are complexified so a negative one contributes its phase through log.
+function freenergy(bp_cache::BeliefPropagationCacheMPI)
+    comm = communicator(bp_cache)
+    me = MPI.Comm_rank(comm)
+    cut = [e for (e, rank) in pairs(bp_cache.edges_to_send) if me < rank]
+
+    numer = complex.(vertex_scalars(bp_cache, collect(vertices(bp_cache))))
+    denom = complex.(edge_scalars(bp_cache, [collect(edges(bp_cache)); cut]))
+    # -Inf rather than an early return: every rank must reach the Allreduce.
+    local_f = any(iszero, denom) ? complex(-Inf) : sum(log.(numer)) - sum(log.(denom))
+    return MPI.Allreduce(local_f, MPI.SUM, comm)
+end
+
+# ψ and ϕ are the rank-local partitions; the same global scalar comes back on every rank.
 function inner_mpi(
         ψ::TensorNetworkState,
         ϕ::TensorNetworkState,
         super_graph::AbstractGraph,
-        shared_vertices::Dictionary;
+        vertex_ranks::Dictionary;
         comm::MPI.Comm = MPI.COMM_WORLD,
-        bp_update_kwargs = nothing,
-        validate::Bool = true,
-        consume_bra::Bool = false
+        bp_update_kwargs = default_bp_update_kwargs(ψ)
     )
-    # `consume_bra` destroys `ϕ` and builds the form's bra from its storage instead of a
-    # conjugated duplicate -- see `BilinearForm`. On a partition holding one factor-sized tensor
-    # that is a whole factor of device memory per rank, and the caller of `inner_mpi` has usually
-    # finished with `ϕ`.
-    bpc = _seed_default_messages!(BeliefPropagationCache(BilinearForm(ψ, ϕ; consume_bra)))
-    bpc = BeliefPropagationCacheMPI(bpc, super_graph, shared_vertices; comm, validate)
-    bp_update_kwargs =
-        isnothing(bp_update_kwargs) ? default_bp_update_kwargs(bpc) : bp_update_kwargs
+    bpc = BeliefPropagationCache(BilinearForm(ψ, ϕ))
+    es = reduce(vcat, [[e, reverse(e)] for e in edges(bpc)])
+    setmessages!(bpc, es, [default_message(bpc, e) for e in es])
+    bpc = BeliefPropagationCacheMPI(bpc, super_graph, vertex_ranks; comm)
     bpc = update(bpc; bp_update_kwargs...)
     return inner(Algorithm("bp"), bpc)
 end
 
-"""
-    partitionfunction_mpi(form, super_graph, shared_vertices; comm, bp_update_kwargs, validate)
-
-The BP estimate of a `form`'s scalar value, with `form` distributed across the ranks of `comm`.
-
-Collective: every rank of `comm` must call it.
-
-This is the memory-cheap way to get `⟨O|V|O⟩` when `V` is a product of one-site operators, which
-is what an echo or perturbation calculation asks for. Written as `inner_mpi(O, V*O)` it needs three
-factor-sized tensors resident per rank -- `O`, `V*O`, and the conjugated bra the `BilinearForm`
-builds. Written as `partitionfunction_mpi(QuadraticForm(O, V), ...)` it needs one: `QuadraticForm`
-derives its bra from the ket, and `V*O` is never formed at all.
-
-See also [`inner_mpi`](@ref).
-"""
-function partitionfunction_mpi(
-        form::AbstractForm,
-        super_graph::AbstractGraph,
-        shared_vertices::Dictionary;
-        comm::MPI.Comm = MPI.COMM_WORLD,
-        bp_update_kwargs = nothing,
-        validate::Bool = true
+function apply_gate!(
+        gate::ITensor,
+        ψ_bpc::BeliefPropagationCacheMPI;
+        v⃗ = vertices(gate, network(ψ_bpc)),
+        role = gate_role(v⃗, vertices(network(ψ_bpc)), ψ_bpc.ghost_ranks),
+        apply_kwargs
     )
-    bpc = _seed_default_messages!(BeliefPropagationCache(form))
-    bpc = BeliefPropagationCacheMPI(bpc, super_graph, shared_vertices; comm, validate)
-    bp_update_kwargs =
-        isnothing(bp_update_kwargs) ? default_bp_update_kwargs(bpc) : bp_update_kwargs
-    bpc = update(bpc; bp_update_kwargs...)
-    return partitionfunction(bpc)
-end
+    nv = length(v⃗)
 
-
-"""
-    expect(cache::BeliefPropagationCacheMPI, observable; alg = "bp")
-
-Expectation value of `observable` on a distributed cache. Unlike [`inner_mpi`](@ref) this is a
-purely local quantity: the observable's support -- and the region BP contracts for it -- must
-lie inside this rank's partition, and only the ranks holding it get an answer. Ranks can
-therefore measure different observables, and no communication happens.
-"""
-function expect(
-        alg::Algorithm"bp",
-        cache::BeliefPropagationCacheMPI,
-        obs::Tuple
+    1 <= nv <= 2 || error(
+        "apply_gate!: only one- and two-site gates are supported; " *
+            "received a gate acting on $nv vertices: $v⃗.",
     )
-    op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
-    iszero(coeff) && return zero(coeff)
-    for v in obs_vs
-        has_vertex(graph(cache), v) || error(
-            "observable $obs is supported on vertex $v, which rank " *
-                "$(MPI.Comm_rank(communicator(cache))) does not hold. An observable measured on a " *
-                "distributed cache must lie inside one partition."
+
+    role.kind === :boundary &&
+        return apply_boundary_gate!(gate, ψ_bpc; v⃗, role, apply_kwargs)
+
+    if nv == 2
+        has_edge(graph(ψ_bpc), NamedEdge(first(v⃗) => last(v⃗))) || error(
+            "apply_gate!: cannot apply a two-site gate on the non-adjacent vertices " *
+                "$(first(v⃗)) and $(last(v⃗)). Simple update requires the two sites to share an " *
+                "edge of the tensor-network graph.",
         )
     end
-    return _expect_bp(cache, op_strings, obs_vs, coeff)
+
+    envs = nv == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
+
+    ψ⃗ = ITensor[network(ψ_bpc)[v] for v in v⃗]
+
+    foreach(v⃗) do v
+        # Allow deallocation; `simple_update_dense` consumes these tensors' storage.
+        setindex_preserve!(ψ_bpc, ITensor(), v)
+    end
+
+    updated_tensors, s_values, err = simple_update_dense(gate, ψ⃗; envs, apply_kwargs...)
+    if nv == 2
+        v1, v2 = v⃗
+        setbondmessages!(ψ_bpc, NamedEdge(v1 => v2), s_values, first(updated_tensors))
+    end
+
+    for (i, v) in enumerate(v⃗)
+        setindex_preserve!(ψ_bpc, updated_tensors[i], v)
+    end
+
+    return ψ_bpc, err
 end
 
-function expect(
-        cache::BeliefPropagationCacheMPI, observable;
-        alg::Union{String, Nothing} = default_alg(cache), kwargs...
+# The new bond's gauge as its pair of messages; `t` only identifies which index of `s_values` it is.
+# Both ranks of a cut edge pass the same `s_values`, so their messages agree without an exchange.
+function setbondmessages!(
+        ψ_bpc::AbstractBeliefPropagationCache, e::AbstractEdge, s_values::ITensor, t::ITensor
     )
-    alg == "bp" || error(
-        "Only the 'bp' algorithm is supported on a BeliefPropagationCacheMPI, got '$alg'."
+    ind2 = commonind(s_values, t)
+    δuv = dag(copy(s_values))
+    δuv = replaceind(δuv, ind2, ind2')
+    map_diag!(sign, δuv, δuv)
+    s_values = denseblocks(s_values) * denseblocks(δuv)
+    setmessage!(ψ_bpc, e, dag(s_values))
+    setmessage!(ψ_bpc, reverse(e), s_values)
+    return ψ_bpc
+end
+
+# A two-site gate whose other vertex lives on `role.peer`; both ranks run it, exchanging QR factors.
+function apply_boundary_gate!(
+        gate::ITensor,
+        ψ_bpc::BeliefPropagationCacheMPI;
+        v⃗,
+        role,
+        apply_kwargs
     )
-    return expect(Algorithm(alg), cache, observable)
+    local_vertices = vertices(network(ψ_bpc))
+    v = only(filter(in(local_vertices), v⃗))
+    remote = only(filter(!in(local_vertices), v⃗))
+    e_in = NamedEdge(remote => v)
+
+    has_edge(messages_graph(ψ_bpc), e_in) || error(
+        "apply_boundary_gate!: $v and $remote are not joined by a cut edge of this partition, so " *
+            "there is no bond for a two-site gate to act on.",
+    )
+
+    # The partner direction is the bond being updated, not an environment.
+    envs = incoming_messages(ψ_bpc, [v]; ignore_edges = [e_in])
+    ψᵥ = network(ψ_bpc)[v]
+    # The messages are the only record of the cut bond's current index, which truncation replaces.
+    lb = only(commoninds(message(ψ_bpc, e_in), ψᵥ))
+
+    # Allow deallocation; `simple_update_dense_boundary` consumes this tensor's storage.
+    setindex_preserve!(ψ_bpc, ITensor(), v)
+
+    u, s_values, err = simple_update_dense_boundary(
+        gate, ψᵥ;
+        envs, lb, compute = role.compute, other_rank = role.peer,
+        comm = communicator(ψ_bpc), apply_kwargs...,
+    )
+
+    setindex_preserve!(ψ_bpc, u, v)
+    setbondmessages!(ψ_bpc, NamedEdge(v => remote), s_values, u)
+
+    return ψ_bpc, err
 end

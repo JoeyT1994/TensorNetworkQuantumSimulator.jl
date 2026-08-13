@@ -70,7 +70,12 @@ norm_factors(tns::TensorNetworkState, v; kwargs...) = norm_factors(tns, [v]; kwa
 bp_factors(tns::TensorNetworkState, v) = norm_factors(tns, v)
 
 function default_message(tns::TensorNetworkState, edge::AbstractEdge)
-    linds = virtualinds(tns, edge)
+    return default_message(tns, edge, virtualinds(tns, edge))
+end
+
+# `linds` explicit, for a partitioned network deriving them across a cut. See `factor_inds`.
+function default_message(tns::TensorNetworkState, ::AbstractEdge, linds)
+    linds = collect(linds)
     return adapt_like(tns, denseblocks(delta(vcat(linds, prime(dag(linds))))))
 end
 
