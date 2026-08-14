@@ -248,6 +248,21 @@ function incoming_messages(
     return messages(bp_cache, b_edges)
 end
 
+# Both orientations of every edge, and an empty vector (rather than a `reduce` error) for a
+# partition that holds a single vertex.
+function _directed_edges(x)
+    es = collect(edges(x))
+    return isempty(es) ? es : reduce(vcat, [[e, reverse(e)] for e in es])
+end
+
+# Seed deltas, not a serial update: that update's `incoming_messages` sees only local edges, so it
+# never contracts the cut bonds' dangling indices and they survive as free indices in the boundary
+# messages, which then have ndims > 2.
+function _seed_default_messages!(bpc::AbstractBeliefPropagationCache)
+    es = _directed_edges(bpc)
+    return setmessages!(bpc, es, [default_message(bpc, e) for e in es])
+end
+
 # Cannot forward to the local cache: updated_message() must dispatch on this type for
 # incoming_messages() to pick up the ghost edges.
 function update_message!(
@@ -283,6 +298,11 @@ function update_iteration!(
     end
     return bpc
 end
+
+# `update_iteration!` above already reduces the diff across ranks, so `diff_denominator` and
+# `reduce_diff` keep their generic (rank-local, identity) definitions. Only the log needs
+# narrowing: without this the non-convergence warning fires once per rank.
+reports_convergence(bpc::BeliefPropagationCacheMPI) = iszero(MPI.Comm_rank(communicator(bpc)))
 
 # The scratch buffer is read only within a sweep, so releasing it here frees the memory for
 # `apply_gate!`'s SVD. Every copy of the cache shares it, so the release reaches the caller's too.
