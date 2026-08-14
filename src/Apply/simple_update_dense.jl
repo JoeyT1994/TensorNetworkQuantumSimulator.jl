@@ -1,5 +1,4 @@
 # GPU compatible dense simple update designed in minimise peak memory usage.
-# See docs/spec_dense_update.md for the memory measurements behind the buffer reuse.
 
 function absorb_first_matrix!(dst_tensor, src_tensor, matrix)
 
@@ -95,7 +94,7 @@ function absorb_matrices!(
 end
 
 # Thin QR of a tall matrix (m >= n) with Q written into `A`, returning `(Q, R)` where `Q === A`, or
-# `nothing` when no in-place method exists for this array type. See docs/spec_dense_update.md.
+# `nothing` when no in-place method exists for this array type.
 function thin_qr_matrix!(A::AbstractMatrix)
     eltype(A) <: LinearAlgebra.BlasFloat || return nothing
     applicable(LAPACK.geqrf!, A) || return nothing
