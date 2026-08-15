@@ -14,6 +14,17 @@
 #     here, bMPS is 2.4e-09 at the corner and 3.9e-09 at the centre -- comparable, not better in
 #     the middle.
 #
+# AT LARGER χ (the data their Fig. 2 caption asks for): CTM reaches the exact-reference floor
+# (~1e-14, set by the reference itself being a ratio of two 11x11 contractions) by χ≈10-12, while
+# bMPS SATURATES at 2.83e-12 and does not move -- identical to 4 s.f. at χ = 12, 14 and 16, and
+# unchanged by maxiter=200 or tolerance=1e-14. So the plateau is not our solver settings. It is NOT
+# established to be fundamental: the exact MPS rank across an 11-row cut is up to 2^11, so χ=12-16
+# may be a plateau rather than a floor. Stated as measured, not as proven.
+#
+# The `marg` columns are their ∂_X Z on the same axis. At χ=1 `:cycle` is already stationary to
+# 6.4e-13 against `:cut`'s 3.8e-04 -- nine orders -- which is the eigen/Schur-vs-SVD truncation
+# claim (their novelty 2) in one number. χ=1 `:cycle` is BP, where they say MP-BP reduces to it.
+#
 # `:cut` and `:cycle` come out nearly equal on this structured classical network; the stationary
 # projector's advantage appears on double-layer states instead (see ctm_projector_survey.jl).
 #
@@ -63,7 +74,7 @@ for (v,lbl) in [(1,1)=>"CORNER", (6,6)=>"CENTRE"]
     tnS = swap(v); mex = real(contract(tnS; alg="exact"))/zden
     @printf("\n%s %s   exact m = %.10f\n", lbl, string(v), mex)
     @printf("  %-3s %-13s %-13s %-13s\n", "χ", "δm/m :cut", "δm/m :cycle", "δm/m bMPS")
-    for χ in (1,2,3,4,5,6)
+    for χ in (1,2,3,4,5,6,7,8,10,12,14,16)
         ec = map((:cut,:cycle)) do p
             c = update(CTMEnvironmentCache(tn, χ; projector=p))
             abs(m_ctm(c, mk(v; spin=true), mk(v), v) - mex)/abs(mex)
