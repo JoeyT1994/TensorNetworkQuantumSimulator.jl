@@ -1,0 +1,143 @@
+python module _slicot_periodic
+    interface
+        subroutine mb03vd(n,p,ilo,ihi,a,lda1,lda2,tau,ldtau,dwork,info)
+            integer intent(in),check(n>=0) :: n
+            integer intent(in),check(p>=1) :: p
+            integer intent(in),check(ilo>=1) :: ilo
+            integer intent(in),check(ihi>=min(ilo,n)) :: ihi
+            double precision intent(in,out),dimension(lda1,lda2,p) :: a
+            integer intent(in),check(lda1>=max(1,n)) :: lda1
+            integer intent(in),check(lda2>=max(1,n)) :: lda2
+            double precision intent(in,out),dimension(ldtau,p) :: tau
+            integer intent(in),check(ldtau>=max(1,n-1)) :: ldtau
+            double precision intent(in,out),dimension(n) :: dwork
+            integer intent(out) :: info
+        end subroutine mb03vd
+
+        subroutine mb03vy(n,p,ilo,ihi,a,lda1,lda2,tau,ldtau,dwork,ldwork,info)
+            integer intent(in),check(n>=0) :: n
+            integer intent(in),check(p>=1) :: p
+            integer intent(in),check(ilo>=1) :: ilo
+            integer intent(in),check(ihi>=min(ilo,n)) :: ihi
+            double precision intent(in,out),dimension(lda1,lda2,p) :: a
+            integer intent(in),check(lda1>=max(1,n)) :: lda1
+            integer intent(in),check(lda2>=max(1,n)) :: lda2
+            double precision intent(in),dimension(ldtau,p) :: tau
+            integer intent(in),check(ldtau>=max(1,n-1)) :: ldtau
+            double precision intent(in,out),dimension(ldwork) :: dwork
+            integer intent(in),check(ldwork>=max(1,n)) :: ldwork
+            integer intent(out) :: info
+        end subroutine mb03vy
+
+        subroutine mb03wd(job,compz,n,p,ilo,ihi,iloz,ihiz,h,ldh1,ldh2,z,ldz1,ldz2,wr,wi,dwork,ldwork,info)
+            character intent(in) :: job
+            character intent(in) :: compz
+            integer intent(in),check(n>=0) :: n
+            integer intent(in),check(p>=1) :: p
+            integer intent(in),check(ilo>=1) :: ilo
+            integer intent(in),check(ihi>=min(ilo,n)) :: ihi
+            integer intent(in),check(iloz>=1) :: iloz
+            integer intent(in),check(ihiz>=ihi) :: ihiz
+            double precision intent(in,out),dimension(ldh1,ldh2,p) :: h
+            integer intent(in),check(ldh1>=max(1,n)) :: ldh1
+            integer intent(in),check(ldh2>=max(1,n)) :: ldh2
+            double precision intent(in,out),dimension(ldz1,ldz2,p) :: z
+            integer intent(in),check(ldz1>=max(1,n)) :: ldz1
+            integer intent(in),check(ldz2>=max(1,n)) :: ldz2
+            double precision intent(in,out),dimension(n) :: wr
+            double precision intent(in,out),dimension(n) :: wi
+            double precision intent(in,out),dimension(ldwork) :: dwork
+            integer intent(in),check(ldwork>=ihi-ilo+p) :: ldwork
+            integer intent(out) :: info
+        end subroutine mb03wd
+
+        subroutine mb03wx(n,p,t,ldt1,ldt2,wr,wi,info)
+            integer intent(in),check(n>=0) :: n
+            integer intent(in),check(p>=1) :: p
+            double precision intent(in),dimension(ldt1,ldt2,p) :: t
+            integer intent(in),check(ldt1>=max(1,n)) :: ldt1
+            integer intent(in),check(ldt2>=max(1,n)) :: ldt2
+            double precision intent(out),dimension(n) :: wr
+            double precision intent(out),dimension(n) :: wi
+            integer intent(out) :: info
+        end subroutine mb03wx
+
+        subroutine mb03kd(compq,whichq,strong,k,nc,kschur,n,ni,s,select,t,ldt,ixt,q,ldq,ixq,m,tol,iwork,dwork,ldwork,info)
+            character intent(in) :: compq
+            integer intent(in),dimension(k),depend(k) :: whichq
+            character intent(in) :: strong
+            integer intent(in),check(k>=2) :: k
+            integer intent(in),check(0<=nc) :: nc
+            integer intent(in),check(1<=kschur && kschur<=k) :: kschur
+            integer intent(in),dimension(k),depend(k) :: n
+            integer intent(in),dimension(k),depend(k) :: ni
+            integer intent(in),dimension(k),depend(k) :: s
+            logical intent(in),dimension(nc),depend(nc) :: select
+            double precision intent(in,out),dimension(*) :: t
+            integer intent(in),dimension(k),depend(k) :: ldt
+            integer intent(in),dimension(k),depend(k) :: ixt
+            double precision intent(in,out),dimension(*) :: q
+            integer intent(in),dimension(k),depend(k) :: ldq
+            integer intent(in),dimension(k),depend(k) :: ixq
+            integer intent(out) :: m
+            double precision intent(in),check(tol>0.0) :: tol
+            integer intent(in,out),dimension(4*k),depend(k) :: iwork
+            double precision intent(in,out),dimension(ldwork),depend(ldwork) :: dwork
+            integer intent(in),check(ldwork>=1) :: ldwork
+            integer intent(out) :: info
+        end subroutine mb03kd
+
+        subroutine mb03bd(job,defl,compq,qind,k,n,h,ilo,ihi,s,a,lda1,lda2,q,ldq1,ldq2,alphar,alphai,beta,scal,iwork,liwork,dwork,ldwork,iwarn,info)
+            character intent(in) :: job
+            character intent(in) :: defl
+            character intent(in) :: compq
+            integer intent(in,out),dimension(k),depend(k) :: qind
+            integer intent(in),check(k>=1) :: k
+            integer intent(in),check(n>=0) :: n
+            integer intent(in),check(h>=1) :: h
+            integer intent(in),check(ilo>=1) :: ilo
+            integer intent(in),check(ihi>=min(ilo,n)) :: ihi
+            integer intent(in),dimension(k),depend(k) :: s
+            double precision intent(in,out),dimension(lda1,lda2,k) :: a
+            integer intent(in),check(lda1>=max(1,n)) :: lda1
+            integer intent(in),check(lda2>=max(1,n)) :: lda2
+            double precision intent(in,out),dimension(ldq1,ldq2,k) :: q
+            integer intent(in),check(ldq1>=1) :: ldq1
+            integer intent(in),check(ldq2>=1) :: ldq2
+            double precision intent(in,out),dimension(n) :: alphar
+            double precision intent(in,out),dimension(n) :: alphai
+            double precision intent(in,out),dimension(n) :: beta
+            integer intent(in,out),dimension(n) :: scal
+            integer intent(in,out),dimension(liwork) :: iwork
+            integer intent(in),check(liwork>=2*k+n) :: liwork
+            double precision intent(in,out),dimension(ldwork) :: dwork
+            integer intent(in),check(ldwork>=k+max(2*n,8*k)) :: ldwork
+            integer intent(out) :: iwarn
+            integer intent(out) :: info
+        end subroutine mb03bd
+
+        subroutine mb03bz(job,compq,k,n,ilo,ihi,s,a,lda1,lda2,q,ldq1,ldq2,alpha,beta,scal,dwork,ldwork,zwork,lzwork,info)
+            character intent(in) :: job
+            character intent(in) :: compq
+            integer intent(in),check(k>=1) :: k
+            integer intent(in),check(n>=0) :: n
+            integer intent(in),check(ilo>=1) :: ilo
+            integer intent(in),check(ihi>=min(ilo,n)) :: ihi
+            integer intent(in),dimension(k),depend(k) :: s
+            complex*16 intent(in,out),dimension(lda1,lda2,k) :: a
+            integer intent(in),check(lda1>=max(1,n)) :: lda1
+            integer intent(in),check(lda2>=max(1,n)) :: lda2
+            complex*16 intent(in,out),dimension(ldq1,ldq2,k) :: q
+            integer intent(in),check(ldq1>=1) :: ldq1
+            integer intent(in),check(ldq2>=1) :: ldq2
+            complex*16 intent(in,out),dimension(n) :: alpha
+            complex*16 intent(in,out),dimension(n) :: beta
+            integer intent(in,out),dimension(n) :: scal
+            double precision intent(in,out),dimension(ldwork) :: dwork
+            integer intent(in),check(ldwork>=max(1,n)) :: ldwork
+            complex*16 intent(in,out),dimension(lzwork) :: zwork
+            integer intent(in),check(lzwork>=max(1,n)) :: lzwork
+            integer intent(out) :: info
+        end subroutine mb03bz
+    end interface
+end python module _slicot_periodic

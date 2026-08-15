@@ -1,3 +1,24 @@
+# =============================== CORRECTION 2026-08-12 ===============================
+# THE bMPS COLUMN IS NOT A FAIR METHOD COMPARISON. An earlier version of this file
+# presented its plateau as a boundary-MPS limitation. That was wrong.
+#
+# It estimates m as a ratio of two GLOBAL partition functions (lnZ=108.9, Z ~ e^109), so
+# it inherits floating-point accumulation in Z. Measured:
+#   * INDEPENDENT of chi -- identical to 4 s.f. from chi=12 to chi=48;
+#   * GROWS with system size -- 2.86e-12 at 11x11 (lnZ=108.9), 5.23e-12 at 13x13
+#     (lnZ=152.8); ~120-150 x eps*lnZ in both cases;
+#   * unchanged by maxiter=200 or tolerance=1e-14.
+# That is accumulation, not truncation. bMPS is converging fine.
+#
+# CTM's magnetisation is a LOCAL ring contraction that never forms Z, so it does not
+# accumulate. The CTM-vs-bMPS gap below therefore partly measures GLOBAL-vs-LOCAL
+# ESTIMATOR NUMERICS, not truncation quality. Do NOT quote it as "bMPS saturates".
+#
+# A fair comparison needs bMPS on a local estimator too (path_contract /
+# reduced_density_matrix off a BoundaryMPSCache). NOT YET DONE.
+#
+# The :cut vs :cycle comparison IS unaffected -- both use the same local ring.
+# =====================================================================================
 # Finite 10x10 RANDOM-BOND Ising (RBIM), free boundaries, bias field h=0.01.
 # J_e = -1 with probability p=0.109, else +1. Nishimori line: exp(-2*beta)=p/(1-p).
 # beta=1.0505 = the multicritical (Nishimori) point. Their Fig. 2 says 'critical

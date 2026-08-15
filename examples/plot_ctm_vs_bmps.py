@@ -117,8 +117,9 @@ def plot_one(csv_path, show=False):
                      "Negative bonds make the network\n"
                      "strongly non-Hermitian -- the regime\n"
                      "the draft picks the RBIM for.\n\n"
-                     "bMPS freezes at 1.35e-11 for\n"
-                     "chi = 12..16 (7 s.f. identical).",
+                     "bMPS floor is ACCUMULATION in the\n"
+                     "global Z, not a truncation limit\n"
+                     "-- see the CSV header.",
                      fontsize=8.5, color=INK_2, va="center", ha="left")
         for ax in axes[:1]:
             ax.legend(frameon=False, fontsize=8.5, labelcolor=INK_2, handlelength=1.6)

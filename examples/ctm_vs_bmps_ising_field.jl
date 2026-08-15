@@ -1,3 +1,12 @@
+# ⚠️ CORRECTED 2026-08-12: the bMPS plateau below is NOT a boundary-MPS limitation. It is
+# floating-point accumulation from estimating m as a ratio of two GLOBAL partition functions
+# (Z ~ e^109): chi-independent (identical chi=12..48) and GROWING with system size (2.86e-12
+# at 11x11, 5.23e-12 at 13x13, ~120-150 x eps*lnZ). CTM's m is a LOCAL ring contraction that
+# never forms Z. The gap therefore partly measures global-vs-local estimator numerics, not
+# truncation quality -- do not quote it as 'bMPS saturates'. A fair comparison needs bMPS on
+# a local estimator (path_contract off a BoundaryMPSCache); not yet done. :cut vs :cycle is
+# unaffected -- both use the same local ring.
+#
 # Finite classical Ising in a field: CTMRG (:cut and :cycle) vs boundary MPS, at matched χ,
 # measured at a CORNER and at the CENTRE against an exact contraction.
 #
