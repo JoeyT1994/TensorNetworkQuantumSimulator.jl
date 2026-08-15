@@ -37,6 +37,12 @@ using TensorNetworkQuantumSimulator, ITensors, Printf, Random, Statistics
 using Dictionaries: Dictionary, set!
 using NamedGraphs.GraphsExtensions: incident_edges
 const T = TensorNetworkQuantumSimulator
+# bMPS on a SINGLE-LAYER network dispatches to `zipup`, whose default cutoff is 1e-12.
+# That, not the method, produced the ~3e-12 'floor' an earlier version of this file
+# reported: with cutoff=0 the same runs reach |dlnZ| = 0 and |dm|/|m| = 1.3e-15.
+# Set it to 0 so chi is the ONLY truncation control, matching CTM (whose qr_cutoff is
+# 1e-13 and measured INERT here). Without this the comparison is not like-for-like.
+const BMPS_KW = (; message_update_alg = T.Algorithm("zipup"; cutoff = 0.0))
 
 # RBIM in a field. Per-edge J_e = ±1; negative bonds need a COMPLEX sqrt of the Boltzmann
 # matrix, which is exactly why they pick this model ("the network becomes strongly non-Hermitian").
@@ -90,8 +96,8 @@ for r in 1:NREAL
             c = update(CTMEnvironmentCache(tn, χ; projector=pr))
             push!(res[pr][χ], abs(real(m_ctm(c, mk(v;spin=true), mk(v), v)) - mex)/abs(mex))
         end
-        mb = real(contract(tnS;alg="boundarymps",mps_bond_dimension=χ))/
-             real(contract(tn; alg="boundarymps",mps_bond_dimension=χ))
+        mb = real(contract(tnS;alg="boundarymps", mps_bond_dimension=χ, bmps_update_kwargs=BMPS_KW))/
+             real(contract(tn; alg="boundarymps", mps_bond_dimension=χ, bmps_update_kwargs=BMPS_KW))
         push!(res[:bmps][χ], abs(mb-mex)/abs(mex))
     end
     println("realisation $r done"); flush(stdout)

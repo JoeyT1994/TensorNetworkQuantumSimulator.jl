@@ -35,6 +35,14 @@ def find(name):
     """A CSV may sit beside this script or in the repo's examples/data/."""
     return next((p for p in (HERE / name, HERE / "data" / name) if p.exists()), None)
 
+# PLOT LABELS follow the collaborators' draft, not the code's option names, so the two
+# can be read side by side:
+#     SVD-CTMRG  <->  projector = :cut     (per-interface rank-chi truncation)
+#     MPS-BP     <->  projector = :cycle   (four-corner cycle; the stationary one)
+# NB the pairing is not symmetric: both are CTMRG. In the draft MP-BP is the
+# fixed-point condition d_X Z = 0, and CTMRG is how they find it -- so 'MPS-BP' here
+# means the CTMRG whose fixed point satisfies it. The code keeps :cut / :cycle.
+#
 # Categorical slots 1-3 of the reference palette, in fixed order. Colour follows the
 # METHOD, so it stays put if a series is dropped.
 CUT, CYCLE, BMPS = "#2a78d6", "#eb6834", "#1baf7a"
@@ -105,8 +113,8 @@ def plot_one(csv_path, show=False):
         for ax in axes:
             ax.set_facecolor("#fcfcfb")
         error_panel(axes[0], chi,
-                    [(":cut", (d["cut_med"], d["cut_lo"], d["cut_hi"]), CUT),
-                     (":cycle", (d["cycle_med"], d["cycle_lo"], d["cycle_hi"]), CYCLE),
+                    [("SVD-CTMRG", (d["cut_med"], d["cut_lo"], d["cut_hi"]), CUT),
+                     ("MPS-BP", (d["cycle_med"], d["cycle_lo"], d["cycle_hi"]), CYCLE),
                      ("boundary MPS", (d["bmps_med"], d["bmps_lo"], d["bmps_hi"]), BMPS)],
                     "RBIM 10x10, site (4,4)")
         axes[0].set_ylabel(r"$|\delta m| / |m|$", fontsize=9, color=INK_2)
@@ -138,15 +146,15 @@ def plot_one(csv_path, show=False):
         ax.set_facecolor("#fcfcfb")
 
     error_panel(axes[0], chi,
-                [(":cut", d["cut_corner"], CUT),
-                 (":cycle", d["cycle_corner"], CYCLE),
+                [("SVD-CTMRG", d["cut_corner"], CUT),
+                 ("MPS-BP", d["cycle_corner"], CYCLE),
                  ("boundary MPS", d["bmps_corner"], BMPS)],
                 "CORNER site (1,1)")
     axes[0].set_ylabel(r"$|\delta m| / |m|$", fontsize=9, color=INK_2)
 
     error_panel(axes[1], chi,
-                [(":cut", d["cut_centre"], CUT),
-                 (":cycle", d["cycle_centre"], CYCLE),
+                [("SVD-CTMRG", d["cut_centre"], CUT),
+                 ("MPS-BP", d["cycle_centre"], CYCLE),
                  ("boundary MPS", d["bmps_centre"], BMPS)],
                 "CENTRE site (6,6)")
 
@@ -154,9 +162,9 @@ def plot_one(csv_path, show=False):
     # analogue, so only two series appear here.
     ax = axes[2]
     ax.plot(chi, np.clip(d["marg_cut"], FLOOR, None), marker="o", markersize=5.5,
-            linewidth=1.8, color=CUT, label=":cut", clip_on=False, zorder=3)
+            linewidth=1.8, color=CUT, label="SVD-CTMRG", clip_on=False, zorder=3)
     ax.plot(chi, np.clip(d["marg_cycle"], FLOOR, None), marker="o", markersize=5.5,
-            linewidth=1.8, color=CYCLE, label=":cycle", clip_on=False, zorder=3)
+            linewidth=1.8, color=CYCLE, label="MPS-BP", clip_on=False, zorder=3)
     ax.set_yscale("log")
     ax.set_title(r"stationarity residual  $\partial_X Z$", fontsize=10, color=INK, pad=8)
     ax.set_xlabel("bond dimension  $\\chi$", fontsize=9, color=INK_2)
