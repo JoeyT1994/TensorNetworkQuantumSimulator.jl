@@ -3,6 +3,14 @@
 # m_exact: corner=0.05748716351402133 centre=0.1672197640571815 (exact contraction).
 # marg_* = marginal_inconsistency = the stationarity residual d_X Z (gauge invariant).
 # NOTE floor ~1e-14: the reference is itself a ratio of two 11x11 contractions.
+#
+# bMPS TRUNCATION IS MATCHED TO CTM. A single-layer network dispatches to `zipup`, whose
+# DEFAULT cutoff is 1e-12; that default -- not the method -- produced the ~3e-12 "bMPS floor"
+# earlier versions of this file reported (first as a method limitation, then, also wrongly,
+# as accumulation in the global Z). Measured at chi=16: cutoff 1e-12 -> |dlnZ| 2.86e-12;
+# cutoff 1e-14 -> 0.0; cutoff 0 -> 1.4e-14. These data use cutoff = 0, so chi is the ONLY
+# truncation control on both sides (CTM's qr_cutoff is 1e-13 and measured inert here).
+# Do not compare at "matched chi" without matching cutoffs.
 chi,cut_corner,cycle_corner,bmps_corner,cut_centre,cycle_centre,bmps_centre,marg_cut,marg_cycle
 1,5.116820e+00,4.487982e+00,3.141327e+00,4.040312e+00,4.092079e+00,3.139721e+00,3.794489e-04,6.432781e-13
 2,2.835002e-03,2.504183e-03,7.940948e-02,7.442374e-03,4.183139e-03,7.111258e-02,2.779001e-08,6.736531e-15
