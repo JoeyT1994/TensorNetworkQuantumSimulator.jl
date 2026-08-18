@@ -14,7 +14,7 @@
 #     CuArray (`CuArray{T,1,DeviceMemory} where T`), so type-construction bugs hide here.
 #   * CUDA-aware MPI, device pointers reaching UCX, and CUDA stream ordering have no analogue.
 @eval module $(gensym())
-using Test: @test, @testset
+using Test: @test, @test_broken, @testset
 using JLArrays: JLArray
 using TensorNetworkQuantumSimulator
 # Everything else is reached through the package, so this file needs no dependency beyond
@@ -109,17 +109,24 @@ SpyVec{T}(::UndefInitializer, n::Integer) where {T} = (SPY_SEEN[] = SPY_REF[][];
     end
 
     # Covers qr / factorize_svd / the env gauging on a device array type.
+    #
+    # Broken upstream: NDTensorsJLArraysExt's `Expose.qr` passes the bare JLArray to
+    # `LinearAlgebra.qr`, which has no GPU method and reaches host `geqrt!` -- "Illegal conversion
+    # of a JLArray to a Ptr". Its neighbours (`qr_positive`, `ql`, `eigen`) call `cpu` first.
+    # CUDA.jl supplies a cuSOLVER `qr` for CuArray, so this is a JLArray gap, not a GPU one.
     @testset "gate application" begin
         e = first(x for x in TNQS.edges(bpc) if degree(g, TNQS.src(x)) == 3)
         v⃗ = [TNQS.src(e), TNQS.dst(e)]
-        out, errs = TNQS.apply_gates(
-            [("Rzz", v⃗, 0.3)], bpc;
-            apply_kwargs = (; maxdim = chi, cutoff = 0.0),
-            bp_update_kwargs = (; maxiter = 2, tolerance = nothing)
-        )
-        @test out isa TNQS.BeliefPropagationCache
-        @test !(ITensors.data(TNQS.network(out)[first(v⃗)]) isa Array)
-        @test all(isfinite, errs)
+        @test_broken begin
+            out, errs = TNQS.apply_gates(
+                [("Rzz", v⃗, 0.3)], bpc;
+                apply_kwargs = (; maxdim = chi, cutoff = 0.0),
+                bp_update_kwargs = (; maxiter = 2, tolerance = nothing)
+            )
+            out isa TNQS.BeliefPropagationCache &&
+                !(ITensors.data(TNQS.network(out)[first(v⃗)]) isa Array) &&
+                all(isfinite, errs)
+        end
     end
 
 end
