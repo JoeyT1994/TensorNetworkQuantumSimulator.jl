@@ -33,7 +33,7 @@
 # See docs/ctmrg_status.md for the current numbers and the open problems;
 # docs/finite_ctmrg_design.md for the derivations and the full record of what was tried.
 
-using LinearAlgebra: eigen, Hermitian, norm, dot, I, Diagonal, qr, svd
+using LinearAlgebra: eigen, Hermitian, norm, dot, I, Diagonal, qr, svd, diagind
 using Random: Xoshiro
 using KrylovKit: eigsolve, svdsolve, schursolve, Arnoldi
 
@@ -260,14 +260,33 @@ _ctm_setenv(cache::CTMEnvironmentCache, env) =
 # testing and for comparing two projectors, where the difference under test can be smaller than the
 # run-to-run spread. Seeding locally from the problem's shape makes each solve reproducible AND
 # leaves the caller's global stream untouched (a CTM sweep must not perturb a user's `Random.seed!`).
-_ctm_startvec(T, n::Integer, tag) = randn(Xoshiro(hash(tag, hash(n))), T, n)
+#
+# The seeded draw happens on the CPU (deterministic RNG) and is then moved onto `ref`'s device, so
+# every Krylov solve starts from a device-resident vector when the network is on a GPU. On CPU this
+# is a plain copy, so the drawn values — hence all numerics — are bit-identical to a direct `randn`.
+
+# A CPU array placed onto `ref`'s device/array-type by a bulk copy (never scalar, never CPU-forcing).
+_ctm_to_device(ref::AbstractArray, v::AbstractArray) =
+    copyto!(similar(ref, eltype(v), size(v)), v)
+# (m × n) zeros on `ref`'s device/eltype.
+_ctm_zeros_like(ref::AbstractArray, m::Integer, n::Integer) =
+    fill!(similar(ref, m, n), zero(eltype(ref)))
+# First `n` columns of the (m × m) identity, on `ref`'s device/eltype (broadcast scatter, GPU-safe).
+function _ctm_eye_like(ref::AbstractArray, m::Integer, n::Integer)
+    E = _ctm_zeros_like(ref, m, n)
+    E[diagind(E)] .= one(eltype(ref))
+    return E
+end
+
+_ctm_startvec(ref::AbstractArray, n::Integer, tag) =
+    _ctm_to_device(ref, randn(Xoshiro(hash(tag, hash(n))), eltype(ref), n))
 
 # Top-`k` eigenpairs of a Hermitian matrix: Krylov when it pays off, else dense.
 function _ctm_eigsolve(ρs::Hermitian, k::Integer, opts::CTMOptions)
     n = size(ρs, 1)
     if opts.arnoldi && n > 4k
         try
-            v0 = _ctm_startvec(eltype(ρs), n, :eig)
+            v0 = _ctm_startvec(parent(ρs), n, :eig)
             # `verbosity = 0`: when the interface's effective rank is below `k` — routine at
             # larger D — KrylovKit reports "invariant subspace of dimension r < howmany" and
             # "stopped without convergence". Both are expected here, not errors: we fall through
@@ -296,11 +315,14 @@ end
 
 function _ctm_eig_projector(ρ::ITensor, bnd::Index, maxdim::Integer, opts::CTMOptions)
     bp = prime(bnd)
-    ρm = Array(ρ, bnd, bp)
+    ρm = ITensors.array(ρ, bnd, bp)
     ρs = Hermitian((ρm + ρm') / 2)
     vals, vecs = _ctm_eigsolve(ρs, Int(maxdim), opts)
-    order = sortperm(vals; rev = true)
-    sv = vals[order]
+    # Rank + degeneracy logic is inherently scalar; run it on a CPU copy of the O(n) eigenvalues,
+    # then gather the kept columns of the (device-resident) eigenvector matrix by index.
+    sv0 = Array(real.(vals))
+    order = sortperm(sv0; rev = true)
+    sv = sv0[order]
     k = min(Int(maxdim), length(sv), size(vecs, 2))
     while k > 1 && k < length(sv) && abs(sv[k] - sv[k + 1]) ≤ opts.degtol * abs(sv[k])
         k -= 1                              # don't split a degenerate multiplet
@@ -363,12 +385,12 @@ end
 # broke the pair's exactness at full rank by ~11% on a complex 4×4. See `_ctm_twosided_projector_qr`.
 function _ctm_block_matrix(B::ITensor, io::Index)
     rest = collect(uniqueinds(B, io))
-    isempty(rest) && return reshape(Array(B, io), 1, ITensors.dim(io))
-    return reshape(Array(B, rest..., io), :, ITensors.dim(io))
+    isempty(rest) && return reshape(ITensors.array(B, io), 1, ITensors.dim(io))
+    return reshape(ITensors.array(B, rest..., io), :, ITensors.dim(io))
 end
 
 # Triangular factor of a block: `R` with `A = Q R`, never forming `ρ`. See the projector note above.
-_ctm_tri_factor(B::ITensor, io::Index) = Matrix(qr(_ctm_block_matrix(B, io)).R)
+_ctm_tri_factor(B::ITensor, io::Index) = qr(_ctm_block_matrix(B, io)).R
 
 # Biorthogonal pair from the TRIANGULAR factors of the two bounding blocks — no squaring
 # anywhere. See the projector note above for the derivation.
@@ -383,7 +405,7 @@ _ctm_tri_factor(B::ITensor, io::Index) = Matrix(qr(_ctm_block_matrix(B, io)).R)
 # non-convergence; agreement with dense measured to 1.4e-15 on matrices captured from a real run.
 function _ctm_svd_topk(W::AbstractMatrix, k::Integer)
     try
-        x0 = _ctm_startvec(eltype(W), size(W, 2), :svd)
+        x0 = _ctm_startvec(W, size(W, 2), :svd)
         # `krylovdim` MUST exceed `k`: KrylovKit's default is 30, and `svdsolve` THROWS for k ≥ 30
         # rather than returning unconverged. Before this was set, every interface with kw ≥ 30 paid
         # a doomed Krylov attempt and then the dense SVD anyway — worst on the largest blocks, which
@@ -414,15 +436,18 @@ function _ctm_twosided_projector_qr(Bw::ITensor, Be::ITensor, io::Index, maxdim:
     # (144,32) 0.14×, (288,48) 0.28×.
     F = (opts.arnoldi && nW >= opts.krylov_min && nW > 8kw) ? _ctm_svd_topk(W, kw) : nothing
     isnothing(F) && (F = svd(W))            # ONE decomposition → consistent U, S, V
-    S = F.S
-    k = min(Int(maxdim), length(S))
-    while k > 1 && S[k] ≤ opts.qr_cutoff * S[1]
+    # Cutoff + degeneracy truncation is scalar; decide `k` on a CPU copy of the singular values.
+    s0 = Array(real.(F.S))
+    k = min(Int(maxdim), length(s0))
+    while k > 1 && s0[k] ≤ opts.qr_cutoff * s0[1]
         k -= 1
     end
-    while k > 1 && k < length(S) && abs(S[k] - S[k + 1]) ≤ opts.degtol * abs(S[k])
+    while k > 1 && k < length(s0) && abs(s0[k] - s0[k + 1]) ≤ opts.degtol * abs(s0[k])
         k -= 1                                      # don't split a degenerate multiplet
     end
-    Sk = S[1:k]; isk = Diagonal(1 ./ sqrt.(Sk))
+    # Whitening scale on the SVD factors' device (the top-k Krylov path returns host `S` but device
+    # `U`/`V`, so anchor to `F.U`), keeping both products fully on-device.
+    isk = Diagonal(_ctm_to_device(F.U, 1 ./ sqrt.(s0[1:k])))
     PAm = RBt * F.V[:, 1:k] * isk           # (bond × kept)
     PBm = isk * F.U[:, 1:k]' * RA           # (kept × bond)
     w = Index(k)
@@ -486,7 +511,8 @@ function _ctm_interface_proj(B, ins::Vector{<:Index}, maxdim::Integer, opts::CTM
     d = ITensors.dim(io); k = min(Int(maxdim), d)
     if k == d                              # nothing to truncate: keep the basis intact
         w = Index(d)
-        return ITensor(Matrix{Float64}(I, d, d), io, w) * co, w
+        # identity isometry on B's device/eltype (never a hardcoded CPU Float64 matrix)
+        return adapt_like(B, dense(delta(io, w))) * co, w
     end
     Bc = B * co
     ρ = Bc * prime(dag(Bc), io)
@@ -737,7 +763,11 @@ end
 # completions outside `range(X)`, and the width-based guard below cannot detect it. Deliberate —
 # pivoting it was measured (8 seeds) to be bit-identical where the deficiency never fires and slightly
 # WORSE where it does, and it does not fix the 8×8 plateau. See docs/ctmrg_status.md.
-_ctm_orthcols(X, k) = (Q = Matrix(qr(X).Q); Q[:, 1:min(k, size(Q, 2))])
+# Thin orthonormal basis: the first `k` columns of `qr(X).Q`, materialized device-generically.
+# `Matrix(qr(X).Q)` would force CPU; instead apply the (implicit) Q to a device-resident thin
+# identity — identical columns, on X's device. `min(k, size(X,2))` because Q has no more than
+# `size(X,2)` columns spanning the range.
+_ctm_orthcols(X, k) = qr(X).Q * _ctm_eye_like(X, size(X, 1), min(k, size(X, 2)))
 
 # Whiten a pair so that `B A = I`, via the SVD of their overlap.
 #
@@ -746,9 +776,11 @@ _ctm_orthcols(X, k) = (Q = Matrix(qr(X).Q); Q[:, 1:min(k, size(Q, 2))])
 # the cut projector. Dropping below `cutoff · S[1]` shrinks `k` instead.
 function _ctm_biorth(A::AbstractMatrix, B::AbstractMatrix, cutoff::Real)
     F = svd(B * A)
-    k = count(>(cutoff * (isempty(F.S) ? one(eltype(F.S)) : F.S[1])), F.S)
+    s0 = Array(real.(F.S))                  # CPU copy: the rank count below is scalar
+    isempty(s0) && return nothing
+    k = count(>(cutoff * s0[1]), s0)
     k < 1 && return nothing
-    isq = Diagonal(1 ./ sqrt.(F.S[1:k]))
+    isq = Diagonal(_ctm_to_device(F.U, 1 ./ sqrt.(s0[1:k])))   # whitening scale on the factors' device
     return A * F.V[:, 1:k] * isq, isq * F.U[:, 1:k]' * B
 end
 
@@ -761,8 +793,8 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
     cs = ntuple(l -> combiner(ins[l]...), 4)
     io = ntuple(l -> combinedind(cs[l]), 4)
     As = try
-        [Array((ESW * cs[1]) * cs[2], io[2], io[1]), Array((ESE * cs[2]) * cs[3], io[3], io[2]),
-         Array((ENE * cs[3]) * cs[4], io[4], io[3]), Array((ENW * cs[4]) * cs[1], io[1], io[4])]
+        [ITensors.array((ESW * cs[1]) * cs[2], io[2], io[1]), ITensors.array((ESE * cs[2]) * cs[3], io[3], io[2]),
+         ITensors.array((ENE * cs[3]) * cs[4], io[4], io[3]), ITensors.array((ENW * cs[4]) * cs[1], io[1], io[4])]
     catch
         return nothing                          # a corner carrying more than its two interfaces
     end
@@ -772,7 +804,7 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
     # Seeded on plaquette POSITION only, so the start vector is bit-identical every sweep. Seeding
     # on the bond dimensions too let it move whenever a rank shifted, which showed up as sweep-to-
     # sweep basis wander (state distance floor 1e-10 rather than 3e-11).
-    v0 = randn(Xoshiro(seed), eltype(As[1]), nsp[1])
+    v0 = _ctm_to_device(As[1], randn(Xoshiro(seed), eltype(As[1]), nsp[1]))
     # SCALE-FREE TOLERANCE — this was the algorithm's accuracy floor, worth ~1000× at χ=32.
     #
     # KrylovKit's `tol` is ABSOLUTE on the residual, and the cycle spectrum is the PRODUCT of the four
@@ -854,9 +886,8 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
         (all(isfinite, a) && all(isfinite, b)) || return nothing
         kt = target(l)
         if size(a, 2) < kt                              # embed at rank, pad the rest with zeros
-            T = eltype(a)
-            a = hcat(a, zeros(T, size(a, 1), kt - size(a, 2)))
-            b = vcat(b, zeros(T, kt - size(b, 1), size(b, 2)))
+            a = hcat(a, _ctm_zeros_like(a, size(a, 1), kt - size(a, 2)))
+            b = vcat(b, _ctm_zeros_like(b, kt - size(b, 1), size(b, 2)))
         end
         w = Index(size(a, 2))
         out[l] = (ITensor(a, io[l], w) * cs[l], ITensor(b, w, io[l]) * cs[l], w, ins[l])
@@ -901,9 +932,9 @@ function _ctm_align(pr, ins, prev)
     issetequal(collect(inds(PAo)), vcat(collect(ins), [wo])) || return pr   # same raw space?
     co = combiner(ins...); io = combinedind(co)
     Am, Ao, Bm, R = try
-        a  = Array(PA * co, io, w)
-        ao = Array(PAo * co, io, wo)
-        b  = Array(PB * co, w, io)
+        a  = ITensors.array(PA * co, io, w)
+        ao = ITensors.array(PAo * co, io, wo)
+        b  = ITensors.array(PB * co, w, io)
         F  = svd(a' * ao)
         a, ao, b, F.U * F.Vt                          # nearest unitary
     catch
@@ -1396,7 +1427,7 @@ function marginal_inconsistency(cache::CTMEnvironmentCache)
         a, b = Ms
         Set(inds(a)) == Set(inds(b)) || continue
         is = inds(a)
-        va = vec(Array(a, is...)); vb = vec(Array(b, is...))
+        va = vec(ITensors.array(a, is...)); vb = vec(ITensors.array(b, is...))
         na = norm(va); nb = norm(vb)
         (iszero(na) || iszero(nb)) && continue
         # clamp: `cos` can marginally exceed 1 in roundoff, and this is a distance
@@ -1432,8 +1463,16 @@ what replaces the greedy pass's one-sided cuts), but the tail is slow: `|ΔF|` t
 and reads as a limit cycle. Warns if `tolerance` is not met within `maxiter` — except under
 `verbose = true`, where the same message is `println`ed rather than warned.
 """
+# Working real precision of the stored network — sets the reachable convergence floor.
+_ctm_real_eltype(cache::CTMEnvironmentCache) = real(eltype(datatype(network(cache))))
+# Default convergence tolerance, PRECISION-AWARE. `|ΔF|` and the state distance bottom out at the
+# working roundoff (~1e-7 in Float32), so a fixed 1e-10 is UNREACHABLE below Float64 and the sweep
+# spins to `maxiter` — wasting sweeps (and, on GPU, the transient memory they churn). `1e3·eps`
+# recovers ~1.2e-4 for Float32 while leaving Float64 at exactly 1e-10 (1e3·eps(Float64) ≈ 2e-13).
+_ctm_default_tol(cache::CTMEnvironmentCache) = max(1.0e-10, 1.0e3 * eps(_ctm_real_eltype(cache)))
+
 function update(cache::CTMEnvironmentCache; maxiter::Integer = 30,
-                tolerance::Real = 1.0e-10, verbose::Bool = false)
+                tolerance::Real = _ctm_default_tol(cache), verbose::Bool = false)
     env = _ctm_env(cache)
     opts = cache.options
     F = cvm_freenergy(env, cache)
