@@ -9,6 +9,7 @@ operator(blf::BilinearForm) = blf.operator
 bra(blf::BilinearForm) = blf.bra
 bra_tensor(blf::BilinearForm, v) = bra(blf)[v]
 bra_virtualinds(blf::BilinearForm, edge::NamedEdge) = virtualinds(bra(blf), edge)
+bra_factor_inds(blf::BilinearForm, v) = factor_inds(bra(blf), v)
 
 Base.copy(blf::BilinearForm) = BilinearForm(copy(blf.ket), copy(blf.operator), copy(blf.bra))
 

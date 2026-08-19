@@ -145,205 +145,239 @@ end
     end
 end
 
-# `blocked_gates!(true)` exists purely to bound peak memory, so it has to be numerically
-# indistinguishable from the standard branch -- including when a gate truncates the bond
-# (maxdim < χ) and when it grows it (maxdim > χ), which take different paths through the padding
-# in `_lmul_q`.
-@testset "Blocked two-site gate" begin
-    g = named_hexagonal_lattice_graph(2, 2)
+end
 
-    for (chi, normalize_tensors, maxdim) in
-        [(4, true, 4), (4, false, 4), (6, true, 3), (6, true, 12)]
+@eval module $(gensym())
+using LinearAlgebra: Diagonal, I, istriu, norm, svd, transpose
+using Random: Random
+using TensorNetworkQuantumSimulator: absorb_matrices, absorb_matrices_mul, absorb_matrices_qr,
+    gate_split, simple_update_dense!, truncation_strategy
+using Test: @test, @testset, @test_throws
 
-        ψ = random_tensornetworkstate(ComplexF64, g; bond_dimension = chi)
-        bpc = update(BeliefPropagationCache(ψ); maxiter = 4, tolerance = nothing)
-        apply_kwargs = (; maxdim, cutoff = 1.0e-14, normalize_tensors)
-        specialised = 0
-
-        for e in TNQS.edges(bpc)
-            v⃗ = [src(e), dst(e)]
-            gate = TNQS.adapt_gate(
-                first(TNQS.toitensor(("Rxx", v⃗, 0.41), TNQS.graph(bpc), siteinds(network(bpc)))),
-                bpc
-            )
-            envs = TNQS.incoming_messages(bpc, v⃗)
-            ψ⃗ = ITensors.ITensor[network(bpc)[v] for v in v⃗]
-
-            blocked = TNQS.blocked_two_site_update(
-                gate, copy(ψ⃗); envs, normalize_tensors, sqrt_cutoff = nothing,
-                consume_inputs = false, apply_kwargs...
-            )
-            isnothing(blocked) && continue
-            specialised += 1
-            reference = TNQS.simple_update(gate, copy(ψ⃗); envs, apply_kwargs...)
-
-            # Compared as the contracted pair: the two paths mint different bond Index ids.
-            @test isapprox(
-                blocked[1][1] * blocked[1][2], reference[1][1] * reference[1][2]; atol = 1.0e-11
-            )
-            @test isapprox(ITensors.norm(blocked[2]), ITensors.norm(reference[2]); atol = 1.0e-11)
-            @test isapprox(blocked[3], reference[3]; atol = 1.0e-11)
-        end
-        # Guards against the assertions above passing because everything fell back.
-        @test specialised > 0
+# Built from `mapslices` so it shares no machinery with the code under test.
+function absorb_reference(tensor, matrices; transposed = false)
+    t = copy(tensor)
+    for (k, matrix) in enumerate(matrices)
+        M = transposed ? matrix : transpose(matrix)
+        t = mapslices(v -> M * v, t; dims = k)
     end
+    return t
+end
 
-    # Every other test in this file uses a complex state, which hides the case that matters most
-    # in practice: the state constructors default to `Float64` and every standard rotation is
-    # complex, so `zerostate |> apply_gates` promotes. The specialised path builds its
-    # factorization at the state's type and multiplies it into a buffer sized from the post-gate
-    # SVD, and `lmul!` has no mixed-eltype method -- so this has to fall back, not throw.
-    @testset "real state under a complex gate falls back" begin
-        g2 = named_grid((3, 3))
-        ψ_real = zerostate(g2)
-        @test scalartype(ψ_real) == Float64          # the premise, in case a default changes
-        circuit = [("Rxx", [(1, 1), (2, 1)], 0.3), ("Rz", [(1, 1)], 0.2)]
-        apply_kwargs = (; maxdim = 4, cutoff = 1.0e-14)
+# Contract the two vertex tensors over their shared (last) axis, then apply `gate` to the two site
+# axes. With invertible environments and their inverses the gauging cancels, so an untruncated
+# simple update has to reproduce this exactly.
+function pair_reference(t1, t2, gate, n1, n2, d1, d2, b)
+    M1, M2 = prod(size(t1)[1:(end - 1)]), prod(size(t2)[1:(end - 1)])
+    T = reshape(
+        reshape(t1, M1, b) * transpose(reshape(t2, M2, b)),
+        size(t1)[1:(end - 1)]..., size(t2)[1:(end - 1)]...
+    )
+    perm = (n1 + 1, n1 + n2 + 2, ntuple(identity, n1)..., ntuple(i -> n1 + 1 + i, n2)...)
+    P = permutedims(T, perm)
+    P = reshape(gate * reshape(P, d1 * d2, :), size(P)...)
+    return permutedims(P, invperm(perm))
+end
 
-        reference, errs_ref = apply_gates(circuit, ψ_real; apply_kwargs)
-        TNQS.blocked_gates!(true)
-        try
-            got, errs = apply_gates(circuit, ψ_real; apply_kwargs)
-            @test scalartype(got) == ComplexF64
-            @test isapprox(errs, errs_ref; atol = 1.0e-12)
-            for v in vertices(g2)
-                @test isapprox(
-                    expect(got, ("Z", [v]); alg = "exact"),
-                    expect(reference, ("Z", [v]); alg = "exact"); atol = 1.0e-10
-                )
-            end
-        finally
-            TNQS.blocked_gates!(false)
-        end
+# A `middle!` for `simple_update_dense!`: contract the shared bond, apply the gate to the site
+# axes, and split with an SVD keeping `maxdim` values. Splits the singular values evenly between
+# the two factors, matching `factorize_svd`'s `ortho = "none"`.
+function gate_middle(gate, d1, d2, maxdim)
+    return function (R1, R2)
+        q1, b, q2 = size(R1, 1), size(R1, 3), size(R2, 1)
+        M = reshape(R1, q1 * d1, b) * transpose(reshape(R2, q2 * d2, b))
+        P = permutedims(reshape(M, q1, d1, q2, d2), (2, 4, 1, 3))
+        P = reshape(gate * reshape(P, d1 * d2, q1 * q2), d1, d2, q1, q2)
+        M = reshape(permutedims(P, (3, 1, 4, 2)), q1 * d1, q2 * d2)
+        F = svd(M)
+        k = isnothing(maxdim) ? length(F.S) : min(maxdim, length(F.S))
+        w = abs2.(F.S)
+        rs = sqrt.(F.S[1:k])
+        return reshape(F.U[:, 1:k] * Diagonal(rs), q1, d1, k),
+            reshape(transpose(Diagonal(rs) * F.Vt[1:k, :]), q2, d2, k),
+            F.S[1:k], sum(w[(k + 1):end]) / sum(w)
     end
+end
 
-    # The environments are absorbed by gemms that rotate each gauged leg from one end of the
-    # storage order to the other, rather than by `contract`. The lattice tests above cover it
-    # end-to-end, but only ever with an environment on *every* row leg, because every bond leaving
-    # `v⃗` carries a message. The cases below drive it directly, against an explicit `contract` as
-    # the reference.
-    @testset "gauging by rotation" begin
-        i, j, k, sph = Index(3, "i"), Index(4, "j"), Index(5, "k"), Index(2, "s")
-        t = ITensors.random_itensor(ComplexF64, i, j, k, sph)
-        allrows = [i, j, k]
-        mats = [ITensors.random_itensor(ComplexF64, x, ITensors.prime(x)) for x in allrows]
-        matof(x) = mats[findfirst(isequal(x), allrows)]
+# Runs one two-site update and compares against `pair_reference`. Environment legs all have
+# dimension `a`, so the QR side lengths are a^n vs d*b -- keep a^n >= d*b or the thin QR has no
+# tall matrix to work with.
+function update_vs_reference(; a1, a2, n1, n2, d1 = 2, d2 = 2, b = 3, maxdim = nothing, normalize_tensors = false)
+    t1 = randn(ComplexF64, ntuple(_ -> a1, n1)..., d1, b)
+    t2 = randn(ComplexF64, ntuple(_ -> a2, n2)..., d2, b)
+    envs1 = ntuple(_ -> randn(ComplexF64, a1, a1), n1)
+    envs2 = ntuple(_ -> randn(ComplexF64, a2, a2), n2)
+    gate = randn(ComplexF64, d1 * d2, d1 * d2)
+    want = pair_reference(t1, t2, gate, n1, n2, d1, d2, b)
 
-        # One environment per row leg, two row legs, one ungauged row leg, and none at all: the
-        # last two are the paths a lattice cannot produce.
-        for gauged in ([i, j, k], [i, k], [j], Index[])
-            legs = [
-                TNQS.GaugeLeg(ITensors.array(matof(x), x, ITensors.prime(x)), x, ITensors.prime(x)) for x in gauged
-            ]
-            colinds = [sph]
+    (u1, u2), svals, err = simple_update_dense!(
+        (t1, t2), (envs1, envs2),
+        (map(m -> transpose(inv(m)), envs1), map(m -> transpose(inv(m)), envs2)),
+        gate_middle(gate, d1, d2, maxdim); normalize_tensors,
+    )
 
-            M, newrows = TNQS._gauge_matrixize(Base.RefValue{Any}(t), allrows, colinds, legs)
-            # Gauged legs rotate to the front, in order; ungauged row legs follow.
-            @test newrows == vcat([ITensors.prime(x) for x in gauged], setdiff(allrows, gauged))
+    k = size(u1)[end]
+    got = reshape(
+        reshape(u1, prod(size(u1)[1:(end - 1)]), k) * transpose(reshape(u2, prod(size(u2)[1:(end - 1)]), k)),
+        size(u1)[1:(end - 1)]..., size(u2)[1:(end - 1)]...
+    )
+    return (; got, want, u1, u2, svals, err, k)
+end
 
-            want = t
-            for x in gauged
-                want = want * matof(x)
-            end
-            @test isapprox(
-                ITensors.itensor(
-                    reshape(M, ITensors.dim.(vcat(newrows, colinds))...),
-                    vcat(newrows, colinds)...
-                ),
-                want; atol = 1.0e-11
-            )
-        end
+@testset "Dense simple update" begin
+    Random.seed!(1234)
 
-        # An environment on a column leg is rotated out of the row space by its own gemm, so the
-        # caller must fall back rather than hand the QR a matrix that is not the gauged tensor.
-        @test isnothing(
-            TNQS.blocked_two_site_update(
-                ITensors.random_itensor(ComplexF64, sph, ITensors.prime(sph)),
-                ITensors.ITensor[t, ITensors.random_itensor(ComplexF64, k, sph)];
-                envs = ITensors.ITensor[], normalize_tensors = true, sqrt_cutoff = nothing,
-                consume_inputs = false, maxdim = 4, cutoff = 0.0
-            )
-        )
-    end
-
-    # The QR is split into row blocks once it exceeds `qr_block_limit()` -- on a GPU that limit is
-    # cuSOLVER's 32-bit dense API, which a χ²xS·χ matrix passes at χ > 812 (S = 4). Lowering the
-    # limit here drives the same code path on the host, so the block arithmetic is verified even
-    # though the vendor limit itself cannot be.
-    @testset "tall-skinny QR" begin
-        for (m, n, nb) in [(64, 8, 2), (64, 8, 4), (100, 5, 3), (33, 4, 3), (2048, 16, 7)]
-            M = randn(ComplexF64, m, n)
-            F = TNQS._tall_skinny_qr!(copy(M), nb)
-            R = TNQS._qr_r(F, M)
-            Q = zeros(ComplexF64, m, n)
-            Q[1:size(R, 1), :] = Matrix{ComplexF64}(LinearAlgebra.I, size(R, 1), n)
-            TNQS._apply_q!(F, Q)
-            @test LinearAlgebra.norm(Q' * Q - LinearAlgebra.I) < 1.0e-10   # orthonormal
-            @test LinearAlgebra.norm(Q * R - M) / LinearAlgebra.norm(M) < 1.0e-10   # reconstructs
-        end
-
-        # A wide matrix (a degree-2 vertex) must never be split: its blocks would be rank
-        # deficient and the two-level product would not be a QR.
-        TNQS.qr_block_limit!(16)
-        try
-            @test !(TNQS._qr_tall!(randn(ComplexF64, 4, 8)) isa TNQS.TallSkinnyQR)
-            @test TNQS._qr_tall!(randn(ComplexF64, 64, 8)) isa TNQS.TallSkinnyQR
-        finally
-            TNQS.qr_block_limit!(TNQS.default_qr_block_limit())
+    @testset "absorb_matrices absorbs axis by axis, $k matrices" for k in 0:3
+        A = randn(ComplexF64, ntuple(_ -> 3, k)..., 2, 4)
+        matrices = ntuple(_ -> randn(ComplexF64, 3, 3), k)
+        for transposed in (false, true)
+            want = absorb_reference(A, matrices; transposed)
+            @test absorb_matrices(A, matrices; transposed) ≈ want
         end
     end
 
-    # Splitting the QR must not change the answer, at any block count.
-    @testset "blocked gate is block-count invariant" begin
-        ψ = random_tensornetworkstate(ComplexF64, g; bond_dimension = 6)
-        bpc = update(BeliefPropagationCache(ψ); maxiter = 4, tolerance = nothing)
-        apply_kwargs = (; maxdim = 6, cutoff = 1.0e-14, normalize_tensors = true)
-        e = first(x for x in TNQS.edges(bpc) if degree(TNQS.graph(bpc), src(x)) == 3)
-        v⃗ = [src(e), dst(e)]
-        gate = TNQS.adapt_gate(
-            first(TNQS.toitensor(("Rxx", v⃗, 0.41), TNQS.graph(bpc), siteinds(network(bpc)))), bpc
-        )
-        envs = TNQS.incoming_messages(bpc, v⃗)
-        ψ⃗ = ITensors.ITensor[network(bpc)[v] for v in v⃗]
-        reference = TNQS.simple_update(gate, copy(ψ⃗); envs, apply_kwargs...)
-
-        split = 0
-        try
-            for limit in (typemax(Int32), 4096, 512, 64)
-                TNQS.qr_block_limit!(limit)
-                TNQS._qr_tall!(randn(ComplexF64, 36, 12)) isa TNQS.TallSkinnyQR && (split += 1)
-                blocked = TNQS.blocked_two_site_update(
-                    gate, copy(ψ⃗); envs, normalize_tensors = true, sqrt_cutoff = nothing,
-                    consume_inputs = false, apply_kwargs...
-                )
-                @test !isnothing(blocked)
-                @test isapprox(
-                    blocked[1][1] * blocked[1][2], reference[1][1] * reference[1][2]; atol = 1.0e-11
-                )
-            end
-        finally
-            TNQS.qr_block_limit!(TNQS.default_qr_block_limit())
-        end
-        @test split > 0    # the blocked path was actually taken, not just the single-block one
+    @testset "absorb_matrices leaves its input alone" begin
+        A = randn(ComplexF64, 3, 3, 2)
+        keep = copy(A)
+        absorb_matrices(A, (randn(ComplexF64, 3, 3),))
+        @test A == keep
     end
 
-    # And the switch actually routes apply_gates through it.
-    ψ = random_tensornetworkstate(ComplexF64, g; bond_dimension = 4)
-    apply_kwargs = (; maxdim = 4, cutoff = 1.0e-14)
-    circuit = [("Rzz", [src(e), dst(e)], 0.2) for e in edges(g)]
-    plain, errs_plain = apply_gates(circuit, ψ; apply_kwargs)
-    blocked_gates!(true)
-    try
-        fast, errs_fast = apply_gates(circuit, ψ; apply_kwargs)
-        @test isapprox(errs_fast, errs_plain; atol = 1.0e-10)
-        for v in vertices(g)
-            @test isapprox(
-                expect(plain, ("Z", [v]); alg = "bp"), expect(fast, ("Z", [v]); alg = "bp");
-                atol = 1.0e-8
-            )
+    @testset "absorb_matrices_qr: $elt, transposed = $transposed" for
+            elt in (Float64, ComplexF64), transposed in (false, true)
+
+        dims, qrdims = (4, 3), (2, 3)          # deliberately unequal leading dims
+        A = randn(elt, dims..., qrdims...)
+        matrices = (randn(elt, 4, 4), randn(elt, 3, 3))
+        m, n = prod(dims), prod(qrdims)
+
+        want = absorb_reference(A, matrices; transposed)
+        Q, R = absorb_matrices_qr(A, matrices; transposed)
+
+        @test size(Q) == (dims..., n)
+        @test size(R) == (n, qrdims...)
+        Qm, Rm = reshape(Q, m, n), reshape(R, n, n)
+        @test Qm * Rm ≈ reshape(want, m, n)
+        @test Qm' * Qm ≈ I                     # the QR's Q is isometric
+        @test istriu(Rm)
+    end
+
+    @testset "absorb_matrices_qr splits at the matrix count" begin
+        A = randn(4, 3, 2, 5)
+        matrices = (randn(4, 4), randn(3, 3))
+        want = absorb_reference(A, matrices)
+        Q, R = absorb_matrices_qr(A, matrices)
+        @test size(Q) == (4, 3, 10)
+        @test size(R) == (10, 2, 5)
+        @test reshape(Q, 12, 10) * reshape(R, 10, 10) ≈ reshape(want, 12, 10)
+    end
+
+    # A degree-1 vertex gives a wide row block, where Q comes back square.
+    @testset "absorb_matrices_qr carries a wide row block, $b bond" for b in (3, 5)
+        a, d = 2, 2
+        A = randn(ComplexF64, a, d, b)
+        envs = (randn(ComplexF64, a, a),)
+        inv_envs = map(m -> transpose(inv(m)), envs)
+        @assert a < d * b
+
+        Q, R = absorb_matrices_qr(A, envs)
+        @test size(Q) == (a, a)
+        @test size(R) == (a, d, b)
+        @test reshape(Q, a, a) * reshape(R, a, d * b) ≈ reshape(absorb_reference(A, envs), a, d * b)
+        @test absorb_matrices_mul(Q, inv_envs, R; transposed = true) ≈ A
+    end
+
+    # Absorbing the inverse environments and multiplying `R` back must undo the first half. The
+    # inverse direction contracts each matrix's second index, which is what `transposed` does.
+    @testset "absorb_matrices_mul inverts absorb_matrices_qr, $k env legs" for k in 1:3
+        a = 8
+        A = randn(ComplexF64, ntuple(_ -> a, k)..., 2, 3)
+        envs = ntuple(_ -> randn(ComplexF64, a, a), k)
+        inv_envs = map(m -> transpose(inv(m)), envs)
+
+        Q, R = absorb_matrices_qr(A, envs)
+        @test absorb_matrices_mul(Q, inv_envs, R; transposed = true) ≈ A
+    end
+
+    # A truncating SVD shrinks `R`'s trailing extent, a grown bond enlarges it.
+    @testset "absorb_matrices_mul handles R narrower and wider than chi" begin
+        Q = randn(ComplexF64, 8, 8, 2, 6)
+        envs = (randn(ComplexF64, 8, 8), randn(ComplexF64, 8, 8))
+        for cols in (2, 6, 9)
+            R = randn(ComplexF64, 6, 2, cols)
+            absorbed = absorb_reference(Q, envs; transposed = true)
+            want = reshape(reshape(absorbed, 128, 6) * reshape(R, 6, 2cols), 8, 8, 2, 2, cols)
+            u = absorb_matrices_mul(Q, envs, R; transposed = true)
+            @test u ≈ want
+            @test size(u) == (8, 8, 2, 2, cols)
         end
-    finally
-        blocked_gates!(false)
+    end
+
+    # The rank `cutoff` asks for: the fewest values whose discarded weight, relative to the total,
+    # stays within it. That is what the sqrt in `truncation_strategy` has to get right.
+    @testset "gate_split truncates on the discarded weight" begin
+        q1, q2, d, b = 6, 6, 2, 5
+        R1 = randn(ComplexF64, q1, d, b)
+        R2 = randn(ComplexF64, q2, d, b)
+        gate = reshape(randn(ComplexF64, d * d, d * d), d, d, d, d)
+
+        T = reshape(reshape(R1, q1 * d, b) * transpose(reshape(R2, q2 * d, b)), q1, d, q2, d)
+        P = permutedims(T, (2, 4, 1, 3))
+        P = reshape(reshape(gate, d * d, d * d) * reshape(P, d * d, q1 * q2), d, d, q1, q2)
+        M = reshape(permutedims(P, (3, 1, 4, 2)), q1 * d, q2 * d)
+        full = svd(M).S
+        w = abs2.(full)
+        keep(cutoff) = findfirst(k -> sum(w[(k + 1):end]) <= cutoff * sum(w), eachindex(w))
+
+        for kw in ((;), (; maxdim = 3), (; cutoff = 0.2), (; maxdim = 3, cutoff = 0.2))
+            L, Rr, svals, err = gate_split(gate, R1, R2; kw...)
+            k = min(get(kw, :maxdim, length(full)), keep(get(kw, :cutoff, 0.0)))
+            @test length(svals) == k
+            @test svals ≈ full[1:k]
+            @test err ≈ sum(w[(k + 1):end]) / sum(w)
+            @test reshape(L, q1 * d, k) * transpose(reshape(Rr, q2 * d, k)) ≈
+                svd(M).U[:, 1:k] * Diagonal(full[1:k]) * svd(M).Vt[1:k, :]
+        end
+
+        @test keep(0.2) < length(full)          # the cutoff case must actually drop something
+    end
+
+    # Sides differ in size and in environment-leg count, so each side's matrices and axis counts have
+    # to travel together or these fail on shape.
+    shapes = [
+        ("side 1 larger, 1 v 1 legs", (a1 = 16, a2 = 8, n1 = 1, n2 = 1)),
+        ("side 2 larger, 1 v 1 legs", (a1 = 8, a2 = 16, n1 = 1, n2 = 1)),
+        ("equal sides,   1 v 1 legs", (a1 = 8, a2 = 8, n1 = 1, n2 = 1)),
+        ("side 1 larger, 2 v 2 legs", (a1 = 6, a2 = 4, n1 = 2, n2 = 2)),
+        ("side 2 larger, 2 v 2 legs", (a1 = 4, a2 = 6, n1 = 2, n2 = 2)),
+        ("side 1 larger, 2 v 1 legs", (a1 = 6, a2 = 8, n1 = 2, n2 = 1)),
+        ("side 2 larger, 1 v 2 legs", (a1 = 8, a2 = 6, n1 = 1, n2 = 2)),
+    ]
+
+    @testset "simple_update_dense! is exact untruncated: $label" for (label, kw) in shapes
+        r = update_vs_reference(; kw...)
+        @test r.got ≈ r.want
+        @test r.err ≈ 0 atol = 1.0e-12
+        @test size(r.u1)[1:(end - 1)] == (ntuple(_ -> kw.a1, kw.n1)..., 2)
+        @test size(r.u2)[1:(end - 1)] == (ntuple(_ -> kw.a2, kw.n2)..., 2)
+    end
+
+    @testset "simple_update_dense! truncates: $label" for (label, kw) in shapes[1:4]
+        for maxdim in (3, 2)
+            r = update_vs_reference(; kw..., maxdim)
+            @test r.k == maxdim
+            @test 0 < r.err < 1
+        end
+    end
+
+    @testset "simple_update_dense! normalizes: $label" for (label, kw) in shapes[1:4]
+        r = update_vs_reference(; kw..., normalize_tensors = true)
+        @test norm(r.u1) ≈ 1
+        @test norm(r.u2) ≈ 1
+        @test norm(r.svals) ≈ 1
+        # Normalizing rescales the pair by a scalar, so directions still agree.
+        s = r.got[1] / r.want[1]
+        @test r.got ≈ s .* r.want
     end
 end
 
