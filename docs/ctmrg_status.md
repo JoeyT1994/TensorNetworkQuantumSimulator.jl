@@ -57,10 +57,11 @@ was *worse than either pure method*; that rested on one seed at one χ and is **
 **Default to `:cut`.** It has no known failure regime and is the longer-tested path. `:cut` is *not*
 cheaper — `:cycle` is markedly faster at scale (below) — so cost is not the reason.
 
-**Use `:cycle` when you want stationarity or speed**, and when the lattice is not large. It is the
+**Use `:cycle` when you want stationarity or speed**, and when χ is adequate for the lattice. It is the
 better projector on hex, on D=2 squares, and on the physical 5×5 benchmark at every χ, and it is
-matrix-free so it is much cheaper per sweep. Its two known weaknesses are random D=3 states and, more
-seriously, **non-convergence on larger lattices** — see [Open problems](#open-problems).
+matrix-free so it is much cheaper per sweep. Its weaknesses: random D=3 states, and a **truncation-induced
+limit cycle when χ is below the lossless threshold** — now understood and detected by the worst-region
+convergence metric (O(1) = raise χ), no longer an unexplained failure. See [Open problems](#open-problems).
 
 ---
 
@@ -135,21 +136,89 @@ configuration twice and report the second.
 
 ---
 
+## GPU / CUDA compatibility — *added 2026-08-19*
+
+Both projectors run on-device (CUDA.jl) end to end, matching the boundary-MPS path. Nothing in the
+algorithm is device-specific; the changes were mechanical — remove host-forcing conversions and move
+scalar work off the device:
+
+- `Base.Array(::ITensor, inds…)` FORCES a host `Matrix` (it typeasserts `Matrix{Float64}` and throws
+  on a device tensor) → `ITensors.array`, which preserves the storage type.
+- Hardcoded host allocations, rebuilt on the network's device/eltype: the identity isometry
+  (`Matrix{Float64}(I)` → `adapt_like(B, dense(delta(…)))`), the zero-padding, and every Krylov start
+  vector (same seed, drawn on CPU then moved on-device — a bit-identical draw, so CPU numerics are
+  unchanged). Helpers: `_ctm_to_device`, `_ctm_zeros_like`, `_ctm_eye_like`.
+- `Matrix(qr().Q/.R)` → device-generic: drop `Matrix()` on `.R`; the thin Q is `qr(X).Q · thinI`,
+  which on CUDA yields the m×kk result directly via `ormqr` and never materializes the full m×m
+  (also the one incidental memory win).
+- Scalar reads of the singular/eigen value vectors (`S[k]`, `sortperm(vals)`, `count(>, S)`) → done
+  on a host copy of the O(n) values, then the device matrices are sliced/gathered by the computed
+  rank. The whitening scale is anchored to the SVD factors' device (`_ctm_svd_topk` returns host `S`
+  but device `U`/`V`).
+
+**Validation without a GPU.** The whole engine was run on a `JLArray`-backed network (the reference
+`AbstractGPUArray`, the same interface `CuArray` implements) under `allowscalar(false)`, which throws
+on any scalar index or host round-trip. `:cut`/`:cycle` × single/double layer all match the CPU
+result to ~1e-15; the forced large-χ Krylov paths (`_ctm_svd_topk`, `_ctm_eigsolve`) run matrix-free
+on device and match dense. The one thing JLArray cannot exercise is CUSOLVER itself (`svd`/`qr`/
+`eigen` on a real `CuArray`) — shimmed in the harness, so a single `adapt(CuArray, tn)` run on
+hardware still needs to close that gap. The harness is a scratch script, not yet in the repo.
+
+### Precision — the memory lever
+
+The engine is now eltype-generic throughout, so `Float32`/`ComplexF32` runs natively at ~2× less
+memory (at the data-dominated large-χ scales where memory binds; the error is χ-truncation, not
+precision). ONE blocker was fixed: the default convergence tolerance was a hardcoded `1e-10`,
+UNREACHABLE below Float64 (Float32 roundoff on `|ΔF|`/state distance is ~1e-7), so a Float32 run spun
+to `maxiter`. `update` now defaults it precision-aware, `max(1e-10, 1e3·eps(real eltype))` — Float64
+stays at exactly 1e-10 (unchanged), Float32 gets ~1.2e-4 and converges. Single-layer 6×6 churn per
+`update`: Float32 **782 MB → 136 MB**; Float64 142 MB, untouched.
+
+**Memory profile (2026-08-19).** The engine is already lean, so no structural memory rewrite was
+made. Persistent env footprint is small and metadata-bound (2.4–2.8 MB at 6×6 D=3 χ=12 double-layer);
+churn is dominated by `_ctm_contract` (~50%) at ~1.8 KB average per contraction — many small
+contractions, so peak VRAM is low. Churn micro-optimisation (the seq-key cache etc.) is low-yield on
+peak and was left alone, consistent with the buffer-reuse rejection elsewhere in this project.
+
+---
+
 ## The convergence test
 
 `update` sweeps until
 
 ```
-certified  =  it ≥ 2  AND  a real state distance exists
-crit       =  max(|ΔF|, statedist²)  ≤  tolerance · max(1, |F|)
+certified  =  it ≥ 2  AND  a real state signal exists
+crit       =  max(|ΔF|, state signal)  ≤  tolerance · max(1, |F|)
 ```
 
 `|ΔF|` **is not a certificate on its own.** `F` is a signed Möbius sum whose cancellation is worth
 ~4000×, so it can sit at its final value while the state is still the greedy seed — measured, complex
 hex 4×4 D=2 at χ=64 reported `|ΔF| = 2.2e-16` on sweep 1 with a still-greedy environment. Hence the
-two-term criterion and the `certified` guard. `statedist²` rather than `statedist` because `F` is
-stationary in the state at the fixed point, so `|ΔF| ~ sd²`; holding both to the same tolerance is
-dimensionally inconsistent and measured ~3× the sweeps for no accuracy.
+two-term criterion and the `certified` guard.
+
+**The state signal is chosen by the PROJECTOR (2026-08-19), not a user knob** — each gets the metric
+that is meaningful for it:
+
+* `:cut` → `_ctm_statedist²`, the raw-tensor distance between successive C/T blocks (gauge on to make
+  them comparable), squared because `F` is stationary in the state (`|ΔF| ~ sd²`). Correct for `:cut`,
+  which is not a stationary point and so has no vanishing residual to watch instead.
+* `:cycle` → **worst-region `|Δ lnZ_r|`**, the largest change across the Möbius regions `F` already
+  sums (`_ctm_region_terms` returns them in the same pass, so it is FREE). `_ctm_statedist` is the
+  wrong metric here: it is NOT gauge invariant, so at a stationary `:cycle` fixed point whose interface
+  basis merely rotates it reports ~1 (measured, 8×8 single-layer, while `marginal_inconsistency` sat at
+  1e-16) and rejects a converged state forever. Two properties fix that. GAUGE INVARIANT: each region
+  is a CLOSED contraction, so the interface gauge `R`/`R⁻¹` cancels inside it. NON-CANCELLING:
+  `|ΔF|` is a signed sum that can sit at its final value while a laggy region still moves (the boundary
+  hasn't propagated there yet); the MAX over regions exposes that region, so it does not certify early
+  where `marginal_inconsistency` and `|ΔF|` do (measured, lossless heavy-hex χ=8: the worst region stays
+  ~6e-2 through the sweep where a local `⟨Z⟩` is still 5e-6 wrong, and only falls to ~1e-10 once that
+  region settles — three sweeps after `marg`/`|ΔF|` had already dropped to 1e-16/1e-14).
+
+Rejected alternatives (2026-08-19), each falsified by a cheap test: `marginal_inconsistency` alone
+(the BP message-overlap `1-|⟨M_v,M_e⟩|/‖·‖` — false-earlies via the local lag above, broke the heavy-hex
+exactness test at err 4.96e-6); a gauge-invariant corner-spectrum distance (plateaus at the
+truncation-tail level, 1e-7…1e-2); a per-corner cosine (needs gauge-fixing an open index, which the
+closed-region metric sidesteps). See `_ctm_region_terms` and `update`.
 
 ### FIXED 2026-08-09: the test was certifying off a 13% sample
 
@@ -206,7 +275,31 @@ diagnostic script wrote stderr to `/dev/null`, hiding the convergence warnings t
 
 Ranked by how much they should worry you.
 
-### 1. `:cycle` does not converge on 8×8 — the top issue
+### 1. `:cycle` under-truncation limit cycle — DIAGNOSED 2026-08-19 (was "does not converge on 8×8")
+
+**Resolution: it is a truncation-insufficiency signal, not a bug, and the worst-region convergence
+metric now detects it.** Reframed 2026-08-19 with the gauge-invariant worst-region `|Δ lnZ_r|`:
+
+* **Truncation-induced, sharp χ threshold.** Same 6×6 D=2 state, worst-region floor by χ: χ=2→3.5,
+  χ=4→1.0, χ=8→1.7, **χ=16→2.2e-8, χ=32→1.6e-8**. Below the lossless χ it limit-cycles at O(1); at/above
+  it converges to ~1e-8. 8×8 needs χ>16 to be lossless, so 8×8 at χ=16 is *under-truncated* and cycles,
+  while 6×6 at χ=16 is lossless and converges. Amplitude ∝ degree of under-truncation (8×8 D=2 χ=16
+  observable oscillation ≈ 4e-5, nearly fine; severely under-truncated 6×6 χ=8 seed7 ≈ 6.6e-2).
+* **A wandering instability, not a periodic orbit.** The worst region hops around the lattice each
+  sweep; the observable oscillation *straddles* the truncated value (some sweeps closer to exact, some
+  farther), so there is no clean sub-oscillation fixed point.
+* **Not fixable by solver tricks** (each falsified by a cheap test, 2026-08-19): a continuous warm-started
+  block seed — the tractable core of the collaborator's `V_from_Ac` — does NOT break it (both cold and
+  warm oscillate O(1)); a better *seed* cannot stabilize a *map* with no stable fixed point at that χ.
+  Cycle-averaging is unreliable (in every case with an exact reference the best single sweep beat the
+  average; severe seeds never centred), and Anderson's premise (a clean fixed point to converge to)
+  therefore does not robustly hold. **The fix is χ**; worst-region tells you when χ is insufficient
+  (O(1) = raise χ, →0 = converged).
+
+The detailed record below (the plateau tables and the earlier falsified mechanisms) is kept as the
+pre-diagnosis history — it is how the χ-threshold picture was reached.
+
+---
 
 Square 8×8 D=2 at χ=16, `:cycle`, sweeps 20–30:
 

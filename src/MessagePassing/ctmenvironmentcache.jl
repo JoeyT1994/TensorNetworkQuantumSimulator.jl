@@ -1352,17 +1352,26 @@ on purpose, and without the warning, use the two-argument form:
 """
 cvm_freenergy(cache::CTMEnvironmentCache) = cvm_freenergy(_ctm_env_checked(cache), cache)
 
-function cvm_freenergy(env::CTMVertexEnvironments, cache::CTMEnvironmentCache)
+# One pass over the region grid returning BOTH the Möbius free energy and the raw per-region ln Z
+# values, so the convergence test can watch the WORST region's change (see `update`) at no extra
+# cost. The half-integer grid enumerates every region exactly once — integer/integer is a vertex
+# (+1), one half-integer an edge (−1), both a plaquette (+1) — and `_ctm_region_desc` knows the
+# Möbius weight. `region_lnZ` returns a real `Float64` (a `log(abs(...))`) and `0.0` for absent
+# regions, so `vals` is a fixed-length real vector every sweep.
+function _ctm_region_terms(env::CTMVertexEnvironments, cache::CTMEnvironmentCache)
     Lx, Ly = env.Lx, env.Ly
-    # The half-integer grid enumerates every region exactly once — integer/integer is a vertex
-    # (+1), one half-integer an edge (−1), both a plaquette (+1) — and `_ctm_region_desc`
-    # already knows the Möbius weight, so it is not spelled out a second time here.
+    vals = Float64[]
     F = 0.0
     for cx in 1.0:0.5:Lx, cy in 1.0:0.5:Ly
-        F += _ctm_region_desc(cx, cy)[2] * region_lnZ(env, cache, cx, cy)
+        z = region_lnZ(env, cache, cx, cy)
+        push!(vals, z)
+        F += _ctm_region_desc(cx, cy)[2] * z
     end
-    return F
+    return F, vals
 end
+
+cvm_freenergy(env::CTMVertexEnvironments, cache::CTMEnvironmentCache) =
+    _ctm_region_terms(env, cache)[1]
 
 """
     marginal_inconsistency(cache::CTMEnvironmentCache) -> Real
@@ -1475,42 +1484,55 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30,
                 tolerance::Real = _ctm_default_tol(cache), verbose::Bool = false)
     env = _ctm_env(cache)
     opts = cache.options
-    F = cvm_freenergy(env, cache)
+    # The state-motion signal is chosen by the PROJECTOR — not a user knob:
+    #
+    #   `:cut`   — `_ctm_statedist`, the raw-tensor distance between successive C/T blocks (gauge on
+    #     to make them comparable), compared as `sd²` since `F` is stationary in the state
+    #     (`|ΔF| ~ sd²`). Correct for `:cut`, and the longer-tested path.
+    #   `:cycle` — the WORST region's change in `ln Z`, `max_r |Δ lnZ_r|` over the Möbius regions
+    #     `F` already sums. Two properties `_ctm_statedist` lacks. GAUGE INVARIANT: each region is a
+    #     CLOSED contraction, so the interface gauge `R`/`R⁻¹` cancels inside it — the raw distance
+    #     instead reports ~1 at a stationary `:cycle` fixed point whose basis merely rotates.
+    #     NON-CANCELLING: `|ΔF|` is a signed Möbius sum that can sit at its final value while a laggy
+    #     region is still moving (the boundary hasn't propagated there yet); taking the MAX over
+    #     regions exposes exactly that region, so it does not certify early. Measured, lossless
+    #     heavy-hex χ=8: `max_r|Δ lnZ_r|` stays ~6e-2 through the sweep where a local `⟨Z⟩` is still
+    #     5e-6 wrong and only falls to ~1e-10 once that region settles, whereas `|ΔF|` and
+    #     `marginal_inconsistency` were already at 1e-14/1e-10 three sweeps too early. It is FREE —
+    #     `_ctm_region_terms` returns these values in the same pass that builds `F`. See
+    #     docs/ctmrg_status.md.
+    cyc = opts.projector === :cycle
+    local vprev
+    F = if cyc
+        f, vprev = _ctm_region_terms(env, cache); f
+    else
+        cvm_freenergy(env, cache)
+    end
     converged, Δ, crit = false, Inf, Inf
-    sd = nothing                       # hoisted: the warning below reports both terms
+    sd = nothing                       # hoisted: the warning below reports the state term
     for it in 1:maxiter
         prev = env
         env = sweep_vertex_environments(cache, env)
-        Fnew = cvm_freenergy(env, cache)
-        Δ = abs(Fnew - F)
-        F = Fnew
-        # Use the state distance alongside `|ΔF|`: the latter oscillates at the roundoff floor
-        # of a signed log-sum and can RISE late in the iteration, so on its own it both stops
-        # early and fails to certify convergence. See `_ctm_statedist`.
-        #
-        # Compare `sd²`, not `sd`. `F` is stationary in the state at the fixed point, so
-        # `|ΔF| ~ sd²` — holding both to the same tolerance is dimensionally inconsistent and
-        # measured ~3x the sweeps for no accuracy (5×5 D=2 χ=8: 30 sweeps / 21 s against 11
-        # sweeps / 2.2 s, same `F` to 12 digits). Equivalent to `sd ≤ √(tolerance · max(1, |F|))` —
-        # note the `max(1, |F|)`: `F` is an EXTENSIVE free energy, so on a large lattice the
-        # effective state tolerance is looser than a bare `√tolerance` by `√|F|`.
-        sd = opts.gauge ? _ctm_statedist(env, prev) : nothing
-        crit = isnothing(sd) ? Δ : max(Δ, sd^2)
-        verbose && @info "CVM sweep $it: F = $F, |ΔF| = $Δ, state Δ = $(something(sd, NaN))"
-        # `|ΔF|` IS NOT A CERTIFICATE ON ITS OWN, and least of all on the first sweep. `F` is a
-        # signed Möbius sum whose cancellation is worth ~4000×, so it can already sit at its final
-        # value while the state is still the GREEDY seed. Measured, complex hex 4×4 D=2 at χ=64:
-        # sweep 1 reported `|ΔF| = 2.2e-16`, the loop exited after ONE sweep, and the returned
-        # cache was still the one-sided greedy environment — norm exact to 1.3e-15 (all
-        # cancellation), but `⟨Z⟩` 7.0e-4 wrong and `marginal_inconsistency` 2.9e-6 against 8.7e-10
-        # at χ=32 and χ=128. Nothing was special about χ=64 except that `Δ` got unlucky; that is
-        # the point — a single `Δ` carries no information about the state.
-        #
-        # So require positive evidence that the STATE stopped moving: at least two sweeps, and a
-        # real `_ctm_statedist` when the gauge makes one available (it returns `nothing` while the
-        # interface bases bootstrap, which is exactly when `Δ` is least trustworthy). With the gauge
-        # off there is no state distance to be had and `Δ` remains the only signal, as before.
-        certified = it >= 2 && (!opts.gauge || !isnothing(sd))
+        if cyc
+            Fnew, vnow = _ctm_region_terms(env, cache)
+            Δ = abs(Fnew - F); F = Fnew
+            sd = maximum(abs.(vnow .- vprev))          # worst region's |Δ lnZ|
+            vprev = vnow
+            crit = max(Δ, sd)
+        else
+            Fnew = cvm_freenergy(env, cache)
+            Δ = abs(Fnew - F); F = Fnew
+            sd = opts.gauge ? _ctm_statedist(env, prev) : nothing
+            crit = isnothing(sd) ? Δ : max(Δ, sd^2)    # sd² ~ |ΔF|; the `max(1,|F|)` scaling below
+        end                                            # loosens the effective state tol by √|F|
+        verbose && @info "CVM sweep $it: F = $F, |ΔF| = $Δ, state = $(something(sd, NaN))"
+        # `|ΔF|` IS NOT A CERTIFICATE ON ITS OWN, least of all on the first sweep: `F` is a signed
+        # Möbius sum whose ~4000× cancellation lets it sit at its final value while the state is
+        # still the GREEDY seed (complex hex 4×4 χ=64: sweep 1 read `|ΔF| = 2.2e-16` with a greedy
+        # environment, `⟨Z⟩` 7e-4 wrong). So require positive evidence the state stopped moving:
+        # ≥2 sweeps and a real state signal (`_ctm_statedist` is `nothing` while bases bootstrap /
+        # with the gauge off; the worst-region signal is always available).
+        certified = it >= 2 && (cyc || !opts.gauge || !isnothing(sd))
         if certified && crit ≤ tolerance * max(one(crit), abs(F))
             converged = true
             verbose && @info "CVM sweep converged after $it sweeps."
@@ -1519,12 +1541,12 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30,
     end
     if !converged
         # Report BOTH terms of the criterion. `|ΔF|` alone is actively misleading: it routinely
-        # bottoms out at ~1e-14 while `sd²` is still the binding term, so the message read
+        # bottoms out at ~1e-14 while the state term is still binding, so the message read
         # "did not converge to tolerance 1e-10 (final |ΔF| = 1.4e-14)" — a number four orders
         # BELOW the tolerance it claimed to have missed.
+        state = opts.projector === :cycle ? "worst region |Δ lnZ|" : "state Δ²"
         msg = "CVM sweep did not converge to tolerance $tolerance after $maxiter sweeps " *
-              "(final |ΔF| = $Δ, state Δ = $(something(sd, NaN)); " *
-              "binding criterion max(|ΔF|, state Δ²) = $crit)."
+              "(final |ΔF| = $Δ, $state = $(something(sd, NaN)); binding criterion = $crit)."
         verbose ? println(msg) : @warn(msg)
     end
     return _ctm_setenv(cache, env)
