@@ -52,7 +52,7 @@ function chain3_case()
 end
 
 # Cut across the spine, where the boundary vertices have degree 3. Every 1-D case above is wide, so
-# without this the thin-QR branch of `absorb_boundary_in!` is never exercised.
+# without this the thin-QR branch of `absorb_boundary_in` is never exercised.
 function comb_case()
     g = named_comb_tree((4, 3))
     spine(i) = [(i, j) for j in 1:3]

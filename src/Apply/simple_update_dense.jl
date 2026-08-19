@@ -1,258 +1,175 @@
-# GPU compatible dense simple update designed in minimise peak memory usage.
+# GPU compatible dense simple update. Each absorption is one `ncon` network, so the intermediates are
+# the backend's business; `allocator` and `backend` kwargs reach `ncon`.
 
-function absorb_first_matrix!(dst_tensor, src_tensor, matrix)
+using MatrixAlgebraKit: DivideAndConquer, Jacobi, QRIteration, diagview, notrunc, qr_compact!,
+    svd_trunc!, truncerror, truncrank
+using TensorOperations: TensorOperations as TO
 
-    @assert size(dst_tensor) == size(src_tensor)
-    chi = size(src_tensor, 1)
-    @assert chi == size(matrix, 1) == size(matrix, 2)
+# `transposed` contracts the matrix's second index rather than its first.
+matrix_labels(k::Int, transposed::Bool) = transposed ? [-k, k] : [k, -k]
 
-    mul!(reshape(dst_tensor, chi, :), matrix, reshape(src_tensor, chi, :))
+function absorb_matrices(tensor::AbstractArray, matrices; transposed = false, kwargs...)
 
-    return dst_tensor
+    m = length(matrices)
+    @assert m <= ndims(tensor)
+
+    labels = Int[1:m..., (-i for i in (m + 1):ndims(tensor))...]
+    network = Vector{Int}[labels, (matrix_labels(k, transposed) for k in 1:m)...]
+
+    return TO.ncon((tensor, matrices...), network; order = collect(1:m), kwargs...)
 end
 
-function absorb_matrix!(dst_tensor, src_tensor, matrix, ind)
+# Extents of the absorbed axes and of the rest, which are the QR's rows and columns.
+absorbed_split(tensor::AbstractArray, matrices) =
+    size(tensor)[1:length(matrices)], size(tensor)[(length(matrices) + 1):end]
 
-    ind > 1 || return absorb_first_matrix!(dst_tensor, src_tensor, transpose(matrix))
+# The QR runs on the absorbed copy with the absorbed axes as its rows, so `tensor` is untouched.
+function absorb_matrices_qr(tensor::AbstractArray, matrices; kwargs...)
 
-    lead = size(src_tensor, 1)
+    dims, qrdims = absorbed_split(tensor, matrices)
 
-    for i in 2:(ind - 1)
-        lead *= size(src_tensor, i)
-    end
+    absorbed = absorb_matrices(tensor, matrices; kwargs...)
 
-    chi = size(src_tensor, ind)
+    Q, R = qr_compact!(reshape(absorbed, prod(dims), prod(qrdims)))
 
-    mul_strided_batched!(
-        reshape(dst_tensor, lead, chi, :),
-        reshape(src_tensor, lead, chi, :),
-        matrix,
-    )
-
-    return dst_tensor
+    return reshape(Q, dims..., size(Q, 2)), reshape(R, size(R, 1), qrdims...)
 end
 
-# CPU
-function mul_strided_batched!(C::AbstractArray, A::AbstractArray, B::AbstractMatrix)
-    _, _, trailA = size(A)
-    _, _, trailC = size(C)
-
-    @assert trailA == trailC
-
-    for t in 1:trailC
-        mul!(view(C, :, :, t), view(A, :, :, t), B)
-    end
-
-    return C
-end
-
-# GPU methods live in ext/TensorNetworkQuantumSimulatorCUDAExt.jl, which routes this to
-# `CUBLAS.gemm_strided_batched!` in one launch instead of one per slice.
-
-# Absorbs each matrix along the leading indices of `tensor`, alternating it with `scratch`. Returns
-# both in their final roles: the buffer holding the result, then the one left free.
-function absorb_chain!(tensor::AbstractArray, scratch::AbstractArray, matrices; op = identity)
-    for (ind, matrix) in enumerate(matrices)
-        absorb_matrix!(scratch, tensor, op(matrix), ind)
-        tensor, scratch = scratch, tensor
-    end
-    return tensor, scratch
-end
-
-function absorb_matrices!(
-        tensor::AbstractArray,
+# Counterpart to `absorb_matrices_qr`; the inverse direction wants `transposed = true`.
+function absorb_matrices_mul(
+        Q::AbstractArray,
         matrices,
-        inds::NTuple,
-        other_inds::NTuple = Tuple(setdiff(collect(1:ndims(tensor)), inds));
-        scratch = nothing,
+        R::AbstractArray;
+        transposed = false,
         kwargs...
     )
 
-    dims = map(i -> size(tensor, i), inds)
-    qrdims = map(i -> size(tensor, i), other_inds)
+    nq, nr, m = ndims(Q), ndims(R), length(matrices)
+    bond = m + 1
 
-    newsize = (dims..., qrdims...)
+    @assert m < nq
+    @assert size(Q, nq) == size(R, 1)
 
-    # PERF: this is the only large allocation in this function if scratch not provided.
-    supplied = !isnothing(scratch)
-    scratch = supplied ? reshape(scratch, newsize) : similar(tensor, newsize)
+    # Output axes are `Q`'s up to the bond, then `R`'s past it, so `R`'s j-th trailing axis lands at
+    # output position `npass + j`.
+    npass = nq - 1
+    qlabels = Int[1:m..., (-i for i in (m + 1):npass)..., bond]
+    rlabels = Int[bond, (-(npass + j) for j in 1:(nr - 1))...]
 
-    permutedims!(scratch, tensor, (inds..., other_inds...))
+    network = Vector{Int}[qlabels, (matrix_labels(k, transposed) for k in 1:m)..., rlabels]
 
-    # Actual tensor now lives in `scratch`; also repurpose the input as the scratch buffer.
-    reused = reshape(tensor, newsize)
-    live, free = absorb_chain!(scratch, reused, matrices; kwargs...)
-
-    # An even number of matrices ends the alternation with the result in the supplied `scratch`; a
-    # caller that lent out part of a larger buffer needs all of it back free.
-    if supplied && live !== reused
-        copyto!(reused, live)
-        live, free = reused, live
-    end
-
-    return live, free
+    return TO.ncon((Q, matrices..., R), network; order = collect(1:bond), kwargs...)
 end
 
-# Thin QR of a tall matrix (m >= n) with Q written into `A`, returning `(Q, R)` where `Q === A`, or
-# `nothing` when no in-place method exists for this array type.
-function thin_qr_matrix!(A::AbstractMatrix)
-    eltype(A) <: LinearAlgebra.BlasFloat || return nothing
-    applicable(LAPACK.geqrf!, A) || return nothing
-    n = size(A, 2)
-    A, tau = LAPACK.geqrf!(A)
-    R = triu!(A[1:n, :])                          # n × n; must precede orgqr!
-    return LAPACK.orgqr!(A, tau), R
+# The truncation controls this path implements; `factorize_svd` honours more, so the rest falls back.
+const DENSE_SVD_KWARGS = (:maxdim, :mindim, :cutoff, :alg)
+
+# ITensors' `cutoff` bounds the discarded weight -- the squared norm of the discarded singular values
+# -- relative to the total, where `truncerror` bounds that norm itself.
+function truncation_strategy(; maxdim = nothing, mindim = nothing, cutoff = nothing)
+    bounds = (
+        (isnothing(maxdim) ? () : (truncrank(maxdim),))...,
+        (isnothing(cutoff) ? () : (truncerror(; rtol = sqrt(cutoff)),))...,
+    )
+    isempty(bounds) && return notrunc()
+    trunc = reduce(&, bounds)
+    return isnothing(mindim) ? trunc : trunc | truncrank(mindim)
 end
 
-# Absorbs each matrix into its respective `inds`, then QRs with `qrinds` as the right-most indices.
-# The third return is a free buffer the same length as `Q`, for `absorb_matrices_mul!`'s `scratch`.
-function absorb_matrices_qr!(
-        tensor::AbstractArray,
-        matrices,
-        inds::NTuple,
-        qrinds::NTuple = Tuple(setdiff(collect(1:ndims(tensor)), inds));
-        kwargs...
+# The names ITensors' `svd` takes, so one set of `apply_kwargs` also serves the fallback.
+function svd_algorithm(alg::AbstractString)
+    alg == "divide_and_conquer" && return DivideAndConquer()
+    alg == "qr_iteration" && return QRIteration()
+    alg == "jacobi_algorithm" && return Jacobi()
+    return error(
+        "svd_algorithm: no MatrixAlgebraKit counterpart for alg $(repr(alg)). Pass " *
+            "\"divide_and_conquer\", \"qr_iteration\", \"jacobi_algorithm\", or a " *
+            "MatrixAlgebraKit algorithm."
+    )
+end
+svd_algorithm(alg) = alg
+
+# The gate as (site outs..., site ins...), or `nothing` when it is not a plain dense operator.
+function gate_array(o::ITensor, sinds)
+    ins = prime.(sinds)
+    (!hasqns(o) && ndims(o) == 2 * length(sinds)) || return nothing
+    issetequal(inds(o), Index[sinds..., ins...]) || return nothing
+    return ITensors.array(o, sinds..., ins...)
+end
+
+# Gates the two factors' site axes and splits with a truncated SVD, the square root of the singular
+# values going to each side. Every factor here is (row block, site axes..., bond).
+function gate_split(
+        gate::AbstractArray, R1::AbstractArray, R2::AbstractArray;
+        maxdim = nothing, mindim = nothing, cutoff = nothing, alg = nothing, kwargs...
     )
 
-    dims = map(i -> size(tensor, i), inds)
-    qrdims = map(i -> size(tensor, i), qrinds)
+    ns1, ns2 = ndims(R1) - 2, ndims(R2) - 2
+    bond = ns1 + ns2 + 1
 
-    # Checked before the permute overwrites the input, which would leave a fallback nothing to read.
-    prod(dims) >= prod(qrdims) || throw(
-        DimensionMismatch(
-            "absorb_matrices_qr!: $(dims) against $(qrdims) is a wide matrix, whose thin Q does " *
-                "not fill the input's storage. Split it the other way, or use " *
-                "`absorb_boundary_in!`, which carries the wide case."
-        )
-    )
-    applicable(LAPACK.geqrf!, similar(tensor, 2, 2)) && eltype(tensor) <: LinearAlgebra.BlasFloat ||
-        error(
-        "absorb_matrices_qr!: no in-place QR for $(typeof(tensor)) with element type " *
-            "$(eltype(tensor)).",
-    )
+    @assert size(R1, ndims(R1)) == size(R2, ndims(R2))
+    @assert ndims(gate) == 2 * (ns1 + ns2)
 
-    tensor, free = absorb_matrices!(tensor, matrices, inds, qrinds; kwargs...)
+    # Negative labels are output positions: each factor's row block followed by its gated site axes.
+    r1labels = Int[-1, 1:ns1..., bond]
+    r2labels = Int[-(2 + ns1), (ns1 + 1):(ns1 + ns2)..., bond]
+    gatelabels = Int[
+        (-i for i in 2:(1 + ns1))...,
+        (-i for i in (3 + ns1):(2 + ns1 + ns2))...,
+        1:(ns1 + ns2)...,
+    ]
 
-    _, R = thin_qr_matrix!(reshape(tensor, prod(dims), prod(qrdims)))
-
-    Q = reshape(tensor, dims..., size(R, 1))
-    R = reshape(R, size(R, 1), qrdims...)
-
-    return Q, R, free
-end
-
-# Counterpart to `absorb_matrices_qr!`, consuming its `Q` and whatever its `R` has become; the
-# inverse direction wants `op = transpose`. The second return is free and full size, not result size.
-function absorb_matrices_mul!(
-        tensor::AbstractArray,
-        matrices,
-        R::AbstractArray; # R is chi x chi'.
-        scratch = nothing,
-        kwargs...
+    M = TO.ncon(
+        (R1, R2, gate), Vector{Int}[r1labels, r2labels, gatelabels];
+        order = collect(1:bond), kwargs...
     )
 
-    dims = ntuple(i -> size(tensor, i), ndims(tensor) - 1)
-    chi = size(tensor, ndims(tensor))
-    coldims = ntuple(i -> size(R, i + 1), ndims(R) - 1)
+    q1, q2 = size(R1, 1), size(R2, 1)
+    d1, d2 = size(M)[2:(1 + ns1)], size(M)[(3 + ns1):end]
 
-    @assert chi == size(R, 1)
-
-    scratch = isnothing(scratch) ? similar(tensor) : reshape(scratch, size(tensor))
-
-    absorbed, free = absorb_chain!(tensor, scratch, matrices; kwargs...)
-
-    # `R`'s trailing extent is not `chi`: truncation shrinks it, a grown bond enlarges it. The front
-    # of `free` serves whenever the result fits, so only a grown bond allocates.
-    rows, cols = prod(dims), prod(coldims)
-    out = if rows * cols <= length(free)
-        reshape(view(free, 1:(rows * cols)), rows, cols)
-    else
-        similar(free, rows, cols)
-    end
-
-    mul!(out, reshape(absorbed, rows, chi), reshape(R, chi, cols))
-
-    return reshape(out, dims..., coldims...), absorbed
-end
-
-# `absorb_matrices_qr!` needs a tall matrix, which a low-degree vertex does not give. Then the whole
-# absorbed tensor stands in for `R`, and `Q === nothing` signals that to `absorb_boundary_out!`.
-function absorb_boundary_in!(
-        tensor::AbstractArray,
-        matrices,
-        inds::NTuple,
-        qrinds::NTuple = Tuple(setdiff(collect(1:ndims(tensor)), inds));
-        kwargs...
+    U, S, Vt, discarded = svd_trunc!(
+        reshape(M, q1 * prod(d1), q2 * prod(d2));
+        trunc = truncation_strategy(; maxdim, mindim, cutoff), alg = svd_algorithm(alg),
     )
 
-    rows = prod(i -> size(tensor, i), inds; init = 1)
-    cols = prod(i -> size(tensor, i), qrinds; init = 1)
+    svals = diagview(S)
+    k = length(svals)
+    # `discarded` is the norm of the dropped values; `factorize_svd` reports the weight they carried.
+    err = iszero(discarded) ? zero(discarded) :
+        discarded^2 / (norm(svals)^2 + discarded^2)
+    root = Diagonal(sqrt.(svals))
 
-    rows >= cols || return (nothing, absorb_matrices!(tensor, matrices, inds, qrinds; kwargs...)...)
-
-    return absorb_matrices_qr!(tensor, matrices, inds, qrinds; kwargs...)
+    return reshape(U * root, q1, d1..., k),
+        reshape(permutedims(root * Vt, (2, 1)), q2, d2..., k),
+        svals, err
 end
 
-# Counterpart to `absorb_boundary_in!`. Without a `Q`, `R` still carries the environment legs as its
-# leading axes, so the chain runs over it directly and there is nothing left to multiply.
-function absorb_boundary_out!(Q, matrices, R::AbstractArray, scratch; kwargs...)
-
-    isnothing(Q) || return first(absorb_matrices_mul!(Q, matrices, R; scratch, kwargs...))
-
-    # A truncation that grew the bond makes `R` longer than the buffer the QR side left behind.
-    buffer = if length(R) <= length(scratch)
-        reshape(view(scratch, 1:length(R)), size(R))
-    else
-        similar(R)
-    end
-
-    return first(absorb_chain!(R, buffer, matrices; kwargs...))
-end
-
-# Two-site simple update on dense vertex tensors, consuming both. `middle!` owns the gate and the
-# truncation as `(R1, R2) -> (R1, R2, svals, err)`; `qrinds` names the axes right of each side's QR.
+# Two-site simple update on dense vertex tensors, each laid out with its environment legs first.
+# `middle!` owns the gate and the truncation as `(R1, R2) -> (R1, R2, svals, err)`.
 function simple_update_dense!(
-        tensors, matrices, inv_matrices, qrinds, middle!;
+        tensors, matrices, inv_matrices, middle!;
         normalize_tensors = true,
     )
 
-    # Larger side first, so its leftover buffer can host the smaller side's scratch; index 1 below is
-    # that side, not the caller's. Reversing a 2-tuple is its own inverse, so `order` also undoes it.
-    flip = length(tensors[1]) < length(tensors[2])
-    order(x1, x2) = flip ? reverse((x1, x2)) : (x1, x2)
+    factors = ntuple(i -> absorb_matrices_qr(tensors[i], matrices[i]), 2)
 
-    tensors, matrices, inv_matrices, qrinds =
-        order(tensors...), order(matrices...), order(inv_matrices...), order(qrinds...)
-    inds = ntuple(i -> Tuple(setdiff(1:ndims(tensors[i]), qrinds[i])), 2)
+    R1, R2, svals, err = middle!(last(factors[1]), last(factors[2]))
 
-    Q1, R1, scratch = absorb_matrices_qr!(tensors[1], matrices[1], inds[1], qrinds[1])
-
-    Q2, R2, _ = absorb_matrices_qr!(
-        tensors[2], matrices[2], inds[2], qrinds[2];
-        scratch = view(scratch, 1:length(tensors[2])),
-    )
-
-    R1, R2, svals, err = middle!(order(R1, R2)...)
-    R1, R2 = order(R1, R2)
-
-    # Deliberate rebinding of `scratch`.
-    u1, scratch = absorb_matrices_mul!(Q1, inv_matrices[1], R1; op = transpose, scratch)
-
-    u2, _ = absorb_matrices_mul!(
-        Q2, inv_matrices[2], R2;
-        op = transpose, scratch = view(scratch, 1:length(Q2)),
+    us = ntuple(
+        i -> absorb_matrices_mul(
+            first(factors[i]), inv_matrices[i], (R1, R2)[i]; transposed = true
+        ), 2
     )
 
     if normalize_tensors
-        rmul!(u1, inv(norm(u1)))
-        rmul!(u2, inv(norm(u2)))
+        foreach(u -> rmul!(u, inv(norm(u))), us)
         isnothing(svals) || (svals = normalize(svals))
     end
 
-    return order(u1, u2), svals, err
+    return us, svals, err
 end
 
-# Read before anything is consumed: the caller needs these to decide whether the dense path applies.
+# The caller needs these to decide whether the dense path applies.
 function dense_update_legs(o::ITensor, ψᵥ::ITensor, side_envs)
     sinds = collect(commoninds(ψᵥ, o))
     legs = Index[only(commoninds(e, ψᵥ)) for e in side_envs]
@@ -260,7 +177,7 @@ function dense_update_legs(o::ITensor, ψᵥ::ITensor, side_envs)
 end
 
 # Environment roots as (leg, leg') arrays, and `ψᵥ` laid out (environment legs..., site legs..., bond)
-# so the QR's row block needs no permute. CONSUMES `ψᵥ`: `array` may return a view of its storage.
+# so the QR's row block needs no permute. `array` may return a view of `ψᵥ`'s storage, read only.
 function dense_update_setup(ψᵥ::ITensor, side_envs, legs, sinds, lb, sqrt_cutoff)
     roots = pseudo_sqrt_inv_sqrt.(side_envs; cutoff = sqrt_cutoff)
     mats(es) = [ITensors.array(es[j], legs[j], prime(legs[j])) for j in eachindex(legs)]
@@ -268,33 +185,33 @@ function dense_update_setup(ψᵥ::ITensor, side_envs, legs, sinds, lb, sqrt_cut
         tensor = ITensors.array(ψᵥ, legs..., sinds..., lb),
         matrices = mats(first.(roots)),
         inv_matrices = mats(dag.(last.(roots))),
-        qrinds = Tuple((length(legs) + 1):(length(legs) + length(sinds) + 1)),
     )
 end
 
-# Where the gate left each site leg, ordered as the array was built; `uniqueinds` promises no order.
-gate_image(t::ITensor, sinds) = Index[only(commoninds(t, Index[s, prime(s)])) for s in sinds]
+# As `setbondmessages!` reads them: diagonal over the new bond and a dummy it contracts away.
+bond_values(svals, newbond::Index) = ITensors.diag_itensor(svals, newbond, sim(newbond))
 
 # Keeps the factor exchange clear of `communicate_messages!`, which uses the default tag 0.
 const _BOUNDARY_GATE_TAG = 1
 
 # The array moves as a buffer, which CUDA-aware MPI can do device to device; the index vector goes
-# separately, so neither side predicts the other's layout nor the bond dimension chosen.
-function send_factor(t::ITensor, is, comm; dest)
+# separately: it carries the new bond `Index` itself, so both ranks name the cut bond by the same
+# `Index` id and `commoninds(message(ψ_bpc, e_in), ψᵥ)` still finds it on the next gate.
+function send_factor(a::AbstractArray, is, comm; dest)
     MPI.send(collect(is), comm; dest, tag = _BOUNDARY_GATE_TAG)
-    MPI.Send(ITensors.array(t, is...), comm; dest, tag = _BOUNDARY_GATE_TAG)
-    return t
+    MPI.Send(a, comm; dest, tag = _BOUNDARY_GATE_TAG)
+    return a
 end
 
 function recv_factor(like::AbstractArray, comm; source)
     is = MPI.recv(comm; source, tag = _BOUNDARY_GATE_TAG)
-    array = similar(like, dim.(Tuple(is)))
-    MPI.Recv!(array, comm; source, tag = _BOUNDARY_GATE_TAG)
-    return ITensors.itensor(array, is...), is
+    a = similar(like, dim.(Tuple(is)))
+    MPI.Recv!(a, comm; source, tag = _BOUNDARY_GATE_TAG)
+    return a, is
 end
 
-# Two-site update across a rank boundary; `compute` picks the rank running the gate and the SVD, and
-# CONSUMES `ψᵥ`. Both ranks must reach this for the same gates in order, or the sends deadlock.
+# Two-site update across a rank boundary; `compute` picks the rank running the gate and the SVD.
+# Both ranks must reach this for the same gates in order, or the sends deadlock.
 function simple_update_dense_boundary(
         o::ITensor, ψᵥ::ITensor;
         envs, lb::Index, compute::Bool, other_rank::Integer, comm::MPI.Comm,
@@ -302,68 +219,59 @@ function simple_update_dense_boundary(
     )
 
     @assert all(ndims(env) == 2 for env in envs)
+    all(in(DENSE_SVD_KWARGS), keys(apply_kwargs)) || error(
+        "simple_update_dense_boundary: cannot honour apply kwargs " *
+            "$(setdiff(keys(apply_kwargs), DENSE_SVD_KWARGS)); this path implements " *
+            "$(DENSE_SVD_KWARGS) only.",
+    )
     sqrt_cutoff_ref = isempty(envs) ? ψᵥ : first(envs)
     sqrt_cutoff = isnothing(sqrt_cutoff) ? 10 * eps(real(scalartype(sqrt_cutoff_ref))) : sqrt_cutoff
 
     legs, sinds = dense_update_legs(o, ψᵥ, envs)
-    (; tensor, matrices, inv_matrices, qrinds) =
+    (; tensor, matrices, inv_matrices) =
         dense_update_setup(ψᵥ, envs, legs, sinds, lb, sqrt_cutoff)
 
-    Q, R, scratch = absorb_boundary_in!(tensor, matrices, Tuple(eachindex(legs)), qrinds)
-
-    # Without a thin Q the environment legs remain in the row block and pass through the gate.
-    rowinds = isnothing(Q) ? legs : Index[Index(size(R, 1), "Link,qr")]
-    Rt = ITensors.itensor(R, rowinds..., sinds..., lb)
+    Q, R = absorb_matrices_qr(tensor, matrices)
 
     if compute
         Rother, isother = recv_factor(R, comm; source = other_rank)
-        # The partner's site legs are the indices of `o` this side does not carry.
-        sother = collect(commoninds(o, Rother))
-        rowother = setdiff(collect(isother), Index[sother...; lb])
+        # The partner sent (row block, site axes..., bond), so its site legs are the middle indices.
+        sother = collect(isother)[2:(end - 1)]
 
-        singular_values! = Ref(ITensor())
-        factored = factorize_svd(
-            ITensors.apply(o, Rt * Rother), unioninds(rowinds, sinds);
-            ortho = "none", singular_values!, apply_kwargs...,
+        gate = gate_array(o, Index[sinds...; sother...])
+        isnothing(gate) && error(
+            "simple_update_dense_boundary: $(o) is not a plain dense operator on the site indices " *
+                "$(Index[sinds...; sother...]) and their primes.",
         )
-        isnothing(factored) && error(
-            "simple_update_dense_boundary: the SVD did not converge. Pass a different algorithm " *
-                "via the `alg` apply kwarg -- on GPU use alg = \"jacobi_algorithm\".",
-        )
-        L, Rr, spec = factored
-        err, svals = spec.truncerr, singular_values![]
-        newbond = only(commoninds(L, Rr))
 
-        # Returned in the layout the partner sent, so `absorb_boundary_out!` needs no permute there.
-        send_factor(
-            Rr, Index[rowother...; gate_image(Rr, sother)...; newbond], comm; dest = other_rank
-        )
+        L, Rr, svals, err = gate_split(gate, R, Rother; apply_kwargs...)
+        newbond = Index(length(svals), "Link,l")
+
+        # Returned in the layout the partner sent, so its own `sinds` still name its site axes.
+        send_factor(Rr, Index[first(isother); sother...; newbond], comm; dest = other_rank)
         MPI.send((svals, err), comm; dest = other_rank, tag = _BOUNDARY_GATE_TAG)
-        souts = gate_image(L, sinds)
-        Rp = ITensors.array(L, rowinds..., souts..., newbond)
+        Rp = L
     else
-        send_factor(Rt, Index[rowinds...; sinds...; lb], comm; dest = other_rank)
-        Rpt, isp = recv_factor(R, comm; source = other_rank)
+        send_factor(R, Index[Index(size(R, 1), "Link,qr"); sinds...; lb], comm; dest = other_rank)
+        Rp, isp = recv_factor(R, comm; source = other_rank)
         svals, err = MPI.recv(comm; source = other_rank, tag = _BOUNDARY_GATE_TAG)
-        # The row block returns unchanged and in the order sent, so the middle axes are the site legs.
         newbond = last(isp)
-        souts = collect(isp)[(length(rowinds) + 1):(end - 1)]
-        Rp = ITensors.array(Rpt, isp...)
     end
 
-    u = absorb_boundary_out!(Q, inv_matrices, Rp, scratch; op = transpose)
+    u = absorb_matrices_mul(Q, inv_matrices, Rp; transposed = true)
 
     if normalize_tensors
         rmul!(u, inv(norm(u)))
         svals = normalize(svals)
     end
 
-    # `itensor`, not `ITensor`: the capitalised constructor copies, undoing the buffering.
-    return noprime(ITensors.itensor(u, legs..., souts..., newbond)), svals, err
+    # `itensor`, not `ITensor`: the capitalised constructor copies an array that is already private.
+    return ITensors.itensor(u, legs..., sinds..., newbond), bond_values(svals, newbond), err
 end
 
-# Signature-compatible with `simple_update`, but CONSUMES `ψ⃗` unless one of the fallbacks below fires
-# first: it writes over the input's storage, which a shallow cache `copy` does not protect.
+# Signature-compatible with `simple_update`, falling back to it on any shape the dense path cannot
+# take: quantum numbers, a vertex count other than two, a vertex with no environment legs, a gate
+# that is not a plain dense operator, or an apply kwarg whose truncation this path does not implement.
 function simple_update_dense(
         o::ITensor, ψ⃗::Vector{<:ITensor};
         envs, normalize_tensors = true, sqrt_cutoff = nothing,
@@ -376,6 +284,7 @@ function simple_update_dense(
 
     length(ψ⃗) == 2 || return fallback()
     any(hasqns, ψ⃗) && return fallback()
+    all(in(DENSE_SVD_KWARGS), keys(apply_kwargs)) || return fallback()
 
     sqrt_cutoff_ref = isempty(envs) ? first(ψ⃗) : first(envs)
     sqrt_cutoff = isnothing(sqrt_cutoff) ? 10 * eps(real(scalartype(sqrt_cutoff_ref))) : sqrt_cutoff
@@ -386,10 +295,10 @@ function simple_update_dense(
     sides = ntuple(i -> dense_update_legs(o, ψ⃗[i], side_envs[i]), 2)
     legs, sinds = first.(sides), last.(sides)
 
-    # The thin QR needs the environment legs to outnumber the site and bond legs on both sides.
-    rows(i) = prod(dim, legs[i]; init = 1)
-    cols(i) = prod(dim, sinds[i]; init = 1) * dim(lb)
-    all(i -> !isempty(legs[i]) && rows(i) >= cols(i), 1:2) || return fallback()
+    all(i -> !isempty(legs[i]), 1:2) || return fallback()
+
+    gate = gate_array(o, Index[sinds[1]...; sinds[2]...])
+    isnothing(gate) && return fallback()
 
     setups = ntuple(
         i -> dense_update_setup(ψ⃗[i], side_envs[i], legs[i], sinds[i], lb, sqrt_cutoff), 2
@@ -397,42 +306,19 @@ function simple_update_dense(
     tensors = ntuple(i -> setups[i].tensor, 2)
     matrices = ntuple(i -> setups[i].matrices, 2)
     inv_matrices = ntuple(i -> setups[i].inv_matrices, 2)
-    qrinds = ntuple(i -> setups[i].qrinds, 2)
 
-    # The new bond and the gate's image of the site legs are read off the SVD result and passed back
-    # through `outinds` for the rewrap.
-    outinds = Ref{Any}(nothing)
-    function middle!(R1, R2)
-        qb = ntuple(i -> Index(size((R1, R2)[i], 1), "Link,qr"), 2)
-        Rs = ntuple(i -> ITensors.itensor((R1, R2)[i], qb[i], sinds[i]..., lb), 2)
-        singular_values! = Ref(ITensor())
-        factored = factorize_svd(
-            ITensors.apply(o, Rs[1] * Rs[2]), unioninds(Index[qb[1]], sinds[1]);
-            ortho = "none", singular_values!, apply_kwargs...,
-        )
-        isnothing(factored) && error(
-            "simple_update_dense: the SVD did not converge. Pass a different algorithm via the " *
-                "`alg` apply kwarg -- on GPU use alg = \"jacobi_algorithm\".",
-        )
-        L, Rr, spec = factored
-        newbond = only(commoninds(L, Rr))
-        souts = ntuple(i -> gate_image((L, Rr)[i], sinds[i]), 2)
-        outinds[] = (souts, newbond)
-        return ITensors.array(L, qb[1], souts[1]..., newbond),
-            ITensors.array(Rr, qb[2], souts[2]..., newbond),
-            singular_values![], spec.truncerr
-    end
+    middle!(R1, R2) = gate_split(gate, R1, R2; apply_kwargs...)
 
-    (u1, u2), s_values, err = simple_update_dense!(
-        tensors, matrices, inv_matrices, qrinds, middle!; normalize_tensors
+    (u1, u2), svals, err = simple_update_dense!(
+        tensors, matrices, inv_matrices, middle!; normalize_tensors
     )
 
-    souts, newbond = outinds[]
-    # `itensor`, not `ITensor`: the capitalised constructor copies, undoing the buffering.
+    newbond = Index(length(svals), "Link,l")
+    # `itensor`, not `ITensor`: the capitalised constructor copies an array that is already private.
     updated_tensors = ITensor[
-        ITensors.itensor(u1, legs[1]..., souts[1]..., newbond),
-        ITensors.itensor(u2, legs[2]..., souts[2]..., newbond),
+        ITensors.itensor(u1, legs[1]..., sinds[1]..., newbond),
+        ITensors.itensor(u2, legs[2]..., sinds[2]..., newbond),
     ]
 
-    return noprime.(updated_tensors), s_values, err
+    return updated_tensors, bond_values(svals, newbond), err
 end

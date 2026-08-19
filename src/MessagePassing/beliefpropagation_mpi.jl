@@ -544,7 +544,7 @@ function apply_gate!(
     ψ⃗ = ITensor[network(ψ_bpc)[v] for v in v⃗]
 
     foreach(v⃗) do v
-        # Allow deallocation; `simple_update_dense` consumes these tensors' storage.
+        # Drops the cache's reference, so the old tensor is collectable once this call returns.
         setindex_preserve!(ψ_bpc, ITensor(), v)
     end
 
@@ -600,7 +600,7 @@ function apply_boundary_gate!(
     # The messages are the only record of the cut bond's current index, which truncation replaces.
     lb = only(commoninds(message(ψ_bpc, e_in), ψᵥ))
 
-    # Allow deallocation; `simple_update_dense_boundary` consumes this tensor's storage.
+    # Drops the cache's reference, so the old tensor is collectable once this call returns.
     setindex_preserve!(ψ_bpc, ITensor(), v)
 
     u, s_values, err = simple_update_dense_boundary(

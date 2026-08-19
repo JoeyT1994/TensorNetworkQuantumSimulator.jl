@@ -150,20 +150,18 @@ end
 @eval module $(gensym())
 using LinearAlgebra: Diagonal, I, istriu, norm, svd, transpose
 using Random: Random
-using TensorNetworkQuantumSimulator: absorb_boundary_in!, absorb_boundary_out!, absorb_chain!,
-    absorb_matrices!, absorb_matrices_mul!, absorb_matrices_qr!, mul_strided_batched!,
-    simple_update_dense!
+using TensorNetworkQuantumSimulator: absorb_matrices, absorb_matrices_mul, absorb_matrices_qr,
+    gate_split, simple_update_dense!, truncation_strategy
 using Test: @test, @testset, @test_throws
 
-# Contract `matrices[k]`'s first index with axis `inds[k]`, then permute to (inds..., qrinds...).
 # Built from `mapslices` so it shares no machinery with the code under test.
-function absorb_reference(tensor, matrices, inds, qrinds; op = identity)
+function absorb_reference(tensor, matrices; transposed = false)
     t = copy(tensor)
     for (k, matrix) in enumerate(matrices)
-        M = transpose(op(matrix))
-        t = mapslices(v -> M * v, t; dims = inds[k])
+        M = transposed ? matrix : transpose(matrix)
+        t = mapslices(v -> M * v, t; dims = k)
     end
-    return permutedims(t, (inds..., qrinds...))
+    return t
 end
 
 # Contract the two vertex tensors over their shared (last) axis, then apply `gate` to the two site
@@ -213,10 +211,9 @@ function update_vs_reference(; a1, a2, n1, n2, d1 = 2, d2 = 2, b = 3, maxdim = n
     want = pair_reference(t1, t2, gate, n1, n2, d1, d2, b)
 
     (u1, u2), svals, err = simple_update_dense!(
-        (copy(t1), copy(t2)), (envs1, envs2),
+        (t1, t2), (envs1, envs2),
         (map(m -> transpose(inv(m)), envs1), map(m -> transpose(inv(m)), envs2)),
-        ((n1 + 1, n1 + 2), (n2 + 1, n2 + 2)), gate_middle(gate, d1, d2, maxdim);
-        normalize_tensors,
+        gate_middle(gate, d1, d2, maxdim); normalize_tensors,
     )
 
     k = size(u1)[end]
@@ -230,59 +227,32 @@ end
 @testset "Dense simple update" begin
     Random.seed!(1234)
 
-    @testset "mul_strided_batched! covers every slice, trail = $trail" for trail in (1, 2, 5)
-        lead, chi = 3, 4
-        A = randn(lead, chi, trail)
-        B = randn(chi, chi)
-        C = similar(A)
-        mul_strided_batched!(C, A, B)
-        @test all(C[:, :, t] ≈ A[:, :, t] * B for t in 1:trail)
-        Ct = similar(A)
-        mul_strided_batched!(Ct, A, transpose(B))
-        @test all(Ct[:, :, t] ≈ A[:, :, t] * transpose(B) for t in 1:trail)
+    @testset "absorb_matrices absorbs axis by axis, $k matrices" for k in 0:3
+        A = randn(ComplexF64, ntuple(_ -> 3, k)..., 2, 4)
+        matrices = ntuple(_ -> randn(ComplexF64, 3, 3), k)
+        for transposed in (false, true)
+            want = absorb_reference(A, matrices; transposed)
+            @test absorb_matrices(A, matrices; transposed) ≈ want
+        end
     end
 
-    # `absorb_chain!` hands back the buffer holding the result and the one left free, whichever way
-    # the alternation happened to land.
-    @testset "absorb_chain! returns (result, free) for $k matrices" for k in 0:3
-        A = randn(3, 3, 3, 2)
-        matrices = ntuple(_ -> randn(3, 3), k)
-        want = absorb_reference(A, matrices, ntuple(identity, k), Tuple((k + 1):4))
-        live, free = absorb_chain!(copy(A), similar(A), matrices)
-        @test live ≈ want
-        @test pointer(free) != pointer(live)
-        @test length(free) == length(live)
+    @testset "absorb_matrices leaves its input alone" begin
+        A = randn(ComplexF64, 3, 3, 2)
+        keep = copy(A)
+        absorb_matrices(A, (randn(ComplexF64, 3, 3),))
+        @test A == keep
     end
 
-    # A caller that lends out part of a larger buffer needs all of it back, so a supplied `scratch`
-    # always comes back free with the result in the input's own storage -- including for an even
-    # matrix count, where the bare alternation would end the other way round.
-    @testset "absorb_matrices! honours a supplied scratch, $k matrices" for k in 1:3
-        tensor = randn(ComplexF64, ntuple(_ -> 8, k)..., 2, 3)
-        matrices = ntuple(_ -> randn(ComplexF64, 8, 8), k)
-        inds = ntuple(identity, k)
-        qrinds = (k + 1, k + 2)
-        want = absorb_reference(tensor, matrices, inds, qrinds)
-
-        input = copy(tensor)
-        base = pointer(input)
-        scratch = Vector{ComplexF64}(undef, length(tensor))
-        live, free = absorb_matrices!(input, matrices, inds, qrinds; scratch)
-        @test live ≈ want
-        @test pointer(live) == base
-        @test pointer(free) == pointer(scratch)
-    end
-
-    @testset "absorb_matrices_qr!: $elt, op = $op" for elt in (Float64, ComplexF64),
-            op in (identity, transpose)
+    @testset "absorb_matrices_qr: $elt, transposed = $transposed" for
+            elt in (Float64, ComplexF64), transposed in (false, true)
 
         dims, qrdims = (4, 3), (2, 3)          # deliberately unequal leading dims
         A = randn(elt, dims..., qrdims...)
         matrices = (randn(elt, 4, 4), randn(elt, 3, 3))
         m, n = prod(dims), prod(qrdims)
 
-        want = absorb_reference(A, matrices, (1, 2), (3, 4); op)
-        Q, R, free = absorb_matrices_qr!(copy(A), matrices, (1, 2), (3, 4); op)
+        want = absorb_reference(A, matrices; transposed)
+        Q, R = absorb_matrices_qr(A, matrices; transposed)
 
         @test size(Q) == (dims..., n)
         @test size(R) == (n, qrdims...)
@@ -290,114 +260,90 @@ end
         @test Qm * Rm ≈ reshape(want, m, n)
         @test Qm' * Qm ≈ I                     # the QR's Q is isometric
         @test istriu(Rm)
-        # `free` is meant to be handed straight to `absorb_matrices_mul!` as its scratch.
-        @test length(free) == length(Q)
-        @test pointer(free) != pointer(Q)
     end
 
-    @testset "absorb_matrices_qr! index handling" begin
-        A = randn(4, 3, 2, 3)
+    @testset "absorb_matrices_qr splits at the matrix count" begin
+        A = randn(4, 3, 2, 5)
         matrices = (randn(4, 4), randn(3, 3))
-        Q1, R1, _ = absorb_matrices_qr!(copy(A), matrices, (1, 2))
-        Q2, R2, _ = absorb_matrices_qr!(copy(A), matrices, (1, 2), (3, 4))
-        @test Q1 ≈ Q2                          # default qrinds is the complement of inds
-        @test R1 ≈ R2
-
-        # A non-ascending `qrinds` is honoured rather than sorted.
-        B = randn(4, 3, 2, 5)
-        want = absorb_reference(B, matrices, (1, 2), (4, 3))
-        Q, R, _ = absorb_matrices_qr!(copy(B), matrices, (1, 2), (4, 3))
-        @test size(R) == (10, 5, 2)
+        want = absorb_reference(A, matrices)
+        Q, R = absorb_matrices_qr(A, matrices)
+        @test size(Q) == (4, 3, 10)
+        @test size(R) == (10, 2, 5)
         @test reshape(Q, 12, 10) * reshape(R, 10, 10) ≈ reshape(want, 12, 10)
-
-        @test_throws DimensionMismatch absorb_matrices_qr!(
-            copy(A), matrices, (1, 2), (3, 4); scratch = Vector{Float64}(undef, 5)
-        )
     end
 
-    # Absorbing the inverse environments and multiplying `R` back must undo the first half. The
-    # inverse direction contracts each matrix's second index, which is what `op = transpose` does.
-    @testset "absorb_matrices_mul! inverts absorb_matrices_qr!, $k env legs" for k in 1:3
-        a = 8
-        A = randn(ComplexF64, ntuple(_ -> a, k)..., 2, 3)
-        envs = ntuple(_ -> randn(ComplexF64, a, a), k)
-        inv_envs = map(m -> transpose(inv(m)), envs)
-        inds, qrinds = ntuple(identity, k), (k + 1, k + 2)
-
-        Q, R, free = absorb_matrices_qr!(copy(A), envs, inds, qrinds)
-        u, spare = absorb_matrices_mul!(Q, inv_envs, R; op = transpose, scratch = free)
-        @test u ≈ A
-        @test length(spare) == length(Q)
-        @test pointer(spare) != pointer(u)
-    end
-
-    # `R`'s trailing extent is not `chi`: a truncating SVD makes it smaller and one that grows the
-    # bond makes it larger, and only the first case fits in the buffer left over.
-    @testset "absorb_matrices_mul! handles R narrower and wider than chi" begin
-        Q = randn(ComplexF64, 8, 8, 6)
-        envs = (randn(ComplexF64, 8, 8), randn(ComplexF64, 8, 8))
-        for cols in (2, 6, 9)
-            R = randn(ComplexF64, 6, 2, cols)
-            absorbed = absorb_chain!(copy(Q), similar(Q), envs; op = transpose)[1]
-            want = reshape(reshape(absorbed, 64, 6) * reshape(R, 6, 2cols), 8, 8, 2, cols)
-            u, spare = absorb_matrices_mul!(copy(Q), envs, R; op = transpose)
-            @test u ≈ want
-            @test size(u) == (8, 8, 2, cols)
-            @test length(spare) == length(Q)
-        end
-    end
-
-    # Across a cut edge there is no partner tensor to fall back on, so the wide case must be carried.
-    @testset "absorb_boundary_in! delegates when the matrix is tall, $k env legs" for k in 1:3
-        a = 8
-        A = randn(ComplexF64, ntuple(_ -> a, k)..., 2, 3)
-        envs = ntuple(_ -> randn(ComplexF64, a, a), k)
-        inds, qrinds = ntuple(identity, k), (k + 1, k + 2)
-        @assert a^k >= 6                       # tall, so this must take the QR branch
-
-        Qw, Rw, _ = absorb_matrices_qr!(copy(A), envs, inds, qrinds)
-        Q, R, free = absorb_boundary_in!(copy(A), envs, inds, qrinds)
-        @test !isnothing(Q)
-        @test Q ≈ Qw
-        @test R ≈ Rw
-
-        # `absorb_boundary_out!` is then the same round trip as the pair it wraps.
-        inv_envs = map(m -> transpose(inv(m)), envs)
-        @test absorb_boundary_out!(Q, inv_envs, R, free; op = transpose) ≈ A
-    end
-
-    # One environment leg against a site and a bond is wide, so the whole absorbed tensor stands in
-    # for `R` and comes back with the environment legs still attached.
-    @testset "absorb_boundary_in! carries the wide case, $b bond" for b in (3, 5)
+    # A degree-1 vertex gives a wide row block, where Q comes back square.
+    @testset "absorb_matrices_qr carries a wide row block, $b bond" for b in (3, 5)
         a, d = 2, 2
         A = randn(ComplexF64, a, d, b)
         envs = (randn(ComplexF64, a, a),)
         inv_envs = map(m -> transpose(inv(m)), envs)
-        @assert a < d * b                      # wide, so this must take the no-QR branch
+        @assert a < d * b
 
-        Q, R, free = absorb_boundary_in!(copy(A), envs, (1,), (2, 3))
-        @test isnothing(Q)
-        @test R ≈ absorb_reference(A, envs, (1,), (2, 3))
+        Q, R = absorb_matrices_qr(A, envs)
+        @test size(Q) == (a, a)
         @test size(R) == (a, d, b)
+        @test reshape(Q, a, a) * reshape(R, a, d * b) ≈ reshape(absorb_reference(A, envs), a, d * b)
+        @test absorb_matrices_mul(Q, inv_envs, R; transposed = true) ≈ A
+    end
 
-        # A truncation that shrank the bond, and one that grew it past the buffer left behind.
-        for newb in (2, b, 3b)
-            Rp = randn(ComplexF64, a, d, newb)
-            want = absorb_reference(Rp, inv_envs, (1,), (2, 3); op = transpose)
-            @test absorb_boundary_out!(nothing, inv_envs, copy(Rp), free; op = transpose) ≈ want
+    # Absorbing the inverse environments and multiplying `R` back must undo the first half. The
+    # inverse direction contracts each matrix's second index, which is what `transposed` does.
+    @testset "absorb_matrices_mul inverts absorb_matrices_qr, $k env legs" for k in 1:3
+        a = 8
+        A = randn(ComplexF64, ntuple(_ -> a, k)..., 2, 3)
+        envs = ntuple(_ -> randn(ComplexF64, a, a), k)
+        inv_envs = map(m -> transpose(inv(m)), envs)
+
+        Q, R = absorb_matrices_qr(A, envs)
+        @test absorb_matrices_mul(Q, inv_envs, R; transposed = true) ≈ A
+    end
+
+    # A truncating SVD shrinks `R`'s trailing extent, a grown bond enlarges it.
+    @testset "absorb_matrices_mul handles R narrower and wider than chi" begin
+        Q = randn(ComplexF64, 8, 8, 2, 6)
+        envs = (randn(ComplexF64, 8, 8), randn(ComplexF64, 8, 8))
+        for cols in (2, 6, 9)
+            R = randn(ComplexF64, 6, 2, cols)
+            absorbed = absorb_reference(Q, envs; transposed = true)
+            want = reshape(reshape(absorbed, 128, 6) * reshape(R, 6, 2cols), 8, 8, 2, 2, cols)
+            u = absorb_matrices_mul(Q, envs, R; transposed = true)
+            @test u ≈ want
+            @test size(u) == (8, 8, 2, 2, cols)
         end
     end
 
-    @testset "absorb_boundary_in! with no environment legs" begin
-        A = randn(ComplexF64, 2, 3)
-        Q, R, free = absorb_boundary_in!(copy(A), (), (), (1, 2))
-        @test isnothing(Q)
-        @test R ≈ A
-        @test absorb_boundary_out!(nothing, (), copy(A), free) ≈ A
+    # The rank `cutoff` asks for: the fewest values whose discarded weight, relative to the total,
+    # stays within it. That is what the sqrt in `truncation_strategy` has to get right.
+    @testset "gate_split truncates on the discarded weight" begin
+        q1, q2, d, b = 6, 6, 2, 5
+        R1 = randn(ComplexF64, q1, d, b)
+        R2 = randn(ComplexF64, q2, d, b)
+        gate = reshape(randn(ComplexF64, d * d, d * d), d, d, d, d)
+
+        T = reshape(reshape(R1, q1 * d, b) * transpose(reshape(R2, q2 * d, b)), q1, d, q2, d)
+        P = permutedims(T, (2, 4, 1, 3))
+        P = reshape(reshape(gate, d * d, d * d) * reshape(P, d * d, q1 * q2), d, d, q1, q2)
+        M = reshape(permutedims(P, (3, 1, 4, 2)), q1 * d, q2 * d)
+        full = svd(M).S
+        w = abs2.(full)
+        keep(cutoff) = findfirst(k -> sum(w[(k + 1):end]) <= cutoff * sum(w), eachindex(w))
+
+        for kw in ((;), (; maxdim = 3), (; cutoff = 0.2), (; maxdim = 3, cutoff = 0.2))
+            L, Rr, svals, err = gate_split(gate, R1, R2; kw...)
+            k = min(get(kw, :maxdim, length(full)), keep(get(kw, :cutoff, 0.0)))
+            @test length(svals) == k
+            @test svals ≈ full[1:k]
+            @test err ≈ sum(w[(k + 1):end]) / sum(w)
+            @test reshape(L, q1 * d, k) * transpose(reshape(Rr, q2 * d, k)) ≈
+                svd(M).U[:, 1:k] * Diagonal(full[1:k]) * svd(M).Vt[1:k, :]
+        end
+
+        @test keep(0.2) < length(full)          # the cutoff case must actually drop something
     end
 
-    # Sides differ in size and in environment-leg count, so the larger-side-first reordering has to
-    # carry each side's matrices and axis labels with it or these fail on shape.
+    # Sides differ in size and in environment-leg count, so each side's matrices and axis counts have
+    # to travel together or these fail on shape.
     shapes = [
         ("side 1 larger, 1 v 1 legs", (a1 = 16, a2 = 8, n1 = 1, n2 = 1)),
         ("side 2 larger, 1 v 1 legs", (a1 = 8, a2 = 16, n1 = 1, n2 = 1)),
