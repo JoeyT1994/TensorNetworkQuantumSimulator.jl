@@ -57,6 +57,8 @@ governs, referenced below.
 | `krylov_min` | `128` | smallest interface at which the Krylov SVD beats a dense one; below it dense LAPACK wins — see `_ctm_svd_topk`. ⚠️ **`:cut` only** — never consulted on the `:cycle` path. **Re-verified end to end 2026-08-11: do not lower it.** In isolation top-k looks faster from n≈48 up (1.8–2.7× at n=72–144, k=8), but in the engine `krylov_min = 48` is 3.3× SLOWER at χ=8 and 2.2× at χ=32, because a Krylov attempt that fails `info.converged >= k` costs the attempt AND the dense fallback. Accuracy is identical either way. |
 | `optimal_max` | `12` | tensor count above which contraction-order search falls back from exhaustive netcon to greedy. A FEASIBILITY gate — see `_ctm_contract`. |
 | `projector` | `:cut` | which interface projector to derive: `:cut` (optimal rank-χ truncation of one bipartition) or `:cycle` (four-corner cycle, which makes `F` stationary). See "Choosing a projector" below. |
+| `cycle_subspace` | `false` | ⚠️ **`:cycle` only.** cycle solve via BLOCK SUBSPACE ITERATION (matmul + QR — GPU-friendly, no general Schur/eig, batchable) instead of the matrix-free Krylov `schursolve`. Accuracy-equivalent to `schursolve` on converged cases (single-layer, lossless → machine precision), comparable-but-noisier on truncated/limit-cycling ones. Meant for GPU. |
+| `cycle_iters` | `20` | block power steps when `cycle_subspace = true` (ignored otherwise). ~6 suffices for single-layer/lossless; double-layer needs ~15-20 (fewer under-resolves the subspace). |
 
 ## Choosing a projector
 
@@ -124,12 +126,19 @@ Base.@kwdef struct CTMOptions
     krylov_min::Int = 128
     optimal_max::Int = 12
     projector::Symbol = :cut
+    # `:cycle` cycle-solve: `false` (default) = matrix-free Krylov (`schursolve`); `true` = block
+    # subspace iteration (matmul + QR only, GPU-friendly, batchable). `cycle_iters` block power steps
+    # are used only when `cycle_subspace = true`.
+    cycle_subspace::Bool = false
+    cycle_iters::Int = 20
 
     function CTMOptions(gauge, arnoldi, degtol, qr_cutoff, krylov_min, optimal_max,
-                        projector)
+                        projector, cycle_subspace, cycle_iters)
         projector in (:cut, :cycle) || throw(ArgumentError(
             "projector must be :cut or :cycle, got $(repr(projector))"))
-        return new(gauge, arnoldi, degtol, qr_cutoff, krylov_min, optimal_max, projector)
+        cycle_iters >= 1 || throw(ArgumentError("cycle_iters must be ≥ 1, got $cycle_iters"))
+        return new(gauge, arnoldi, degtol, qr_cutoff, krylov_min, optimal_max, projector,
+                   cycle_subspace, cycle_iters)
     end
 end
 
@@ -784,12 +793,6 @@ function _ctm_biorth(A::AbstractMatrix, B::AbstractMatrix, cutoff::Real)
     return A * F.V[:, 1:k] * isq, isq * F.U[:, 1:k]' * B
 end
 
-# LEVER 1 prototype (revertible): GPU-friendly cycle solve via block subspace iteration instead of
-# the matrix-free Krylov `schursolve`. Default OFF (committed behaviour = Krylov). `_CTM_CYCLE_ITERS`
-# is the number of block power steps.
-const _CTM_CYCLE_SUBSPACE = Ref(false)
-const _CTM_CYCLE_ITERS = Ref(6)
-
 function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOptions,
                                seed::UInt)
     any(isnothing, (ENW, ENE, ESE, ESW)) && return nothing
@@ -843,16 +846,16 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
               (transpose(As[3]) * (transpose(As[4]) * u)))) / scale
     VR = Vector{Any}(undef, 4); VL = Vector{Any}(undef, 4)
     local kres
-    if _CTM_CYCLE_SUBSPACE[]
-        # LEVER 1 (GPU-friendly, revertible; default OFF). Replace the sequential matrix-free Krylov
+    if opts.cycle_subspace
+        # GPU-friendly cycle solve (`cycle_subspace = true`). Replace the sequential matrix-free Krylov
         # with BLOCK SUBSPACE ITERATION for the dominant invariant subspace: only matmul + QR, which
         # CUSOLVER HAS (it has no general non-Hermitian Schur/eig, so `schursolve` can't be done as a
         # single dense GPU call). A few big block ops instead of many tiny sequential matvecs, and
-        # batchable across plaquettes (lever 2). Accuracy vs `schursolve` is what the prototype measures.
+        # batchable across plaquettes. `cycle_iters` needs ~15-20 for double-layer (fewer under-resolves).
         k = kcyc
         BR = _ctm_to_device(As[1], randn(Xoshiro(seed), eltype(As[1]), nsp[1], k))
         BL = _ctm_to_device(As[1], randn(Xoshiro(seed + 0x9e3779b9), eltype(As[1]), nsp[1], k))
-        for _ in 1:_CTM_CYCLE_ITERS[]
+        for _ in 1:opts.cycle_iters
             BR = _ctm_orthcols(fwd(BR), k)
             BL = _ctm_orthcols(bwd(BL), k)
         end
