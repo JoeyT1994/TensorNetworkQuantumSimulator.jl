@@ -784,6 +784,12 @@ function _ctm_biorth(A::AbstractMatrix, B::AbstractMatrix, cutoff::Real)
     return A * F.V[:, 1:k] * isq, isq * F.U[:, 1:k]' * B
 end
 
+# LEVER 1 prototype (revertible): GPU-friendly cycle solve via block subspace iteration instead of
+# the matrix-free Krylov `schursolve`. Default OFF (committed behaviour = Krylov). `_CTM_CYCLE_ITERS`
+# is the number of block power steps.
+const _CTM_CYCLE_SUBSPACE = Ref(false)
+const _CTM_CYCLE_ITERS = Ref(6)
+
 function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOptions,
                                seed::UInt)
     any(isnothing, (ENW, ENE, ESE, ESW)) && return nothing
@@ -835,21 +841,41 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
     fwd(v) = (As[4] * (As[3] * (As[2] * (As[1] * v)))) / scale
     bwd(u) = (transpose(As[1]) * (transpose(As[2]) *
               (transpose(As[3]) * (transpose(As[4]) * u)))) / scale
-    alg = Arnoldi(; krylovdim = max(4kcyc + 8, 24), tol = 1.0e-16)
-    local VRv, VLv, iR, iL
-    try
-        _, VRv, _, iR = schursolve(fwd, v0, kcyc, :LM, alg)
-        _, VLv, _, iL = schursolve(bwd, v0, kcyc, :LM, alg)
-    catch
-        return nothing                          # fall through to the pairwise cut
-    end
-    # Solve the cycle at the rank it can actually RESOLVE. `schursolve` terminates when the Krylov
-    # space closes, which at an interior plaquette is ~19 of a requested 32: the four-fold product's
-    # spectrum is ~the 4th power of one corner's, so directions past that carry no cycle weight.
-    kres = min(kcyc, iR.converged, iL.converged, length(VRv), length(VLv))
-    kres < 1 && return nothing
     VR = Vector{Any}(undef, 4); VL = Vector{Any}(undef, 4)
-    VR[1] = reduce(hcat, VRv[1:kres]); VL[1] = permutedims(reduce(hcat, VLv[1:kres]))
+    local kres
+    if _CTM_CYCLE_SUBSPACE[]
+        # LEVER 1 (GPU-friendly, revertible; default OFF). Replace the sequential matrix-free Krylov
+        # with BLOCK SUBSPACE ITERATION for the dominant invariant subspace: only matmul + QR, which
+        # CUSOLVER HAS (it has no general non-Hermitian Schur/eig, so `schursolve` can't be done as a
+        # single dense GPU call). A few big block ops instead of many tiny sequential matvecs, and
+        # batchable across plaquettes (lever 2). Accuracy vs `schursolve` is what the prototype measures.
+        k = kcyc
+        BR = _ctm_to_device(As[1], randn(Xoshiro(seed), eltype(As[1]), nsp[1], k))
+        BL = _ctm_to_device(As[1], randn(Xoshiro(seed + 0x9e3779b9), eltype(As[1]), nsp[1], k))
+        for _ in 1:_CTM_CYCLE_ITERS[]
+            BR = _ctm_orthcols(fwd(BR), k)
+            BL = _ctm_orthcols(bwd(BL), k)
+        end
+        (all(isfinite, BR) && all(isfinite, BL)) || return nothing
+        kres = min(k, size(BR, 2), size(BL, 2))
+        kres < 1 && return nothing
+        VR[1] = BR; VL[1] = permutedims(BL)
+    else
+        alg = Arnoldi(; krylovdim = max(4kcyc + 8, 24), tol = 1.0e-16)
+        local VRv, VLv, iR, iL
+        try
+            _, VRv, _, iR = schursolve(fwd, v0, kcyc, :LM, alg)
+            _, VLv, _, iL = schursolve(bwd, v0, kcyc, :LM, alg)
+        catch
+            return nothing                          # fall through to the pairwise cut
+        end
+        # Solve the cycle at the rank it can actually RESOLVE. `schursolve` terminates when the Krylov
+        # space closes, which at an interior plaquette is ~19 of a requested 32: the four-fold product's
+        # spectrum is ~the 4th power of one corner's, so directions past that carry no cycle weight.
+        kres = min(kcyc, iR.converged, iL.converged, length(VRv), length(VLv))
+        kres < 1 && return nothing
+        VR[1] = reduce(hcat, VRv[1:kres]); VL[1] = permutedims(reduce(hcat, VLv[1:kres]))
+    end
     for l in 1:3
         VR[l + 1] = _ctm_orthcols(As[l] * VR[l], kres)
     end
