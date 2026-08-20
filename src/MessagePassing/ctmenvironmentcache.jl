@@ -823,7 +823,7 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
     # 1e-13/1e-14/1e-15/1e-16), and tying it to `s_kcyc/s_1` via a loose first pass collapses χ=32 to
     # 9.0e-09, because a loose pass cannot resolve 32 eigenvalues and so reads the tail off the wrong
     # one. The χ=4 cost that remains is the criterion, not the solver — see the docstring.
-    scale = let v = v0 / max(norm(v0), eps()), sc = one(real(eltype(As[1])))
+    scale = let v = v0 / max(norm(v0), eps(real(eltype(As[1])))), sc = one(real(eltype(As[1])))
         for _ in 1:5
             w = As[4] * (As[3] * (As[2] * (As[1] * v)))
             nw = norm(w)
@@ -1359,13 +1359,14 @@ cvm_freenergy(cache::CTMEnvironmentCache) = cvm_freenergy(_ctm_env_checked(cache
 # Möbius weight. `region_lnZ` returns a real `Float64` (a `log(abs(...))`) and `0.0` for absent
 # regions, so `vals` is a fixed-length real vector every sweep.
 function _ctm_region_terms(env::CTMVertexEnvironments, cache::CTMEnvironmentCache)
+    RT = _ctm_real_eltype(cache)        # keep the network's working precision (Float32 stays Float32)
     Lx, Ly = env.Lx, env.Ly
-    vals = Float64[]
-    F = 0.0
+    vals = RT[]
+    F = zero(RT)
     for cx in 1.0:0.5:Lx, cy in 1.0:0.5:Ly
-        z = region_lnZ(env, cache, cx, cy)
+        z = convert(RT, region_lnZ(env, cache, cx, cy))
         push!(vals, z)
-        F += _ctm_region_desc(cx, cy)[2] * z
+        F += convert(RT, _ctm_region_desc(cx, cy)[2]) * z
     end
     return F, vals
 end
