@@ -911,7 +911,16 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
         # 44% magnitude mismatch — ten noise modes, drawn differently on each side, which IS the
         # residual-grows-with-χ wander. Keep the longest agreeing prefix. The 1e-3 tolerance is ~20×
         # looser than the worst healthy case measured (4.3e-5) and ~400× tighter than the failure.
-        aR = abs.(@view valsR[1:kres]); aL = abs.(@view valsL[1:kres])
+        # Magnitudes over the FULL returned lists, not just the retained prefix: the degtol
+        # back-off below must compare the retained boundary `aR[kres]` against the first DROPPED
+        # value `aR[kres+1]`, which only exists if the list extends past the cut. (First version
+        # truncated `aR` at `kres`, which made that guard dead code — measured "degtol inert" and
+        # it was vacuous.) Values beyond `info.converged` are unconverged Ritz estimates — fine
+        # for a gap test, never used as retained modes.
+        nv = min(length(valsR), length(valsL))
+        kres = min(kres, nv)
+        kres < 1 && return nothing
+        aR = abs.(@view valsR[1:nv]); aL = abs.(@view valsL[1:nv])
         for j in 1:kres
             if abs(aR[j] - aL[j]) > 1.0e-3 * max(aR[j], aL[j])
                 kres = j - 1
@@ -941,7 +950,11 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
         # no-op: never split a near-degenerate cluster at the cut. An invariant subspace that must
         # split a cluster is ill-defined, and the sweep re-resolves it differently each time — the
         # under-truncation limit cycle lands EXACTLY on one (measured `|λ_8| = |λ_9|` to displayed
-        # digits on random 5×5 at χ=8). Off by default (`degtol = 0`), like the cut path.
+        # digits on random 5×5 at χ=8). At the default `degtol = 0` the `≤` still fires on EXACT
+        # magnitude ties — which on ⟨ψ|ψ⟩ networks are the (λ, conj λ) pairs the swap identity
+        # `conj(M) = S·M·S` forces on the spectrum (see docs/ctmrg_status.md, the falsified
+        # swap-symmetry entry) — so a conjugate pair straddling the cut is never split even with
+        # the knob off.
         while kres > 1 && kres < length(aR) && abs(aR[kres] - aR[kres + 1]) <= opts.degtol * abs(aR[kres])
             kres -= 1
         end

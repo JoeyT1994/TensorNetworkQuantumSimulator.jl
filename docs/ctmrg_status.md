@@ -333,6 +333,33 @@ dense ground-truth spectra) split the `:cycle` pathologies into three distinct d
    no-op), though the fundamental fix remains χ.
 3. **The pipeline is exact when fed a spectrally clean subspace** — the deep-modes case biorth
    overlap is conditioned at exactly 1.0.
+4. **Random states at tight χ fail on the CRITERION, not the solver, and nothing tunes it away
+   (measured on `ctm_test.jl`'s gauged 4×4 D=2, seed 1234).** The cycle spectrum of a random state
+   is quasi-degenerate exactly where a small χ forces the cut (χ=4 lands inside a
+   {4.6e-3, 4.6e-3, 4.4e-3} cluster; χ=2 splits a 1.2-ratio pair), so there is NO good rank-χ
+   invariant subspace: at χ=2 it limit-cycles, at χ=4 it converges to a GENUINE stationary point
+   (worst-region 1e-13) that is still 18× worse than `:cut` on lnZ. Ruled out by direct A/B:
+   the gauge (cycle spectra and errors bit-identical gauged vs ungauged — the cycle spectrum is
+   gauge-invariant by similarity; meanwhile the SAME gauge improves `:cut`'s lnZ 30×, because the
+   BP gauge is precisely the basis where per-bipartition truncation is optimal) and `cycle_gapcut`
+   (inert). `degtol` back-off DOES help — but only after a wiring fix (2026-08-21, same day): the
+   first cycle-degtol implementation compared against a magnitude list truncated AT the cut, so the
+   guard could never fire and the initial "inert" measurement was vacuous. Fixed (compare against
+   the full returned Ritz list), `degtol = 0.3` takes the seed-1234 χ=2 lnZ from 5.2e-2 to 2.9e-3
+   (18×) and the observable from 3.6e-3 to 4.1e-4 — within 8× of `:cut` on lnZ while 30× better on
+   the observable. It is NOT a default: the value that helps χ=2 slightly worsens the χ=4
+   observable on the same state — no single value is right even within one example, because the
+   ill-posed cut has no right answer, only different trades. The DEFAULT gained a free structural
+   guard from the fix: at `degtol = 0` the `≤` fires on EXACT magnitude ties, i.e. a (λ, conj λ)
+   swap pair straddling the cut is never split. Measured on the one known pair-straddling case
+   (random 5×5 χ=8, `|λ_8| = |λ_9|`): oscillation 1.9 → 0.78, obs 1.2e-3 → 6.9e-4, strictly better;
+   flagship 5×5 Ising and all other battery cases bit-identical; 183/183. The trace-extremal criterion ranks directions by plaquette-loop weight, which
+   at shallow, structureless spectra does not match what the Möbius sum needs. The SAME case shows
+   the flip side: `:cycle` beats both `:cut` and bMPS on the corner observable at χ=2 (3.6e-3
+   against 1.2e-2 / 5.5e-3) while losing lnZ by 150× — stationarity buys single-region ratios, the
+   optimal bipartition cut buys the global signed sum. **Guidance: for lnZ on random/unstructured
+   states at tight χ, gauge + `:cut`; `:cycle`'s domain is observables and adequate χ.** Physical
+   states have decaying, gapped cycle spectra, which is why they do not hit this.
 
 Also derived by hand (recorded so nobody re-derives it): extremising the plaquette trace
 `Z_p = tr(Π₄A₄Π₃A₃Π₂A₂Π₁A₁)` over rank-k oblique projectors forces `range(Π)`/`ker(Π)` to be
