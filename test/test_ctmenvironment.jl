@@ -431,7 +431,10 @@ end
     Random.seed!(22)
     tn = random_tensornetwork(Float64, named_grid((6, 6)); bond_dimension = 2)
     mi_cut = marginal_inconsistency(update(CTMEnvironmentCache(tn, 4; projector = :cut)))
-    mi_cyc = marginal_inconsistency(update(CTMEnvironmentCache(tn, 4; projector = :cycle)))
+    # Stationarity is a property of the SETTLED messages, so drive `:cycle` to worst-region here;
+    # the `:free_energy` default certifies once F settles, which is a few sweeps sooner.
+    mi_cyc = marginal_inconsistency(update(CTMEnvironmentCache(tn, 4; projector = :cycle);
+                                           convergence = :worst_region))
     @test mi_cut > 1.0e-8                                   # the cut is NOT stationary here
     @test mi_cyc < 1.0e-14                                  # the cycle is, to machine precision
     # NOT asserted at χ=6. `:cycle` is a PURE formulation — every interface comes from the
@@ -453,8 +456,12 @@ end
     g3 = named_grid((4, 4))
     ψ3 = random_tensornetworkstate(Float64, g3, siteinds("S=1/2", g3); bond_dimension = 2)
     ex3 = real(expect(ψ3, ("Z", [(2, 2)]); alg = "exact"))
-    err3(proj, χ) = abs(real(expect(update(CTMEnvironmentCache(ψ3, χ; projector = proj)),
-                                    ("Z", [(2, 2)]))) - ex3)
+    # Through the high-level `expect(::TensorNetworkState; alg = "ctmrg", ...)` path ON PURPOSE: it
+    # is what a caller measuring an observable uses, and it defaults the `:cycle` solve to
+    # worst-region (message stationarity), which is what makes the observable tight. `:cut` is
+    # unaffected by that default.
+    err3(proj, χ) = abs(real(expect(ψ3, ("Z", [(2, 2)]); alg = "ctmrg", maxdim = χ,
+                                    ctm_options = (; projector = proj))) - ex3)
     for χ in (4, 6, 8)
         @test err3(:cut, χ) > 2 * err3(:cycle, χ)
     end
@@ -468,7 +475,8 @@ end
     tn3 = random_tensornetwork(Float64, named_grid((5, 5)); bond_dimension = 2)
     lnZ3 = log(abs(real(contract(tn3; alg = "exact"))))
     # both are near-exact here, so compare stationarity, which is where the criterion shows
-    @test marginal_inconsistency(update(CTMEnvironmentCache(tn3, 8; projector = :cycle))) < 1.0e-13
+    @test marginal_inconsistency(update(CTMEnvironmentCache(tn3, 8; projector = :cycle);
+                                        convergence = :worst_region)) < 1.0e-13
     @test abs(cvm_freenergy(update(CTMEnvironmentCache(tn3, 8; projector = :cycle))) - lnZ3) < 1.0e-8
 
     # 4. DETERMINISM. Every Krylov solve here takes a locally seeded start vector, so a sweep is
@@ -513,8 +521,14 @@ end
     ψhh = random_tensornetworkstate(Float64, ghh, siteinds("S=1/2", ghh); bond_dimension = 2)
     vhh = collect(vertices(ghh))[max(1, length(vertices(ghh)) ÷ 2)]
     exhh = real(expect(ψhh, ("Z", [vhh]); alg = "exact"))
-    for proj in (:cut, :cycle)
-        err = abs(real(expect(update(CTMEnvironmentCache(ψhh, 8; projector = proj)),
+    # Each projector runs its OBSERVABLE-TIGHT criterion — the same split the `expect` path picks
+    # automatically. `:cut` stays on its default `|ΔF|`+statedist pair: that is the criterion whose
+    # partial-coverage bug this test guards, and the worst-region signal over-warns on it here
+    # (floors ~8e-6 on this lossless case while `⟨Z⟩` is exact). `:cycle` needs
+    # `convergence = :worst_region`, since its `|ΔF|` default certifies before the boundary-lagged
+    # `⟨Z⟩` settles (F at sweep 2, `⟨Z⟩` at sweep ~5).
+    for (proj, kw) in ((:cut, (;)), (:cycle, (; convergence = :worst_region)))
+        err = abs(real(expect(update(CTMEnvironmentCache(ψhh, 8; projector = proj); kw...),
                               ("Z", [vhh]))) - exhh)
         @test err < 1.0e-12
     end

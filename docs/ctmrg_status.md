@@ -60,8 +60,9 @@ cheaper — `:cycle` is markedly faster at scale (below) — so cost is not the 
 **Use `:cycle` when you want stationarity or speed**, and when χ is adequate for the lattice. It is the
 better projector on hex, on D=2 squares, and on the physical 5×5 benchmark at every χ, and it is
 matrix-free so it is much cheaper per sweep. Its weaknesses: random D=3 states, and a **truncation-induced
-limit cycle when χ is below the lossless threshold** — now understood and detected by the worst-region
-convergence metric (O(1) = raise χ), no longer an unexplained failure. See [Open problems](#open-problems).
+limit cycle when χ is below the lossless threshold** — now understood and flagged by the convergence
+check (both `|ΔF|` and the worst-region signal move on it; O(1) = raise χ), no longer an unexplained
+failure. See [Open problems](#open-problems) and [The convergence test](#the-convergence-test).
 
 ---
 
@@ -194,25 +195,53 @@ crit       =  max(|ΔF|, state signal)  ≤  tolerance · max(1, |F|)
 `|ΔF|` **is not a certificate on its own.** `F` is a signed Möbius sum whose cancellation is worth
 ~4000×, so it can sit at its final value while the state is still the greedy seed — measured, complex
 hex 4×4 D=2 at χ=64 reported `|ΔF| = 2.2e-16` on sweep 1 with a still-greedy environment. Hence the
-two-term criterion and the `certified` guard.
+`certified` guard (≥2 sweeps), and, for `:cut`, the second term.
 
-**The state signal is chosen by the PROJECTOR (2026-08-19), not a user knob** — each gets the metric
-that is meaningful for it:
+**The signal depends on the projector, and for `:cycle` on the `convergence` kwarg (2026-08-20):**
 
-* `:cut` → `_ctm_statedist²`, the raw-tensor distance between successive C/T blocks (gauge on to make
-  them comparable), squared because `F` is stationary in the state (`|ΔF| ~ sd²`). Correct for `:cut`,
-  which is not a stationary point and so has no vanishing residual to watch instead.
-* `:cycle` → **worst-region `|Δ lnZ_r|`**, the largest change across the Möbius regions `F` already
-  sums (`_ctm_region_terms` returns them in the same pass, so it is FREE). `_ctm_statedist` is the
-  wrong metric here: it is NOT gauge invariant, so at a stationary `:cycle` fixed point whose interface
-  basis merely rotates it reports ~1 (measured, 8×8 single-layer, while `marginal_inconsistency` sat at
-  1e-16) and rejects a converged state forever. Two properties fix that. GAUGE INVARIANT: each region
-  is a CLOSED contraction, so the interface gauge `R`/`R⁻¹` cancels inside it. NON-CANCELLING:
-  `|ΔF|` is a signed sum that can sit at its final value while a laggy region still moves (the boundary
-  hasn't propagated there yet); the MAX over regions exposes that region, so it does not certify early
-  where `marginal_inconsistency` and `|ΔF|` do (measured, lossless heavy-hex χ=8: the worst region stays
-  ~6e-2 through the sweep where a local `⟨Z⟩` is still 5e-6 wrong, and only falls to ~1e-10 once that
-  region settles — three sweeps after `marg`/`|ΔF|` had already dropped to 1e-16/1e-14).
+* `:cut` → `crit = max(|ΔF|, _ctm_statedist²)`, the raw-tensor distance between successive C/T blocks
+  (gauge on to make them comparable), squared because `F` is stationary in the state (`|ΔF| ~ sd²`).
+  Correct for `:cut`, which is not a stationary point and so has no vanishing residual to watch instead.
+  `convergence = :worst_region` ADDS the worst-region term on top of this pair (2026-08-21) — the
+  region terms are projector-independent, so the kwarg is honored rather than silently ignored. That
+  also closes a hole: with `gauge = false`, `:cut` previously certified on `|ΔF|` alone (the
+  documented false-certify mode); `:worst_region` gives that configuration a safe, full-coverage
+  signal. ⚠️ Rarely useful for `:cut` otherwise — measured on lossless heavy-hex χ=8, the `:cut`
+  worst-region signal floors at ~8e-6 (statedist ~3e-6) while `⟨Z⟩` is exact to 1e-17, so it warns
+  spuriously; `:cut`'s own pair is already observable-tight. Hence the observable paths inject
+  worst-region only for `:cycle`.
+* `:cycle`, `convergence = :free_energy` (**DEFAULT**) → `crit = |ΔF|` alone. Converging `F` *is* the
+  target when the endpoint is a scalar (lnZ, an overlap, a free energy), and there `|ΔF|` is both
+  correct and tightest: it ignores the gauge / near-null-mode wander a raw state distance sees (that
+  wander spuriously GROWS with χ once χ exceeds the state's rank, though `F` is at machine precision),
+  yet still MOVES on a genuine under-truncation limit cycle. Usually stops in ~2 sweeps. ⚠️ **It is NOT
+  a stationarity certificate.** `F` is a *stationary functional* of the messages, so its value is
+  correct to second order in the message error — it sits at its final value while the messages are
+  still moving. Measured: heavy-hex χ=8, `|ΔF| = 2e-14` from sweep 1 while the worst region is still
+  **2.79** and a local `⟨Z⟩` is 5e-6 wrong until sweep 5; square 4×4 D=2, `|ΔF|` hits machine-zero at
+  sweep 2 while the messages do not settle until sweep 4. So `:free_energy` certifies before a
+  boundary-lagged single-site observable settles.
+* `:cycle`, `convergence = :worst_region` → `crit = max(|ΔF|, worst-region |Δ lnZ_r|)`, the largest
+  change across the Möbius regions `F` already sums (`_ctm_region_terms` returns them in the same pass,
+  so it is FREE — same per-sweep cost as `:free_energy`, it just does not stop as early). This is the
+  faithful **message-stationarity** signal, and it is built from the *same* free-energy pieces as
+  `|ΔF|` — the region terms `lnZ_r`, read BEFORE the ±1 Möbius signs cancel them, rather than after.
+  Two properties earn it. GAUGE INVARIANT: each region is a CLOSED contraction, so the interface gauge
+  `R`/`R⁻¹` cancels inside it (`_ctm_statedist`, by contrast, is not gauge invariant — at a stationary
+  `:cycle` fixed point whose interface basis merely rotates it reports ~1, measured 8×8 single-layer
+  while `marginal_inconsistency` sat at 1e-16, and would reject a converged state forever). NON-
+  CANCELLING: the MAX over regions exposes a laggy region that `|ΔF|` misses (measured heavy-hex χ=8:
+  worst region ~6e-2 through the sweep where `⟨Z⟩` is still 5e-6 wrong, falling to ~1e-10 only once
+  that region settles). Cost: it over-warns on OVER-parametrised states (χ > rank), where the surplus
+  null modes wander and the residual plateaus ~1e-4 though `F` and the observable are converged.
+
+**The observable paths pick `:worst_region` for you — on `:cycle` caches.**
+`expect(::TensorNetworkState; alg = "ctmrg")` and `reduced_density_matrix(...; alg = "ctmrg")` build
+and solve the cache internally; when `ctm_options` selects `projector = :cycle` they default that
+internal solve to `convergence = :worst_region` — an observable read off the ring needs the messages
+actually stationary, not just `F`. `:cut` caches keep their statedist pair, which is already
+observable-tight (and worst-region warns spuriously there, see above). Either choice is overridable
+through `cache_update_kwargs`. Driving `update` yourself keeps the `:free_energy` default.
 
 Rejected alternatives (2026-08-19), each falsified by a cheap test: `marginal_inconsistency` alone
 (the BP message-overlap `1-|⟨M_v,M_e⟩|/‖·‖` — false-earlies via the local lag above, broke the heavy-hex
@@ -271,14 +300,81 @@ diagnostic script wrote stderr to `/dev/null`, hiding the convergence warnings t
 
 ---
 
+## The cycle-spectrum anatomy and the `cycle_gapcut` fix — *2026-08-21*
+
+Instrumenting `_ctm_cycle_projectors` on an interior plaquette (engine-identical construction,
+dense ground-truth spectra) split the `:cycle` pathologies into three distinct diseases:
+
+| case | cycle spectrum | largest cliff | fwd/bwd retained-spectrum mismatch | biorth σmin/σmax |
+|---|---|---|---|---|
+| over-param (TFIM 5×5 nl=3, χ=16) | 4 real modes, then noise at 1e-11 | **1.8e5** at j=4 | **0.44** (kres=14) | 2.8e-2 |
+| deep modes (TFIM 4×4 nl=4, χ=16) | smooth decay to 3.4e-14 | 4.5e2 | 4.3e-5 | **1.0** |
+| under-trunc (random 5×5, χ=8) | smooth, no cliff; cut lands ON a degenerate pair (`\|λ_8\| = \|λ_9\|`) | 27 | 3.4e-13 | 1.7e-2 |
+| healthy (random 5×5, χ=16) | smooth to 7.5e-9 | 1.2e2 | 2.0e-9 | 1.7e-2 |
+
+1. **The over-param wander is retained noise, drawn differently left and right.** The engine kept
+   kres=14 of which 10 were noise, and the two `schursolve`s retained spectral sets differing by
+   44% — in that block `Π = P_A P_B` is not a spectral projector of anything and is redrawn every
+   sweep. **Fixes (both in `_ctm_cycle_projectors`): the always-on left/right spectral-consistency
+   guard** (keep the longest prefix on which the two solves agree to 1e-3; healthy cases measure
+   ≤ 4.3e-5, the failure 0.44) **and the `cycle_gapcut` noise-cliff cut** (truncate below the first
+   cliff that is both steep, ≤ 1e-4×, and tiny, ≤ √eps·|λ₁|). Cliffs separate what magnitudes
+   cannot: junk sits at 1.6e-11·|λ₁| in one case while REAL weight sits at 6.4e-13·|λ₁| in another
+   (why every fixed `cycle_rankcut` failed), but the measured cliff into noise is 1.8e5 against
+   ≤ 4.5e2 anywhere inside a physical decay. A/B (25 sweeps, median of last 10 worst-region
+   residuals): 5×5 nl=3 goes **1.4e-7/7.4e-3 (χ=8/16) → 3.8e-13/2.7e-13** — flat in χ, a genuine
+   fixed point; deep-modes/random cases bit-identical. Cost: the observable absorbs the cut weight
+   (1.4e-14 → 1.7e-11 ≈ |λ₅|/|λ₁| on the over-param case) — the old "cycle-null modes carry vertex
+   weight" lesson, now a controlled trade instead of an uncontrolled wander.
+2. **The under-truncation limit cycle is a forced cluster split.** At χ=8 the cut lands exactly on
+   a degenerate pair — a "dominant invariant subspace" that must split a cluster is ill-defined and
+   re-resolves differently each sweep, so the map has no stable fixed point. `degtol` now applies to
+   the cycle cut with the same back-off semantics as `:cut` (retiring open problem #4's silent
+   no-op), though the fundamental fix remains χ.
+3. **The pipeline is exact when fed a spectrally clean subspace** — the deep-modes case biorth
+   overlap is conditioned at exactly 1.0.
+
+Also derived by hand (recorded so nobody re-derives it): extremising the plaquette trace
+`Z_p = tr(Π₄A₄Π₃A₃Π₂A₂Π₁A₁)` over rank-k oblique projectors forces `range(Π)`/`ker(Π)` to be
+right/left invariant subspaces — the extremals ARE the spectral projectors of the cycle, dominant =
+maximal `|Z_p|`. The construction is sound; every disease above is numerical realisation, not
+formulation.
+
+### FALSIFIED 2026-08-21: "the ket↔bra swap gives the left subspace for free" (one-solve `:cycle`)
+
+The hypothesis was `Mᵀ = S·M·S` on ⟨ψ|ψ⟩ norm networks (`S` = ket↔bra swap on the bond), which
+would make the backward `schursolve` redundant. Probed dense on a 2×2 lattice where all four cycle
+bonds are raw (ket, bra) pairs and `S` is exactly constructible through the engine's own combiners.
+**It fails at O(1)**: `‖Mᵀ − SMS‖/‖M‖` = 0.94 on a complex random state, 0.41 real random (the
+7e-4 on a TFIM-evolved state is only because that cycle is near-identity). The identity that DOES
+hold — to machine precision on every case, per corner and for the cycle — is
+
+```
+conj(M) = S · M · S        (from the CP structure  E = Σ_p A_p ⊗ conj(A_p))
+```
+
+with three verified corollaries: (1) **real norm networks: `[M, S] = 0`** — the cycle commutes with
+the swap, so both solves could in principle be restricted to a swap-parity sector (~2× smaller,
+and it would remove cross-sector degeneracies), at the cost of maintaining swap-covariant kept
+indices recursively; (2) the retained `:LM` invariant subspace is exactly closed under
+`v ↦ S·conj(v)` (worst principal angle cos = 1.000000 on all cases) — the structural origin of the
+systematic double-layer degeneracies `degtol` guards; (3) the same relation holds for `Mᵀ`, so the
+left subspace is equally structured — but left and right stay two independent problems. Do not
+re-attempt one-solve-via-swap; if a one-sided eig is ever justified on physical states it must rest
+on something else (approximate Hermiticity of the environment, not this symmetry).
+
+---
+
 ## Open problems
 
 Ranked by how much they should worry you.
 
 ### 1. `:cycle` under-truncation limit cycle — DIAGNOSED 2026-08-19 (was "does not converge on 8×8")
 
-**Resolution: it is a truncation-insufficiency signal, not a bug, and the worst-region convergence
-metric now detects it.** Reframed 2026-08-19 with the gauge-invariant worst-region `|Δ lnZ_r|`:
+**Resolution: it is a truncation-insufficiency signal, not a bug, and the convergence check now flags
+it** (the `|ΔF|` default fails to certify because `F` genuinely oscillates on the cycle; the
+worst-region signal — the observable-path default — makes the O(1) floor explicit). Reframed
+2026-08-19 with the gauge-invariant worst-region `|Δ lnZ_r|`:
 
 * **Truncation-induced, sharp χ threshold.** Same 6×6 D=2 state, worst-region floor by χ: χ=2→3.5,
   χ=4→1.0, χ=8→1.7, **χ=16→2.2e-8, χ=32→1.6e-8**. Below the lossless χ it limit-cycles at O(1); at/above
@@ -619,7 +715,10 @@ ln⟨ψ|ψ⟩ = -6.217866847854575        ⟨X⟩ at their (2,2) = 0.91690059812
 
 `test/test_ctmenvironment.jl`, testset "Two-projector engine: :cut and :cycle" — option validation,
 exactness at lossless χ on square **and** hex, stationarity, the observable win, no-saturation-in-χ on
-heavy-hex, determinism, and a regression guard on the convergence test.
+heavy-hex, determinism, and a regression guard on the convergence test. The observable-accuracy
+assertions go through the high-level `expect(::TensorNetworkState; alg = "ctmrg")` path on purpose, so
+they exercise its `convergence = :worst_region` default; the stationarity assertions that drive
+`update` directly name `:worst_region` explicitly (the direct-`update` default is `:free_energy`).
 
 The whole file takes ~4–5 minutes. **Do not use it as an inner-loop check** — iterate with a small
 purpose-built script on one lattice and 2–3 χ values, and run the file once before declaring done.
