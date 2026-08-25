@@ -24,6 +24,11 @@ Caches can also be transferred to the GPU:
 
 Significant speedups are seen on NVIDIA GPUs for many operations (BP, BoundaryMPS, Gate Application) at moderate to large bond dimensions. Use `ComplexF32` element types for best GPU performance. We highly recommend CUDA.jl (NVidia GPUs) as speedups are well documented in this case [[Rudolph2025]](index.md#references). Experience using Metal.jl is very limited and so proceed with caution.
 
+Finite CTMRG is currently an exception: it is device-compatible, but its many small projector
+factorizations are not yet batched and are launch-bound at tested χ ≤ 16. See
+[`ctmrg_status.md`](../ctmrg_status.md#gpu-status) and `examples/ctm_gpu_benchmark.jl` before choosing
+a device for CTMRG.
+
 ## Loop Corrections
 
 On loopy graphs, belief propagation provides approximate results. Loop corrections can be used to systematically improve the BP estimate of the norm by accounting for the loops up to size `max_configuration_size` in the graph [[Evenbly2026]](index.md#references):

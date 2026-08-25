@@ -405,6 +405,16 @@ end
         projector = :nonsense)
     @test TNQS.options(CTMEnvironmentCache(
         random_tensornetwork(Float64, named_grid((3, 3)); bond_dimension = 2), 4)).projector === :cut
+    @test_throws ArgumentError CTMEnvironmentCache(
+        random_tensornetwork(Float64, named_grid((2, 2)); bond_dimension = 2), 4;
+        gauge_state = true)
+    let g = named_grid((2, 2)),
+        ψ = random_tensornetworkstate(Float64, g, siteinds("S=1/2", g);
+                                      bond_dimension = 2)
+        gauged = CTMEnvironmentCache(ψ, 4; projector = :cycle, gauge_state = true)
+        @test norm_sqr(TNQS.network(gauged); alg = "exact") ≈
+              norm_sqr(ψ; alg = "exact") rtol = 1.0e-11
+    end
 
     # 1. Both are EXACT at lossless χ, on a square grid and on a sparse (x,y) hex grid. Hex is the
     # gate that matters: it has plaquettes whose four-corner cycle is rank-collapsed by a

@@ -19,6 +19,8 @@ Compute the reduced density matrix on the vertices `verts` of the tensor network
 # Keyword Arguments
 - `alg::Union{String, Nothing}`: The contraction algorithm to use. If not provided, defaults based on the type of `ψ`. Supported algorithms are `"exact"`, `"bp"`, `"boundarymps"` and `"ctmrg"` (single vertex only, requires `maxdim`).
 - `normalize::Bool = true`: Whether to normalize the reduced density matrix so that its trace is 1.
+- Cycle CTMRG RDMs default to `gauge_state = true`, the Vidal/BP symmetric-gauge preconditioner;
+  pass `gauge_state = false` to retain the raw PEPS representation.
 - `kwargs...`: Additional keyword arguments specific to the chosen algorithm.
 
 # Returns
@@ -98,16 +100,18 @@ function reduced_density_matrix(
         maxdim::Integer,
         cache_update_kwargs = (;),
         ctm_options = (;),          # `CTMOptions` fields, e.g. `(degtol = 1e-9,)`
+        gauge_state::Bool = get(ctm_options, :projector, :cut) === :cycle,
         kwargs...,
     )
     # Like `expect`, an RDM read off the ring needs the messages stationary, not just F converged,
-    # so default a `:cycle` solve to `convergence = :worst_region` (`:cut`'s statedist pair is
+    # so default a `:cycle` solve to `convergence = :environment` (`:cut`'s statedist pair is
     # already observable-tight, and worst-region over-warns there; overridable through
     # `cache_update_kwargs`). See `expect(::Algorithm"ctmrg", ::TensorNetworkState, ...)`.
     if get(ctm_options, :projector, :cut) === :cycle
-        cache_update_kwargs = merge((; convergence = :worst_region), cache_update_kwargs)
+        cache_update_kwargs = merge((; convergence = :environment), cache_update_kwargs)
     end
-    cache = update(CTMEnvironmentCache(ψ, maxdim; ctm_options...); cache_update_kwargs...)
+    cache = update(CTMEnvironmentCache(ψ, maxdim; gauge_state, ctm_options...);
+                   cache_update_kwargs...)
     return reduced_density_matrix(alg, cache, verts; kwargs...)
 end
 

@@ -1,7 +1,7 @@
 # Head-to-head against the collaborator's finite CTMRG on their own 5x5 Ising PEPS.
 #
-# Needs `peps5x5.bin`, produced by the companion exporter:
-#     python3 examples/export_ising5x5.py
+# Needs `peps5x5.bin`, produced with `python examples/export_peps.py 5x5`.
+#     python examples/export_peps.py 5x5
 # (override the location with the CTM_ISING5X5_DIR environment variable). Compares the CUT projector
 # against the CYCLE projector
 # (`projector = :cut` vs `:cycle`) on `ln<psi|psi>` and on a single-site <X>.
@@ -37,7 +37,7 @@ rawshape(x, y) = (2, x == 1 ? 1 : 3, x == NX ? 1 : 3, y == 1 ? 1 : 3, y == NY ? 
 function load_peps()
     isfile(BIN) || error("""
         missing $BIN -- generate it with:
-            python3 $(joinpath(@__DIR__, "export_ising5x5.py"))
+            python $(joinpath(@__DIR__, "export_peps.py")) 5x5
         or point CTM_ISING5X5_DIR at the directory holding peps5x5.bin.""")
     data = open(BIN, "r") do f
         read!(f, Vector{Float64}(undef, filesize(BIN) ÷ 8))
@@ -120,4 +120,4 @@ function main()
     end
 end
 
-main()
+abspath(PROGRAM_FILE) == (@__FILE__) && main()

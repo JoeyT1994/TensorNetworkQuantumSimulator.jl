@@ -48,10 +48,12 @@ Compute the expectation value of one or more observables on a tensor network sta
     - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
     - `"ctmrg"`: Finite CTMRG / CVM environments (requires `maxdim`; single-site observables only).
       When given a `TensorNetworkState` with `ctm_options = (; projector = :cycle)`, the internal
-      `update` defaults to `convergence = :worst_region` so the observable is read off stationary
+      `update` defaults to `convergence = :environment` so the observable is read off a converged
       messages (the free energy alone converges a few sweeps sooner); override with
       `cache_update_kwargs = (; convergence = :free_energy)`. `:cut` keeps its own
-      observable-tight criterion.
+      observable-tight criterion. Cycle observables also default to `gauge_state = true`, applying
+      the Vidal/BP symmetric-gauge preconditioner once; pass `gauge_state = false` to benchmark the
+      raw input representation.
 - `cache_update_kwargs...`: Keyword arguments passed to the `update` function when using `"bp"` or `"boundarymps"` algorithms.
 
 # Returns
@@ -195,18 +197,20 @@ function expect(
         maxdim::Integer,
         cache_update_kwargs = (;),
         ctm_options = (;),          # `CTMOptions` fields, e.g. `(degtol = 1e-9,)`
+        gauge_state::Bool = get(ctm_options, :projector, :cut) === :cycle,
         kwargs...,
     )
     # Observables need the messages actually stationary. For `:cycle` that is
-    # `convergence = :worst_region`: `update`'s `:free_energy` default stops once F settles, and F
+    # `convergence = :environment`: `update`'s `:free_energy` default stops once F settles, and F
     # settles a few sweeps BEFORE a boundary-lagged single-site observable does (see `update`). For
     # `:cut` the default statedist pair is already observable-tight, and the worst-region signal
     # over-warns there (measured: lossless heavy-hex `:cut` floors at ~8e-6 while `⟨Z⟩` is exact to
     # 1e-17) — so inject only for `:cycle`. Overridable either way through `cache_update_kwargs`.
     if get(ctm_options, :projector, :cut) === :cycle
-        cache_update_kwargs = merge((; convergence = :worst_region), cache_update_kwargs)
+        cache_update_kwargs = merge((; convergence = :environment), cache_update_kwargs)
     end
-    cache = update(CTMEnvironmentCache(ψ, maxdim; ctm_options...); cache_update_kwargs...)
+    cache = update(CTMEnvironmentCache(ψ, maxdim; gauge_state, ctm_options...);
+                   cache_update_kwargs...)
     return expect(alg, cache, observable; kwargs...)
 end
 
