@@ -23,8 +23,8 @@ paths. The gate/operator library covers S=1/2 with the gate registry's conventio
 module KTensors
 
 using LinearAlgebra: LinearAlgebra, Hermitian, Diagonal, norm, mul!, diag, rmul!, BlasFloat
-using MatrixAlgebraKit: MatrixAlgebraKit, qr_compact, svd_compact, svd_trunc, eigh_full,
-    truncrank, truncerror
+using MatrixAlgebraKit: MatrixAlgebraKit, qr_compact, qr_compact!, svd_compact, svd_trunc,
+    eigh_full, truncrank, truncerror
 using TensorOperations: TensorOperations, ncon
 using Adapt: Adapt, adapt
 using ..TensorInterface: TensorInterface
@@ -337,9 +337,8 @@ function LinearAlgebra.qr(t::KTensor, linds; kwargs...)
     return Qt, Rt
 end
 
-function _svd_split(t::KTensor, linds::Vector{KIndex}; maxdim = nothing, cutoff = nothing, mindim = 1)
-    mindim > 1 && error("_svd_split: mindim > 1 is not supported by the KTensors backend yet")
-    A, li, ri = _matricize(t, linds)
+# Matrix-level truncated SVD with the ITensors truncerr convention (discarded Σs²/total).
+function _svd_matrix(A::AbstractMatrix; maxdim = nothing, cutoff = nothing)
     trunc = _mak_trunc(; maxdim, cutoff)
     if trunc === nothing
         U, S, Vt = svd_compact(A)
@@ -351,7 +350,14 @@ function _svd_split(t::KTensor, linds::Vector{KIndex}; maxdim = nothing, cutoff 
         total = kept2 + err^2
         truncerr = total > 0 ? err^2 / total : 0.0
     end
-    return U, diag(S), Vt, li, ri, truncerr
+    return U, diag(S), Vt, truncerr
+end
+
+function _svd_split(t::KTensor, linds::Vector{KIndex}; maxdim = nothing, cutoff = nothing, mindim = 1)
+    mindim > 1 && error("_svd_split: mindim > 1 is not supported by the KTensors backend yet")
+    A, li, ri = _matricize(t, linds)
+    U, S, Vt, truncerr = _svd_matrix(A; maxdim, cutoff)
+    return U, S, Vt, li, ri, truncerr
 end
 
 """
@@ -530,6 +536,114 @@ function fused_norm_message(
         iszero(s) || rmul!(vec(out), inv(s))
     end
     return KTensor(oinds, out)
+end
+
+# ── Fused two-site simple-update gate kernel ────────────────────────────────────────────
+#
+# The BP-gauged simple update with the same buffer discipline as the message kernel:
+# √env absorption, the matricize copies, Q factors and the de-gauging chain all live in the
+# task-local buffer; `dag` of the inverse-√ environments is fused as a conj flag. Only the
+# two updated site tensors and the singular-value tensor escape to the heap.
+
+# Buffered permute+reshape to a (linds × rest) matrix. Returns (matrix, linds, rinds).
+function _matricize_temp(da, ia::Vector{KIndex}, linds::Vector{KIndex}, buf)
+    rinds = filter(i -> i ∉ linds, ia)
+    perm = map(i -> findfirst(==(i), ia), vcat(linds, rinds))
+    T = eltype(da)
+    dims = ntuple(k -> size(da, perm[k]), ndims(da))
+    C = TensorOperations.tensoralloc(Array{T, ndims(da)}, dims, Val(true), buf)
+    TensorOperations.tensoradd!(C, da, (Tuple(perm), ()), false, one(T), zero(T))
+    dl = prod(Int[i.d for i in linds]; init = 1)
+    return reshape(C, dl, :), linds, rinds
+end
+
+# Buffered thin QR; destroys Amat (which is itself a buffer temp).
+function _qr_temp(Amat::AbstractMatrix, buf)
+    m, n = size(Amat)
+    k = min(m, n)
+    T = eltype(Amat)
+    Q = TensorOperations.tensoralloc(Matrix{T}, (m, k), Val(true), buf)
+    R = TensorOperations.tensoralloc(Matrix{T}, (k, n), Val(true), buf)
+    qr_compact!(Amat, (Q, R))
+    return Q, R
+end
+
+# Absorb a chain of 2-index gauge tensors into (X, ix) as buffer temps; conjB fuses dag.
+function _absorb_chain(X, ix::Vector{KIndex}, ms::Vector{<:KTensor}, conjB::Bool, buf)
+    for m in ms
+        X, oa, ob = _tc_pair(X, ix, m.data, m.inds, conjB, identity, Val(true), buf)
+        ix = vcat(oa, ob)
+    end
+    return X, ix
+end
+
+function fused_two_site_gate(
+        o::KTensor, ψ1::KTensor, ψ2::KTensor,
+        sqrt1::Vector{<:KTensor}, inv1::Vector{<:KTensor},
+        sqrt2::Vector{<:KTensor}, inv2::Vector{<:KTensor},
+        s1::Vector{KIndex}, s2::Vector{KIndex};
+        maxdim = nothing, cutoff = nothing,
+    )
+    buf = _bp_buffer()
+    cp = TensorOperations.allocator_checkpoint!(buf)
+
+    # Gauge: X_k = ψ_k · ∏ √env (buffer temps)
+    X1, ix1 = _absorb_chain(ψ1.data, ψ1.inds, sqrt1, false, buf)
+    X2, ix2 = _absorb_chain(ψ2.data, ψ2.inds, sqrt2, false, buf)
+
+    # QR split: Q side = gauged environment legs (not shared with partner, not gate sites)
+    ql1 = filter(i -> i ∉ ψ2.inds && i ∉ s1, ix1)
+    ql2 = filter(i -> i ∉ ψ1.inds && i ∉ s2, ix2)
+    A1, l1, r1 = _matricize_temp(X1, ix1, ql1, buf)
+    A2, l2, r2 = _matricize_temp(X2, ix2, ql2, buf)
+    Q1m, R1m = _qr_temp(A1, buf)
+    Q2m, R2m = _qr_temp(A2, buf)
+    b1 = KIndex(size(Q1m, 2), "Link,qr")
+    b2 = KIndex(size(Q2m, 2), "Link,qr")
+    iR1 = vcat([b1], r1)
+    iR2 = vcat([b2], r2)
+    R1 = reshape(R1m, (b1.d, Int[i.d for i in r1]...))
+    R2 = reshape(R2m, (b2.d, Int[i.d for i in r2]...))
+
+    # oR = noprime(o · (R1 · R2)) — small, buffer temps
+    RR, oa, ob = _tc_pair(R1, iR1, R2, iR2, false, identity, Val(true), buf)
+    iRR = vcat(oa, ob)
+    oR, oa, ob = _tc_pair(RR, iRR, o.data, o.inds, false, identity, Val(true), buf)
+    ioR = map(vcat(oa, ob)) do i
+        i.plev == 1 && (TensorInterface.noprime(i) ∈ s1 || TensorInterface.noprime(i) ∈ s2) ?
+            TensorInterface.noprime(i) : i
+    end
+
+    # SVD across the (b1, s1) | (b2, s2) cut
+    AoR, lo, ro = _matricize_temp(oR, ioR, vcat([b1], s1), buf)
+    U, S, Vt, truncerr = _svd_matrix(AoR; maxdim, cutoff)
+    k = length(S)
+    u = KIndex(k, "Link,u")
+    v = KIndex(k, "Link,v")
+    up = TensorInterface.prime(u)
+    TS = promote_type(eltype(U), eltype(S))
+    sq = sqrt.(S)
+    F1 = reshape(U .* reshape(TS.(sq), 1, k), (Int[i.d for i in lo]..., k))
+    F2 = reshape(reshape(TS.(sq), k, 1) .* Vt, (k, Int[i.d for i in ro]...))
+    iF1 = vcat(lo, [up])
+    iF2 = vcat([up], ro)
+
+    # De-gauge: Y_k = Q_k · ∏ conj(inv-√env), the dag fused as a conj flag
+    iQ1 = vcat(l1, [b1])
+    iQ2 = vcat(l2, [b2])
+    Y1, iy1 = _absorb_chain(reshape(Q1m, (Int[i.d for i in l1]..., b1.d)), iQ1, inv1, true, buf)
+    Y2, iy2 = _absorb_chain(reshape(Q2m, (Int[i.d for i in l2]..., b2.d)), iQ2, inv2, true, buf)
+
+    # Reassemble; these two escape to the heap
+    T1, oa, ob = _tc_pair(Y1, iy1, F1, iF1, false, identity, Val(false), buf)
+    iT1 = vcat(oa, ob)
+    T2, oa, ob = _tc_pair(Y2, iy2, F2, iF2, false, identity, Val(false), buf)
+    iT2 = vcat(oa, ob)
+
+    s_values = KTensor(KIndex[u, v], Matrix(Diagonal(S)))
+    TensorOperations.allocator_reset!(buf, cp)
+
+    return KTensor(iT1, T1), KTensor(iT2, T2), s_values, truncerr
 end
 
 # ── S=1/2 operator & state library (conventions pinned against ITensors) ────────────────

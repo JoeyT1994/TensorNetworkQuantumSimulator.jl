@@ -18,6 +18,44 @@ Simple update of one or two local tensors in the presence of factorized environm
 - `s_values::Union{Nothing, ITensor}`: The singular values from the SVD (if applicable).
 - `err::Number`: The truncation error from the SVD (if applicable).
 """
+#Backend-specialized fast path for the two-site gate. Returns `nothing` when no
+#specialization applies and the generic path below should run.
+fused_simple_update(o, ψ⃗; kwargs...) = nothing
+
+function fused_simple_update(
+        o::KTensor, ψ⃗::Vector{<:KTensor};
+        envs, normalize_tensors = true, sqrt_cutoff = nothing, apply_kwargs...
+    )
+    length(ψ⃗) == 2 || return nothing
+    isempty(envs) && return nothing
+    all(env -> env isa KTensor && ndims(env) == 2, envs) || return nothing
+    isempty(setdiff(keys(apply_kwargs), (:maxdim, :cutoff))) || return nothing
+
+    sqrt_cutoff = isnothing(sqrt_cutoff) ? 10 * eps(real(scalartype(first(envs)))) : sqrt_cutoff
+    envs_v1 = filter(env -> hascommoninds(env, ψ⃗[1]), envs)
+    envs_v2 = filter(env -> hascommoninds(env, ψ⃗[2]), envs)
+    ssi1 = pseudo_sqrt_inv_sqrt.(envs_v1; cutoff = sqrt_cutoff)
+    ssi2 = pseudo_sqrt_inv_sqrt.(envs_v2; cutoff = sqrt_cutoff)
+    s1 = collect(KIndex, commoninds(ψ⃗[1], o))
+    s2 = collect(KIndex, commoninds(ψ⃗[2], o))
+
+    t1, t2, s_values, err = KTensors.fused_two_site_gate(
+        o, ψ⃗[1], ψ⃗[2],
+        collect(KTensor, first.(ssi1)), collect(KTensor, last.(ssi1)),
+        collect(KTensor, first.(ssi2)), collect(KTensor, last.(ssi2)),
+        s1, s2; apply_kwargs...
+    )
+    updated_tensors = [t1, t2]
+
+    if normalize_tensors
+        s_values = normalize(s_values)
+        for ψᵥ in updated_tensors
+            rmul!(data(ψᵥ), inv(norm(ψᵥ)))
+        end
+    end
+    return noprime.(updated_tensors), s_values, err
+end
+
 function simple_update(
         o, ψ⃗::Vector;
         envs, normalize_tensors = true, sqrt_cutoff = nothing, apply_kwargs...
@@ -27,6 +65,8 @@ function simple_update(
         updated_tensors = [apply(o, only(ψ⃗))]
         s_values, err = nothing, 0
     else
+        fast = fused_simple_update(o, ψ⃗; envs, normalize_tensors, sqrt_cutoff, apply_kwargs...)
+        fast !== nothing && return fast
         # When envs is empty no gauging happens and the cutoff is unused, so fall back to
         # the scalartype of the local tensors to materialize a valid default without erroring.
         sqrt_cutoff_ref = isempty(envs) ? first(ψ⃗) : first(envs)
