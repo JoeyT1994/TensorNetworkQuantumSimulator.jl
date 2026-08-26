@@ -1,24 +1,26 @@
 #=
-KTensors: the TensorKit-stack tensor backend, behind the TensorInterface seam.
+KTensors: the tensor engine — named-index tensors over dense arrays.
 
-A `KTensor` is a named-index tensor: a dense N-d array plus a vector of `KIndex` labels.
-Index identity (id, plev) — not position — drives contraction, exactly like the ITensor
-semantics the library is written against. Contraction is executed by TensorOperations
-(the engine underneath TensorKit) with dynamically generated labels; factorizations are
-LAPACK via LinearAlgebra, matching the ITensors conventions pinned down empirically
-(see examples/benchmark_bp_square.jl's agreement digest and test/test_ktensors.jl).
+A `KTensor` is a dense N-d array plus a vector of `KIndex` labels. Index identity
+(id, plev) — not position — drives contraction. Contraction is executed by
+TensorOperations with dynamically generated labels; factorizations run through
+MatrixAlgebraKit (which also supplies the in-place variants and the CUSOLVER/ROCSOLVER
+algorithm selection for a future GPU story). The hot paths — the double-layer BP message
+update, the two-site simple-update gate, and BP expectation-value closures — run as fused
+kernels: conjugation is folded into the BLAS calls (no materialized `dag`), and all chain
+intermediates live in a task-local, reusable BufferAllocator so that only results touch
+the heap. They attach to the generic algorithms through the hooks in
+src/kernel_hooks.jl and fall back to the plain seam-verb path whenever a network's
+structure doesn't match.
 
-Versioning plan (deliberate, incremental):
-  v1 (this file): dense `Array` data. Proves the seam, matches ITensors numerics, and
-      gives TensorOperations' allocator hooks for the later allocation work.
-  v2: `data` becomes a TensorKit `TensorMap` over graded spaces — `KIndex.dual` is already
-      maintained by `dag` so bond orientations are in place; symmetric/fermionic sectors
-      enter through the space type without touching the seam or call sites.
-  v3: workspace-reusing kernels for the BP message update (target ≤ 2F + out) and
-      MatrixAlgebraKit in-place factorizations.
+The operator/state library is a runtime registry (`register_op!`) covering S=1/2 gates in
+the first-index-fastest matrix convention; conventions were validated against the
+historical ITensors implementation, which survives as a test-only cross-check
+(test/test_ktensors.jl).
 
-Not yet implemented (error clearly if hit): combiner, directsum, boundary-MPS specific
-paths. The gate/operator library covers S=1/2 with the gate registry's conventions.
+Next increment: graded/symmetric data (TensorKit `TensorMap`) behind these same types —
+`KIndex.dual` is already maintained by `dag` so bond orientations are in place, and
+sectors enter through the space type without touching the seam or call sites.
 =#
 module KTensors
 
@@ -101,10 +103,6 @@ function TensorInterface.inds(t::KTensor; plev = nothing)
 end
 TensorInterface.scalartype(::KTensor{T}) where {T} = T
 TensorInterface.datatype(::KTensor{T, N, A}) where {T, N, A <: Array} = Vector{T}
-TensorInterface.hasqns(::KTensor) = false
-TensorInterface.hasqns(::KIndex) = false
-TensorInterface.dense(t::KTensor) = t
-TensorInterface.denseblocks(t::KTensor) = t
 TensorInterface.array(t::KTensor) = t.data
 TensorInterface.data(t::KTensor) = vec(t.data)
 TensorInterface.new_index(t::KTensor, d::Integer; tags = "") = KIndex(d, tags)
@@ -169,9 +167,8 @@ TensorInterface.replaceinds(t::KTensor, p::Pair) = TensorInterface.replaceinds(t
 
 # ── Construction ────────────────────────────────────────────────────────────────────────
 
-TensorInterface.from_array(A::AbstractArray, is::KIndex...) = KTensor(collect(KIndex, is), reshape(complex_or_real_copy(A), TensorInterface.dim.(is)...))
+TensorInterface.from_array(A::AbstractArray, is::KIndex...) = KTensor(collect(KIndex, is), reshape(copy(A), TensorInterface.dim.(is)...))
 TensorInterface.from_array(A::AbstractVector, i::KIndex) = KTensor(KIndex[i], copy(A))
-complex_or_real_copy(A) = copy(A)
 
 TensorInterface.random_itensor(elt::Type, is::AbstractVector{KIndex}) = KTensor(collect(is), randn(elt, TensorInterface.dim.(is)...))
 TensorInterface.random_itensor(elt::Type, is::KIndex...) = TensorInterface.random_itensor(elt, collect(is))

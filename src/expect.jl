@@ -4,7 +4,6 @@ function expect(
         observables::Vector{<:Tuple};
         contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod())
     )
-    disable_warn_order()
 
     denom = norm_sqr(alg, ψ; contraction_sequence_kwargs)
     out = Number[]

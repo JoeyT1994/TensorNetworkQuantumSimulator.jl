@@ -38,11 +38,6 @@ function apply_gates(
     return _apply_gate_tensors(itensors, ψ_bpc; gate_vertices, kwargs...)
 end
 
-#Direct entry point for circuits already given as backend tensors
-function apply_gates(circuit::Vector{<:KTensor}, ψ_bpc::BeliefPropagationCache; kwargs...)
-    return _apply_gate_tensors(circuit, ψ_bpc; kwargs...)
-end
-
 function adapt_gate(gate, ψ_bpc::BeliefPropagationCache)
     gate = scalartype(gate) <: Complex ? adapt(complex(scalartype(ψ_bpc)), gate) : adapt(scalartype(ψ_bpc), gate)
     return adapt(unspecify_type_parameters(datatype(ψ_bpc)), gate)
@@ -135,7 +130,7 @@ function apply_gate!(
         δuv = dag(copy(s_values))
         δuv = replaceind(δuv, ind2, ind2')
         map_diag!(sign, δuv, δuv)
-        s_values = denseblocks(s_values) * denseblocks(δuv)
+        s_values = s_values * δuv
         setmessage!(ψ_bpc, e, dag(s_values))
         setmessage!(ψ_bpc, reverse(e), s_values)
     end

@@ -190,7 +190,7 @@ function set_interpartition_messages!(
             virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
             m1, m2 = message(bmps_cache, es[i]), message(bmps_cache, es[i + 1])
             ind = new_index(m1, virt_dim; tags = "m$(i)$(i + 1)")
-            t = adapt_like(m1, dense(delta(ind)))
+            t = adapt_like(m1, delta(ind))
             setmessage!(bmps_cache, es[i], m1 * t)
             setmessage!(bmps_cache, es[i + 1], m2 * t)
         end

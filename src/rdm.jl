@@ -22,7 +22,7 @@ Compute the reduced density matrix on the vertices `verts` of the tensor network
 - `kwargs...`: Additional keyword arguments specific to the chosen algorithm.
 
 # Returns
-- An `ITensor` representing the reduced density matrix on the specified vertices.
+- A tensor representing the reduced density matrix on the specified vertices.
 """
 function reduced_density_matrix(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, verts; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "rdm", alg)
@@ -37,7 +37,6 @@ function reduced_density_matrix(
         contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod()),
         normalize = true
     )
-    disable_warn_order()
     op_string_f = v -> v ∈ verts ? "ρ" : "I"
     ρ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
     seq = contraction_sequence(ρ_tensors; contraction_sequence_kwargs...)

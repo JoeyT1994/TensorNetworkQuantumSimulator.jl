@@ -45,12 +45,12 @@ using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_grap
 # extends with its own methods.
 using .TensorInterface: Algorithm, @Algorithm_str
 using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, noncommoninds,
-    hascommoninds, dim, plev, tags, hasqns,
+    hascommoninds, dim, plev, tags,
     dag, prime, noprime, sim, replaceind, replaceinds,
-    onehot, delta, dense, denseblocks, combiner, combinedind, random_itensor, directsum,
+    onehot, delta, combiner, combinedind, random_itensor, directsum,
     op, state,
     scalar, apply, map_diag, map_diag!, factorize_svd,
-    array, data, disable_warn_order, new_index, from_array
+    array, data, new_index, from_array
 import .TensorInterface: contract, truncate, inner, uniqueinds, datatype, scalartype
 using .KTensors: KTensors, KIndex, KTensor, register_op!
 

@@ -35,6 +35,7 @@ include("symmetric_gauge.jl")
 include("entanglement.jl")
 include("truncate.jl")
 include("rdm.jl")
+include("kernel_hooks.jl")
 
 
 export

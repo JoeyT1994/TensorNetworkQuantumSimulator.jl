@@ -34,15 +34,15 @@ function matricize(a, row_inds = filter(i -> plev(i) ==0, inds(a)))
 end
 
 """
-    renyi_entropy(a::ITensor, row_inds = ...; normalize = true, α = 1)
+    renyi_entropy(a, row_inds = ...; normalize = true, α = 1)
 
-Compute the Rényi entropy of order `α` of a density matrix represented as an `ITensor`.
+Compute the Rényi entropy of order `α` of a density matrix represented as a tensor.
 
 The tensor `a` is interpreted as a density matrix where unprimed indices are row indices
 and primed indices are column indices.
 
 # Arguments
-- `a`: Density matrix as an `ITensor`.
+- `a`: Density matrix as a tensor.
 - `row_inds`: The row (ket) indices. Defaults to all unprimed indices of `a`.
 
 # Keyword Arguments

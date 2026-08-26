@@ -26,11 +26,11 @@ What a backend must implement, by group:
 
   Index construction : new_index(ref, dim; tags), sim, dag, prime, noprime
   Index queries      : inds, dim, plev, tags, commonind(s), uniqueinds, unioninds,
-                       noncommonind(s), hascommoninds, hasqns
+                       noncommonind(s), hascommoninds
   Index replacement  : replaceind(s) (relabeling, no data movement)
-  Construction       : from_array, random_itensor, onehot, delta, dense, denseblocks,
-                       combiner (+ combinedind), directsum,
-                       op(name::String, siteinds...), state(name::String, siteind)
+  Construction       : from_array, random_itensor, onehot, delta, combiner (+
+                       combinedind), directsum, op(name::String, siteinds...),
+                       state(name::String, siteind)
   Contraction        : contract(ts::Vector; sequence), Base.:*, scalar, apply
   Diagonal ops       : map_diag, map_diag!
   Factorizations     : the LinearAlgebra generics of rule 3, factorize_svd
@@ -68,11 +68,11 @@ end
 for f in [
         # index queries
         :inds, :commonind, :commoninds, :uniqueinds, :unioninds, :noncommonind,
-        :noncommoninds, :hascommoninds, :dim, :plev, :tags, :hasqns,
+        :noncommoninds, :hascommoninds, :dim, :plev, :tags,
         # index/tensor transforms
         :dag, :prime, :noprime, :sim, :replaceind, :replaceinds,
         # construction
-        :onehot, :delta, :dense, :denseblocks, :combiner, :combinedind, :random_itensor,
+        :onehot, :delta, :combiner, :combinedind, :random_itensor,
         :directsum, :op, :state, :new_index, :from_array,
         # contraction / evaluation
         :contract, :scalar, :apply, :inner,
@@ -97,9 +97,6 @@ scalartype(x) = scalartype(typeof(x))
 scalartype(T::Type{<:Number}) = T
 scalartype(::Type{<:AbstractArray{T}}) where {T} = T
 datatype(A::AbstractArray) = typeof(A)
-
-# Dense backends have no index-ordering warnings to disable; kept as a no-op for callers.
-disable_warn_order() = nothing
 
 export Algorithm, @Algorithm_str
 

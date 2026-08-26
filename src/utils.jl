@@ -39,7 +39,7 @@ adapt_like(ref, t) = adapt(datatype(ref))(t)
 
 function identity_tensor(eltype, row_inds::Vector, col_inds::Vector)
     c_row, c_col = combiner(row_inds),combiner(col_inds)
-    t= denseblocks(delta(eltype, combinedind(c_row), combinedind(c_col)))
+    t = delta(eltype, combinedind(c_row), combinedind(c_col))
     return (t * c_row)*c_col
 end
 
