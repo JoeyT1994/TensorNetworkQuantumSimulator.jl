@@ -22,7 +22,9 @@ paths. The gate/operator library covers S=1/2 with the gate registry's conventio
 =#
 module KTensors
 
-using LinearAlgebra: LinearAlgebra, Hermitian, Diagonal, norm, svd, qr, eigen, mul!
+using LinearAlgebra: LinearAlgebra, Hermitian, Diagonal, norm, mul!, diag
+using MatrixAlgebraKit: MatrixAlgebraKit, qr_compact, svd_compact, svd_trunc, eigh_full,
+    truncrank, truncerror
 using TensorOperations: TensorOperations, ncon
 using Adapt: Adapt, adapt
 using ..TensorInterface: TensorInterface
@@ -298,7 +300,7 @@ function Adapt.adapt_structure(to::Type{<:AbstractVector}, t::KTensor)
 end
 Adapt.adapt_structure(to, t::KTensor) = KTensor(copy(t.inds), adapt(to, t.data))
 
-# ── Factorizations (LAPACK now; MatrixAlgebraKit in-place variants are the v3 target) ───
+# ── Factorizations (MatrixAlgebraKit; in-place/preallocated variants are the v3 target) ─
 
 struct KSpectrum
     eigs::Vector{Float64}
@@ -316,32 +318,19 @@ function _matricize(t::KTensor, linds::Vector{KIndex})
     return reshape(A, dl, dr), linds, rinds
 end
 
-# ITensors-convention truncation: keep the largest k singular values such that the
-# discarded Σs² fraction is ≤ cutoff, capped by maxdim. Returns (k, truncerr).
-function _truncdim(S::Vector{<:Real}; maxdim = nothing, cutoff = nothing, mindim = 1)
-    s2 = abs2.(S)
-    total = sum(s2)
-    n = length(S)
-    k = isnothing(maxdim) ? n : min(n, Int(maxdim))
-    if !isnothing(cutoff) && total > 0
-        discarded = 0.0
-        while k > max(mindim, 1)
-            discarded_next = discarded + s2[k]
-            (discarded_next / total) > cutoff && break
-            discarded = discarded_next
-            k -= 1
-        end
-    end
-    k = max(k, min(mindim, n), 1)
-    truncerr = total > 0 ? sum(@view s2[(k + 1):n]) / total : 0.0
-    return k, truncerr
+# ITensors-convention truncation as a MatrixAlgebraKit strategy: keep the smallest set of
+# singular values whose discarded Σs² fraction is ≤ cutoff (⇔ 2-norm rtol = √cutoff),
+# capped at maxdim. `nothing` means no constraint.
+function _mak_trunc(; maxdim = nothing, cutoff = nothing)
+    strategies = Any[]
+    isnothing(maxdim) || push!(strategies, truncrank(Int(maxdim)))
+    isnothing(cutoff) || push!(strategies, truncerror(; rtol = sqrt(cutoff), p = 2))
+    return isempty(strategies) ? nothing : reduce(&, strategies)
 end
 
 function LinearAlgebra.qr(t::KTensor, linds; kwargs...)
     A, li, ri = _matricize(t, _indvec(linds))
-    F = qr(A)
-    Q = Matrix(F.Q)
-    R = Matrix(F.R)
+    Q, R = qr_compact(A)
     b = KIndex(size(Q, 2), "Link,qr")
     Qt = KTensor(vcat(li, [b]), reshape(Q, (Int[i.d for i in li]..., size(Q, 2))))
     Rt = KTensor(vcat([b], ri), reshape(R, (size(R, 1), Int[i.d for i in ri]...)))
@@ -349,13 +338,20 @@ function LinearAlgebra.qr(t::KTensor, linds; kwargs...)
 end
 
 function _svd_split(t::KTensor, linds::Vector{KIndex}; maxdim = nothing, cutoff = nothing, mindim = 1)
+    mindim > 1 && error("_svd_split: mindim > 1 is not supported by the KTensors backend yet")
     A, li, ri = _matricize(t, linds)
-    F = svd(A)
-    k, truncerr = _truncdim(F.S; maxdim, cutoff, mindim)
-    U = F.U[:, 1:k]
-    S = F.S[1:k]
-    Vt = F.Vt[1:k, :]
-    return U, S, Vt, li, ri, truncerr
+    trunc = _mak_trunc(; maxdim, cutoff)
+    if trunc === nothing
+        U, S, Vt = svd_compact(A)
+        truncerr = 0.0
+    else
+        U, S, Vt, err = svd_trunc(A; trunc)
+        # MAK reports ‖discarded‖₂; the ITensors convention is discarded Σs² / total Σs².
+        kept2 = sum(abs2, diag(S))
+        total = kept2 + err^2
+        truncerr = total > 0 ? err^2 / total : 0.0
+    end
+    return U, diag(S), Vt, li, ri, truncerr
 end
 
 """
@@ -439,7 +435,8 @@ function LinearAlgebra.eigen(t::KTensor, linds, rinds; ishermitian::Bool = false
     lv, rv = _indvec(linds), _indvec(rinds)
     A, li, ri = _matricize(t, lv)
     ri == rv || error("eigen: rinds don't match the remaining indices")
-    vals, vecs = eigen(Hermitian((A + A') / 2))
+    D, vecs = eigh_full((A + A') / 2)
+    vals = diag(D)
     k = length(vals)
     lk = KIndex(k, "Link,eigen")
     D = KTensor(KIndex[TensorInterface.prime(lk), lk], Matrix(Diagonal(vals)))
