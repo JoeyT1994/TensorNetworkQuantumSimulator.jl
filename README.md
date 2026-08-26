@@ -2,7 +2,7 @@
 
 [![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/)
 
-A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks (TNs) of near-arbitrary geometry. Built on top of [ITensors](https://github.com/ITensor/ITensors.jl) and [NamedGraphs](https://github.com/ITensor/NamedGraphs.jl).
+A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks (TNs) of near-arbitrary geometry. Built on top of [ITensorBase](https://github.com/ITensor/ITensorBase.jl) and [NamedGraphs](https://github.com/ITensor/NamedGraphs.jl).
 
 The main workhorses of the simulation are _belief propagation_ (BP) and the _singular value decomposition_ for applying gates, and _BP_ or _boundary MPS_ for estimating expectation values and sampling.
 
