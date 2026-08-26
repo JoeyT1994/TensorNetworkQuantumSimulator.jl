@@ -4,11 +4,11 @@ function sample(
         alg::Algorithm"bp",
         ψ::TensorNetworkState,
         nsamples::Integer;
-        bp_update_kwargs = (;),
+        bp_update_kwargs = default_bp_update_kwargs(ψ),
         gauge_state = true,
         kwargs...,
     )
-    bp_cache = update(BeliefPropagationCache(ψ); bp_update_kwargs...)
+    bp_cache = converged_cache(alg, ψ; cache_update_kwargs = bp_update_kwargs)
     if gauge_state
         bp_cache = symmetrize_and_normalize(bp_cache)
     end
@@ -130,7 +130,7 @@ Draw `nsamples` bitstrings from a 2D open-boundary tensor network state. Samples
     - `bitstring`: The sampled bitstring as a dictionary mapping each vertex to a configuration (0...d-1).
 """
 function sample_directly_certified(ψ::TensorNetworkState, nsamples::Integer; projected_mps_bond_dimension = 5 * maxvirtualdim(ψ), alg = nothing, kwargs...)
-    algorithm_check(ψ, "sample", alg)
+    algorithm_check(ψ, "sample_certified", alg)
     probs_and_bitstrings, _ = sample(Algorithm(alg), ψ, nsamples; projected_mps_bond_dimension, kwargs...)
     # returns the self-certified p/q, logq and bitstrings
     return probs_and_bitstrings
@@ -162,7 +162,7 @@ Draw `nsamples` bitstrings from a 2D open-boundary tensor network state. Samples
     - `bitstring`: The sampled bitstring as a dictionary mapping each vertex to a configuration (0...d-1).
 """
 function sample_certified(ψ::TensorNetworkState, nsamples::Int; alg = nothing, certification_mps_bond_dimension = 5 * maxvirtualdim(ψ), certification_cache_message_update_kwargs = (;), kwargs...)
-    algorithm_check(ψ, "sample", alg)
+    algorithm_check(ψ, "sample_certified", alg)
     probs_and_bitstrings, ψ = sample(Algorithm(alg), ψ, nsamples; kwargs...)
     # send the bitstrings and the logq to the certification function
     return certify_samples(ψ, probs_and_bitstrings; alg, certification_mps_bond_dimension, certification_cache_message_update_kwargs, gauge_state = false)

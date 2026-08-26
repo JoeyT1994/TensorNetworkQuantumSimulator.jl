@@ -90,8 +90,7 @@ function reduced_density_matrix(
         cache_update_kwargs = default_bp_update_kwargs(ψ),
         kwargs...,
     )
-    ψ_bpc = BeliefPropagationCache(ψ)
-    ψ_bpc = update(ψ_bpc; cache_update_kwargs...)
+    ψ_bpc = converged_cache(alg, ψ; cache_update_kwargs)
 
     return reduced_density_matrix(alg, ψ_bpc, verts; kwargs...)
 end
@@ -105,8 +104,7 @@ function reduced_density_matrix(
         partition_by::String = boundarymps_partitioning(verts),
         kwargs...,
     )
-    ψ_bpc = BoundaryMPSCache(ψ, mps_bond_dimension; partition_by)
-    ψ_bpc = update(ψ_bpc; cache_update_kwargs...)
+    ψ_bpc = converged_cache(alg, ψ; mps_bond_dimension, partition_by, cache_update_kwargs)
 
     return reduced_density_matrix(alg, ψ_bpc, verts; kwargs...)
 end

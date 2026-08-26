@@ -1,6 +1,7 @@
 # A Form wraps a `ket`, an `operator` and a `bra` tensor network (the bra may be stored
-# or derived from the ket). Concrete subtypes must define `ket`, `operator`, `bra`, and the
-# per-vertex / per-edge dual accessors `bra_tensor` and `bra_virtualinds`.
+# or derived from the ket). Concrete subtypes must define `ket`, `operator`, and the
+# per-vertex / per-edge dual accessors `bra_tensor` and `bra_virtualinds`. A whole-network
+# `bra` is optional: `QuadraticForm` derives its bra lazily and does not provide one.
 abstract type AbstractForm{V} <: AbstractTensorNetwork{V} end
 
 #Forward onto the ket

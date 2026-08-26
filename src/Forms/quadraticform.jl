@@ -5,7 +5,8 @@ end
 
 ket(qf::QuadraticForm) = qf.ket
 operator(qf::QuadraticForm) = qf.operator
-bra(qf::QuadraticForm) = prime(conj(ket(qf)))
+#No whole-network `bra`: the dual is taken lazily per vertex/edge below, and there is no
+#`prime`/`conj` for a TensorNetworkState to build one with.
 bra_tensor(qf::QuadraticForm, v) = bra_tensor(ket(qf), v)
 bra_virtualinds(qf::QuadraticForm, edge::NamedEdge) = conj.(prime.(virtualinds(ket(qf), edge)))
 
@@ -16,7 +17,7 @@ function QuadraticForm(ket::TensorNetworkState, f::Function = v -> "I")
     sinds = siteinds(ket)
     verts = collect(vertices(ket))
     dtype = datatype(ket)
-    operator_tensors = adapt(dtype).([reduce(prod, ITensor[Ops.op(f(v), sind) for sind in sinds[v]]) for v in verts])
+    operator_tensors = adapt(dtype).([reduce(*, ITensor[Ops.op(f(v), sind) for sind in sinds[v]]) for v in verts])
     operator = TensorNetworkState(Dictionary(verts, operator_tensors))
     return QuadraticForm(ket, operator)
 end

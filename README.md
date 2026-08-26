@@ -261,11 +261,14 @@ We encourage users to read the literature listed below and explore the [tests](t
 You can also work directly in the Heisenberg picture, representing a many-body operator as a TNS with two indices per site.
 
 ```julia
+using ITensorBase: noprime
+using TensorNetworkQuantumSimulator: Ops, setindex_preserve!
+
 # Start with the Z operator on a single site vz, identity elsewhere
 s = siteinds("S=1/2", g; inds_per_site = 2)
 ψI = identity_tensornetworkstate(ComplexF64, g, s)
 ψ0 = copy(ψI)
-setindex_preserve!(ψ0, noprime(ψ0[vz] * ITensors.op("Z", s[vz][1])), vz)
+setindex_preserve!(ψ0, noprime(ψ0[vz] * Ops.op("Z", s[vz][1])), vz)
 ```
 
 Gates are then applied as pairs to the ket (`s[v][1]`) and bra (`s[v][2]`) indices, and observables are extracted via inner products with other operators (e.g. the identity network gives the trace; see `examples/2dIsing_dynamics_Heisenbergpicture.jl`).

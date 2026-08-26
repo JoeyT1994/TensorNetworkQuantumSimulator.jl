@@ -73,20 +73,16 @@ function norm_sqr(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_con
     tn = network(cache)
     z = cache_partitionfunction(alg, cache; max_configuration_size)
     tn isa TensorNetworkState && return z
-    tn isa TensorNetwork && return z * z
+    tn isa TensorNetwork && return abs2(z)
     return state_error("TensorNetworkState")
 end
 
 function norm_sqr(alg::Union{Algorithm"bp", Algorithm"loopcorrections"}, ψ::TensorNetworkState; cache_update_kwargs = default_bp_update_kwargs(ψ), kwargs...)
-    ψ_bpc = BeliefPropagationCache(ψ)
-    ψ_bpc = update(ψ_bpc; cache_update_kwargs...)
-    return norm_sqr(alg, ψ_bpc; kwargs...)
+    return norm_sqr(alg, converged_cache(alg, ψ; cache_update_kwargs); kwargs...)
 end
 
 function norm_sqr(alg::Algorithm"boundarymps", ψ::TensorNetworkState; mps_bond_dimension::Integer, partition_by = "row", cache_update_kwargs = default_bmps_update_kwargs(ψ), kwargs...)
-    ψ_bmps = BoundaryMPSCache(ψ, mps_bond_dimension; partition_by)
-    cache_update_kwargs = with_default_maxiter(cache_update_kwargs, ψ_bmps)
-    ψ_bmps = update(ψ_bmps; cache_update_kwargs...)
+    ψ_bmps = converged_cache(alg, ψ; mps_bond_dimension, partition_by, cache_update_kwargs)
     return norm_sqr(alg, ψ_bmps; kwargs...)
 end
 

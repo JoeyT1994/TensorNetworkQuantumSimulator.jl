@@ -38,10 +38,6 @@ default_bp_maxiter(g::AbstractGraph) = is_tree(g) ? 1 : _default_bp_update_maxit
 
 edge_sequence(bp_cache::BeliefPropagationCache) = bp_cache.edge_sequence
 
-function set_edge_sequence(bp_cache::BeliefPropagationCache, edge_sequence::Vector)
-    return BeliefPropagationCache(network(bp_cache), messages(bp_cache), contraction_sequences(bp_cache), edge_sequence)
-end
-
 function edge_scalar(bp_cache::BeliefPropagationCache, edge::AbstractEdge)
     return scalar(message(bp_cache, edge) * message(bp_cache, reverse(edge)))
 end
@@ -115,12 +111,6 @@ function default_bp_update_kwargs(tn::AbstractTensorNetwork)
 end
 
 default_bp_update_kwargs(bp_cache::BeliefPropagationCache) = default_bp_update_kwargs(network(bp_cache))
-
-function make_hermitian(A::ITensor)
-    A_inds = inds(A)
-    @assert length(A_inds) == 2
-    return (A + replaceinds(conj(A), first(A_inds) => last(A_inds), last(A_inds) => first(A_inds))) / 2
-end
 
 function rescale_messages!(bp_cache::BeliefPropagationCache, edges::Vector{<:AbstractEdge})
     ms = messages(bp_cache)

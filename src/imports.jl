@@ -32,13 +32,10 @@ using NamedGraphs.GraphsExtensions:
     edgetype,
     leaf_vertices,
     post_order_dfs_edges,
-    decorate_graph_edges,
-    add_vertex!,
     add_vertex,
     rem_edge,
     rem_vertex,
     add_edges,
-    rem_vertices,
     rem_vertex!
 
 using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_graph, named_comb_tree, named_path_graph

@@ -112,9 +112,6 @@ function toitensor(circuit::Vector, g::NamedGraph, sinds::Dictionary)
     return [toitensor(gate, g, sinds) for gate in circuit]
 end
 
-# Already an ITensor: pass through
-toitensor(gate::ITensor, sinds::Dictionary) = gate
-
 # Single circuit tuple → (ITensor, vertices)
 function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     name = gate[1]

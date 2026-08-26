@@ -111,6 +111,8 @@ There are two paths for using a gate that isn't in the built-in registry, depend
 For a one-off gate, build the `ITensor` yourself from the physical site indices and pass it to `apply_gates`. No registration needed:
 
 ```julia
+using ITensorBase: ITensor
+
 s = siteinds(ψ)
 # Custom gates
 gate1 = ITensor(my_local_matrix, s[v1], s[v1]')

@@ -65,7 +65,7 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
                     append!(row_inds, Index[only(intersect(inds(me), [prime(l)])) for l in linds])
                     append!(col_inds, Index[only(intersect(inds(mer), [prime(l)])) for l in linds_sim])
                 end
-                ap = adapt_like(me, identity_tensor(row_inds, conj.(col_inds)))
+                ap = adapt_like(me, identity_tensor(Float64, row_inds, conj.(col_inds)))
                 ap = ap - me * mer
                 push!(antiprojectors, ap)
             end
