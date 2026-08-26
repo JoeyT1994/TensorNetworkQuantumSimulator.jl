@@ -1,3 +1,7 @@
+#Backend-specialized fast path for the two-site gate. Returns `nothing` when no
+#specialization applies and the generic path below should run.
+fused_simple_update(o, ψ⃗; kwargs...) = nothing
+
 """
     simple_update(o, ψ⃗; envs, normalize_tensors = true, sqrt_cutoff, apply_kwargs...)
 
@@ -18,10 +22,6 @@ Simple update of one or two local tensors in the presence of factorized environm
 - `s_values`: The singular values from the SVD (if applicable).
 - `err::Number`: The truncation error from the SVD (if applicable).
 """
-#Backend-specialized fast path for the two-site gate. Returns `nothing` when no
-#specialization applies and the generic path below should run.
-fused_simple_update(o, ψ⃗; kwargs...) = nothing
-
 function simple_update(
         o, ψ⃗::Vector;
         envs, normalize_tensors = true, sqrt_cutoff = nothing, apply_kwargs...

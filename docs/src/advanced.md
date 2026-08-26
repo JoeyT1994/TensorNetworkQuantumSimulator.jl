@@ -2,27 +2,18 @@
 
 ## GPU Support
 
-Almost all operations support GPU acceleration. Load the relevant Julia GPU package (e.g. CUDA.jl or Metal.jl) and transfer the state or cache from which point subsequent operations on that object will be done on GPU:
+!!! warning "In flux"
+    GPU execution is being re-established on the current tensor engine and is not yet
+    validated. The GPU results reported in [[Rudolph2025]](index.md#references) were
+    obtained with an earlier ITensors-based backend (available on the `main` branch
+    history). The building blocks for the new path exist — TensorOperations provides
+    cuTENSOR-backed contraction and CUDA buffer allocators, and MatrixAlgebraKit provides
+    CUSOLVER/ROCSOLVER factorizations — but wiring and benchmarking them here is ongoing
+    work. States and caches can be transferred with `CUDA.cu`/`adapt` as before; the fused
+    CPU kernels detect non-CPU storage and fall back to the generic contraction path.
 
-```julia
-using TensorNetworkQuantumSimulator
-using CUDA
-
-g = named_grid((8, 8))
-ψ_cpu = random_tensornetworkstate(ComplexF32, g; bond_dimension = 8)
-ψ_gpu = CUDA.cu(ψ_cpu)
-
-@time expect(ψ_cpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
-@time expect(ψ_gpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
-```
-
-Caches can also be transferred to the GPU:
-
-```julia
-ψ_bpc_gpu = CUDA.cu(BeliefPropagationCache(ψ))
-```
-
-Significant speedups are seen on NVIDIA GPUs for many operations (BP, BoundaryMPS, Gate Application) at moderate to large bond dimensions. Use `ComplexF32` element types for best GPU performance. We highly recommend CUDA.jl (NVidia GPUs) as speedups are well documented in this case [[Rudolph2025]](index.md#references). Experience using Metal.jl is very limited and so proceed with caution.
+Use `ComplexF32` element types for best GPU performance once available; imaginary-time
+simulations can be run without `Complex` arithmetic entirely.
 
 ## Loop Corrections
 

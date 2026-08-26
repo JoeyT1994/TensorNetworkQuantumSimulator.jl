@@ -106,35 +106,42 @@ equivalent are marked `—`.
 
 There are two paths for using a gate that isn't in the built-in registry, depending on whether the gate is one-off or reusable.
 
-#### Path 1: Pass an `ITensor` directly
+#### Path 1: Pass a gate tensor directly
 
-For a one-off gate, build the `ITensor` yourself from the physical site indices and pass it to `apply_gates`. No registration needed:
+For a one-off gate, build the tensor yourself from the physical site indices and pass it to `apply_gates`. No registration needed. Products of built-in operators are the easiest route:
 
 ```julia
-using ITensors: ITensor
-
 s = siteinds(ψ)
-# Custom gates
-gate1 = ITensor(my_local_matrix, s[v1], s[v1]')
-gate2 = ITensor(my_nn_gate, s[v1], s[v2], s[v1]', s[v2]')
+gate1 = op("Rz", only(s[v1]); θ = 0.3)
+gate2 = op("X", only(s[v1])) * op("X", only(s[v2]))
 ψ, errors = apply_gates([gate1, gate2], ψ; apply_kwargs)
+```
+
+For an arbitrary matrix, construct the tensor from an array with `from_array` (indices
+ordered primed-then-unprimed; a `4 × 4` two-site matrix is interpreted in the
+first-index-fastest, column-major convention):
+
+```julia
+using TensorNetworkQuantumSimulator: from_array
+
+sv1, sv2 = only(s[v1]), only(s[v2])
+gate1 = from_array(my_local_matrix, sv1', sv1)
+gate2 = from_array(my_nn_gate, sv1', sv2', sv1, sv2)
 ```
 
 #### Path 2: Register a named gate
 
 For a gate you'll reuse repeatedly, register it once and then use the tuple form like any built-in. Two steps:
 
-1. Define the matrix as an `ITensors.op` method.
-2. Call [`register_gate!`](@ref) to tell the dispatcher which keyword arguments your `op` accepts.
+1. Register the matrix with [`register_op!`](@ref): a function of the keyword arguments returning the operator matrix (`2 × 2` for one site, `4 × 4` for two sites in the first-index-fastest convention).
+2. Call [`register_gate!`](@ref) to tell the dispatcher which keyword arguments your operator accepts.
 
 ```julia
-using ITensors: op, OpName, SiteType, Index
-
-# 1. Define the matrix (the "physics" part)
-function ITensors.op(::OpName"FSim", ::SiteType"S=1/2", s1::Index, s2::Index;
-                     θ::Number, ϕ::Number)
-    # ... return a 4-leg ITensor ...
-end
+# 1. Register the matrix (the "physics" part)
+register_op!("FSim", (; θ, ϕ) -> [1 0 0 0;
+                                  0 cos(θ) -im*sin(θ) 0;
+                                  0 -im*sin(θ) cos(θ) 0;
+                                  0 0 0 exp(-im*ϕ)]; nsites = 2)
 
 # 2. Register the dispatch info (the "name → kwargs" part)
 register_gate!("FSim"; paramkeys = (:θ, :ϕ))
@@ -148,7 +155,7 @@ The keyword arguments map as:
 
 - `paramkeys = (:θ, :ϕ)` — names of the kwargs your `op` expects, in the order they appear in the circuit-tuple parameter. For a single-parameter gate, use a 1-tuple like `(:θ,)`.
 - `opname = "FSim"` — defaults to the gate name; override if your circuit-level name should differ from the `OpName` your `op` uses.
-- `rescale = identity` — applied to the parameter(s) before forwarding to `op`. Useful when your `op` follows a different convention (e.g., the built-in `"Rxx"` uses `rescale = θ -> θ/2` to bridge our qiskit convention to ITensors').
+- `rescale = identity` — applied to the parameter(s) before forwarding to the operator. Useful when your matrix follows a different convention (e.g., the built-in `"Rxx"` uses `rescale = θ -> θ/2` to bridge the qiskit convention to the registry's).
 
 To add a qiskit-style alias for your gate (so e.g. `"fsim"` resolves to `"FSim"`), call [`register_alias!`](@ref):
 

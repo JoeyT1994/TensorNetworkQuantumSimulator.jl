@@ -4,15 +4,15 @@ TensorNetworkQuantumSimulator provides two core types, `TensorNetworkState` and 
 
 ## TensorNetwork
 
-A `TensorNetwork` is the simpler of the two types: a collection of ITensors living on the vertices of a graph, connected by shared (virtual) indices along the edges. Contracting all tensors produces a single scalar value.
+A `TensorNetwork` is the simpler of the two types: a collection of tensors living on the vertices of a graph, connected by shared (virtual) indices along the edges. Contracting all tensors produces a single scalar value.
 
 ```julia
 using TensorNetworkQuantumSimulator
-using ITensors: Index, random_itensor
+using TensorNetworkQuantumSimulator: new_index, random_itensor
 using Dictionaries: Dictionary
 
-i, j = Index(2, "i"), Index(2, "j")
-t_a, t_b, t_c = random_itensor(i), random_itensor(i, j), random_itensor(j)
+i, j = new_index(2; tags = "i"), new_index(2; tags = "j")
+t_a, t_b, t_c = random_itensor(Float64, i), random_itensor(Float64, i, j), random_itensor(Float64, j)
 # Construct from a dictionary of tensors (graph is inferred from shared indices)
 tn = TensorNetwork(Dictionary(["a", "b", "c"], [t_a, t_b, t_c]))
 
@@ -137,7 +137,7 @@ graph(tn)             # underlying NamedGraph
 vertices(tn)          # all vertices
 neighbors(tn, v)      # neighboring vertices of v
 edges(tn)             # all edges
-tn[v]                 # directly access the ITensor at vertex v
+tn[v]                 # directly access the tensor at vertex v
 maxvirtualdim(tn)     # maximum bond dimension across all edges
 scalartype(tn)        # element type of the tensors (e.g. ComplexF64)
 datatype(tn)          # storage type (e.g. Array, CuArray)

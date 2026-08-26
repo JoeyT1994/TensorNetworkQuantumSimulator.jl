@@ -4,7 +4,7 @@ CurrentModule = TensorNetworkQuantumSimulator
 
 # TensorNetworkQuantumSimulator.jl
 
-A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks of near-arbitrary geometry. Built on top of [ITensors.jl](https://github.com/ITensor/ITensors.jl) and [NamedGraphs.jl](https://github.com/ITensor/NamedGraphs.jl).
+A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks of near-arbitrary geometry. Built on a native named-index tensor engine (dense arrays with [TensorOperations.jl](https://github.com/Jutho/TensorOperations.jl) contraction and [MatrixAlgebraKit.jl](https://github.com/QuantumKitHub/MatrixAlgebraKit.jl) factorizations, with fused workspace-reusing kernels for the hot paths) and [NamedGraphs.jl](https://github.com/ITensor/NamedGraphs.jl).
 
 ![Overview of TensorNetworkQuantumSimulator.jl](mainfig.svg)
 
@@ -17,7 +17,7 @@ A Julia package for simulating quantum circuits, quantum dynamics and equilibriu
 - **Entanglement Entropy**: Von Neumann and Rényi entropies from BP messages (per bond) or from reduced density matrices (per subsystem).
 - **Sampling**: Sample from planar tensor network states using boundary MPS, with the MPS bond dimension controlling sample quality. Options to compute the importance-sampling ratio ``p(x)/q(x)`` for direct sample quality certification.
 - **Operators**: Operator evolution in the Heisenberg picture and density matrix representation.
-- **GPU Support**: GPU acceleration via CUDA.jl or Metal.jl. CUDA.jl is highly recommended for large bond dimension simulations, where it can provide dramatic speedups.
+- **Performance**: The hot paths (belief-propagation message updates, gate application, expectation values) run as fused kernels with conjugation folded into the BLAS calls and intermediates in reusable workspaces, keeping heap allocations to the results themselves.
 - **Arbitrary Precision**: `Float32`, `Float64`, `ComplexF32`, `ComplexF64`, and other numeric types.
 
 ## Algorithm Overview
