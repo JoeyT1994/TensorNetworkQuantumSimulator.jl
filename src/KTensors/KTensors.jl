@@ -22,7 +22,7 @@ paths. The gate/operator library covers S=1/2 with the gate registry's conventio
 =#
 module KTensors
 
-using LinearAlgebra: LinearAlgebra, Hermitian, Diagonal, norm, mul!, diag
+using LinearAlgebra: LinearAlgebra, Hermitian, Diagonal, norm, mul!, diag, rmul!, BlasFloat
 using MatrixAlgebraKit: MatrixAlgebraKit, qr_compact, svd_compact, svd_trunc, eigh_full,
     truncrank, truncerror
 using TensorOperations: TensorOperations, ncon
@@ -442,6 +442,94 @@ function LinearAlgebra.eigen(t::KTensor, linds, rinds; ishermitian::Bool = false
     D = KTensor(KIndex[TensorInterface.prime(lk), lk], Matrix(Diagonal(vals)))
     U = KTensor(vcat(rv, [lk]), reshape(vecs, (Int[i.d for i in rv]..., k)))
     return D, U
+end
+
+# ── Fused BP norm-message kernel ────────────────────────────────────────────────────────
+#
+# The double-layer message update m_out = (∏ m_in) · ψ · conj(ψ̃) computed with:
+#   * sequential absorption of each incoming message into the ket (F-sized GEMMs),
+#   * a closing GEMM against ψ itself with the conjugation fused into the BLAS call —
+#     `dag(prime(ψ))` is never materialized,
+#   * all chain intermediates (and TensorOperations' internal permute scratch) living in a
+#     task-local, reusable BufferAllocator; only the small outgoing message touches the heap.
+#
+# Steady-state heap cost per call: the output message + O(1) bookkeeping — the "2F + out"
+# target, with the 2F living in the reused buffer.
+
+function _bp_buffer()
+    return get!(task_local_storage(), :ktensors_bp_buffer) do
+        TensorOperations.BufferAllocator()
+    end::TensorOperations.BufferAllocator
+end
+
+# One pairwise contraction at the data level. `pairfn` maps an index of `b` to the index of
+# `a` it should contract with (identity for plain absorption; the site/prime partner map for
+# the closing bra contraction). Returns (data, out_inds).
+function _tc_pair(
+        da, ia::Vector{KIndex}, db, ib::Vector{KIndex}, conjB::Bool, pairfn,
+        istemp::Val, allocator
+    )
+    ca, cb = Int[], Int[]
+    for (j, bj) in enumerate(ib)
+        p = pairfn(bj)
+        i = findfirst(==(p), ia)
+        i === nothing && continue
+        push!(ca, i)
+        push!(cb, j)
+    end
+    oa = setdiff(1:length(ia), ca)
+    ob = setdiff(1:length(ib), cb)
+    pA = (Tuple(oa), Tuple(ca))
+    pB = (Tuple(cb), Tuple(ob))
+    pAB = (Tuple(1:(length(oa) + length(ob))), ())
+    TC = promote_type(eltype(da), eltype(db))
+    C = TensorOperations.tensoralloc_contract(TC, da, pA, false, db, pB, conjB, pAB, istemp, allocator)
+    backend = TC <: BlasFloat ? TensorOperations.StridedBLAS() : TensorOperations.StridedNative()
+    TensorOperations.tensorcontract!(C, da, pA, false, db, pB, conjB, pAB, one(TC), zero(TC), backend, allocator)
+    return C, ia[oa], ib[ob]
+end
+
+# Pattern check: `m` must be a standard doubled norm-network message for `ψ` — every index
+# either a plev-0 index of ψ (ket side) or the prime of one (bra side).
+function _is_norm_message(m::KTensor, ψinds::Vector{KIndex})
+    return all(m.inds) do i
+        (i.plev == 0 && i ∈ ψinds) || (i.plev == 1 && TensorInterface.noprime(i) ∈ ψinds)
+    end
+end
+
+"""
+Fused computation of the outgoing BP message from vertex tensor `ψ` (site indices `sinds`)
+given standard doubled `incoming` messages. Returns `nothing` when the structure doesn't
+match (caller falls back to the generic contraction path).
+"""
+function fused_norm_message(
+        ψ::KTensor, sinds::Vector{KIndex}, incoming::Vector{<:KTensor};
+        normalize::Bool = true
+    )
+    ψ.data isa Array || return nothing
+    all(m -> m.data isa Array && _is_norm_message(m, ψ.inds), incoming) || return nothing
+
+    buf = _bp_buffer()
+    cp = TensorOperations.allocator_checkpoint!(buf)
+    X, ix = ψ.data, ψ.inds
+    for m in incoming
+        X, oa, ob = _tc_pair(X, ix, m.data, m.inds, false, identity, Val(true), buf)
+        ix = vcat(oa, ob)
+    end
+    # Closing: ψ-leg i pairs with X-leg i (sites, ket↔bra direct) or prime(i)
+    # (message-bridged bra side); unpaired ψ-legs (the target edge) come out primed.
+    # istemp = Val(false) puts the output on the heap while the internal permute scratch of
+    # the contraction still lives in the buffer.
+    partner = i -> i ∈ sinds ? i : TensorInterface.prime(i)
+    out, o_ket, o_bra = _tc_pair(X, ix, ψ.data, ψ.inds, true, partner, Val(false), buf)
+    oinds = vcat(o_ket, TensorInterface.prime.(o_bra))
+    TensorOperations.allocator_reset!(buf, cp)
+
+    if normalize
+        s = sum(out)
+        iszero(s) || rmul!(vec(out), inv(s))
+    end
+    return KTensor(oinds, out)
 end
 
 # ── S=1/2 operator & state library (conventions pinned against ITensors) ────────────────

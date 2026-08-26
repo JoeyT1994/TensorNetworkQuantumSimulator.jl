@@ -68,6 +68,17 @@ end
 norm_factors(tns::TensorNetworkState, v; kwargs...) = norm_factors(tns, [v]; kwargs...)
 bp_factors(tns::TensorNetworkState, v) = norm_factors(tns, v)
 
+#Fused KTensors fast path for the double-layer BP message update (see KTensors module).
+#Falls through to the generic contraction path when the message structure doesn't match
+#(e.g. boundary-MPS messages with link indices) or the site indices aren't KIndex.
+function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector{<:KTensor}; normalize)
+    ψ = tns[v]
+    ψ isa KTensor || return nothing
+    sinds = siteinds(tns, v)
+    all(i -> i isa KIndex, sinds) || return nothing
+    return KTensors.fused_norm_message(ψ, collect(KIndex, sinds), incoming_ms; normalize)
+end
+
 function default_message(tns::TensorNetworkState, edge::AbstractEdge)
     linds = virtualinds(tns, edge)
     return adapt_like(tns, denseblocks(delta(vcat(linds, prime(dag(linds))))))
