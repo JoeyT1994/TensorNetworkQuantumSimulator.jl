@@ -145,6 +145,7 @@ function BoundaryMPSCache(
         partition_by = "row",
         gauge_state = false,
         set_messages = true,
+        link_sectors = nothing,
     )
     grouping_function = partition_by == "row" ? v -> first(v) : v -> last(v)
     group_sorting_function = partition_by == "row" ? v -> last(v) : v -> first(v)
@@ -166,7 +167,7 @@ function BoundaryMPSCache(
     messages = default_messages()
     bmps_cache = BoundaryMPSCache(tn, messages, supergraph, sorted_es, mps_bond_dimension, Dictionary{Pair, Vector}())
     @assert is_correct_format(bmps_cache)
-    set_messages && set_interpartition_messages!(bmps_cache, pes)
+    set_messages && set_interpartition_messages!(bmps_cache, pes; link_sectors)
 
     return bmps_cache
 end
@@ -174,9 +175,14 @@ end
 all_quotientedges(graph) = QuotientEdges(all_edges(quotient_graph(graph)))
 
 #Initialise all the interpartition message tensors
+#`link_sectors`, when given, is a function `d -> Vector{charge => dim}` choosing the graded
+#space of the boundary-MPS virtual links (e.g. an even-biased parity split); by default the
+#space is derived from the message legs (see `new_index` for graded tensors). Flux-free
+#block bookkeeping means this only affects sparsity, never correctness.
 function set_interpartition_messages!(
         bmps_cache::BoundaryMPSCache,
-        quotientedges = all_quotientedges(bmps_cache),
+        quotientedges = all_quotientedges(bmps_cache);
+        link_sectors = nothing,
     )
     m_keys = keys(messages(bmps_cache))
     for pe in quotientedges
@@ -186,14 +192,76 @@ function set_interpartition_messages!(
                 setmessage!(bmps_cache, e, default_message(bmps_cache, e))
             end
         end
-        for i in 1:(length(es) - 1)
-            virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
-            m1, m2 = message(bmps_cache, es[i]), message(bmps_cache, es[i + 1])
-            ind = new_index(m1, virt_dim; tags = "m$(i)$(i + 1)")
-            t = adapt_like(m1, delta(ind))
-            setmessage!(bmps_cache, es[i], m1 * t)
-            setmessage!(bmps_cache, es[i + 1], m2 * t)
+        if tensortype(bmps_cache) <: KTensors.BlockTensor
+            set_graded_interpartition_messages!(bmps_cache, es; link_sectors)
+        else
+            for i in 1:(length(es) - 1)
+                virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
+                m1, m2 = message(bmps_cache, es[i]), message(bmps_cache, es[i + 1])
+                ind = link_sectors === nothing ? new_index(m1, virt_dim; tags = "m$(i)$(i + 1)") :
+                    new_index(collect(link_sectors(virt_dim)); tags = "m$(i)$(i + 1)")
+                t = adapt_like(m1, delta(ind))
+                setmessage!(bmps_cache, es[i], m1 * t)
+                setmessage!(bmps_cache, es[i + 1], m2 * t)
+            end
         end
+    end
+    return bmps_cache
+end
+
+#Graded boundary-MPS message initialization, following the recipe validated on the
+#fermionic branch: random CONSERVING blocks over even-biased charged links, instead of the
+#rank-1 delta join. The delta join is an exactly symmetric starting point whose invariant
+#subspace the (exactly block-preserving) graded fitting cannot leave; a random
+#structure-compatible full-rank start converges properly. Ket-side legs (plev 0) count +q,
+#bra-side (plev 1) −q, left link +q, right link −q.
+function set_graded_interpartition_messages!(bmps_cache::BoundaryMPSCache, es::Vector{<:NamedEdge}; link_sectors = nothing)
+    n = length(es)
+    #Link i carries the CUMULATIVE ket-bra charge imbalance of messages 1..i, so its sector
+    #support is the convolution of the per-message difference spectra from the left,
+    #intersected (weight-multiplied) with the reachable spectrum from the right. The
+    #resulting weights are naturally centre-heavy — for a parity grading this reproduces
+    #the even-biased (even ≥ odd) split validated on the fermionic branch.
+    spectra = [KTensors._message_diff_spectrum(message(bmps_cache, e)) for e in es]
+    prefix = Vector{Dict{Int, Float64}}(undef, n)
+    suffix = Vector{Dict{Int, Float64}}(undef, n)
+    prefix[1] = spectra[1]
+    for i in 2:n
+        prefix[i] = KTensors._convolve_charges(prefix[i - 1], spectra[i])
+    end
+    suffix[n] = spectra[n]
+    for i in (n - 1):-1:1
+        suffix[i] = KTensors._convolve_charges(suffix[i + 1], spectra[i])
+    end
+    links = KIndex[]
+    for i in 1:(n - 1)
+        virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
+        if link_sectors === nothing
+            w = Dict{Int, Float64}()
+            for (q, a) in prefix[i]
+                b = get(suffix[i + 1], -q, 0.0)
+                b > 0 && (w[q] = a * b)
+            end
+            ind = KIndex(KTensors._allocate_sectors(w, virt_dim), "m$(i)$(i + 1)")
+        else
+            ind = new_index(collect(link_sectors(virt_dim)); tags = "m$(i)$(i + 1)")
+        end
+        push!(links, ind)
+    end
+    for i in 1:n
+        m = message(bmps_cache, es[i])
+        legs = collect(KIndex, inds(m))
+        signs = Int[plev(l) == 0 ? 1 : -1 for l in legs]
+        if i > 1
+            push!(legs, links[i - 1])
+            push!(signs, 1)
+        end
+        if i < n
+            push!(legs, links[i])
+            push!(signs, -1)
+        end
+        t = adapt_like(m, KTensors.random_conserving_blocktensor(scalartype(m), legs, signs))
+        setmessage!(bmps_cache, es[i], t)
     end
     return bmps_cache
 end

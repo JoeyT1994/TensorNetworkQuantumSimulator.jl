@@ -55,8 +55,43 @@ function TensorInterface.inds(t::BlockTensor; plev = nothing)
 end
 TensorInterface.scalartype(::BlockTensor{T}) where {T} = T
 TensorInterface.datatype(::BlockTensor{T}) where {T} = Vector{T}
-TensorInterface.new_index(::BlockTensor, d::Integer; tags = "") = KIndex(GradedSpace([0], [Int(d)]), tags)
-TensorInterface.new_index(i::GradedIndex, d::Integer; tags = "") = KIndex(GradedSpace([0], [Int(d)]), tags)
+#Fresh graded link space for a bond of total dimension d, derived from the charges seen on
+#`ref`'s legs. For parity-like gradings (charges ⊆ {0, 1}) the split is even-biased — in a
+#double-layer network the doubled tensors are even-parity dominant, so the even sector needs
+#at least as many states as the odd one. Flux-free bookkeeping means a suboptimal choice
+#costs sparsity, never correctness, and the fitting/SVD sweeps regenerate finer structure.
+function _link_space(charges::Vector{Int}, d::Int)
+    (d <= 1 || length(charges) <= 1) && return GradedSpace([0], [max(d, 1)])
+    #candidate link charges: the differences the (ket, bra) pairs can pump into the link,
+    #weighted by their multiplicity — centre-heavy, so for a parity grading this reduces to
+    #the even-biased split (even sector at least as large as the odd one)
+    pair_diffs = [q1 - q2 for q1 in charges for q2 in charges]
+    diffs = sort(unique(pair_diffs))
+    w = [count(==(δ), pair_diffs) for δ in diffs]
+    #keep at most d sectors: highest weight first, ties broken toward small |charge|
+    order = sort(1:length(diffs); by = k -> (-w[k], abs(diffs[k])))
+    sel = sort(order[1:min(d, length(diffs))])
+    wsel = w[sel]
+    dims = [max(1, fld(d * wk, sum(wsel))) for wk in wsel]
+    #repair rounding so the dims sum to d, biasing towards the heaviest (central) sectors
+    heavy = sort(1:length(sel); by = k -> -wsel[k])
+    i = 1
+    while sum(dims) < d
+        dims[heavy[mod1(i, length(heavy))]] += 1
+        i += 1
+    end
+    i = length(heavy)
+    while sum(dims) > d
+        k = heavy[mod1(i, length(heavy))]
+        dims[k] > 1 && (dims[k] -= 1)
+        i -= 1
+    end
+    return GradedSpace(diffs[sel], dims)
+end
+_ref_charges(t::BlockTensor) = sort(unique(vcat([space(i).charges for i in t.inds]...)))
+_ref_charges(i::GradedIndex) = sort(unique(space(i).charges))
+TensorInterface.new_index(ref::BlockTensor, d::Integer; tags = "") = KIndex(_link_space(_ref_charges(ref), Int(d)), tags)
+TensorInterface.new_index(ref::GradedIndex, d::Integer; tags = "") = KIndex(_link_space(_ref_charges(ref), Int(d)), tags)
 TensorInterface.new_index(sectors::Vector{<:Pair}; tags = "") = KIndex(GradedSpace(sectors...), tags)
 
 function TensorInterface.scalar(t::BlockTensor{T, 0}) where {T}
@@ -150,6 +185,11 @@ end
 TensorInterface.onehot(p::Pair{<:GradedIndex, <:Integer}) = TensorInterface.onehot(Float64, p)
 
 function _delta_graded(elt::Type, is::AbstractVector{<:KIndex})
+    if length(is) == 1
+        #single-index delta: a vector of ones (matching the dense semantics)
+        i = only(is)
+        return BlockTensor([i], Dict((k,) => ones(elt, space(i).dims[k]) for k in 1:nsectors(space(i))))
+    end
     #Pairs of indices sharing an id (e.g. a bond and its primed partner) each get an
     #identity; independent pairs combine as an outer product.
     ids = unique([i.id for i in is])
@@ -429,17 +469,13 @@ function _split_positions(t::BlockTensor, linds::Vector{<:KIndex})
     return lpos, rpos, t.inds[lpos], t.inds[rpos]
 end
 
-function TensorInterface.factorize_svd(
-        t::BlockTensor, linds;
-        ortho = "none", singular_values! = nothing,
-        maxdim = nothing, cutoff = nothing, kwargs...,
-    )
-    ortho == "none" || error("factorize_svd: graded prototype only implements ortho = \"none\"")
-    T = eltype(t)
-    lpos, rpos, li, ri = _split_positions(t, _indvec(linds))
+#Shared per-class SVD with global truncation. Returns
+#(lpos, rpos, li, ri, kept_factors, bond, truncerr, kept_s2) where kept_factors is a list of
+#(σLs, σRs, rowoff, coloff, U, s, Vt, kept) in deterministic (charge-sorted) order.
+function _svd_graded_core(t::BlockTensor, lv::Vector{<:KIndex}; maxdim = nothing, cutoff = nothing)
+    lpos, rpos, li, ri = _split_positions(t, lv)
     classes = _charge_classes(collect(keys(t.blocks)), lpos, rpos)
-
-    factors = []  # (σLs, σRs, rowoff, coloff, U, S, Vt, charge)
+    factors = []
     all_s2 = Float64[]
     for (σLs, σRs, ks) in classes
         M, rowoff, coloff = _class_matrix(t, lpos, rpos, σLs, σRs, ks)
@@ -449,8 +485,7 @@ function TensorInterface.factorize_svd(
         append!(all_s2, abs2.(s))
     end
 
-    #Global truncation: keep the largest singular values across all classes, ITensors
-    #convention for the discarded weight.
+    #Global truncation across classes (ITensors convention for the discarded weight)
     sort!(all_s2; rev = true)
     total = sum(all_s2; init = 0.0)
     nkeep = length(all_s2)
@@ -467,8 +502,6 @@ function TensorInterface.factorize_svd(
     threshold2 = nkeep < length(all_s2) ? all_s2[nkeep] : 0.0
     truncerr = total > 0 ? sum(@view all_s2[(nkeep + 1):end]) / total : 0.0
 
-    #Per-class kept counts (values strictly above the threshold always kept; ties broken by
-    #class order until the global budget is exhausted)
     kept = zeros(Int, length(factors))
     budget = nkeep
     for (ci, f) in enumerate(factors)
@@ -483,37 +516,107 @@ function TensorInterface.factorize_svd(
         budget -= extra
     end
 
-    #Bond space: one sector per class with kept > 0, deterministically ordered by charge
     order = sortperm([f[8] for f in factors])
-    sectors = [(f = factors[ci]; (f[8], kept[ci])) for ci in order if kept[ci] > 0]
-    isempty(sectors) && error("factorize_svd: everything truncated away")
-    bond = GradedSpace(Int[first.(sectors)...], Int[last.(sectors)...])
+    kept_factors = [(factors[ci]..., kept[ci]) for ci in order if kept[ci] > 0]
+    isempty(kept_factors) && error("graded SVD: everything truncated away")
+    #gauge the bond charge labels by an even offset: keeps them small and relative while
+    #preserving their parity (which fermionic sign rules rely on)
+    qs = Int[f[8] for f in kept_factors]
+    qs .-= 2 * fld(minimum(qs), 2)
+    bond = GradedSpace(qs, Int[f[9] for f in kept_factors])
+    return lpos, rpos, li, ri, kept_factors, bond, truncerr, sort(all_s2; rev = true)[1:nkeep]
+end
+
+"""
+factorize_svd matching the dense convention: `ortho = "none"` returns F1 = U√S and
+F2 = √S·V sharing the primed bond, singular values on unprimed `(u, v)`.
+"""
+function TensorInterface.factorize_svd(
+        t::BlockTensor, linds;
+        ortho = "none", singular_values! = nothing,
+        maxdim = nothing, cutoff = nothing, kwargs...,
+    )
+    ortho == "none" || error("factorize_svd: graded backend implements ortho = \"none\"")
+    T = eltype(t)
+    lv = filter(i -> i ∈ t.inds, _indvec(linds))
+    lpos, rpos, li, ri, kept_factors, bond, truncerr, kept_s2 = _svd_graded_core(t, lv; maxdim, cutoff)
     u = KIndex(bond, "Link,u")
     v = KIndex(bond, "Link,v")
     up = TensorInterface.prime(u)
-
     NL, NR = length(lpos) + 1, length(rpos) + 1
     f1_blocks = Dict{NTuple{NL, Int}, Array{T, NL}}()
     f2_blocks = Dict{NTuple{NR, Int}, Array{T, NR}}()
-    sv_blocks = Dict{NTuple{2, Int}, Array{real(T) === T ? T : real(T), 2}}()
-    csector = 0
-    for ci in order
-        kept[ci] > 0 || continue
-        csector += 1
-        σLs, σRs, rowoff, coloff, U, s, Vt, _ = factors[ci]
-        kk = kept[ci]
-        sq = sqrt.(s[1:kk])
+    sv_blocks = Dict{NTuple{2, Int}, Array{real(T), 2}}()
+    for (csector, f) in enumerate(kept_factors)
+        σLs, σRs, rowoff, coloff, U, sv, Vt, _, kk = f
+        sq = sqrt.(sv[1:kk])
         _scatter_left!(f1_blocks, t, lpos, σLs, rowoff, U[:, 1:kk] .* reshape(T.(sq), 1, kk), csector)
         _scatter_right!(f2_blocks, t, rpos, σRs, coloff, reshape(T.(sq), kk, 1) .* Vt[1:kk, :], csector)
-        sv_blocks[(csector, csector)] = Matrix(Diagonal(s[1:kk]))
+        sv_blocks[(csector, csector)] = Matrix(Diagonal(sv[1:kk]))
     end
-
     F1 = BlockTensor(vcat(li, [up]), f1_blocks)
     F2 = BlockTensor(vcat([up], ri), f2_blocks)
     if singular_values! !== nothing
         singular_values![] = BlockTensor([u, v], sv_blocks)
     end
-    return F1, F2, KSpectrum(sort(all_s2; rev = true)[1:nkeep], truncerr)
+    return F1, F2, KSpectrum(kept_s2, truncerr)
+end
+
+#ITensors-style factorize: L isometric for ortho = "left" (L = U, R = S·Vt), mirrored for
+#"right"; unprimed bond carrying `tags`.
+function LinearAlgebra.factorize(
+        t::BlockTensor, linds...;
+        ortho = "left", maxdim = nothing, cutoff = nothing, tags = "Link,fact", kwargs...,
+    )
+    T = eltype(t)
+    lv = length(linds) == 1 ? _indvec(only(linds)) : collect(KIndex, linds)
+    lv = filter(i -> i ∈ t.inds, lv)
+    lpos, rpos, li, ri, kept_factors, bond, _, _ = _svd_graded_core(t, lv; maxdim, cutoff)
+    b = KIndex(bond, String(tags))
+    NL, NR = length(lpos) + 1, length(rpos) + 1
+    l_blocks = Dict{NTuple{NL, Int}, Array{T, NL}}()
+    r_blocks = Dict{NTuple{NR, Int}, Array{T, NR}}()
+    for (csector, f) in enumerate(kept_factors)
+        σLs, σRs, rowoff, coloff, U, sv, Vt, _, kk = f
+        if ortho == "left"
+            _scatter_left!(l_blocks, t, lpos, σLs, rowoff, U[:, 1:kk], csector)
+            _scatter_right!(r_blocks, t, rpos, σRs, coloff, Diagonal(T.(sv[1:kk])) * Vt[1:kk, :], csector)
+        elseif ortho == "right"
+            _scatter_left!(l_blocks, t, lpos, σLs, rowoff, U[:, 1:kk] * Diagonal(T.(sv[1:kk])), csector)
+            _scatter_right!(r_blocks, t, rpos, σRs, coloff, Vt[1:kk, :], csector)
+        else
+            error("factorize: unknown ortho = $(ortho)")
+        end
+    end
+    return BlockTensor(vcat(li, [b]), l_blocks), BlockTensor(vcat([b], ri), r_blocks)
+end
+
+#ITensors-style svd: U(linds, u), S(u, v), V(rinds, v) with T ≈ U*S*V
+function LinearAlgebra.svd(t::BlockTensor, linds; maxdim = nothing, cutoff = nothing, kwargs...)
+    T = eltype(t)
+    lv = filter(i -> i ∈ t.inds, _indvec(linds))
+    lpos, rpos, li, ri, kept_factors, bond, _, _ = _svd_graded_core(t, lv; maxdim, cutoff)
+    u = KIndex(bond, "Link,u")
+    v = KIndex(bond, "Link,v")
+    NL, NR = length(lpos) + 1, length(rpos) + 1
+    u_blocks = Dict{NTuple{NL, Int}, Array{T, NL}}()
+    v_blocks = Dict{NTuple{NR, Int}, Array{T, NR}}()
+    s_blocks = Dict{NTuple{2, Int}, Array{real(T), 2}}()
+    for (csector, f) in enumerate(kept_factors)
+        σLs, σRs, rowoff, coloff, U, sv, Vt, _, kk = f
+        _scatter_left!(u_blocks, t, lpos, σLs, rowoff, U[:, 1:kk], csector)
+        _scatter_right!(v_blocks, t, rpos, σRs, coloff, Vt[1:kk, :], csector)
+        s_blocks[(csector, csector)] = Matrix(Diagonal(sv[1:kk]))
+    end
+    Ut = BlockTensor(vcat(li, [u]), u_blocks)
+    St = BlockTensor([u, v], s_blocks)
+    #V carries (rinds..., v): rewrap the (v, rinds...) scatter with the bond moved last
+    v_blocks2 = Dict{NTuple{NR, Int}, Array{T, NR}}()
+    for (k, b) in v_blocks
+        v_blocks2[(k[2:end]..., k[1])] = permutedims(b, vcat(2:NR, 1))
+    end
+    Vt_ = BlockTensor(vcat(ri, [v]), v_blocks2)
+    return Ut, St, Vt_
 end
 
 function LinearAlgebra.qr(t::BlockTensor{T}, linds; kwargs...) where {T}
@@ -526,7 +629,9 @@ function LinearAlgebra.qr(t::BlockTensor{T}, linds; kwargs...) where {T}
         push!(factors, (σLs, σRs, rowoff, coloff, Q, R, _class_charge(t, lpos, first(σLs))))
     end
     order = sortperm([f[7] for f in factors])
-    bond = GradedSpace(Int[factors[ci][7] for ci in order], Int[size(factors[ci][5], 2) for ci in order])
+    qs = Int[factors[ci][7] for ci in order]
+    qs .-= 2 * fld(minimum(qs), 2)
+    bond = GradedSpace(qs, Int[size(factors[ci][5], 2) for ci in order])
     b = KIndex(bond, "Link,qr")
     NL, NR = length(lpos) + 1, length(rpos) + 1
     q_blocks = Dict{NTuple{NL, Int}, Array{T, NL}}()
@@ -552,7 +657,9 @@ function LinearAlgebra.eigen(t::BlockTensor{T}, linds, rinds; ishermitian::Bool 
         push!(factors, (σLs, σRs, rowoff, coloff, V, diag(D), _class_charge(t, lpos, first(σLs))))
     end
     order = sortperm([f[7] for f in factors])
-    bond = GradedSpace(Int[factors[ci][7] for ci in order], Int[length(factors[ci][6]) for ci in order])
+    qs = Int[factors[ci][7] for ci in order]
+    qs .-= 2 * fld(minimum(qs), 2)
+    bond = GradedSpace(qs, Int[length(factors[ci][6]) for ci in order])
     lk = KIndex(bond, "Link,eigen")
     ND = 2
     NU = length(rpos) + 1
@@ -588,4 +695,78 @@ function TensorInterface.contract(ts::Vector; kwargs...)
     all(t -> t isa KTensor, ts) && return TensorInterface.contract(collect(KTensor, ts); kwargs...)
     all(t -> t isa BlockTensor, ts) && return TensorInterface.contract(collect(BlockTensor, ts); kwargs...)
     return error("contract: expected a homogeneous tensor list, got $(unique(typeof.(ts)))")
+end
+
+#Random graded tensor populated only on the charge-conserving blocks: block present iff
+#Σ signs .* charges == 0 (signs: +1 ket-side legs, −1 bra-side/dual legs). This is the
+#graded boundary-MPS message initializer — the analogue of the fermionic branch's
+#parity-even random init: a full-rank, structure-compatible start that the one-site fitting
+#can refine, where the rank-1 delta join gets trapped in its own invariant subspace.
+function random_conserving_blocktensor(elt::Type, is::AbstractVector{<:KIndex}, signs::Vector{Int})
+    isv = collect(KIndex, is)
+    N = length(isv)
+    blocks = Dict{NTuple{N, Int}, Array{elt, N}}()
+    for key in Iterators.product((1:nsectors(space(i)) for i in isv)...)
+        q = sum(signs[a] * space(isv[a]).charges[key[a]] for a in 1:N; init = 0)
+        q == 0 || continue
+        blocks[key] = randn(elt, _blockdims(isv, key)...)
+    end
+    if isempty(blocks)
+        #no conserving blocks exist (e.g. single-layer amplitude networks carry net flux):
+        #fall back to a fully populated random tensor — flux-free bookkeeping keeps this
+        #correct, and later factorizations trim whatever the environment doesn't support
+        for key in Iterators.product((1:nsectors(space(i)) for i in isv)...)
+            blocks[key] = randn(elt, _blockdims(isv, key)...)
+        end
+    end
+    return BlockTensor(isv, blocks)
+end
+
+#Sector allocation from a charge-weight table: keep at most d sectors (highest weight,
+#ties toward small |charge|), dims proportional to weight with the heaviest sectors
+#absorbing the rounding remainder.
+function _allocate_sectors(w::Dict{Int, Float64}, d::Int)
+    isempty(w) && return GradedSpace([0], [max(d, 1)])
+    qs = sort(collect(keys(w)); by = q -> (-w[q], abs(q)))[1:min(d, length(w))]
+    sort!(qs)
+    ws = [w[q] for q in qs]
+    dims = [max(1, floor(Int, d * wk / sum(ws))) for wk in ws]
+    heavy = sort(1:length(qs); by = k -> -ws[k])
+    i = 1
+    while sum(dims) < d
+        dims[heavy[mod1(i, length(heavy))]] += 1
+        i += 1
+    end
+    i = length(heavy)
+    while sum(dims) > d
+        k = heavy[mod1(i, length(heavy))]
+        dims[k] > 1 && (dims[k] -= 1)
+        i -= 1
+    end
+    return GradedSpace(qs, dims)
+end
+
+#Weighted sumset convolution of charge spectra
+function _convolve_charges(w1::Dict{Int, Float64}, w2::Dict{Int, Float64})
+    out = Dict{Int, Float64}()
+    for (q1, a) in w1, (q2, b) in w2
+        out[q1 + q2] = get(out, q1 + q2, 0.0) + a * b
+    end
+    return out
+end
+
+#Charge-difference spectrum a message tensor can pump into a boundary-MPS link:
+#Σ over ket-leg charge minus bra-leg charge combinations, with multiplicities.
+function _message_diff_spectrum(m::BlockTensor)
+    w = Dict{Int, Float64}(0 => 1.0)
+    for i in TensorInterface.inds(m)
+        sp = space(i)
+        wi = Dict{Int, Float64}()
+        for (k, q) in enumerate(sp.charges)
+            qq = i.plev == 0 ? q : -q
+            wi[qq] = get(wi, qq, 0.0) + sp.dims[k]
+        end
+        w = _convolve_charges(w, wi)
+    end
+    return w
 end

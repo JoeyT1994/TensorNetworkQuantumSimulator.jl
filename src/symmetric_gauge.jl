@@ -28,7 +28,9 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
 
         U, S, V = svd(Ce, edge_ind; kwargs...)
 
-        new_edge_ind = [new_index(S, dim(commoninds(S, U)); tags = tags(first(edge_ind)))]
+        #a fresh index with the SAME space as the SVD bond (graded spaces must match for the
+        #replaceinds below); sim keeps the space and mints a new identity
+        new_edge_ind = [sim(only(commoninds(S, U)))]
 
         ψvsrc = replaceinds(ψvsrc * U, commoninds(S, U), new_edge_ind)
         ψvdst = replaceinds(ψvdst, edge_ind, edge_ind_sim)

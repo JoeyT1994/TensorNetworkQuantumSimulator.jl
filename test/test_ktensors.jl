@@ -173,6 +173,16 @@ end
         nfull = sum(prod(Int[TI.dim(i) for i in TI.inds(ψg[v])]) for v in vertices(ψg))
         @test nstored < 0.5 * nfull
 
+        #graded boundary MPS + certified sampling: random conserving init over convolved
+        #charged link spectra (fermion-branch recipe). Fixed per-sector allocation makes
+        #this variational at ~1e-4 (adaptive link expansion is future work); the sampling
+        #importance ratios are much tighter.
+        ne = real(norm_sqr(ψg; alg = "exact"))
+        nb = real(norm_sqr(ψg; alg = "boundarymps", mps_bond_dimension = 20))
+        @test abs(nb / ne - 1) < 5e-3
+        certified = sample_certified(ψg, 4; alg = "boundarymps", norm_mps_bond_dimension = 20, projected_mps_bond_dimension = 20)
+        @test all(x -> isfinite(real(first(x))), certified)
+
         #graded factorization round-trip on a generic 4-leg block tensor
         si = TI.new_index([0 => 1, 1 => 2]; tags = "a")
         sj = TI.new_index([0 => 2, 1 => 1]; tags = "b")
