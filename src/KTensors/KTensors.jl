@@ -32,19 +32,54 @@ using VectorInterface: VectorInterface
 using Adapt: Adapt, adapt
 using ..TensorInterface: TensorInterface
 
-export KIndex, KTensor, register_op!
+export KIndex, KTensor, BlockTensor, GradedSpace, register_op!
 
 # ── Index ───────────────────────────────────────────────────────────────────────────────
 
-struct KIndex
+"""
+    GradedSpace(charges => dims...)
+
+An abelian graded vector space: a list of `charge => dimension` sectors. Used as the
+space of a `KIndex` to make tensors block-sparse under the corresponding U(1)/Zₙ symmetry.
+"""
+struct GradedSpace
+    charges::Vector{Int}
+    dims::Vector{Int}
+    function GradedSpace(charges::Vector{Int}, dims::Vector{Int})
+        length(charges) == length(dims) || error("GradedSpace: charges/dims length mismatch")
+        #repeated charges are permitted: sectors are positional (block keys index into this
+        #list), and factorizations may produce several disconnected classes of equal charge
+        return new(charges, dims)
+    end
+end
+GradedSpace(sectors::Pair{<:Integer, <:Integer}...) = GradedSpace(Int[first.(sectors)...], Int[last.(sectors)...])
+Base.:(==)(a::GradedSpace, b::GradedSpace) = a.charges == b.charges && a.dims == b.dims
+
+space_dim(s::Integer) = Int(s)
+space_dim(s::GradedSpace) = sum(s.dims)
+nsectors(s::GradedSpace) = length(s.charges)
+#Position range of sector k within the dense (charge-ordered) index
+sector_range(s::GradedSpace, k::Int) = (sum(s.dims[1:(k - 1)]) + 1):sum(s.dims[1:k])
+
+"""
+    KIndex(d::Integer, tags = "")
+    KIndex(space::GradedSpace, tags = "")
+
+A named tensor index: identified by `(id, plev)`, carrying a space (a plain dimension for
+dense tensors, a `GradedSpace` for block-sparse ones), cosmetic tags, and a dual/arrow flag.
+"""
+struct KIndex{S}
     id::UInt64
-    d::Int
+    space::S
     plev::Int
     tags::String
-    dual::Bool   # bond orientation; bookkeeping for the graded v2, inert for dense data
+    dual::Bool   # bond orientation (arrow); inert for dense data
 end
 
 KIndex(d::Integer, tags::AbstractString = "") = KIndex(rand(UInt64), Int(d), 0, String(tags), false)
+KIndex(s::GradedSpace, tags::AbstractString = "") = KIndex(rand(UInt64), s, 0, String(tags), false)
+dimof(i::KIndex) = space_dim(i.space)
+space(i::KIndex) = i.space
 
 # Identity is (id, plev): `dag` (dual flip) and tag changes never change which index this is.
 Base.:(==)(a::KIndex, b::KIndex) = a.id == b.id && a.plev == b.plev
@@ -53,33 +88,34 @@ Base.adjoint(i::KIndex) = TensorInterface.prime(i)
 Base.copy(i::KIndex) = i
 
 function Base.show(io::IO, i::KIndex)
-    print(io, "(d=", i.d, "|id=", repr(i.id % UInt16), "|\"", i.tags, "\")", "'"^i.plev, i.dual ? "†" : "")
+    print(io, "(d=", dimof(i), "|id=", repr(i.id % UInt16), "|\"", i.tags, "\")", "'"^i.plev, i.dual ? "†" : "")
     return nothing
 end
 
-TensorInterface.dim(i::KIndex) = i.d
-TensorInterface.dim(is::AbstractVector{KIndex}) = prod(TensorInterface.dim.(is); init = 1)
+TensorInterface.dim(i::KIndex) = dimof(i)
+TensorInterface.dim(is::AbstractVector{<:KIndex}) = prod(TensorInterface.dim.(is); init = 1)
 TensorInterface.plev(i::KIndex) = i.plev
 TensorInterface.tags(i::KIndex) = i.tags
-TensorInterface.dag(i::KIndex) = KIndex(i.id, i.d, i.plev, i.tags, !i.dual)
-TensorInterface.prime(i::KIndex, n::Integer = 1) = KIndex(i.id, i.d, i.plev + n, i.tags, i.dual)
-TensorInterface.noprime(i::KIndex) = KIndex(i.id, i.d, 0, i.tags, i.dual)
-TensorInterface.sim(i::KIndex) = KIndex(rand(UInt64), i.d, i.plev, i.tags, i.dual)
+TensorInterface.dag(i::KIndex) = KIndex(i.id, i.space, i.plev, i.tags, !i.dual)
+TensorInterface.prime(i::KIndex, n::Integer = 1) = KIndex(i.id, i.space, i.plev + n, i.tags, i.dual)
+TensorInterface.noprime(i::KIndex) = KIndex(i.id, i.space, 0, i.tags, i.dual)
+TensorInterface.sim(i::KIndex) = KIndex(rand(UInt64), i.space, i.plev, i.tags, i.dual)
 
 for f in [:dag, :prime, :noprime, :sim]
-    @eval TensorInterface.$f(is::AbstractVector{KIndex}, args...) = map(i -> TensorInterface.$f(i, args...), is)
+    @eval TensorInterface.$f(is::AbstractVector{<:KIndex}, args...) = map(i -> TensorInterface.$f(i, args...), is)
 end
 
-TensorInterface.new_index(::Union{KIndex, AbstractVector{KIndex}}, d::Integer; tags = "") = KIndex(d, tags)
+TensorInterface.new_index(::Union{KIndex, AbstractVector{<:KIndex}}, d::Integer; tags = "") = KIndex(d, tags)
 
 # ── Tensor ──────────────────────────────────────────────────────────────────────────────
 
 struct KTensor{T, N, A <: AbstractArray{T, N}}
-    inds::Vector{KIndex}
+    inds::Vector{<:KIndex}
     data::A
-    function KTensor(inds::Vector{KIndex}, data::A) where {T, N, A <: AbstractArray{T, N}}
+    function KTensor(inds::AbstractVector, data::A) where {T, N, A <: AbstractArray{T, N}}
+        inds = collect(KIndex, inds)
         length(inds) == N || error("KTensor: $(length(inds)) indices for a rank-$N array")
-        all(i -> i.d == size(data, findfirst(==(i), inds)), unique(inds)) ||
+        all(i -> dimof(i) == size(data, findfirst(==(i), inds)), unique(inds)) ||
             error("KTensor: index dimensions $(TensorInterface.dim.(inds)) don't match array size $(size(data))")
         return new{T, N, A}(inds, data)
     end
@@ -119,7 +155,7 @@ _indvec(i::KIndex) = KIndex[i]
 _indvec(is::AbstractVector) = collect(KIndex, is)
 _indvec(is::Tuple) = collect(KIndex, is)
 
-const KIndsLike = Union{KTensor, KIndex, AbstractVector{KIndex}, Tuple{KIndex, Vararg{KIndex}}}
+const KIndsLike = Union{KTensor, KIndex, AbstractVector{<:KIndex}, Tuple{KIndex, Vararg{KIndex}}}
 
 TensorInterface.commoninds(a::KIndsLike, b::KIndsLike) = filter(i -> i ∈ _indvec(b), _indvec(a))
 # ITensors convention: the singular forms return the FIRST match (or nothing), not `only`.
@@ -156,7 +192,7 @@ function TensorInterface.replaceinds(t::KTensor, old, new)
             i
         else
             n = newv[k]
-            n.d == i.d || error("replaceinds: dimension mismatch $(i) → $(n)")
+            dimof(n) == dimof(i) || error("replaceinds: dimension mismatch $(i) → $(n)")
             n
         end
     end
@@ -167,38 +203,43 @@ TensorInterface.replaceinds(t::KTensor, p::Pair) = TensorInterface.replaceinds(t
 
 # ── Construction ────────────────────────────────────────────────────────────────────────
 
-TensorInterface.from_array(A::AbstractArray, is::KIndex...) = KTensor(collect(KIndex, is), reshape(copy(A), TensorInterface.dim.(is)...))
-TensorInterface.from_array(A::AbstractVector, i::KIndex) = KTensor(KIndex[i], copy(A))
+TensorInterface.from_array(A::AbstractArray, is::KIndex{<:Integer}...) = KTensor(collect(KIndex, is), reshape(copy(A), TensorInterface.dim.(is)...))
+TensorInterface.from_array(A::AbstractVector, i::KIndex{<:Integer}) = KTensor(KIndex[i], copy(A))
 
-TensorInterface.random_itensor(elt::Type, is::AbstractVector{KIndex}) = KTensor(collect(is), randn(elt, TensorInterface.dim.(is)...))
+function TensorInterface.random_itensor(elt::Type, is::AbstractVector{<:KIndex})
+    any(i -> space(i) isa GradedSpace, is) && error("random_itensor: not yet implemented for graded indices")
+    return KTensor(collect(is), randn(elt, TensorInterface.dim.(is)...))
+end
 TensorInterface.random_itensor(elt::Type, is::KIndex...) = TensorInterface.random_itensor(elt, collect(is))
-TensorInterface.random_itensor(is::AbstractVector{KIndex}) = TensorInterface.random_itensor(Float64, is)
+TensorInterface.random_itensor(is::AbstractVector{<:KIndex}) = TensorInterface.random_itensor(Float64, is)
 TensorInterface.random_itensor(is::KIndex...) = TensorInterface.random_itensor(Float64, collect(is))
 
-function TensorInterface.onehot(elt::Type, p::Pair{KIndex, <:Integer})
+function TensorInterface.onehot(elt::Type, p::Pair{<:KIndex, <:Integer})
     i, v = p
-    data = zeros(elt, i.d)
+    data = zeros(elt, dimof(i))
     data[v] = one(elt)
     return KTensor(KIndex[i], data)
 end
-TensorInterface.onehot(p::Pair{KIndex, <:Integer}) = TensorInterface.onehot(Float64, p)
+TensorInterface.onehot(p::Pair{<:KIndex, <:Integer}) = TensorInterface.onehot(Float64, p)
 
-function TensorInterface.delta(elt::Type, is::AbstractVector{KIndex})
+#Index vectors are often abstractly typed, so the dense/graded split is decided by content
+function TensorInterface.delta(elt::Type, is::AbstractVector{<:KIndex})
     isempty(is) && return KTensor(one(elt))
+    all(i -> space(i) isa GradedSpace, is) && return _delta_graded(elt, is)
     data = zeros(elt, TensorInterface.dim.(is)...)
     for k in 1:minimum(TensorInterface.dim.(is))
         data[ntuple(_ -> k, length(is))...] = one(elt)
     end
     return KTensor(collect(is), data)
 end
-TensorInterface.delta(is::AbstractVector{KIndex}) = TensorInterface.delta(Float64, is)
+TensorInterface.delta(is::AbstractVector{<:KIndex}) = TensorInterface.delta(Float64, is)
 TensorInterface.delta(elt::Type, is::KIndex...) = TensorInterface.delta(elt, collect(is))
 TensorInterface.delta(is::KIndex...) = TensorInterface.delta(Float64, collect(is))
 
 # A combiner is an explicit reshape isometry: identity data between the combined index
 # (first) and the product of the combined indices. `t * C` combines; multiplying by `C`
 # again splits back.
-function TensorInterface.combiner(is::AbstractVector{KIndex}; tags = "CMB,Link")
+function TensorInterface.combiner(is::AbstractVector{<:KIndex}; tags = "CMB,Link")
     isempty(is) && error("combiner: no indices to combine")
     D = prod(TensorInterface.dim.(is))
     c = KIndex(D, String(tags))
@@ -211,7 +252,7 @@ TensorInterface.combinedind(C::KTensor) = first(C.inds)
 # Direct sum of two tensors along the paired index axes (`olds1[k]`/`olds2[k]` → `news[k]`,
 # with dim(news[k]) = dim(olds1[k]) + dim(olds2[k])); all other indices must coincide.
 function TensorInterface.directsum(
-        news::AbstractVector{KIndex}, p1::Pair{<:KTensor}, p2::Pair{<:KTensor}
+        news::AbstractVector{<:KIndex}, p1::Pair{<:KTensor}, p2::Pair{<:KTensor}
     )
     t1, olds1 = first(p1), collect(KIndex, last(p1))
     t2, olds2 = first(p2), collect(KIndex, last(p2))
@@ -224,7 +265,7 @@ function TensorInterface.directsum(
     out = zeros(T, TensorInterface.dim.(oinds)...)
     r1 = map(i -> begin
         k = findfirst(==(i), olds1)
-        k === nothing ? Colon() : (1:i.d)
+        k === nothing ? Colon() : (1:dimof(i))
     end, t1.inds)
     out[r1...] .= t1.data
     perm2 = map(t1.inds) do i
@@ -236,7 +277,7 @@ function TensorInterface.directsum(
     d2 = permutedims(t2.data, perm2)
     r2 = map(enumerate(t1.inds)) do (ax, i)
         k = findfirst(==(i), olds1)
-        k === nothing ? Colon() : ((i.d + 1):(i.d + size(d2, ax)))
+        k === nothing ? Colon() : ((dimof(i) + 1):(dimof(i) + size(d2, ax)))
     end
     out[r2...] .= d2
     return KTensor(oinds, out)
@@ -354,11 +395,6 @@ function TensorInterface.contract(ts::Vector{<:KTensor}; sequence = nothing, kwa
     return _contract_seq(ts, sequence)
 end
 
-#Abstractly-typed tensor lists (e.g. from Any-valued network dictionaries) route here
-function TensorInterface.contract(ts::Vector; kwargs...)
-    all(t -> t isa KTensor, ts) || error("contract: expected KTensors, got $(unique(typeof.(ts)))")
-    return TensorInterface.contract(collect(KTensor, ts); kwargs...)
-end
 _contract_seq(ts::Vector{<:KTensor}, s::Integer) = ts[s]
 function _contract_seq(ts::Vector{<:KTensor}, s::Union{Vector, Tuple})
     return mapreduce(x -> _contract_seq(ts, x), *, s)
@@ -376,7 +412,7 @@ function _seq_temp_bytes(ts, s::Union{Vector, Tuple}, elsize)
         iy, sub = _seq_temp_bytes(ts, s[k], elsize)
         total += sub
         ix = vcat(filter(i -> i ∉ iy, ix), filter(i -> i ∉ ix, iy))
-        total += prod(Int[i.d for i in ix]; init = 1) * elsize
+        total += prod(Int[dimof(i) for i in ix]; init = 1) * elsize
     end
     return ix, total
 end
@@ -441,13 +477,13 @@ struct KSpectrum
 end
 
 # Permute+reshape to a (linds...) × (rest...) matrix. Returns matrix, left inds, right inds.
-function _matricize(t::KTensor, linds::Vector{KIndex})
+function _matricize(t::KTensor, linds::Vector{<:KIndex})
     rinds = TensorInterface.uniqueinds(t, linds)
     perm = map(i -> findfirst(==(i), t.inds), vcat(linds, rinds))
     any(isnothing, perm) && error("factorize: indices $(linds) not all found on tensor $(t.inds)")
     A = permutedims(t.data, perm)
-    dl = prod(Int[i.d for i in linds]; init = 1)
-    dr = prod(Int[i.d for i in rinds]; init = 1)
+    dl = prod(Int[dimof(i) for i in linds]; init = 1)
+    dr = prod(Int[dimof(i) for i in rinds]; init = 1)
     return reshape(A, dl, dr), linds, rinds
 end
 
@@ -465,8 +501,8 @@ function LinearAlgebra.qr(t::KTensor, linds; kwargs...)
     A, li, ri = _matricize(t, _indvec(linds))
     Q, R = qr_compact(A)
     b = KIndex(size(Q, 2), "Link,qr")
-    Qt = KTensor(vcat(li, [b]), reshape(Q, (Int[i.d for i in li]..., size(Q, 2))))
-    Rt = KTensor(vcat([b], ri), reshape(R, (size(R, 1), Int[i.d for i in ri]...)))
+    Qt = KTensor(vcat(li, [b]), reshape(Q, (Int[dimof(i) for i in li]..., size(Q, 2))))
+    Rt = KTensor(vcat([b], ri), reshape(R, (size(R, 1), Int[dimof(i) for i in ri]...)))
     return Qt, Rt
 end
 
@@ -486,7 +522,7 @@ function _svd_matrix(A::AbstractMatrix; maxdim = nothing, cutoff = nothing)
     return U, diag(S), Vt, truncerr
 end
 
-function _svd_split(t::KTensor, linds::Vector{KIndex}; maxdim = nothing, cutoff = nothing, mindim = 1)
+function _svd_split(t::KTensor, linds::Vector{<:KIndex}; maxdim = nothing, cutoff = nothing, mindim = 1)
     mindim > 1 && error("_svd_split: mindim > 1 is not supported by the KTensors backend yet")
     A, li, ri = _matricize(t, linds)
     U, S, Vt, truncerr = _svd_matrix(A; maxdim, cutoff)
@@ -514,14 +550,14 @@ function TensorInterface.factorize_svd(
         sq = sqrt.(S)
         F1m = U .* reshape(T.(sq), 1, k)
         F2m = reshape(T.(sq), k, 1) .* Vt
-        F1 = KTensor(vcat(li, [up]), reshape(F1m, (Int[i.d for i in li]..., k)))
-        F2 = KTensor(vcat([up], ri), reshape(F2m, (k, Int[i.d for i in ri]...)))
+        F1 = KTensor(vcat(li, [up]), reshape(F1m, (Int[dimof(i) for i in li]..., k)))
+        F2 = KTensor(vcat([up], ri), reshape(F2m, (k, Int[dimof(i) for i in ri]...)))
     elseif ortho == "left"
-        F1 = KTensor(vcat(li, [up]), reshape(U, (Int[i.d for i in li]..., k)))
-        F2 = KTensor(vcat([up], ri), reshape(Diagonal(T.(S)) * Vt, (k, Int[i.d for i in ri]...)))
+        F1 = KTensor(vcat(li, [up]), reshape(U, (Int[dimof(i) for i in li]..., k)))
+        F2 = KTensor(vcat([up], ri), reshape(Diagonal(T.(S)) * Vt, (k, Int[dimof(i) for i in ri]...)))
     elseif ortho == "right"
-        F1 = KTensor(vcat(li, [up]), reshape(U * Diagonal(T.(S)), (Int[i.d for i in li]..., k)))
-        F2 = KTensor(vcat([up], ri), reshape(Vt, (k, Int[i.d for i in ri]...)))
+        F1 = KTensor(vcat(li, [up]), reshape(U * Diagonal(T.(S)), (Int[dimof(i) for i in li]..., k)))
+        F2 = KTensor(vcat([up], ri), reshape(Vt, (k, Int[dimof(i) for i in ri]...)))
     else
         error("factorize_svd: unknown ortho = $ortho")
     end
@@ -546,11 +582,11 @@ function LinearAlgebra.factorize(
     T = eltype(U)
     b = KIndex(k, String(tags))
     if ortho == "left"
-        L = KTensor(vcat(li, [b]), reshape(U, (Int[i.d for i in li]..., k)))
-        R = KTensor(vcat([b], ri), reshape(Diagonal(T.(S)) * Vt, (k, Int[i.d for i in ri]...)))
+        L = KTensor(vcat(li, [b]), reshape(U, (Int[dimof(i) for i in li]..., k)))
+        R = KTensor(vcat([b], ri), reshape(Diagonal(T.(S)) * Vt, (k, Int[dimof(i) for i in ri]...)))
     elseif ortho == "right"
-        L = KTensor(vcat(li, [b]), reshape(U * Diagonal(T.(S)), (Int[i.d for i in li]..., k)))
-        R = KTensor(vcat([b], ri), reshape(Vt, (k, Int[i.d for i in ri]...)))
+        L = KTensor(vcat(li, [b]), reshape(U * Diagonal(T.(S)), (Int[dimof(i) for i in li]..., k)))
+        R = KTensor(vcat([b], ri), reshape(Vt, (k, Int[dimof(i) for i in ri]...)))
     else
         error("factorize: unknown ortho = $ortho")
     end
@@ -563,9 +599,9 @@ function LinearAlgebra.svd(t::KTensor, linds; maxdim = nothing, cutoff = nothing
     k = length(S)
     u = KIndex(k, "Link,u")
     v = KIndex(k, "Link,v")
-    Ut = KTensor(vcat(li, [u]), reshape(U, (Int[i.d for i in li]..., k)))
+    Ut = KTensor(vcat(li, [u]), reshape(U, (Int[dimof(i) for i in li]..., k)))
     St = KTensor(KIndex[u, v], Matrix(Diagonal(S)))
-    Vt_ = KTensor(vcat(ri, [v]), reshape(copy(transpose(Vt)), (Int[i.d for i in ri]..., k)))
+    Vt_ = KTensor(vcat(ri, [v]), reshape(copy(transpose(Vt)), (Int[dimof(i) for i in ri]..., k)))
     return Ut, St, Vt_
 end
 
@@ -591,7 +627,7 @@ function LinearAlgebra.eigen(t::KTensor, linds, rinds; ishermitian::Bool = false
     k = length(vals)
     lk = KIndex(k, "Link,eigen")
     D = KTensor(KIndex[TensorInterface.prime(lk), lk], Matrix(Diagonal(vals)))
-    U = KTensor(vcat(rv, [lk]), reshape(vecs, (Int[i.d for i in rv]..., k)))
+    U = KTensor(vcat(rv, [lk]), reshape(vecs, (Int[dimof(i) for i in rv]..., k)))
     return D, U
 end
 
@@ -617,7 +653,7 @@ end
 # `a` it should contract with (identity for plain absorption; the site/prime partner map for
 # the closing bra contraction). Returns (data, out_inds).
 function _tc_pair(
-        da, ia::Vector{KIndex}, db, ib::Vector{KIndex}, conjB::Bool, pairfn,
+        da, ia::Vector{<:KIndex}, db, ib::Vector{<:KIndex}, conjB::Bool, pairfn,
         istemp::Val, allocator
     )
     ca, cb = Int[], Int[]
@@ -642,7 +678,7 @@ end
 
 # Pattern check: `m` must be a standard doubled norm-network message for `ψ` — every index
 # either a plev-0 index of ψ (ket side) or the prime of one (bra side).
-function _is_norm_message(m::KTensor, ψinds::Vector{KIndex})
+function _is_norm_message(m::KTensor, ψinds::Vector{<:KIndex})
     return all(m.inds) do i
         (i.plev == 0 && i ∈ ψinds) || (i.plev == 1 && TensorInterface.noprime(i) ∈ ψinds)
     end
@@ -656,7 +692,7 @@ message update) come out as an unprimed/primed pair; a fully surrounded vertex c
 scalar (0-index) tensor. Returns `nothing` when the structure doesn't match.
 """
 function fused_norm_closure(
-        ψ::KTensor, sinds::Vector{KIndex}, incoming::Vector{<:KTensor};
+        ψ::KTensor, sinds::Vector{<:KIndex}, incoming::Vector{<:KTensor};
         op::Union{Nothing, KTensor} = nothing
     )
     ψ.data isa Array || return nothing
@@ -693,7 +729,7 @@ given standard doubled `incoming` messages. Returns `nothing` when the structure
 match (caller falls back to the generic contraction path).
 """
 function fused_norm_message(
-        ψ::KTensor, sinds::Vector{KIndex}, incoming::Vector{<:KTensor};
+        ψ::KTensor, sinds::Vector{<:KIndex}, incoming::Vector{<:KTensor};
         normalize::Bool = true
     )
     m = fused_norm_closure(ψ, sinds, incoming)
@@ -713,14 +749,14 @@ end
 # two updated site tensors and the singular-value tensor escape to the heap.
 
 # Buffered permute+reshape to a (linds × rest) matrix. Returns (matrix, linds, rinds).
-function _matricize_temp(da, ia::Vector{KIndex}, linds::Vector{KIndex}, buf)
+function _matricize_temp(da, ia::Vector{<:KIndex}, linds::Vector{<:KIndex}, buf)
     rinds = filter(i -> i ∉ linds, ia)
     perm = map(i -> findfirst(==(i), ia), vcat(linds, rinds))
     T = eltype(da)
     dims = ntuple(k -> size(da, perm[k]), ndims(da))
     C = TensorOperations.tensoralloc(Array{T, ndims(da)}, dims, Val(true), buf)
     TensorOperations.tensoradd!(C, da, (Tuple(perm), ()), false, one(T), zero(T))
-    dl = prod(Int[i.d for i in linds]; init = 1)
+    dl = prod(Int[dimof(i) for i in linds]; init = 1)
     return reshape(C, dl, :), linds, rinds
 end
 
@@ -736,7 +772,7 @@ function _qr_temp(Amat::AbstractMatrix, buf)
 end
 
 # Absorb a chain of 2-index gauge tensors into (X, ix) as buffer temps; conjB fuses dag.
-function _absorb_chain(X, ix::Vector{KIndex}, ms::Vector{<:KTensor}, conjB::Bool, buf)
+function _absorb_chain(X, ix::Vector{<:KIndex}, ms::Vector{<:KTensor}, conjB::Bool, buf)
     for m in ms
         X, oa, ob = _tc_pair(X, ix, m.data, m.inds, conjB, identity, Val(true), buf)
         ix = vcat(oa, ob)
@@ -748,7 +784,7 @@ function fused_two_site_gate(
         o::KTensor, ψ1::KTensor, ψ2::KTensor,
         sqrt1::Vector{<:KTensor}, inv1::Vector{<:KTensor},
         sqrt2::Vector{<:KTensor}, inv2::Vector{<:KTensor},
-        s1::Vector{KIndex}, s2::Vector{KIndex};
+        s1::Vector{<:KIndex}, s2::Vector{<:KIndex};
         maxdim = nothing, cutoff = nothing,
     )
     buf = _kernel_buffer()
@@ -769,8 +805,8 @@ function fused_two_site_gate(
     b2 = KIndex(size(Q2m, 2), "Link,qr")
     iR1 = vcat([b1], r1)
     iR2 = vcat([b2], r2)
-    R1 = reshape(R1m, (b1.d, Int[i.d for i in r1]...))
-    R2 = reshape(R2m, (b2.d, Int[i.d for i in r2]...))
+    R1 = reshape(R1m, (dimof(b1), Int[dimof(i) for i in r1]...))
+    R2 = reshape(R2m, (dimof(b2), Int[dimof(i) for i in r2]...))
 
     # oR = noprime(o · (R1 · R2)) — small, buffer temps
     RR, oa, ob = _tc_pair(R1, iR1, R2, iR2, false, identity, Val(true), buf)
@@ -790,16 +826,16 @@ function fused_two_site_gate(
     up = TensorInterface.prime(u)
     TS = promote_type(eltype(U), eltype(S))
     sq = sqrt.(S)
-    F1 = reshape(U .* reshape(TS.(sq), 1, k), (Int[i.d for i in lo]..., k))
-    F2 = reshape(reshape(TS.(sq), k, 1) .* Vt, (k, Int[i.d for i in ro]...))
+    F1 = reshape(U .* reshape(TS.(sq), 1, k), (Int[dimof(i) for i in lo]..., k))
+    F2 = reshape(reshape(TS.(sq), k, 1) .* Vt, (k, Int[dimof(i) for i in ro]...))
     iF1 = vcat(lo, [up])
     iF2 = vcat([up], ro)
 
     # De-gauge: Y_k = Q_k · ∏ conj(inv-√env), the dag fused as a conj flag
     iQ1 = vcat(l1, [b1])
     iQ2 = vcat(l2, [b2])
-    Y1, iy1 = _absorb_chain(reshape(Q1m, (Int[i.d for i in l1]..., b1.d)), iQ1, inv1, true, buf)
-    Y2, iy2 = _absorb_chain(reshape(Q2m, (Int[i.d for i in l2]..., b2.d)), iQ2, inv2, true, buf)
+    Y1, iy1 = _absorb_chain(reshape(Q1m, (Int[dimof(i) for i in l1]..., dimof(b1))), iQ1, inv1, true, buf)
+    Y2, iy2 = _absorb_chain(reshape(Q2m, (Int[dimof(i) for i in l2]..., dimof(b2))), iQ2, inv2, true, buf)
 
     # Reassemble; these two escape to the heap
     T1, oa, ob = _tc_pair(Y1, iy1, F1, iF1, false, identity, Val(false), buf)
@@ -820,7 +856,7 @@ const _σx = ComplexF64[0 1; 1 0]
 const _σy = ComplexF64[0 -im; im 0]
 const _σz = ComplexF64[1 0; 0 -1]
 
-_is_spinhalf(i::KIndex) = i.d == 2
+_is_spinhalf(i::KIndex) = dimof(i) == 2
 
 """
     register_op!(name::String, f::Function; nsites::Int = 1)
@@ -923,5 +959,7 @@ function TensorInterface.state(name::String, i::KIndex)
     haskey(vecmap, name) || error("state: unknown state \"$name\" for the KTensors backend")
     return KTensor(KIndex[i], copy(vecmap[name]))
 end
+
+include("blocktensor.jl")
 
 end

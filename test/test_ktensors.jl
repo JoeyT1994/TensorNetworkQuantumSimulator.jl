@@ -144,6 +144,47 @@ end
         end
     end
 
+    @testset "graded (block-sparse) backend" begin
+        using TensorNetworkQuantumSimulator.KTensors: BlockTensor, GradedSpace
+        function graded_digest(sectors)
+            g = named_grid((3, 3))
+            s = siteinds("S=1/2", g; sectors)
+            ψ = tensornetworkstate(ComplexF64, v -> iseven(v[1] + v[2]) ? "↑" : "↓", g, s)
+            layer = Any[("Rz", [v], 0.4) for v in vertices(g)]
+            for ces in edge_color(g, 4)
+                append!(layer, ("xx_plus_yy", pair, (0.7, 0.3)) for pair in ces)
+                append!(layer, ("Rzz", pair, 0.2) for pair in ces)
+            end
+            circuit = reduce(vcat, [layer for _ in 1:2])
+            bp_update_kwargs = (; maxiter = 30, tolerance = 1.0e-12)
+            ψ, errs = apply_gates(circuit, ψ; apply_kwargs = (; maxdim = 4, cutoff = 1.0e-14), bp_update_kwargs)
+            zs = expect(ψ, [("Z", [v]) for v in vertices(g)]; alg = "bp", cache_update_kwargs = bp_update_kwargs)
+            zx = expect(ψ, ("Z", [(2, 2)]); alg = "exact")
+            return ψ, real(sum(zs)), real(zx), sum(errs)
+        end
+        ψd, zd, zxd, ed = graded_digest(nothing)
+        ψg, zg, zxg, eg = graded_digest([0 => 1, 1 => 1])
+        @test ψg[(1, 1)] isa BlockTensor
+        @test zd ≈ zg atol = 1e-10
+        @test zxd ≈ zxg atol = 1e-10
+        @test ed ≈ eg atol = 1e-12
+        #the particle-conserving circuit leaves the state genuinely block-sparse
+        nstored = sum(sum(length, values(ψg[v].blocks); init = 0) for v in vertices(ψg))
+        nfull = sum(prod(Int[TI.dim(i) for i in TI.inds(ψg[v])]) for v in vertices(ψg))
+        @test nstored < 0.5 * nfull
+
+        #graded factorization round-trip on a generic 4-leg block tensor
+        si = TI.new_index([0 => 1, 1 => 2]; tags = "a")
+        sj = TI.new_index([0 => 2, 1 => 1]; tags = "b")
+        T4 = TI.from_array(rand(ComplexF64, 3, 3, 3, 3), si', sj', si, sj)
+        svr = Ref{Any}(nothing)
+        F1, F2, spec = TI.factorize_svd(T4, [si', sj']; ortho = "none", singular_values! = svr)
+        @test norm(F1 * F2 - T4) < 1e-10
+        @test spec.truncerr < 1e-13
+        Q, R = qr(T4, [si', sj'])
+        @test norm(Q * R - T4) < 1e-10
+    end
+
     @testset "end-to-end BP digests" begin
         function digest(g)
             ψ = tensornetworkstate(ComplexF64, v -> "↑", g, "S=1/2")

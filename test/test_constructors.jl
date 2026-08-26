@@ -45,7 +45,7 @@ using Test: @testset, @test, @test_throws
     s = siteinds("S=1/2", g)
     @test s isa Dictionary
     @test keys(s) == vertices(g)
-    @test all([s[v] isa Vector{KIndex} for v in vertices(g)])
+    @test all([s[v] isa Vector{<:KIndex} for v in vertices(g)])
     @test all([length(s[v]) == 1 for v in vertices(g)])
 
     #TensorNetworkState

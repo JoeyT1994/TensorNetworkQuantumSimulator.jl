@@ -22,7 +22,9 @@ end
 
 #OMEinsumContractionOrders helpers
 function to_eincode(tensors::Vector)
-    ixs = map(t -> collect(inds(t)), tensors)
+    #identity.() narrows the abstract-eltype index vectors to the concrete index type; the
+    #omeinsum machinery needs a concrete, consistent label type
+    ixs = map(t -> identity.(collect(inds(t))), tensors)
     LT = eltype(eltype(ixs))
     #`reduce` over a single tensor returns the tensor itself, not its indices; a one-tensor
     #network is trivial and its open indices are all of that tensor's indices.

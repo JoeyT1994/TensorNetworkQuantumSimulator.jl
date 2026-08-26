@@ -4,8 +4,14 @@ function default_siteinds(g::AbstractGraph; kwargs...)
     return siteinds("S=1/2", g; kwargs...)
 end
 
-function siteinds(sitetype::String, g::AbstractGraph, sitedimension::Integer = site_dimension(sitetype); inds_per_site::Integer = 1)
+function siteinds(sitetype::String, g::AbstractGraph, sitedimension::Integer = site_dimension(sitetype); inds_per_site::Integer = 1, sectors = nothing)
     vs = collect(vertices(g))
+    if sectors !== nothing
+        #graded (block-sparse) site indices: `sectors` is a list of charge => dimension pairs
+        sum(last.(sectors)) == sitedimension ||
+            error("siteinds: sector dimensions $(sectors) do not sum to the site dimension $(sitedimension)")
+        return Dictionary(vs, [[new_index(collect(sectors); tags = site_tag(sitetype)) for i in 1:inds_per_site] for v in vs])
+    end
     return Dictionary(vs, [[new_index(sitedimension; tags = site_tag(sitetype)) for i in 1:inds_per_site] for v in vs])
 end
 
