@@ -326,8 +326,29 @@ function _trace_all(t::KTensor)
     return out isa Number ? out : sum(out)
 end
 
+#Buffered sequence execution: contraction trees run pairwise with every intermediate in
+#the task-local buffer (checkpoint/reset per call); only the root result touches the heap.
+#This gives EVERY cached-sequence contraction (boundary MPS, exact, loop corrections, ...)
+#the allocation discipline of the fused kernels without structure-specific code. Falls back
+#to the plain heap path for non-CPU storage or when the tree's total intermediate footprint
+#exceeds `SEQ_BUFFER_MAXBYTES` (the task-local buffer only ever grows, so unboundedly large
+#trees — e.g. exact contraction of big networks — should not pin their peak memory forever).
+const SEQ_BUFFER_MAXBYTES = Ref(2^30)
+
 function TensorInterface.contract(ts::Vector{<:KTensor}; sequence = nothing, kwargs...)
     isnothing(sequence) && return reduce(*, ts)
+    sequence isa Integer && return ts[sequence]
+    if all(t -> t.data isa Array, ts)
+        elsize = sizeof(promote_type(map(eltype, ts)...))
+        _, total = _seq_temp_bytes(ts, sequence, elsize)
+        if total <= SEQ_BUFFER_MAXBYTES[]
+            buf = _kernel_buffer()
+            cp = TensorOperations.allocator_checkpoint!(buf)
+            data, is = _exec_seq(ts, sequence, buf, true)
+            TensorOperations.allocator_reset!(buf, cp)
+            return KTensor(is, data)
+        end
+    end
     return _contract_seq(ts, sequence)
 end
 
@@ -339,6 +360,47 @@ end
 _contract_seq(ts::Vector{<:KTensor}, s::Integer) = ts[s]
 function _contract_seq(ts::Vector{<:KTensor}, s::Union{Vector, Tuple})
     return mapreduce(x -> _contract_seq(ts, x), *, s)
+end
+
+#Symbolic walk of the sequence tree: per-node open indices and the summed byte size of all
+#intermediates (the buffer is only reset at the root, so the requirement is the total, not
+#the live peak). Returns (open_inds, total_intermediate_bytes).
+function _seq_temp_bytes(ts, s::Integer, elsize)
+    return ts[s].inds, 0
+end
+function _seq_temp_bytes(ts, s::Union{Vector, Tuple}, elsize)
+    ix, total = _seq_temp_bytes(ts, s[1], elsize)
+    for k in 2:length(s)
+        iy, sub = _seq_temp_bytes(ts, s[k], elsize)
+        total += sub
+        ix = vcat(filter(i -> i ∉ iy, ix), filter(i -> i ∉ ix, iy))
+        total += prod(Int[i.d for i in ix]; init = 1) * elsize
+    end
+    return ix, total
+end
+
+#Execute the tree: leaves are the input arrays, intermediates are buffer temps, and the
+#root-level final pairwise contraction writes its result on the heap.
+function _exec_seq(ts, s::Integer, buf, isroot)
+    t = ts[s]
+    return t.data, t.inds
+end
+function _exec_seq(ts, s::Union{Vector, Tuple}, buf, isroot)
+    X, ix = _exec_seq(ts, s[1], buf, false)
+    n = length(s)
+    for k in 2:n
+        Y, iy = _exec_seq(ts, s[k], buf, false)
+        if ndims(X) == 0 || ndims(Y) == 0
+            #scalar × tensor: cheap, sidestep the pairwise machinery
+            data = ndims(X) == 0 ? X[] .* Y : Y[] .* X
+            X, ix = data, (ndims(X) == 0 ? iy : ix)
+            continue
+        end
+        istemp = (isroot && k == n) ? Val(false) : Val(true)
+        X, oa, ob = _tc_pair(X, ix, Y, iy, false, identity, istemp, buf)
+        ix = vcat(oa, ob)
+    end
+    return X, ix
 end
 
 TensorInterface.apply(o::KTensor, t::KTensor) = TensorInterface.noprime(o * t)
@@ -543,8 +605,8 @@ end
 # Steady-state heap cost per call: the output message + O(1) bookkeeping — the "2F + out"
 # target, with the 2F living in the reused buffer.
 
-function _bp_buffer()
-    return get!(task_local_storage(), :ktensors_bp_buffer) do
+function _kernel_buffer()
+    return get!(task_local_storage(), :ktensors_kernel_buffer) do
         TensorOperations.BufferAllocator()
     end::TensorOperations.BufferAllocator
 end
@@ -599,7 +661,7 @@ function fused_norm_closure(
     all(m -> m.data isa Array && _is_norm_message(m, ψ.inds), incoming) || return nothing
     op === nothing || op.data isa Array || return nothing
 
-    buf = _bp_buffer()
+    buf = _kernel_buffer()
     cp = TensorOperations.allocator_checkpoint!(buf)
     X, ix = ψ.data, ψ.inds
     for m in incoming
@@ -687,7 +749,7 @@ function fused_two_site_gate(
         s1::Vector{KIndex}, s2::Vector{KIndex};
         maxdim = nothing, cutoff = nothing,
     )
-    buf = _bp_buffer()
+    buf = _kernel_buffer()
     cp = TensorOperations.allocator_checkpoint!(buf)
 
     # Gauge: X_k = ψ_k · ∏ √env (buffer temps)
