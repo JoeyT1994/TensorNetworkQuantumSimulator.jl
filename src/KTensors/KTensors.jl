@@ -172,6 +172,8 @@ TensorInterface.from_array(A::AbstractVector, i::KIndex) = KTensor(KIndex[i], co
 
 TensorInterface.random_itensor(elt::Type, is::AbstractVector{KIndex}) = KTensor(collect(is), randn(elt, TensorInterface.dim.(is)...))
 TensorInterface.random_itensor(elt::Type, is::KIndex...) = TensorInterface.random_itensor(elt, collect(is))
+TensorInterface.random_itensor(is::AbstractVector{KIndex}) = TensorInterface.random_itensor(Float64, is)
+TensorInterface.random_itensor(is::KIndex...) = TensorInterface.random_itensor(Float64, collect(is))
 
 function TensorInterface.onehot(elt::Type, p::Pair{KIndex, <:Integer})
     i, v = p

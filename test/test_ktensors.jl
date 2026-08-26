@@ -27,6 +27,7 @@ end
         @test TI.dag(i) == i           # dual flip preserves identity
         @test TI.sim(i) != i
         @test i' == TI.prime(i)
+        @test eltype(TI.random_itensor(i, TI.sim(i))) == Float64   # eltype defaults to Float64
     end
 
     @testset "contraction" begin
