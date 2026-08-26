@@ -504,16 +504,19 @@ function _is_norm_message(m::KTensor, ψinds::Vector{KIndex})
 end
 
 """
-Fused computation of the outgoing BP message from vertex tensor `ψ` (site indices `sinds`)
-given standard doubled `incoming` messages. Returns `nothing` when the structure doesn't
-match (caller falls back to the generic contraction path).
+Fused ket-side closure of vertex tensor `ψ` (site indices `sinds`) against its own
+conjugate, given standard doubled `incoming` messages and an optional single-site operator
+`op` inserted between the layers. ψ-legs without a partner (e.g. the target edge of a
+message update) come out as an unprimed/primed pair; a fully surrounded vertex closes to a
+scalar (0-index) tensor. Returns `nothing` when the structure doesn't match.
 """
-function fused_norm_message(
+function fused_norm_closure(
         ψ::KTensor, sinds::Vector{KIndex}, incoming::Vector{<:KTensor};
-        normalize::Bool = true
+        op::Union{Nothing, KTensor} = nothing
     )
     ψ.data isa Array || return nothing
     all(m -> m.data isa Array && _is_norm_message(m, ψ.inds), incoming) || return nothing
+    op === nothing || op.data isa Array || return nothing
 
     buf = _bp_buffer()
     cp = TensorOperations.allocator_checkpoint!(buf)
@@ -522,20 +525,39 @@ function fused_norm_message(
         X, oa, ob = _tc_pair(X, ix, m.data, m.inds, false, identity, Val(true), buf)
         ix = vcat(oa, ob)
     end
-    # Closing: ψ-leg i pairs with X-leg i (sites, ket↔bra direct) or prime(i)
-    # (message-bridged bra side); unpaired ψ-legs (the target edge) come out primed.
-    # istemp = Val(false) puts the output on the heap while the internal permute scratch of
-    # the contraction still lives in the buffer.
-    partner = i -> i ∈ sinds ? i : TensorInterface.prime(i)
+    covered = op === nothing ? KIndex[] : KIndex[i for i in op.inds if i.plev == 0]
+    if op !== nothing
+        X, oa, ob = _tc_pair(X, ix, op.data, op.inds, false, identity, Val(true), buf)
+        ix = vcat(oa, ob)
+    end
+    # Closing: ψ-leg i pairs with X-leg i (uncovered sites, ket↔bra direct) or prime(i)
+    # (message-bridged virtuals and operator-covered sites); unpaired ψ-legs come out as an
+    # (i, i′) pair. istemp = Val(false) puts the output on the heap while the internal
+    # permute scratch of the contraction still lives in the buffer.
+    partner = i -> (i ∈ sinds && i ∉ covered) ? i : TensorInterface.prime(i)
     out, o_ket, o_bra = _tc_pair(X, ix, ψ.data, ψ.inds, true, partner, Val(false), buf)
     oinds = vcat(o_ket, TensorInterface.prime.(o_bra))
     TensorOperations.allocator_reset!(buf, cp)
 
-    if normalize
-        s = sum(out)
-        iszero(s) || rmul!(vec(out), inv(s))
-    end
     return KTensor(oinds, out)
+end
+
+"""
+Fused computation of the outgoing BP message from vertex tensor `ψ` (site indices `sinds`)
+given standard doubled `incoming` messages. Returns `nothing` when the structure doesn't
+match (caller falls back to the generic contraction path).
+"""
+function fused_norm_message(
+        ψ::KTensor, sinds::Vector{KIndex}, incoming::Vector{<:KTensor};
+        normalize::Bool = true
+    )
+    m = fused_norm_closure(ψ, sinds, incoming)
+    m === nothing && return nothing
+    if normalize
+        s = sum(m.data)
+        iszero(s) || rmul!(vec(m.data), inv(s))
+    end
+    return m
 end
 
 # ── Fused two-site simple-update gate kernel ────────────────────────────────────────────

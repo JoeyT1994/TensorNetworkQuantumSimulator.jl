@@ -69,6 +69,8 @@ function expect(
 
     #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
     function contract_region(op_string_f)
+        fast = norm_scalar_kernel(network(cache), steiner_vs, incoming_ms; op_strings = op_string_f)
+        fast !== nothing && return fast
         tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
         append!(tensors, incoming_ms)
         seq = contraction_sequence(tensors; alg = "optimal")

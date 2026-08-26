@@ -79,6 +79,55 @@ function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector{<:K
     return KTensors.fused_norm_message(ψ, collect(KIndex, sinds), incoming_ms; normalize)
 end
 
+#Fused KTensors fast path for BP region scalars (expectation-value numerators/denominators
+#and vertex scalars): one- and two-vertex regions close through the same fused kernel — a
+#two-vertex region is "message from v1 with its operator inserted" followed by a full
+#closure at v2. Larger Steiner regions and non-standard structures fall back.
+function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Vector{<:KTensor}; op_strings::Function)
+    1 <= length(vs) <= 2 || return nothing
+    ψs, sindss, ops = KTensor[], Vector{KIndex}[], Union{Nothing, KTensor}[]
+    for v in vs
+        ψ = tns[v]
+        ψ isa KTensor || return nothing
+        sinds = siteinds(tns, v)
+        all(i -> i isa KIndex, sinds) || return nothing
+        str = op_strings(v)
+        if str == "I"
+            push!(ops, nothing)
+        elseif str == "ρ" || length(sinds) != 1
+            return nothing
+        else
+            push!(ops, adapt_like(ψ, op(str, only(sinds))))
+        end
+        push!(ψs, ψ)
+        push!(sindss, collect(KIndex, sinds))
+    end
+
+    if length(vs) == 1
+        c = KTensors.fused_norm_closure(ψs[1], sindss[1], incoming_ms; op = ops[1])
+        (c === nothing || !isempty(inds(c))) && return nothing
+        return scalar(c)
+    end
+
+    #Partition the region's incoming messages by which vertex tensor they attach to
+    ms1, ms2 = KTensor[], KTensor[]
+    for m in incoming_ms
+        ket_legs = filter(i -> plev(i) == 0, inds(m))
+        if all(i -> i ∈ inds(ψs[1]), ket_legs)
+            push!(ms1, m)
+        elseif all(i -> i ∈ inds(ψs[2]), ket_legs)
+            push!(ms2, m)
+        else
+            return nothing
+        end
+    end
+    T1 = KTensors.fused_norm_closure(ψs[1], sindss[1], ms1; op = ops[1])
+    T1 === nothing && return nothing
+    c = KTensors.fused_norm_closure(ψs[2], sindss[2], vcat(ms2, [T1]); op = ops[2])
+    (c === nothing || !isempty(inds(c))) && return nothing
+    return scalar(c)
+end
+
 function default_message(tns::TensorNetworkState, edge::AbstractEdge)
     linds = virtualinds(tns, edge)
     return adapt_like(tns, denseblocks(delta(vcat(linds, prime(dag(linds))))))

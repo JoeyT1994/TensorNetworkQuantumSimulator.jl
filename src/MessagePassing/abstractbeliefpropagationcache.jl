@@ -22,6 +22,8 @@ end
 
 function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
     incoming_ms = incoming_messages(bp_cache, vertex)
+    fast = norm_scalar_kernel(network(bp_cache), [vertex], incoming_ms; op_strings = v -> "I")
+    fast !== nothing && return fast
     state = bp_factors(bp_cache, vertex)
     contract_list = [state; incoming_ms]
     sequence = contraction_sequence(contract_list; alg = "optimal")
@@ -161,9 +163,10 @@ function incoming_messages(bp_cache::AbstractBeliefPropagationCache, vertex; kwa
     return incoming_messages(bp_cache, [vertex]; kwargs...)
 end
 
-#Backend-specialized fast path for the double-layer message update. Returns `nothing` when
-#no specialization applies and the generic contraction path below should run.
+#Backend-specialized fast paths for the double-layer message update and region scalars.
+#Both return `nothing` when no specialization applies and the generic path should run.
 norm_message_kernel(net, vertex, incoming_ms; kwargs...) = nothing
+norm_scalar_kernel(net, vertices, incoming_ms; kwargs...) = nothing
 
 function updated_message(
         alg::Algorithm"contract", bp_cache::AbstractBeliefPropagationCache, edge::NamedEdge
