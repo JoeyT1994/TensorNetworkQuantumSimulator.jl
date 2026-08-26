@@ -1,5 +1,6 @@
 using TensorNetworkQuantumSimulator
 using Statistics
+using TensorNetworkQuantumSimulator: ITensor
 
 function main()
     #Define the lattice

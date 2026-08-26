@@ -1,6 +1,6 @@
 @eval module $(gensym())
 using Dictionaries: Dictionary
-using ITensors: datatype
+using TensorNetworkQuantumSimulator: datatype
 using Random
 using Statistics
 using TensorNetworkQuantumSimulator

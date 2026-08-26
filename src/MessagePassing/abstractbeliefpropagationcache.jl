@@ -24,7 +24,7 @@ function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
     state = bp_factors(bp_cache, vertex)
     contract_list = [state; incoming_ms]
     sequence = contraction_sequence(contract_list; alg = "optimal")
-    return scalar(contract(contract_list; sequence))
+    return scalar(contract_network(contract_list; sequence))
 end
 
 function edge_scalar(
@@ -41,8 +41,8 @@ for f in [
         :(bp_factors),
         :(default_bp_maxiter),
         :(virtualinds),
-        :(ITensors.datatype),
-        :(ITensors.NDTensors.scalartype),
+        :(datatype),
+        :(VectorInterface.scalartype),
         :(maxvirtualdim),
         :(default_message),
         :(siteinds),
@@ -177,10 +177,17 @@ function updated_message(
         sequence = contraction_sequence(contract_list; alg = alg.kwargs.sequence_alg)
         seq_changed = true
     end
-    updated_message = contract(contract_list; sequence)
+    updated_message = contract_network(contract_list; sequence)
 
     if alg.kwargs.normalize
-        message_norm = sum(updated_message)
+        # A doubled (ket/bra) network message is a bond operator: normalize by its trace,
+        # which is sign-correct for fermionic bonds (the entrywise `sum` can flip the sign).
+        # A single-layer network message is a vector with no bra/ket pairing, so use `sum`.
+        message_norm = if is_operator(updated_message)
+            tr(updated_message, operator_inds(updated_message)...)
+        else
+            sum(updated_message)
+        end
         if !iszero(message_norm)
             updated_message = updated_message / message_norm
         end

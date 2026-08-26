@@ -1,7 +1,7 @@
 using TensorNetworkQuantumSimulator
 using Graphs: center
 using TensorNetworkQuantumSimulator: setindex_preserve!, noprime
-using ITensors: ITensors, ITensor
+using TensorNetworkQuantumSimulator: Ops, ITensor
 
 function main()
     nx, ny = 4, 4
@@ -14,7 +14,7 @@ function main()
     #Start from the identity operator, then place a single Z on vertex vz
     ψI = identity_tensornetworkstate(ComplexF64, g, s)
     ψ0 = copy(ψI)
-    setindex_preserve!(ψ0, noprime(ψ0[vz] * ITensors.op("Z", s[vz][1])), vz)
+    setindex_preserve!(ψ0, noprime(ψ0[vz] * Ops.op("Z", s[vz][1])), vz)
 
     maxdim, cutoff = 4, 1.0e-14
     apply_kwargs = (; maxdim, cutoff, normalize_tensors = false)
@@ -34,11 +34,11 @@ function main()
     ec = edge_color(g, 4)
     
     #Ket leg (s[v][1]) gets U† (angle negated), bra leg (s[v][2]) gets U (angle unchanged) so that O -> U'OU
-    append!(layer, [ITensors.op("Rz", s[v][1];  θ = -h * δt)*ITensors.op("Rz", s[v][2];  θ = h * δt) for v in vertices(g)])
+    append!(layer, [Ops.op("Rz", s[v][1];  θ = -h * δt)*Ops.op("Rz", s[v][2];  θ = h * δt) for v in vertices(g)])
     for es in ec
-        append!(layer, [ITensors.op("Rxx", s[src(e)][1], s[dst(e)][1], ϕ = -J * δt)*ITensors.op("Rxx", s[src(e)][2], s[dst(e)][2], ϕ = J * δt) for e in es])
+        append!(layer, [Ops.op("Rxx", s[src(e)][1], s[dst(e)][1], ϕ = -J * δt)*Ops.op("Rxx", s[src(e)][2], s[dst(e)][2], ϕ = J * δt) for e in es])
     end
-    append!(layer, [ITensors.op("Rz", s[v][1];  θ = -h * δt)*ITensors.op("Rz", s[v][2];  θ = h * δt) for v in vertices(g)])
+    append!(layer, [Ops.op("Rz", s[v][1];  θ = -h * δt)*Ops.op("Rz", s[v][2];  θ = h * δt) for v in vertices(g)])
 
     χinit = maxvirtualdim(ψ)
     println("Initial bond dimension of the Heisenberg operator is $χinit")

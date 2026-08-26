@@ -4,7 +4,7 @@ CurrentModule = TensorNetworkQuantumSimulator
 
 # TensorNetworkQuantumSimulator.jl
 
-A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks of near-arbitrary geometry. Built on top of [ITensors.jl](https://github.com/ITensor/ITensors.jl) and [NamedGraphs.jl](https://github.com/ITensor/NamedGraphs.jl).
+A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks of near-arbitrary geometry. Built on top of [ITensorBase.jl](https://github.com/ITensor/ITensorBase.jl) and [NamedGraphs.jl](https://github.com/ITensor/NamedGraphs.jl).
 
 ![Overview of TensorNetworkQuantumSimulator.jl](mainfig.svg)
 

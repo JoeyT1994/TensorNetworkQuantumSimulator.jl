@@ -1,6 +1,5 @@
 using Dictionaries: Dictionary
 using Graphs: Graphs
-using ITensors: ITensors, ITensor
 using NamedGraphs: NamedGraphs, add_edge!, incident_edges
 using NamedGraphs.GraphsExtensions: rem_edges!
 using Adapt
@@ -15,6 +14,13 @@ graph(tn::TensorNetwork) = tn.graph
 tensors(tn::TensorNetwork) = tn.tensors
 
 Base.getindex(tn::TensorNetwork, v) = getindex(tensors(tn), v)
+
+# The next-gen `ITensor` is parameterized (`ITensor{IndexName}`), which does not match
+# the abstract `Dictionary{V, ITensor}` field type by invariance; convert so a
+# dictionary of concrete ITensors still builds.
+function TensorNetwork(tensors::Dictionary{V, <:ITensor}, graph::NamedGraph{V}) where {V}
+    return TensorNetwork{V}(convert(Dictionary{V, ITensor}, tensors), graph)
+end
 
 function TensorNetwork(tensors::Dictionary)
     g = NamedGraph(keys(tensors))
@@ -60,7 +66,7 @@ function add_tensor!(tn::TensorNetwork, tensor::ITensor, v)
 end
 
 function default_message(tn::TensorNetwork, edge::NamedEdge)
-    return adapt_like(tn, denseblocks(delta(virtualinds(tn, edge))))
+    return adapt_like(tn, delta(virtualinds(tn, edge)))
 end
 
 function bp_factors(tn::TensorNetwork, vertex)
@@ -78,7 +84,7 @@ function random_tensornetwork(eltype, g::AbstractGraph; bond_dimension::Integer 
     tensors = Dictionary{vertextype(g), ITensor}()
     for v in vs
         is = [l[NamedEdge(v => vn)] for vn in neighbors(g, v)]
-        set!(tensors, v, random_itensor(eltype, is))
+        set!(tensors, v, randn(eltype, is...))
     end
     return TensorNetwork(tensors, g)
 end
