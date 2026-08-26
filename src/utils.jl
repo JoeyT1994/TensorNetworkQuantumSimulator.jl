@@ -43,20 +43,21 @@ function identity_tensor(eltype, row_inds::Vector{<:Index}, col_inds::Vector{<:I
     return (t * c_row)*c_col
 end
 
-identity_tensor(row_inds::Vector{<:Index}, col_inds::Vector{<:Index}) = identity_tensor(Float64, row_inds, col_inds)
-
 #Function for checking the correct algorithm is being used for the given cache type and functionality
 function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState}, f::String, alg)
     if alg == "bp"
         if !((tns isa BeliefPropagationCache) || (tns isa TensorNetworkState))
             return error("Expected BeliefPropagationCache or TensorNetworkState for 'bp' algorithm, got $(typeof(tns))")
         end
+        if f ∈ ["sample_certified"]
+            return error("Certified sampling needs an estimate of p(x)/q(x), which the 'bp' sampler does not produce. Use alg = 'boundarymps'.")
+        end
     elseif alg == "loopcorrections"
         if !((tns isa BeliefPropagationCache) || (tns isa TensorNetworkState))
             return error("Expected BeliefPropagationCache or TensorNetworkState for 'loop correction' algorithm, got $(typeof(tns))")
         end
 
-        if f ∈ ["normalize", "expect", "sample", "truncate", "rdm"]
+        if f ∈ ["normalize", "expect", "sample", "sample_certified", "truncate", "rdm"]
             return error("Loop correction-based contraction not supported for this functionality yet")
         end
     elseif alg == "boundarymps"
@@ -67,7 +68,7 @@ function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetwor
             return error("boundarymps contraction not supported for this functionality yet")
         end
     elseif alg == "exact"
-        if f ∈ ["normalize", "sample", "truncate"]
+        if f ∈ ["normalize", "sample", "sample_certified", "truncate"]
             return error("exact contraction not supported for this functionality yet")
         end
     elseif alg ∉ ["exact", "bp", "loopcorrections", "boundarymps"]
@@ -81,10 +82,27 @@ default_alg(bp_cache::BeliefPropagationCache) = "bp"
 default_alg(bmps_cache::BoundaryMPSCache) = "boundarymps"
 default_alg(any) = error("You must specify a contraction algorithm. Currently supported: exact, bp and boundarymps.")
 
-# Fill in the `maxiter` cache-update default for `cache` unless the user already supplied one.
-function with_default_maxiter(cache_update_kwargs, cache)
-    maxiter = get(cache_update_kwargs, :maxiter, default_bp_maxiter(cache))
-    return (; cache_update_kwargs..., maxiter)
+# Build the cache `alg` needs over `network` and run it to convergence. Shared by the state-level
+# entry points of `expect`, `reduced_density_matrix`, `norm_sqr`, `inner` and `normalize`, which all
+# wrap a network in a cache, converge it, then hand off to the corresponding cache-level method.
+# `cache_update_kwargs` is deliberately required: each entry point documents its own default.
+function converged_cache(
+        ::Union{Algorithm"bp", Algorithm"loopcorrections"}, network;
+        cache_update_kwargs,
+    )
+    return update(BeliefPropagationCache(network); cache_update_kwargs...)
+end
+
+function converged_cache(
+        ::Algorithm"boundarymps", network;
+        mps_bond_dimension::Integer,
+        partition_by = "row",
+        gauge_state = false,
+        cache_update_kwargs,
+    )
+    # `update` applies the `maxiter` default itself via `set_default_kwargs`, so none is added here
+    cache = BoundaryMPSCache(network, mps_bond_dimension; partition_by, gauge_state)
+    return update(cache; cache_update_kwargs...)
 end
 
 """

@@ -9,7 +9,7 @@ using NamedGraphs: NamedEdge, has_edge
 using TensorNetworkQuantumSimulator: virtualinds, tensors
 
 
-@testset "Test Sampling" begin
+@testset "Test Truncate" begin
     Random.seed!(123)
 
     #Product State (all down) on hexagonal lattice
