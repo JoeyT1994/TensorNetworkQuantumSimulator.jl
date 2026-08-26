@@ -43,8 +43,7 @@ using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_grap
 # All tensor-level verbs come from the TensorInterface seam (see tensor_interface.jl) —
 # never from a tensor library directly. `import` (not `using`) for the names this package
 # extends with its own methods.
-using .TensorInterface: ITensor, Index, Algorithm, @Algorithm_str, OpName, @OpName_str,
-    SiteType, @SiteType_str
+using .TensorInterface: Algorithm, @Algorithm_str
 using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, noncommoninds,
     hascommoninds, dim, plev, tags, hasqns,
     dag, prime, noprime, sim, replaceind, replaceinds,
@@ -53,7 +52,7 @@ using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, no
     scalar, apply, map_diag, map_diag!, factorize_svd,
     array, data, disable_warn_order, new_index, from_array
 import .TensorInterface: contract, truncate, inner, uniqueinds, datatype, scalartype
-using .KTensors: KTensors, KIndex, KTensor
+using .KTensors: KTensors, KIndex, KTensor, register_op!
 
 using Adapt: adapt
 

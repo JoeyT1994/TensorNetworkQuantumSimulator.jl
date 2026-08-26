@@ -407,7 +407,8 @@ function generic_apply(
     @assert length(right_inds) == b
 
     # Forward sweep: carry · MPO[i] · MPS[i], peel off the output legs, truncate the new bond.
-    out = eltype(mpo)[]
+    # The output tensors vary in rank along the chain, so strip type parameters.
+    out = unspecify_type_parameters(eltype(mpo))[]
     carry = nothing        # forward environment: singular values + still-open virtual bonds
     left_link = nothing    # bond from the previously emitted output tensor into `carry`
     for i in 1:b

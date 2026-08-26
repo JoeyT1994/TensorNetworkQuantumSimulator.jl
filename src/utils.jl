@@ -37,7 +37,7 @@ end
 # Adapt `t` to the storage datatype (eltype + device) of `ref`.
 adapt_like(ref, t) = adapt(datatype(ref))(t)
 
-function identity_tensor(eltype, row_inds::Vector{<:Index}, col_inds::Vector{<:Index})
+function identity_tensor(eltype, row_inds::Vector, col_inds::Vector)
     c_row, c_col = combiner(row_inds),combiner(col_inds)
     t= denseblocks(delta(eltype, combinedind(c_row), combinedind(c_col)))
     return (t * c_row)*c_col
@@ -106,7 +106,7 @@ function converged_cache(
 end
 
 """
-    safe_eigen(m::ITensor, args...; kwargs...)
+    safe_eigen(m, args...; kwargs...)
     A wrapper around the backend `eigen` that ensures eigen computations are done in Float64/ComplexF64 precision on CPU for better numerical stability.
 """
 function safe_eigen(m, args...; kwargs...)

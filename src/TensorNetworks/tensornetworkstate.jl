@@ -237,8 +237,8 @@ The local states can be given as strings (e.g. `"↑"`, `"↓"`, `"0"`, `"1"`) o
 # Returns
 - A `TensorNetworkState` representing the constructed tensor network state.
 """
-function tensornetworkstate(eltype, f::Function, g::AbstractGraph, sitetype::String, d::Integer = site_dimension(sitetype); backend::String = "itensors")
-    return tensornetworkstate(eltype, f, g, siteinds(sitetype, g, d; backend))
+function tensornetworkstate(eltype, f::Function, g::AbstractGraph, sitetype::String, d::Integer = site_dimension(sitetype))
+    return tensornetworkstate(eltype, f, g, siteinds(sitetype, g, d))
 end
 
 function random_tensornetworkstate(g::AbstractGraph, args...; kwargs...)

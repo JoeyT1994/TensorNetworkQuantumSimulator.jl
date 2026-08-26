@@ -142,7 +142,7 @@ function add(tn1::AbstractTensorNetwork, tn2::AbstractTensorNetwork)
         zip(
             es,
             [
-                Index(
+                new_index(
                         dim(only(virtualinds(tn1, e))) + dim(only(virtualinds(tn2, e))),
                     ) for e in es
             ],
@@ -153,9 +153,9 @@ function add(tn1::AbstractTensorNetwork, tn2::AbstractTensorNetwork)
     for v in vertices(tn1)
         es_v = filter(x -> src(x) == v || dst(x) == v, es)
 
-        tn1v_linkinds = Index[only(virtualinds(tn1, e)) for e in es_v]
-        tn2v_linkinds = Index[only(virtualinds(tn2, e)) for e in es_v]
-        tn12v_linkinds = Index[new_edge_indices[e] for e in es_v]
+        tn1v_linkinds = [only(virtualinds(tn1, e)) for e in es_v]
+        tn2v_linkinds = [only(virtualinds(tn2, e)) for e in es_v]
+        tn12v_linkinds = [new_edge_indices[e] for e in es_v]
 
         setindex_preserve!(
             tn12, directsum(

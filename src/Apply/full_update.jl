@@ -1,12 +1,12 @@
 using KrylovKit: linsolve
 
 """
-    full_update(o::ITensor, ψ::TensorNetworkState, v⃗; envs, kwargs...)
+    full_update(o, ψ::TensorNetworkState, v⃗; envs, kwargs...)
 
 Full update of two tensors in the presence of environments under the action of a two-site gate. More general than `simple_update` (allows for more accurate non-BP environments), but at a higher computational cost depending on the dimensions of the environment tensors involved.
 """
 function full_update(
-        o::ITensor,
+        o,
         ψ::TensorNetworkState,
         v⃗;
         envs,
@@ -49,22 +49,22 @@ function full_update(
     end
     ψᵥ₁ = Qᵥ₁ * Rᵥ₁
     ψᵥ₂ = Qᵥ₂ * Rᵥ₂
-    return ITensor[ψᵥ₁, ψᵥ₂]
+    return [ψᵥ₁, ψᵥ₂]
 end
 
 """Calculate the overlap of the gate acting on the previous p and q versus the new p and q in the presence of environments. This is the cost function that optimise_p_q will minimise"""
 function fidelity(
-        envs::Vector{ITensor},
-        p_cur::ITensor,
-        q_cur::ITensor,
-        p_prev::ITensor,
-        q_prev::ITensor,
-        gate::ITensor,
+        envs::Vector,
+        p_cur,
+        q_cur,
+        p_prev,
+        q_prev,
+        gate,
     )
     p_sind, q_sind = commonind(p_cur, gate), commonind(q_cur, gate)
     p_sind_sim, q_sind_sim = sim(p_sind), sim(q_sind)
     gate_sq =
-        gate * replaceinds(dag(gate), Index[p_sind, q_sind], Index[p_sind_sim, q_sind_sim])
+        gate * replaceinds(dag(gate), [p_sind, q_sind], [p_sind_sim, q_sind_sim])
     term1_tns = vcat(
         [
             p_prev,
@@ -100,10 +100,10 @@ end
 """Do Full Update Sweeping, Optimising the tensors p and q in the presence of the environments envs,
 Specifically this functions find the p_cur and q_cur which optimise envs*gate*p*q*dag(prime(p_cur))*dag(prime(q_cur))"""
 function optimise_p_q(
-        p::ITensor,
-        q::ITensor,
-        envs::Vector{ITensor},
-        o::ITensor;
+        p,
+        q,
+        envs::Vector,
+        o;
         nfullupdatesweeps = 10,
         print_fidelity_loss = false,
         envisposdef = true,
@@ -118,15 +118,15 @@ function optimise_p_q(
     qs_ind = setdiff(inds(q_cur), collect(Iterators.flatten(inds.(vcat(envs, p_cur)))))
     ps_ind = setdiff(inds(p_cur), collect(Iterators.flatten(inds.(vcat(envs, q_cur)))))
 
-    function b(p::ITensor, q::ITensor, o::ITensor, envs::Vector{ITensor}, r::ITensor)
-        ts = vcat(ITensor[p, q, o, dag(prime(r))], envs)
+    function b(p, q, o, envs::Vector, r)
+        ts = vcat([p, q, o, dag(prime(r))], envs)
         sequence = contraction_sequence(ts; alg = "optimal")
         return noprime(contract(ts; sequence))
     end
 
-    function M_p(envs::Vector{ITensor}, p_q_tensor::ITensor, s_ind, apply_tensor::ITensor)
+    function M_p(envs::Vector, p_q_tensor, s_ind, apply_tensor)
         ts = vcat(
-            ITensor[
+            [
                 p_q_tensor, replaceinds(prime(dag(p_q_tensor)), prime(s_ind), s_ind), apply_tensor,
             ],
             envs,

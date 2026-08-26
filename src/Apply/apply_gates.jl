@@ -4,7 +4,7 @@
 Apply a sequence of gates, via simple update, to a `TensorNetworkState` or a `BeliefPropagationCache` wrapping a `TensorNetworkState`, using belief propagation to update the environment.
 
 # Arguments
-- `circuit::Vector`: A vector of tuples where each tuple contains a gate (as an `ITensor`) and the vertices it acts on.
+- `circuit::Vector`: A vector of tuples where each tuple contains a gate and the vertices it acts on.
 - `ψ::TensorNetworkState`: The tensor network state to which the gates will be applied.
 
 # Keyword Arguments
@@ -39,7 +39,7 @@ function apply_gates(
 end
 
 #Direct entry point for circuits already given as backend tensors
-function apply_gates(circuit::Vector{<:ITensor}, ψ_bpc::BeliefPropagationCache; kwargs...)
+function apply_gates(circuit::Vector{<:KTensor}, ψ_bpc::BeliefPropagationCache; kwargs...)
     return _apply_gate_tensors(circuit, ψ_bpc; kwargs...)
 end
 

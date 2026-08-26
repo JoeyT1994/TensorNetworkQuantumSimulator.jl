@@ -1,4 +1,4 @@
-function normalize_rdm(ρ::ITensor)
+function normalize_rdm(ρ)
     dtype = datatype(ρ)
     tr_ρ = copy(ρ)
     for i in inds(ρ; plev = 0)

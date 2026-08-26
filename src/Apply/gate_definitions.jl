@@ -1,19 +1,13 @@
 # --- Gate registry -----------------------------------------------------------
 
-# This file is the dense-backend operator library: the one sanctioned place outside
-# tensor_interface.jl that may reference ITensors directly (to extend `ITensors.op` with
-# OpName/SiteType methods so ITensors' string-op lookup finds them). Everything else in
-# src/ goes through the TensorInterface seam.
-using ITensors: ITensors
-
 # Internal dispatch record for a circuit-tuple gate name.
 #
-# - `opname`: the `OpName` string forwarded to `ITensors.op`. Usually equal to the
+# - `opname`: the operator name looked up in the backend op registry. Usually equal to the
 #   user-facing key, but kept separate so a registry entry can rename if needed.
 # - `paramkeys`: keyword names accepted by the underlying `op` definition, e.g.
 #   `(:θ,)`, `(:ϕ,)`, or `(:θ, :β)`. Empty for fixed gates.
 # - `rescale`: applied to the user-supplied parameter(s) before forwarding. Used
-#   when our (qiskit) convention differs from the `ITensors.op` convention. For
+#   when our (qiskit) convention differs from the registry convention. For
 #   multi-parameter gates, `rescale` receives and returns a tuple/vector.
 struct GateSpec
     opname::String
@@ -23,7 +17,7 @@ end
 GateSpec(opname; paramkeys = (), rescale = identity) = GateSpec(opname, paramkeys, rescale)
 
 # Registry of circuit-tuple gates. Adding a new gate is one entry here (plus an
-# `ITensors.op` method if upstream doesn't already provide one).
+# `register_op!` entry if the library doesn't already provide one).
 const GATES = Dict{String, GateSpec}(
     # Single-qubit fixed
     "X" => GateSpec("X"),
@@ -31,7 +25,7 @@ const GATES = Dict{String, GateSpec}(
     "Z" => GateSpec("Z"),
     "H" => GateSpec("H"),
 
-    # Single-qubit parametric (qiskit and ITensors agree on convention)
+    # Single-qubit parametric (qiskit and the registry agree on convention)
     "Rx"  => GateSpec("Rx";  paramkeys = (:θ,)),
     "Ry"  => GateSpec("Ry";  paramkeys = (:θ,)),
     "Rz"  => GateSpec("Rz";  paramkeys = (:θ,)),
@@ -50,8 +44,8 @@ const GATES = Dict{String, GateSpec}(
 
     # Two-qubit parametric.
     # qiskit:   Rxx(θ) = exp(-i θ XX / 2)
-    # ITensors: op("Rxx"; ϕ) = exp(-i ϕ XX)
-    # We expose qiskit's θ and forward ϕ = θ/2 to ITensors.
+    # registry: op("Rxx"; ϕ) = exp(-i ϕ XX)
+    # We expose qiskit's θ and forward ϕ = θ/2 to the registry.
     "Rxx" => GateSpec("Rxx"; paramkeys = (:ϕ,), rescale = θ -> θ / 2),
     "Ryy" => GateSpec("Ryy"; paramkeys = (:ϕ,), rescale = θ -> θ / 2),
     "Rzz" => GateSpec("Rzz"; paramkeys = (:ϕ,), rescale = θ -> θ / 2),
@@ -163,8 +157,8 @@ end
 Register a custom gate `name` so it can be used in circuit-tuple form
 `(name, vertices, parameter)` with `apply_gates`.
 
-The matrix itself must be defined separately as an `ITensors.op` method whose
-`OpName` matches `opname` (defaults to `name`). See "Custom Gates" in the gate
+The matrix itself must be registered separately via `register_op!` under a name
+matching `opname` (defaults to `name`). See "Custom Gates" in the gate
 docs for a worked example.
 
 Modifies the runtime gate registry. The registration lives only in the current
@@ -173,14 +167,14 @@ in your script's startup, or in a downstream package's `__init__()`.
 
 Built-in gates are locked: passing a built-in name throws `ArgumentError`.
 Choose a different name for your custom gate, or — if you really need a new
-matrix under an existing name — define your own `ITensors.op` method directly.
+matrix under an existing name — register your own matrix via `register_op!` directly.
 Previously user-registered names may be overwritten freely.
 
 # Arguments
 - `name`: name used in circuit tuples.
 
 # Keyword Arguments
-- `opname`: the `OpName` string forwarded to `ITensors.op`. Defaults to `name`.
+- `opname`: the operator name looked up in the backend op registry. Defaults to `name`.
 - `paramkeys`: tuple of keyword names accepted by the underlying `op`, e.g.
   `(:θ,)` for a single rotation angle, `(:θ, :β)` for a two-parameter gate.
   Empty (`()`) for non-parametric gates.
@@ -198,7 +192,7 @@ function register_gate!(
     name in BUILTIN_GATES && throw(ArgumentError(
         "\"$name\" is a built-in gate and cannot be overwritten. " *
         "Choose a different name for your custom gate, or define your own " *
-        "`ITensors.op` method directly if you need to override the matrix."
+        "`register_op!` entry directly if you need to override the matrix."
     ))
     GATES[name] = GateSpec(opname, paramkeys, rescale)
     return name
@@ -242,43 +236,6 @@ function unregister_gate!(name::String)
 end
 
 # --- In-house gate definitions ----------------------------------------------
-
-"""
-    ITensors.op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Number)
-
-Gate for rotation by XX+YY at a given angle with Rz rotations either side. Consistent with qiskit.
-"""
-function ITensors.op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Number)
-    return [
-        [1 0 0 0];
-        [0 cos(θ / 2) -im * sin(θ / 2) * exp(-im * β) 0]
-        [0 -im * sin(θ / 2) * exp(im * β) cos(θ / 2) 0]
-        [0 0 0 1]
-    ]
-end
-ITensors.op(o::OpName"xx_plus_yy", ::SiteType"Qubit"; θ::Number, β::Number) =
-    ITensors.op(o, ITensors.SiteType("S=1/2"); θ, β)
-
-"""
-    ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Number)
-
-Gate for rotation by XXYY at a given angle.
-"""
-function ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2", s1::Index, s2::Index; θ = 1)
-    h = 0.5 * (op("X", s1) * op("X", s2) + op("Y", s1) * op("Y", s2))
-    return exp(-im * θ * h)
-end
-ITensors.op(o::OpName"Rxxyy", ::SiteType"Qubit"; θ::Number) =
-    ITensors.op(o, ITensors.SiteType("S=1/2"); θ)
-
-"""
-    ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2"; θ::Number)
-
-Gate for rotation by XXYYZZ at a given angle.
-"""
-function ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2", s1::Index, s2::Index; θ = 1)
-    h = 0.5 * (op("X", s1) * op("X", s2) + op("Y", s1) * op("Y", s2) + op("Z", s1) * op("Z", s2))
-    return exp(-im * θ * h)
-end
-ITensors.op(o::OpName"Rxxyyzz", ::SiteType"Qubit"; θ::Number) =
-    ITensors.op(o, ITensors.SiteType("S=1/2"); θ)
+# The operator matrices themselves live in the KTensors registry (see
+# `KTensors.register_op!` and OP1_REGISTRY/OP2_REGISTRY): Rxxyy, Rxxyyzz and the
+# qiskit-convention xx_plus_yy are registered there alongside the standard gates.

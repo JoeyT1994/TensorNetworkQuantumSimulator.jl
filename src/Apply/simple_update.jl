@@ -4,9 +4,9 @@
 Simple update of one or two local tensors in the presence of factorized environments under the action of a one- or two-site gate. This is a computationally cheaper but less accurate alternative to `full_update`. It is exact if no truncation is performed.
 
 # Arguments
-- `o::ITensor`: The gate to be applied.
-- `ψ⃗::Vector{<:ITensor}`: The one or two local tensors being updated.
-- `envs::Vector{ITensor}`: The factorized environment tensors associated with the tensors in `ψ⃗`.
+- `o`: The gate to be applied.
+- `ψ⃗::Vector`: The one or two local tensors being updated.
+- `envs::Vector`: The factorized environment tensors associated with the tensors in `ψ⃗`.
 
 # Keyword Arguments
 - `normalize_tensors::Bool`: Whether to normalize the updated tensors. Default is `true`.
@@ -14,8 +14,8 @@ Simple update of one or two local tensors in the presence of factorized environm
 - `apply_kwargs...`: Additional keyword arguments passed to the SVD factorization.
 
 # Returns
-- `updated_tensors::Vector{ITensor}`: The updated tensors after applying the gate.
-- `s_values::Union{Nothing, ITensor}`: The singular values from the SVD (if applicable).
+- `updated_tensors::Vector`: The updated tensors after applying the gate.
+- `s_values`: The singular values from the SVD (if applicable).
 - `err::Number`: The truncation error from the SVD (if applicable).
 """
 #Backend-specialized fast path for the two-site gate. Returns `nothing` when no

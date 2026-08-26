@@ -20,7 +20,7 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
     es =
         unique(collect(Iterators.flatten(boundary_edges(bpc, [v]; dir = :out) for v in vs)))
     updated_es = NamedEdge[]
-    antiprojectors = ITensor[]
+    antiprojectors = tensortype(bpc)[]
     for e in es
         if reverse(e) ∉ updated_es
             mer = message(bpc, reverse(e))
@@ -81,7 +81,7 @@ function weight(bpc::BeliefPropagationCache, eg)
     es = collect(edges(eg))
     bpc, antiprojectors = sim_edgeinduced_subgraph(bpc, eg)
     incoming_ms =
-        ITensor[message(bpc, e) for e in boundary_edges(bpc, es)]
+        [message(bpc, e) for e in boundary_edges(bpc, es)]
     local_tensors = collect(Iterators.flatten(bp_factors(bpc, v) for v in vs))
     ts = [incoming_ms; local_tensors; antiprojectors]
     seq = any(hasqns.(ts)) ? contraction_sequence(ts; alg = "optimal") : contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())

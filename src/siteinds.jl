@@ -4,17 +4,9 @@ function default_siteinds(g::AbstractGraph; kwargs...)
     return siteinds("S=1/2", g; kwargs...)
 end
 
-function siteinds(sitetype::String, g::AbstractGraph, sitedimension::Integer = site_dimension(sitetype); inds_per_site::Integer = 1, backend::String = "itensors")
+function siteinds(sitetype::String, g::AbstractGraph, sitedimension::Integer = site_dimension(sitetype); inds_per_site::Integer = 1)
     vs = collect(vertices(g))
-    make_index =
-    if backend == "itensors"
-        () -> Index(sitedimension, site_tag(sitetype))
-    elseif backend == "ktensors"
-        () -> KIndex(sitedimension, site_tag(sitetype))
-    else
-        error("Unknown backend \"$backend\". Supported: \"itensors\", \"ktensors\".")
-    end
-    return Dictionary(vs, [[make_index() for i in 1:inds_per_site] for v in vs])
+    return Dictionary(vs, [[KIndex(sitedimension, site_tag(sitetype)) for i in 1:inds_per_site] for v in vs])
 end
 
 function site_dimension(sitetype::String)

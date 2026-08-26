@@ -26,10 +26,11 @@ using LinearAlgebra: LinearAlgebra, Hermitian, Diagonal, norm, mul!, diag, rmul!
 using MatrixAlgebraKit: MatrixAlgebraKit, qr_compact, qr_compact!, svd_compact, svd_trunc,
     eigh_full, truncrank, truncerror
 using TensorOperations: TensorOperations, ncon
+using VectorInterface: VectorInterface
 using Adapt: Adapt, adapt
 using ..TensorInterface: TensorInterface
 
-export KIndex, KTensor
+export KIndex, KTensor, register_op!
 
 # ── Index ───────────────────────────────────────────────────────────────────────────────
 
@@ -55,6 +56,7 @@ function Base.show(io::IO, i::KIndex)
 end
 
 TensorInterface.dim(i::KIndex) = i.d
+TensorInterface.dim(is::AbstractVector{KIndex}) = prod(TensorInterface.dim.(is); init = 1)
 TensorInterface.plev(i::KIndex) = i.plev
 TensorInterface.tags(i::KIndex) = i.tags
 TensorInterface.dag(i::KIndex) = KIndex(i.id, i.d, i.plev, i.tags, !i.dual)
@@ -93,7 +95,10 @@ function Base.show(io::IO, t::KTensor{T, N}) where {T, N}
     return nothing
 end
 
-TensorInterface.inds(t::KTensor) = t.inds
+function TensorInterface.inds(t::KTensor; plev = nothing)
+    plev === nothing && return t.inds
+    return filter(i -> i.plev == plev, t.inds)
+end
 TensorInterface.scalartype(::KTensor{T}) where {T} = T
 TensorInterface.datatype(::KTensor{T, N, A}) where {T, N, A <: Array} = Vector{T}
 TensorInterface.hasqns(::KTensor) = false
@@ -160,6 +165,7 @@ function TensorInterface.replaceinds(t::KTensor, old, new)
     return KTensor(newinds, t.data)
 end
 TensorInterface.replaceind(t::KTensor, old::KIndex, new::KIndex) = TensorInterface.replaceinds(t, [old], [new])
+TensorInterface.replaceinds(t::KTensor, p::Pair) = TensorInterface.replaceinds(t, first(p), last(p))
 
 # ── Construction ────────────────────────────────────────────────────────────────────────
 
@@ -190,9 +196,55 @@ TensorInterface.delta(is::AbstractVector{KIndex}) = TensorInterface.delta(Float6
 TensorInterface.delta(elt::Type, is::KIndex...) = TensorInterface.delta(elt, collect(is))
 TensorInterface.delta(is::KIndex...) = TensorInterface.delta(Float64, collect(is))
 
-TensorInterface.combiner(is::KIndex...; kwargs...) = error("combiner: not yet implemented for the KTensors backend")
-TensorInterface.combiner(is::AbstractVector{KIndex}; kwargs...) = error("combiner: not yet implemented for the KTensors backend")
-TensorInterface.directsum(args::Pair{<:KTensor}...; kwargs...) = error("directsum: not yet implemented for the KTensors backend")
+# A combiner is an explicit reshape isometry: identity data between the combined index
+# (first) and the product of the combined indices. `t * C` combines; multiplying by `C`
+# again splits back.
+function TensorInterface.combiner(is::AbstractVector{KIndex}; tags = "CMB,Link")
+    isempty(is) && error("combiner: no indices to combine")
+    D = prod(TensorInterface.dim.(is))
+    c = KIndex(D, String(tags))
+    data = reshape(Matrix{Float64}(LinearAlgebra.I, D, D), (D, TensorInterface.dim.(is)...))
+    return KTensor(vcat([c], collect(KIndex, is)), data)
+end
+TensorInterface.combiner(is::KIndex...; kwargs...) = TensorInterface.combiner(collect(KIndex, is); kwargs...)
+TensorInterface.combinedind(C::KTensor) = first(C.inds)
+
+# Direct sum of two tensors along the paired index axes (`olds1[k]`/`olds2[k]` → `news[k]`,
+# with dim(news[k]) = dim(olds1[k]) + dim(olds2[k])); all other indices must coincide.
+function TensorInterface.directsum(
+        news::AbstractVector{KIndex}, p1::Pair{<:KTensor}, p2::Pair{<:KTensor}
+    )
+    t1, olds1 = first(p1), collect(KIndex, last(p1))
+    t2, olds2 = first(p2), collect(KIndex, last(p2))
+    length(news) == length(olds1) == length(olds2) || error("directsum: length mismatch")
+    oinds = map(t1.inds) do i
+        k = findfirst(==(i), olds1)
+        k === nothing ? i : news[k]
+    end
+    T = promote_type(eltype(t1), eltype(t2))
+    out = zeros(T, TensorInterface.dim.(oinds)...)
+    r1 = map(i -> begin
+        k = findfirst(==(i), olds1)
+        k === nothing ? Colon() : (1:i.d)
+    end, t1.inds)
+    out[r1...] .= t1.data
+    perm2 = map(t1.inds) do i
+        k = findfirst(==(i), olds1)
+        j = k === nothing ? findfirst(==(i), t2.inds) : findfirst(==(olds2[k]), t2.inds)
+        j === nothing && error("directsum: tensors do not share the unsummed index $(i)")
+        j
+    end
+    d2 = permutedims(t2.data, perm2)
+    r2 = map(enumerate(t1.inds)) do (ax, i)
+        k = findfirst(==(i), olds1)
+        k === nothing ? Colon() : ((i.d + 1):(i.d + size(d2, ax)))
+    end
+    out[r2...] .= d2
+    return KTensor(oinds, out)
+end
+
+#Default-backend index constructor (no reference index/tensor in scope, e.g. fresh networks)
+TensorInterface.new_index(d::Integer; tags = "") = KIndex(d, String(tags))
 
 # ── Arithmetic, contraction ─────────────────────────────────────────────────────────────
 
@@ -210,8 +262,22 @@ end
 
 Base.:+(a::KTensor, b::KTensor) = KTensor(copy(a.inds), a.data + _align(a, b))
 Base.:-(a::KTensor, b::KTensor) = KTensor(copy(a.inds), a.data - _align(a, b))
+Base.isapprox(a::KTensor, b::KTensor; kwargs...) = isapprox(a.data, _align(a, b); kwargs...)
 
 LinearAlgebra.norm(t::KTensor) = norm(t.data)
+
+# VectorInterface (KrylovKit's vector-space contract, used by full_update's linsolve).
+# Copying implementations are always legal for the !!-variants.
+VectorInterface.scalartype(::Type{<:KTensor{T}}) where {T} = T
+VectorInterface.zerovector(t::KTensor, S::Type{<:Number}) = KTensor(copy(t.inds), zeros(S, size(t.data)))
+VectorInterface.scale(t::KTensor, α::Number) = t * α
+VectorInterface.scale!!(t::KTensor, α::Number) = t * α
+VectorInterface.scale!!(y::KTensor, x::KTensor, α::Number) = x * α
+function VectorInterface.add(y::KTensor, x::KTensor, α::Number, β::Number)
+    return KTensor(copy(y.inds), β * y.data + α * _align(y, x))
+end
+VectorInterface.add!!(y::KTensor, x::KTensor, α::Number, β::Number) = VectorInterface.add(y, x, α, β)
+VectorInterface.inner(x::KTensor, y::KTensor) = LinearAlgebra.dot(x, y)
 LinearAlgebra.normalize(t::KTensor) = t * inv(norm(t))
 LinearAlgebra.dot(a::KTensor, b::KTensor) = LinearAlgebra.dot(vec(a.data), vec(_align(a, b)))
 LinearAlgebra.tr(t::KTensor) = _trace_all(t)
@@ -266,6 +332,12 @@ end
 function TensorInterface.contract(ts::Vector{<:KTensor}; sequence = nothing, kwargs...)
     isnothing(sequence) && return reduce(*, ts)
     return _contract_seq(ts, sequence)
+end
+
+#Abstractly-typed tensor lists (e.g. from Any-valued network dictionaries) route here
+function TensorInterface.contract(ts::Vector; kwargs...)
+    all(t -> t isa KTensor, ts) || error("contract: expected KTensors, got $(unique(typeof.(ts)))")
+    return TensorInterface.contract(collect(KTensor, ts); kwargs...)
 end
 _contract_seq(ts::Vector{<:KTensor}, s::Integer) = ts[s]
 function _contract_seq(ts::Vector{<:KTensor}, s::Union{Vector, Tuple})
@@ -406,6 +478,8 @@ function LinearAlgebra.factorize(
         ortho = "left", maxdim = nothing, cutoff = nothing, mindim = 1, tags = "Link,fact", kwargs...,
     )
     lv = length(linds) == 1 ? _indvec(only(linds)) : collect(KIndex, linds)
+    # ITensors convention: entries of linds not present on the tensor are ignored
+    lv = filter(i -> i ∈ t.inds, lv)
     U, S, Vt, li, ri, _ = _svd_split(t, lv; maxdim, cutoff, mindim)
     k = length(S)
     T = eltype(U)
@@ -424,7 +498,7 @@ end
 
 # ITensors-style svd: U(linds, u), S(u, v), V(rinds, v).
 function LinearAlgebra.svd(t::KTensor, linds; maxdim = nothing, cutoff = nothing, mindim = 1, kwargs...)
-    U, S, Vt, li, ri, _ = _svd_split(t, _indvec(linds); maxdim, cutoff, mindim)
+    U, S, Vt, li, ri, _ = _svd_split(t, filter(i -> i ∈ t.inds, _indvec(linds)); maxdim, cutoff, mindim)
     k = length(S)
     u = KIndex(k, "Link,u")
     v = KIndex(k, "Link,v")
@@ -432,6 +506,16 @@ function LinearAlgebra.svd(t::KTensor, linds; maxdim = nothing, cutoff = nothing
     St = KTensor(KIndex[u, v], Matrix(Diagonal(S)))
     Vt_ = KTensor(vcat(ri, [v]), reshape(copy(transpose(Vt)), (Int[i.d for i in ri]..., k)))
     return Ut, St, Vt_
+end
+
+# Index-free hermitian eigen on a (l, l′)-paired tensor: linds = the plev-0 indices,
+# rinds = their primes, and U comes back labeled by the UNPRIMED side, so that
+# U · D · prime(dag(U)) reconstructs the tensor (the convention symmetric_gauge relies on).
+function LinearAlgebra.eigen(t::KTensor; ishermitian::Bool = false, kwargs...)
+    lv = filter(i -> i.plev == 0, t.inds)
+    rv = collect(KIndex, TensorInterface.prime.(lv))
+    D, U = LinearAlgebra.eigen(t, lv, rv; ishermitian, kwargs...)
+    return D, TensorInterface.replaceinds(U, rv, lv)
 end
 
 # eigen matching the ITensors hermitian convention probed empirically:
@@ -677,74 +761,79 @@ const _σz = ComplexF64[1 0; 0 -1]
 
 _is_spinhalf(i::KIndex) = i.d == 2
 
-function _op1(name::String; kwargs...)
-    name == "I" && return _σI
-    name == "X" && return _σx
-    name == "Y" && return _σy
-    name == "Z" && return _σz
-    name == "H" && return ComplexF64[1 1; 1 -1] / sqrt(2)
-    name == "S+" && return ComplexF64[0 1; 0 0]
-    name == "S-" && return ComplexF64[0 0; 1 0]
-    name == "Sz" && return _σz / 2
-    name == "Sx" && return _σx / 2
-    name == "Sy" && return _σy / 2
-    if name == "Rx"
-        θ = kwargs[:θ]
-        return exp(-im * θ / 2 * _σx)
-    elseif name == "Ry"
-        θ = kwargs[:θ]
-        return exp(-im * θ / 2 * _σy)
-    elseif name == "Rz"
-        θ = kwargs[:θ]
-        return exp(-im * θ / 2 * _σz)
-    elseif name == "P"
-        ϕ = kwargs[:ϕ]
-        return ComplexF64[1 0; 0 exp(im * ϕ)]
-    end
-    return nothing
+"""
+    register_op!(name::String, f::Function; nsites::Int = 1)
+
+Register a custom operator matrix for the KTensors backend. `f(; kwargs...)` must return
+the operator matrix: 2×2 for `nsites = 1`, 4×4 for `nsites = 2` in the first-index-fastest
+(column-major) basis convention. Overwrites any existing entry with the same name.
+"""
+function register_op!(name::String, f::Function; nsites::Int = 1)
+    nsites == 1 && (OP1_REGISTRY[name] = f; return nothing)
+    nsites == 2 && (OP2_REGISTRY[name] = f; return nothing)
+    return error("register_op!: only 1- and 2-site operators are supported")
 end
 
+const OP1_REGISTRY = Dict{String, Function}(
+    "I" => (; kwargs...) -> _σI,
+    "X" => (; kwargs...) -> _σx,
+    "Y" => (; kwargs...) -> _σy,
+    "Z" => (; kwargs...) -> _σz,
+    "H" => (; kwargs...) -> ComplexF64[1 1; 1 -1] / sqrt(2),
+    "S+" => (; kwargs...) -> ComplexF64[0 1; 0 0],
+    "S-" => (; kwargs...) -> ComplexF64[0 0; 1 0],
+    "Sz" => (; kwargs...) -> _σz / 2,
+    "Sx" => (; kwargs...) -> _σx / 2,
+    "Sy" => (; kwargs...) -> _σy / 2,
+    "Rx" => (; θ) -> exp(-im * θ / 2 * _σx),
+    "Ry" => (; θ) -> exp(-im * θ / 2 * _σy),
+    "Rz" => (; θ) -> exp(-im * θ / 2 * _σz),
+    "P" => (; ϕ) -> ComplexF64[1 0; 0 exp(im * ϕ)],
+)
+
+_op1(name::String; kwargs...) = haskey(OP1_REGISTRY, name) ? OP1_REGISTRY[name](; kwargs...) : nothing
+
 # Two-site 4×4 matrices in the (first index fastest) convention that maps onto
-# data[s1', s2', s1, s2] via column-major reshape — matching the ITensors op layouts.
-function _op2(name::String; kwargs...)
-    kr(A, B) = kron(B, A)   # s1 fastest
-    if name == "Rzz"
-        ϕ = kwargs[:ϕ]
-        return exp(-im * ϕ * kr(_σz, _σz))
-    elseif name == "Rxx"
-        ϕ = kwargs[:ϕ]
-        return exp(-im * ϕ * kr(_σx, _σx))
-    elseif name == "Ryy"
-        ϕ = kwargs[:ϕ]
-        return exp(-im * ϕ * kr(_σy, _σy))
-    elseif name == "Rxxyy"
-        θ = kwargs[:θ]
-        h = 0.5 * (kr(_σx, _σx) + kr(_σy, _σy))
-        return exp(-0.5 * im * θ * h)
-    elseif name == "Rxxyyzz"
-        θ = kwargs[:θ]
-        h = 0.5 * (kr(_σx, _σx) + kr(_σy, _σy) + kr(_σz, _σz))
-        return exp(-0.5 * im * θ * h)
-    elseif name == "xx_plus_yy"
-        θ, β = kwargs[:θ], kwargs[:β]
-        # matches gate_definitions: exp(-i θ/2 (cos β (XX+YY)/2 + sin β (YX-XY)/2)) convention
-        h = cos(β) * 0.5 * (kr(_σx, _σx) + kr(_σy, _σy)) + sin(β) * 0.5 * (kr(_σy, _σx) - kr(_σx, _σy))
-        return exp(-0.5 * im * θ * h)
-    elseif name == "CZ"
-        return ComplexF64[1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 -1]
-    elseif name == "CNOT" || name == "CX"
-        # control = first index (fastest); |s1=1⟩ flips s2
-        m = zeros(ComplexF64, 4, 4)
-        m[1, 1] = 1; m[3, 3] = 1   # s1=0 (slots 1,3): identity on s2
-        m[4, 2] = 1; m[2, 4] = 1   # s1=1 (slots 2,4): flip s2
-        return m
-    elseif name == "CPHASE"
-        ϕ = kwargs[:ϕ]
-        return ComplexF64[1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 exp(im * ϕ)]
-    elseif name == "SWAP"
-        return ComplexF64[1 0 0 0; 0 0 1 0; 0 1 0 0; 0 0 0 1]
-    end
-    return nothing
+# data[s1', s2', s1, s2] via column-major reshape. Conventions validated against the
+# historical ITensors library (test/test_ktensors.jl).
+_kr(A, B) = kron(B, A)   # s1 fastest
+
+const OP2_REGISTRY = Dict{String, Function}(
+    "Rzz" => (; ϕ) -> exp(-im * ϕ * _kr(_σz, _σz)),
+    "Rxx" => (; ϕ) -> exp(-im * ϕ * _kr(_σx, _σx)),
+    "Ryy" => (; ϕ) -> exp(-im * ϕ * _kr(_σy, _σy)),
+    "Rxxyy" => (; θ) -> exp(-im * θ * 0.5 * (_kr(_σx, _σx) + _kr(_σy, _σy))),
+    "Rxxyyzz" => (; θ) -> exp(-im * θ * 0.5 * (_kr(_σx, _σx) + _kr(_σy, _σy) + _kr(_σz, _σz))),
+    "xx_plus_yy" => (; θ, β) -> exp(
+        -0.5 * im * θ * (
+            cos(β) * 0.5 * (_kr(_σx, _σx) + _kr(_σy, _σy)) +
+                sin(β) * 0.5 * (_kr(_σy, _σx) - _kr(_σx, _σy))
+        )
+    ),
+    "CZ" => (; kwargs...) -> ComplexF64[1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 -1],
+    "CNOT" => (; kwargs...) -> _controlled(_σx),
+    "CX" => (; kwargs...) -> _controlled(_σx),
+    "CY" => (; kwargs...) -> _controlled(_σy),
+    "CRx" => (; θ) -> _controlled(exp(-im * θ / 2 * _σx)),
+    "CRy" => (; θ) -> _controlled(exp(-im * θ / 2 * _σy)),
+    "CRz" => (; θ) -> _controlled(exp(-im * θ / 2 * _σz)),
+    "CPHASE" => (; ϕ) -> ComplexF64[1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 exp(im * ϕ)],
+    "SWAP" => (; kwargs...) -> ComplexF64[1 0 0 0; 0 0 1 0; 0 1 0 0; 0 0 0 1],
+    "iSWAP" => (; kwargs...) -> ComplexF64[1 0 0 0; 0 0 im 0; 0 im 0 0; 0 0 0 1],
+    "√SWAP" => (; kwargs...) -> ComplexF64[1 0 0 0; 0 (1 + im)/2 (1 - im)/2 0; 0 (1 - im)/2 (1 + im)/2 0; 0 0 0 1],
+    "√iSWAP" => (; kwargs...) -> ComplexF64[1 0 0 0; 0 1/sqrt(2) im/sqrt(2) 0; 0 im/sqrt(2) 1/sqrt(2) 0; 0 0 0 1],
+)
+
+_op2(name::String; kwargs...) = haskey(OP2_REGISTRY, name) ? OP2_REGISTRY[name](; kwargs...) : nothing
+
+# Controlled single-qubit gate, control = FIRST index (which is the fastest in our
+# column-major fastest-first layout): slots (1,3) are control=0 (identity on the target),
+# slots (2,4) are control=1 (apply `u`).
+function _controlled(u::AbstractMatrix)
+    m = Matrix{ComplexF64}(LinearAlgebra.I, 4, 4)
+    m[2, 2] = u[1, 1]; m[2, 4] = u[1, 2]
+    m[4, 2] = u[2, 1]; m[4, 4] = u[2, 2]
+    return m
 end
 
 function TensorInterface.op(name::String, i::KIndex; kwargs...)

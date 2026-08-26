@@ -1,6 +1,7 @@
 @eval module $(gensym())
 using Dictionaries: Dictionary
-using ITensors: ITensors, Index, dag, inds, prime
+using TensorNetworkQuantumSimulator: dag, inds, prime, random_itensor, new_index
+using TensorNetworkQuantumSimulator.KTensors: KIndex
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test, @test_throws
@@ -10,8 +11,8 @@ using Test: @testset, @test, @test_throws
     Random.seed!(123)
 
     #TensorNetwork construction from tensors
-    i, j, k, l = Index(2), Index(2), Index(2), Index(2)
-    A, B, C, D = ITensors.random_itensor(i, j), ITensors.random_itensor(j, k), ITensors.random_itensor(k, l), ITensors.random_itensor(l, i)
+    i, j, k, l = new_index(2), new_index(2), new_index(2), new_index(2)
+    A, B, C, D = random_itensor(Float64, i, j), random_itensor(Float64, j, k), random_itensor(Float64, k, l), random_itensor(Float64, l, i)
     t = TensorNetwork([A, B, C, D])
     @test t isa TensorNetwork
     @test scalartype(t) == eltype(A)
@@ -44,7 +45,7 @@ using Test: @testset, @test, @test_throws
     s = siteinds("S=1/2", g)
     @test s isa Dictionary
     @test keys(s) == vertices(g)
-    @test all([s[v] isa Vector{<:Index} for v in vertices(g)])
+    @test all([s[v] isa Vector{KIndex} for v in vertices(g)])
     @test all([length(s[v]) == 1 for v in vertices(g)])
 
     #TensorNetworkState

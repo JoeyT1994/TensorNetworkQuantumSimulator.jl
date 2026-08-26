@@ -44,6 +44,8 @@ export
     degree,
     apply_gates,
     apply_circuit,
+    op,
+    register_op!,
     register_gate!,
     register_alias!,
     unregister_gate!,

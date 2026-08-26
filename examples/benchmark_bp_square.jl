@@ -26,9 +26,9 @@ function build_layer(g; J, hx, dt)
     return layer
 end
 
-function run_workload(; L, maxdim, nlayers, elt, J, hx, dt, bp_sweeps, backend)
+function run_workload(; L, maxdim, nlayers, elt, J, hx, dt, bp_sweeps)
     g = named_grid((L, L))
-    ψ0 = tensornetworkstate(elt, v -> "↑", g, "S=1/2"; backend)
+    ψ0 = tensornetworkstate(elt, v -> "↑", g, "S=1/2")
     layer = build_layer(g; J, hx, dt)
 
     # Fixed BP schedule so every backend does the same work between gates.
@@ -75,13 +75,13 @@ phase_report(label, t, extra = "") = @printf(
     label, t.time, t.bytes / 2^30, 100 * t.gctime / t.time, extra
 )
 
-function main(; L = 10, maxdim = 8, nlayers = 10, elt = ComplexF64, J = 1.0, hx = 2.5, dt = 0.05, bp_sweeps = 20, backend = "itensors")
+function main(; L = 10, maxdim = 8, nlayers = 10, elt = ComplexF64, J = 1.0, hx = 2.5, dt = 0.05, bp_sweeps = 20)
     # Warm-up at tiny size to exclude compilation from the timings.
-    run_workload(; L = 3, maxdim = 2, nlayers = 1, elt, J, hx, dt, bp_sweeps = 2, backend)
+    run_workload(; L = 3, maxdim = 2, nlayers = 1, elt, J, hx, dt, bp_sweeps = 2)
 
-    res = run_workload(; L, maxdim, nlayers, elt, J, hx, dt, bp_sweeps, backend)
+    res = run_workload(; L, maxdim, nlayers, elt, J, hx, dt, bp_sweeps)
 
-    println("== BP square-lattice benchmark: L=$L (χ=$maxdim, $nlayers layers, $elt, backend=$backend) ==")
+    println("== BP square-lattice benchmark: L=$L (χ=$maxdim, $nlayers layers, $elt) ==")
     phase_report("evolve", res.evolve, "($(res.n_gates) gates, cum. gate err $(@sprintf("%.3e", res.digest.cum_trunc_err)))")
     phase_report("bp", res.bp, "($(res.bp_sweeps) sweeps × $(2 * res.n_edges) messages)")
     phase_report("measure", res.measure, "($(L * L) Z + $(res.n_edges) ZZ)")
@@ -94,5 +94,7 @@ function main(; L = 10, maxdim = 8, nlayers = 10, elt = ComplexF64, J = 1.0, hx 
     return res
 end
 
-main(backend = "itensors")
-main(backend = "ktensors")
+# Reference digest at the default parameters (validated against the historical ITensors
+# backend to ~1e-13 before its removal):
+#   ⟨Z⟩ center = -0.16229418610571..., Σ ⟨Z⟩ = -24.7937337722159..., Σ ⟨ZZ⟩ = 62.8275875662148...
+main()
