@@ -158,7 +158,7 @@ n = norm(ψ; alg = "bp")
 ψ = normalize(ψ; alg = "bp")
 
 # Inner product between two states
-ip = ITensors.inner(ψ, ϕ; alg = "bp")
+ip = inner(ψ, ϕ; alg = "bp")
 
 # Reduced density matrix on a set of vertices
 ρ = reduced_density_matrix(ψ, [(3, 3)]; alg = "bp")
