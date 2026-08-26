@@ -1,15 +1,14 @@
-using ITensors: Index, ITensor, @Algorithm_str, inds, noncommoninds, dim
 using OMEinsumContractionOrders: OMEinsumContractionOrders, optimize_code, EinCode, NestedEinsum, TreeSA, GreedyMethod, SABipartite, Treewidth, ExactTreewidth, HyperND, ExhaustiveSearch
 
 # The exact "optimal" contraction order (Pfeifer 2014 netcon) is provided by
 # OMEinsumContractionOrders' `ExhaustiveSearch` optimizer, which ported this routine from
 # TensorOperations. It handles trivial 1-/2-tensor inputs directly, so the previous
 # trivial-tensor pruning and scalar-`Int` workarounds are no longer needed.
-function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:ITensor})
+function contraction_sequence(::Algorithm"optimal", tensors::Vector)
     return contraction_sequence(Algorithm("omeinsum"), tensors; optimizer = ExhaustiveSearch())
 end
 
-function contraction_sequence(::Algorithm"omeinsum", tensors::Vector{<:ITensor}; optimizer = TreeSA())
+function contraction_sequence(::Algorithm"omeinsum", tensors::Vector; optimizer = TreeSA())
     code, size_dict = to_eincode(tensors)
     optcode = optimize_code(code, size_dict, optimizer)
     seq = to_contraction_sequence(optcode)
@@ -17,12 +16,12 @@ function contraction_sequence(::Algorithm"omeinsum", tensors::Vector{<:ITensor};
     return seq isa Integer ? [seq] : seq
 end
 
-function contraction_sequence(tensors::Vector{<:ITensor}; alg = "optimal", kwargs...)
+function contraction_sequence(tensors::Vector; alg = "optimal", kwargs...)
     return contraction_sequence(Algorithm(alg), tensors; kwargs...)
 end
 
 #OMEinsumContractionOrders helpers
-function to_eincode(tensors::Vector{<:ITensor})
+function to_eincode(tensors::Vector)
     ixs = map(t -> collect(inds(t)), tensors)
     LT = eltype(eltype(ixs))
     #`reduce` over a single tensor returns the tensor itself, not its indices; a one-tensor

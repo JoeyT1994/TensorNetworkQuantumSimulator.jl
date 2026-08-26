@@ -1,13 +1,12 @@
 using Dictionaries: Dictionary
 using Graphs: Graphs
-using ITensors: ITensors, ITensor
 using NamedGraphs: NamedGraphs, add_edge!, incident_edges
 using NamedGraphs.GraphsExtensions: rem_edges!
 using Adapt
 
 #TODO: Make this show() nicely.
-struct TensorNetwork{V} <: AbstractTensorNetwork{V}
-    tensors::Dictionary{V, ITensor}
+struct TensorNetwork{V, T} <: AbstractTensorNetwork{V}
+    tensors::Dictionary{V, T}
     graph::NamedGraph{V}
 end
 
@@ -31,7 +30,7 @@ end
 
 Base.copy(tn::TensorNetwork) = TensorNetwork(copy(tensors(tn)), copy(graph(tn)))
 
-function TensorNetwork(tensors::Vector{<:ITensor})
+function TensorNetwork(tensors::Vector)
     return TensorNetwork(Dictionary([i for i in 1:length(tensors)], tensors))
 end
 
@@ -41,7 +40,7 @@ function NamedGraphs.rem_vertex!(tn::TensorNetwork, v)
     return tn
 end
 
-function add_tensor!(tn::TensorNetwork, tensor::ITensor, v)
+function add_tensor!(tn::TensorNetwork, tensor, v)
     vs = collect(vertices(tn))
     g = graph(tn)
     if !has_vertex(g, v)
@@ -64,11 +63,11 @@ function default_message(tn::TensorNetwork, edge::NamedEdge)
 end
 
 function bp_factors(tn::TensorNetwork, vertex)
-    return ITensor[tn[vertex]]
+    return [tn[vertex]]
 end
 
 function bp_factors(tn::TensorNetwork, vertices::Vector)
-    return ITensor[tn[v] for v in vertices]
+    return [tn[v] for v in vertices]
 end
 
 function random_tensornetwork(eltype, g::AbstractGraph; bond_dimension::Integer = 1)
@@ -86,10 +85,9 @@ end
 random_tensornetwork(g::AbstractGraph; kwargs...) = random_tensornetwork(Float64, g; kwargs...)
 
 function siteinds(tn::TensorNetwork)
-    s = Dictionary{vertextype(tn), Vector{<:Index}}()
+    s = Dictionary{vertextype(tn), Vector}()
     for v in vertices(tn)
-        is = uniqueinds(tn, v)
-        isempty(is) ? set!(s, v, Index[]) : set!(s, v, is)
+        set!(s, v, uniqueinds(tn, v))
     end
     return s
 end

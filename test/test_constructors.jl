@@ -32,7 +32,7 @@ using Test: @testset, @test, @test_throws
 
         ψdag = map_virtualinds(prime, map_tensors(dag, ψ))
         @test ψdag isa TensorNetwork
-        @test ITensors.contract(ψdag; alg = "exact") ≈ conj(ITensors.contract(ψ; alg = "exact"))
+        @test contract(ψdag; alg = "exact") ≈ conj(contract(ψ; alg = "exact"))
 
         v = first(vertices(g))
         rem_vertex!(ψ, v)

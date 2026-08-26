@@ -40,8 +40,20 @@ using NamedGraphs.GraphsExtensions:
 
 using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_graph, named_comb_tree, named_path_graph
 
-using ITensors: ITensors
-using ITensors: Index, ITensor, hasqns, noncommonind, combinedind, combiner, replaceinds, sim, onehot, delta, plev, dense, unioninds, uniqueinds, commonind, commoninds, replaceind, datatype, inds, dag, noprime, factorize_svd, prime, hascommoninds, map_diag!, @Algorithm_str, scalar, @OpName_str, @SiteType_str, denseblocks, tags, op, apply, contract, inner
+# All tensor-level verbs come from the TensorInterface seam (see tensor_interface.jl) —
+# never from a tensor library directly. `import` (not `using`) for the names this package
+# extends with its own methods.
+using .TensorInterface: ITensor, Index, Algorithm, @Algorithm_str, OpName, @OpName_str,
+    SiteType, @SiteType_str
+using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, noncommoninds,
+    hascommoninds, dim, plev, tags, hasqns,
+    dag, prime, noprime, sim, replaceind, replaceinds,
+    onehot, delta, dense, denseblocks, combiner, combinedind, random_itensor, directsum,
+    op, state,
+    scalar, apply, map_diag, map_diag!, factorize_svd,
+    array, data, disable_warn_order, new_index, from_array
+import .TensorInterface: contract, truncate, inner, uniqueinds, datatype, scalartype
+using .KTensors: KTensors, KIndex, KTensor
 
 using Adapt: adapt
 

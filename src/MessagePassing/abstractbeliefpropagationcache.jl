@@ -6,7 +6,8 @@ abstract type AbstractBeliefPropagationCache{V} <: AbstractNamedGraph{V} end
 #Interface
 messages(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 contraction_sequences(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
-default_messages() = Dictionary{NamedEdge, Union{ITensor, Vector{ITensor}}}()
+default_messages() = Dictionary{NamedEdge, Any}()
+tensortype(bp_cache::AbstractBeliefPropagationCache) = tensortype(network(bp_cache))
 
 function rescale_messages!(
         bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge}; kwargs...
@@ -41,8 +42,8 @@ for f in [
         :(bp_factors),
         :(default_bp_maxiter),
         :(virtualinds),
-        :(ITensors.datatype),
-        :(ITensors.NDTensors.scalartype),
+        :datatype,
+        :(scalartype),
         :(maxvirtualdim),
         :(default_message),
         :(siteinds),
@@ -60,7 +61,7 @@ function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCa
     return bp_cache
 end
 
-function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex)
+function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value, vertex)
     setindex_preserve!(network(bp_cache), value, vertex)
     return bp_cache
 end
@@ -90,7 +91,7 @@ function deletemessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdg
     return bp_cache
 end
 
-function setmessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdge, message::Union{ITensor, Vector{<:ITensor}})
+function setmessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdge, message)
     ms = messages(bp_cache)
     set!(ms, e, message)
     return bp_cache
@@ -102,14 +103,15 @@ function message(bp_cache::AbstractBeliefPropagationCache, edge::AbstractEdge; k
 end
 
 function messages(bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge})
-    isempty(edges) && return ITensor[]
-    ms = ITensor[]
+    T = tensortype(bp_cache)
+    isempty(edges) && return T[]
+    ms = T[]
     for e in edges
         m = message(bp_cache, e)
-        if m isa ITensor
-            push!(ms, m)
-        else
+        if m isa Vector
             append!(ms, m)
+        else
+            push!(ms, m)
         end
     end
     return ms
@@ -167,7 +169,7 @@ function updated_message(
         bp_cache, vertex; ignore_edges = (reverse(edge),)
     )
     state = bp_factors(bp_cache, vertex)
-    contract_list = ITensor[incoming_ms; state]
+    contract_list = vcat(incoming_ms, state)
     cache_key = vertex => edge
     seq_cache = contraction_sequences(bp_cache)
     seq_changed = false

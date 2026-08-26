@@ -1,5 +1,11 @@
 # --- Gate registry -----------------------------------------------------------
 
+# This file is the dense-backend operator library: the one sanctioned place outside
+# tensor_interface.jl that may reference ITensors directly (to extend `ITensors.op` with
+# OpName/SiteType methods so ITensors' string-op lookup finds them). Everything else in
+# src/ goes through the TensorInterface seam.
+using ITensors: ITensors
+
 # Internal dispatch record for a circuit-tuple gate name.
 #
 # - `opname`: the `OpName` string forwarded to `ITensors.op`. Usually equal to the
@@ -120,7 +126,7 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     # Multi-letter Pauli-string sugar: "XYZ" → X⊗Y⊗Z applied componentwise.
     # Single-letter "X"/"Y"/"Z" goes through the registry below.
     if _ispaulistring(name) && length(name) > 1
-        t = prod(ITensors.op(string(c), sind) for (c, sind) in zip(name, s_inds))
+        t = prod(op(string(c), sind) for (c, sind) in zip(name, s_inds))
         return t, verts
     end
 
@@ -137,7 +143,7 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     end
 
     if isempty(spec.paramkeys)
-        return ITensors.op(spec.opname, s_inds...), verts
+        return op(spec.opname, s_inds...), verts
     end
 
     raw = spec.rescale(gate[3])
@@ -146,7 +152,7 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
         "Gate \"$name\" expects $(length(spec.paramkeys)) parameter(s), got $(length(pvals))."
     ))
     kwargs = NamedTuple{spec.paramkeys}(pvals)
-    return ITensors.op(spec.opname, s_inds...; kwargs...), verts
+    return op(spec.opname, s_inds...; kwargs...), verts
 end
 
 # --- Public registration API ------------------------------------------------

@@ -1,4 +1,3 @@
-using ITensors: random_itensor
 
 """
     TensorNetworkState{V} <: AbstractTensorNetwork{V}
@@ -9,9 +8,9 @@ A tensor network state defined on a graph with vertices of type `V`. Wraps a `Te
 - `tensornetwork::TensorNetwork{V}`: The underlying tensor network.
 - `siteinds::Dictionary{V, Vector{<:Index}}`: A dictionary mapping each vertex to its physical (site) indices.
 """
-struct TensorNetworkState{V} <: AbstractTensorNetwork{V}
-    tensornetwork::TensorNetwork{V}
-    siteinds::Dictionary{V, Vector{<:Index}}
+struct TensorNetworkState{V, TN <: TensorNetwork{V}, SI <: Dictionary} <: AbstractTensorNetwork{V}
+    tensornetwork::TN
+    siteinds::SI
 end
 
 tensornetwork(tns::TensorNetworkState) = tns.tensornetwork
@@ -23,7 +22,7 @@ Base.copy(tns::TensorNetworkState) = TensorNetworkState(copy(tensornetwork(tns))
 
 TensorNetworkState(tn::TensorNetwork) = TensorNetworkState(tn, siteinds(tn))
 TensorNetworkState(tensors::Dictionary, g::NamedGraph) = TensorNetworkState(TensorNetwork(tensors, g))
-TensorNetworkState(tensors::Union{Dictionary, Vector{<:ITensor}}) = TensorNetworkState(TensorNetwork(tensors))
+TensorNetworkState(tensors::Union{Dictionary, Vector}) = TensorNetworkState(TensorNetwork(tensors))
 
 #Forward onto the tn
 for f in [
@@ -38,7 +37,7 @@ end
 
 siteinds(tns::TensorNetworkState, v) = siteinds(tns)[v]
 
-function Base.setindex!(tns::TensorNetworkState, value::ITensor, v)
+function Base.setindex!(tns::TensorNetworkState, value, v)
     setindex!(tensornetwork(tns), value, v)
     sinds = siteinds(tns)
     for vn in vcat(neighbors(tns, v), [v])
@@ -48,19 +47,19 @@ function Base.setindex!(tns::TensorNetworkState, value::ITensor, v)
 end
 
 function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I")
-    factors = ITensor[]
+    factors = tensortype(tns)[]
     for v in verts
         sinds = siteinds(tns, v)
         tnv = tns[v]
         tnv_dag = dag(prime(tnv))
         if op_strings(v) == "ρ" || isempty(sinds)
-            append!(factors, ITensor[tnv, tnv_dag])
+            append!(factors, [tnv, tnv_dag])
         elseif op_strings(v) == "I"
             tnv_dag = replaceinds(tnv_dag, prime.(sinds), sinds)
-            append!(factors, ITensor[tnv, tnv_dag])
+            append!(factors, [tnv, tnv_dag])
         else
-            op = adapt_like(tnv, ITensors.op(op_strings(v), only(sinds)))
-            append!(factors, ITensor[tnv, tnv_dag, op])
+            op_tensor = adapt_like(tnv, op(op_strings(v), only(sinds)))
+            append!(factors, [tnv, tnv_dag, op_tensor])
         end
     end
     return factors
@@ -92,13 +91,14 @@ Generate a random `TensorNetworkState` on graph `g` with local state indices giv
 """
 function random_tensornetworkstate(eltype, g::AbstractGraph, siteinds::Dictionary = default_siteinds(g); bond_dimension::Integer = 1)
     vs = collect(vertices(g))
-    l = Dict(e => Index(bond_dimension) for e in edges(g))
+    l = Dict(e => new_index(only(siteinds[src(e)]), bond_dimension) for e in edges(g))
     l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
-    tensors = Dictionary{vertextype(g), ITensor}()
+    tensors = Dictionary{vertextype(g), Any}()
     for v in vs
         is = vcat(siteinds[v], [l[NamedEdge(v => vn)] for vn in neighbors(g, v)])
         set!(tensors, v, random_itensor(eltype, is))
     end
+    tensors = Dictionary(vs, identity.(collect(tensors)))
     return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
 end
 
@@ -140,23 +140,24 @@ The local states can be given as strings (e.g. `"↑"`, `"↓"`, `"0"`, `"1"`) o
 """
 function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dictionary = default_siteinds(g))
     vs = collect(vertices(g))
-    tensors = Dictionary{vertextype(g), ITensor}()
+    tensors = Dictionary{vertextype(g), Any}()
     for v in vs
         tnv = f(v)
         if tnv isa String
-            set!(tensors, v, adapt(eltype)(ITensors.state(f(v), only(siteinds[v]))))
+            set!(tensors, v, adapt(eltype)(state(f(v), only(siteinds[v]))))
         elseif tnv isa Vector{<:Number}
-            set!(tensors, v, adapt(eltype)(ITensors.ITensor(f(v), only(siteinds[v]))))
+            set!(tensors, v, adapt(eltype)(from_array(f(v), only(siteinds[v]))))
         else
             error("Unrecognized local state constructor. Currently supported: Strings and Vectors.")
         end
     end
 
-    l = Dict(e => Index(1) for e in edges(g))
+    l = Dict(e => new_index(only(siteinds[src(e)]), 1) for e in edges(g))
     for e in edges(g)
         tensors[src(e)] *= onehot(eltype, l[e] => 1)
         tensors[dst(e)] *= onehot(eltype, l[e] => 1)
     end
+    tensors = Dictionary(vs, identity.(collect(tensors)))
     return TensorNetworkState(tensors, g)
 end
 
@@ -176,8 +177,8 @@ The local states can be given as strings (e.g. `"↑"`, `"↓"`, `"0"`, `"1"`) o
 # Returns
 - A `TensorNetworkState` representing the constructed tensor network state.
 """
-function tensornetworkstate(eltype, f::Function, g::AbstractGraph, sitetype::String, d::Integer = site_dimension(sitetype))
-    return tensornetworkstate(eltype, f, g, siteinds(sitetype, g, d))
+function tensornetworkstate(eltype, f::Function, g::AbstractGraph, sitetype::String, d::Integer = site_dimension(sitetype); backend::String = "itensors")
+    return tensornetworkstate(eltype, f, g, siteinds(sitetype, g, d; backend))
 end
 
 function random_tensornetworkstate(g::AbstractGraph, args...; kwargs...)
@@ -188,7 +189,7 @@ function tensornetworkstate(f::Function, args...)
     return tensornetworkstate(Float64, f, args...)
 end
 
-function NamedGraphs.vertices(t::ITensor, tns::TensorNetworkState)
+function NamedGraphs.vertices(t, tns::TensorNetworkState)
     t_inds = inds(t)
     return filter(v -> !isempty(intersect(t_inds, siteinds(tns, v))), collect(vertices(tns)))
 end

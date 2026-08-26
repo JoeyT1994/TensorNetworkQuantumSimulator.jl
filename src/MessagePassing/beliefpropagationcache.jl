@@ -1,12 +1,10 @@
 using Dictionaries: Dictionary, set!, delete!
 using Graphs: AbstractGraph, is_tree, connected_components
 using NamedGraphs.GraphsExtensions: default_root_vertex, forest_cover, post_order_dfs_edges, forest_cover_edge_sequence, boundary_edges, leaf_vertices, a_star
-using ITensors: dim, ITensor, delta, Algorithm
-using ITensors.NDTensors: scalartype
 using LinearAlgebra: normalize
 
 #TODO: Make this show() nicely.
-struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Vector{ITensor}}} <:
+struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M} <:
     AbstractBeliefPropagationCache{V}
     network::N
     messages::Dictionary{NamedEdge, M}
@@ -14,7 +12,7 @@ struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITens
     edge_sequence::Vector
 end
 
-function message_diff(message_a::ITensor, message_b::ITensor)
+function message_diff(message_a, message_b)
     n_a, n_b = norm(message_a), norm(message_b)
     f = abs2(dot(message_a, message_b) / (n_a * n_b))
     return 1 - f
@@ -107,7 +105,7 @@ function default_bp_update_kwargs(tn::AbstractTensorNetwork)
     if is_tree(tn)
         maxiter, tolerance, verbose = 1, nothing, false
     else
-        maxiter, tolerance, verbose = _default_bp_update_maxiter, default_tolerance(ITensors.NDTensors.scalartype(tn)), false
+        maxiter, tolerance, verbose = _default_bp_update_maxiter, default_tolerance(scalartype(tn)), false
     end
     return (; maxiter, tolerance, verbose)
 end
@@ -136,14 +134,14 @@ function loop_correlation(bpc::BeliefPropagationCache, loop::Vector{<:NamedEdge}
 
     es = vcat(loop, [target_e])
     incoming_es = boundary_edges(bpc, es)
-    incoming_messages = ITensor[message(bpc, e) for e in incoming_es]
+    incoming_messages = [message(bpc, e) for e in incoming_es]
     vs = unique(vcat(src.(loop), dst.(loop)))
 
     src_vertex = src(target_e)
     e_virtualinds = inds(message(bpc, target_e))
     e_virtualinds_sim = sim.(e_virtualinds)
 
-    local_tensors = ITensor[]
+    local_tensors = tensortype(bpc)[]
     ts = bp_factors(bpc, src_vertex)
 
     for t in ts
@@ -156,14 +154,14 @@ function loop_correlation(bpc::BeliefPropagationCache, loop::Vector{<:NamedEdge}
         push!(local_tensors, t)
     end
 
-    tensors = ITensor[local_tensors; reduce(vcat, [bp_factors(bpc, v) for v in setdiff(vs, [src_vertex])]); incoming_messages]
+    tensors = vcat(local_tensors, reduce(vcat, [bp_factors(bpc, v) for v in setdiff(vs, [src_vertex])]), incoming_messages)
     seq = contraction_sequence(tensors; alg = "omeinsum", optimizer = GreedyMethod())
     t = contract(tensors; sequence = seq)
 
-    row_combiner, col_combiner = ITensors.combiner(e_virtualinds), ITensors.combiner(e_virtualinds_sim)
+    row_combiner, col_combiner = combiner(e_virtualinds), combiner(e_virtualinds_sim)
     t = t * row_combiner * col_combiner
     t = adapt(Vector{ComplexF64})(t)
-    t = ITensors.NDTensors.array(t)
+    t = array(t)
     λs = reverse(sort(LinearAlgebra.eigvals(t); by = abs))
     err = 1 - abs(λs[1]) / sum(abs.(λs))
     return err

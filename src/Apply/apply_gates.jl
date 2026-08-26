@@ -35,16 +35,21 @@ function apply_gates(
     circuit = toitensor(circuit, g, siteinds(network(ψ_bpc)))
     gate_vertices = [gate[2] for gate in circuit]
     itensors = [gate[1] for gate in circuit]
-    return apply_gates(itensors, ψ_bpc; gate_vertices, kwargs...)
+    return _apply_gate_tensors(itensors, ψ_bpc; gate_vertices, kwargs...)
 end
 
-function adapt_gate(gate::ITensor, ψ_bpc::BeliefPropagationCache)
+#Direct entry point for circuits already given as backend tensors
+function apply_gates(circuit::Vector{<:ITensor}, ψ_bpc::BeliefPropagationCache; kwargs...)
+    return _apply_gate_tensors(circuit, ψ_bpc; kwargs...)
+end
+
+function adapt_gate(gate, ψ_bpc::BeliefPropagationCache)
     gate = scalartype(gate) <: Complex ? adapt(complex(scalartype(ψ_bpc)), gate) : adapt(scalartype(ψ_bpc), gate)
     return adapt(unspecify_type_parameters(datatype(ψ_bpc)), gate)
 end
 
-function apply_gates(
-        circuit::Vector{<:ITensor},
+function _apply_gate_tensors(
+        circuit::Vector,
         ψ_bpc::BeliefPropagationCache;
         gate_vertices::Vector = vertices.(circuit, (network(ψ_bpc),)),
         apply_kwargs = (;),
@@ -99,7 +104,7 @@ end
 
 #Apply function for a single gate
 function apply_gate!(
-        gate::ITensor,
+        gate,
         ψ_bpc::BeliefPropagationCache;
         v⃗ = vertices(gate, network(ψ_bpc)),
         apply_kwargs
@@ -121,7 +126,7 @@ function apply_gate!(
 
     envs = nv == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
 
-    ψ⃗ = ITensor[network(ψ_bpc)[v] for v in v⃗]
+    ψ⃗ = [network(ψ_bpc)[v] for v in v⃗]
     updated_tensors, s_values, err = simple_update(gate, ψ⃗; envs, apply_kwargs...)
     if nv == 2
         v1, v2 = v⃗

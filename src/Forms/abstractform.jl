@@ -7,8 +7,9 @@ abstract type AbstractForm{V} <: AbstractTensorNetwork{V} end
 #Forward onto the ket
 for f in [
         :(graph),
-        :(ITensors.datatype),
-        :(ITensors.NDTensors.scalartype),
+        :datatype,
+        :(scalartype),
+        :tensortype,
         :(NamedGraphs.leafless_edge_induced_subgraphs),
     ]
     @eval begin
@@ -19,7 +20,7 @@ for f in [
 end
 
 function virtualinds(form::AbstractForm, edge::NamedEdge)
-    return Index[virtualinds(ket(form), edge); virtualinds(operator(form), edge); bra_virtualinds(form, edge)]
+    return vcat(virtualinds(ket(form), edge), virtualinds(operator(form), edge), bra_virtualinds(form, edge))
 end
 
 function default_message(form::AbstractForm, edge::AbstractEdge)
@@ -27,9 +28,9 @@ function default_message(form::AbstractForm, edge::AbstractEdge)
 end
 
 function bp_factors(form::AbstractForm, verts::Vector)
-    factors = ITensor[]
+    factors = tensortype(ket(form))[]
     for v in verts
-        append!(factors, ITensor[ket(form)[v], operator(form)[v], bra_tensor(form, v)])
+        append!(factors, [ket(form)[v], operator(form)[v], bra_tensor(form, v)])
     end
     return factors
 end

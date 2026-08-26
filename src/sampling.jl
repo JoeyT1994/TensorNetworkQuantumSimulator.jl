@@ -23,11 +23,11 @@ function sample(
             ψv, ψv_dag = network(projected_bp_cache)[v], dag(prime(network(projected_bp_cache)[v]))
             push!(tensors, ψv, ψv_dag)
             seq = contraction_sequence(tensors; alg = "optimal")
-            ρ = ITensors.contract(tensors; sequence = seq)
+            ρ = contract(tensors; sequence = seq)
 
             ρ_tr = tr(ρ)
             ρ *= inv(ρ_tr)
-            ρ_diag = collect(real.(diag(ITensors.array(ρ))))
+            ρ_diag = collect(real.(diag(array(ρ))))
             config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
             # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
             set!(bit_string, v, config - 1)
@@ -200,7 +200,7 @@ function get_one_sample(
             es = sorted_edges(norm_bmps_cache, pe)
 
             for (i, e) in enumerate(es)
-                setmessage!(norm_bmps_cache, e, ITensor[outgoing_mps[i], prime(dag(outgoing_mps[i]))])
+                setmessage!(norm_bmps_cache, e, [outgoing_mps[i], prime(dag(outgoing_mps[i]))])
             end
 
             incoming_mps = outgoing_mps
@@ -237,7 +237,7 @@ function sample_partition!(
         ρ_tr = tr(ρ)
         push!(traces, ρ_tr)
         ρ *= inv(ρ_tr)
-        ρ_diag = collect(real.(diag(ITensors.array(ρ))))
+        ρ_diag = collect(real.(diag(array(ρ))))
         config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
         # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
         set!(bit_string, v, config - 1)

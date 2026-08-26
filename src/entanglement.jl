@@ -30,7 +30,7 @@ end
 
 function matricize(a::ITensor, row_inds = filter(i -> plev(i) ==0, inds(a)))
     col_inds = prime.(row_inds)
-    return ITensors.array(a * ITensors.combiner(row_inds) * ITensors.combiner(col_inds))
+    return array(a * combiner(row_inds) * combiner(col_inds))
 end
 
 """
