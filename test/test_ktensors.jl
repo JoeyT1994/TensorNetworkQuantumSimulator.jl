@@ -218,10 +218,10 @@ end
         bits = v -> iseven(v[1]) ? 1 : 2
         @test amp2(ψg, bits) ≈ amp2(ψd, bits) atol = 1.0e-10
         gsamples = sample_directly_certified(
-            ψg, 2; alg = "boundarymps", gauge_state = false,
+            ψg, 2; alg = "boundarymps",
             norm_mps_bond_dimension = 12, projected_mps_bond_dimension = 12
         )
-        @test all(x -> isfinite(real(x.poverq)) && real(x.poverq) > 0, gsamples)
+        @test all(x -> abs(real(x.poverq) - 1) < 0.1, gsamples)
 
         #graded purification: the infinite-T identity state pairs ket sites with
         #DUAL-representation ancillas (flux-zero per site); U(1) Heisenberg imaginary
@@ -496,14 +496,14 @@ end
             @test hop ≈ real(ψv' * (cs[j]' * cs[k] + cs[k]' * cs[j]) * ψv) / nrm atol = 1.0e-12
             pr = real(only(expect(ψt, ("pairing", (v1, v2)); alg = "exact")))
             @test pr ≈ real(ψv' * (cs[j]' * cs[k]' + cs[k] * cs[j]) * ψv) / nrm atol = 1.0e-12
-            #certified sampling on the fermionic state: certificates positive and finite
-            #(ρ closures psd_gauged before their diagonals are read), and every sampled
-            #configuration lands in the physical charge sector (even parity here)
+            #certified sampling on the fermionic state through the full gauged pipeline
+            #(symmetric gauge + psd_gauge'd ρ closures): certificates ≈ p/q ≈ 1, and
+            #every sampled configuration lands in the physical charge sector
             samples = sample_directly_certified(
-                ψt, 2; alg = "boundarymps", gauge_state = false,
+                ψt, 2; alg = "boundarymps",
                 norm_mps_bond_dimension = 8, projected_mps_bond_dimension = 8
             )
-            @test all(x -> isfinite(real(x.poverq)) && real(x.poverq) > 0, samples)
+            @test all(x -> abs(real(x.poverq) - 1) < 0.1, samples)
             @test all(x -> iseven(sum(values(x.bitstring))), samples)
             #fermionic boundary MPS: fitted seam messages (fit-adjoint supertrace metric
             #on out-arrow crossing legs) + a joint odd-pair operator through the walk.

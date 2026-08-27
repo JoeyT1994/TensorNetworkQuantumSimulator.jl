@@ -8,8 +8,18 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         edge_ind = commoninds(ψvsrc, ψvdst)
         edge_ind_sim = sim(edge_ind)
 
-        X_D, X_U = safe_eigen(message(bp_cache, e); ishermitian = true, cutoff = nothing)
-        Y_D, Y_U = safe_eigen(message(bp_cache, reverse(e)); ishermitian = true, cutoff = nothing)
+        #Graded messages carry a per-sector parity gauge; fix to the PSD representative
+        #before taking roots (dense no-op, cf. pseudo_sqrt_inv_sqrt)
+        X_D, X_U = safe_eigen(parity_message_gauge(message(bp_cache, e)); ishermitian = true, cutoff = nothing)
+        Y_D, Y_U = safe_eigen(parity_message_gauge(message(bp_cache, reverse(e))); ishermitian = true, cutoff = nothing)
+        #Orientation bookkeeping for graded tensors (no-ops for dense data): eigen's D is
+        #labelled (lk′, lk) with slot orientations matching U-from-the-left; the U·D·U†
+        #sandwich below pairs U's bond with D's FIRST slot, so swap D's labels. And the
+        #sandwiched roots/isometries get absorbed into the SAME-side site tensor, so the
+        #dag'd representative (the identical hermitian operator in the flipped
+        #orientation — itself a bond-gauge choice) is what contracts.
+        X_D = replaceinds(X_D, collect(inds(X_D)), reverse(collect(inds(X_D))))
+        Y_D = replaceinds(Y_D, collect(inds(Y_D)), reverse(collect(inds(Y_D))))
         X_D, Y_D = map_diag(x -> x + regularization, X_D),
             map_diag(x -> x + regularization, Y_D)
 
@@ -21,7 +31,7 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         inv_rootX = X_U * inv_rootX_D * prime(dag(X_U))
         inv_rootY = Y_U * inv_rootY_D * prime(dag(Y_U))
 
-        ψvsrc, ψvdst = noprime(ψvsrc * inv_rootX), noprime(ψvdst * inv_rootY)
+        ψvsrc, ψvdst = noprime(ψvsrc * dag(inv_rootX)), noprime(ψvdst * dag(inv_rootY))
 
         Ce = rootX
         Ce = Ce * replaceinds(rootY, edge_ind, edge_ind_sim)
@@ -32,9 +42,9 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         #replaceinds below); sim keeps the space and mints a new identity
         new_edge_ind = [sim(only(commoninds(S, U)))]
 
-        ψvsrc = replaceinds(ψvsrc * U, commoninds(S, U), new_edge_ind)
+        ψvsrc = replaceinds(ψvsrc * dag(U), commoninds(S, U), new_edge_ind)
         ψvdst = replaceinds(ψvdst, edge_ind, edge_ind_sim)
-        ψvdst = replaceinds(ψvdst * V, commoninds(V, S), new_edge_ind)
+        ψvdst = replaceinds(ψvdst * dag(V), commoninds(V, S), new_edge_ind)
 
 
         S = replaceinds(
@@ -44,7 +54,7 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         )
 
         sqrtS = map_diag(sqrt, S)
-        ψvsrc = noprime(ψvsrc * sqrtS)
+        ψvsrc = noprime(ψvsrc * dag(sqrtS))
         ψvdst = noprime(ψvdst * sqrtS)
         setindex_preserve!(bp_cache, ψvsrc, vsrc)
         setindex_preserve!(bp_cache, ψvdst, vdst)
