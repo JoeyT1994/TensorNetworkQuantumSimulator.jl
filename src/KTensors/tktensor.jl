@@ -127,8 +127,8 @@ struct TKTensor{S <: TKSpace, TM <: TK.AbstractTensorMap}
         isempty(inds) && error("TKTensor: fully-contracted results are plain Numbers")
         S = typeof(space(first(inds)))
         iv = collect(KIndex{S}, inds)
-        TK.numout(data) == length(iv) && TK.numin(data) == 0 ||
-            error("TKTensor: data must be one-sided with $(length(iv)) codomain legs")
+        TK.numout(data) + TK.numin(data) == length(iv) ||
+            error("TKTensor: $(length(iv)) indices for data with $(TK.numout(data) + TK.numin(data)) legs")
         for (a, i) in enumerate(iv)
             TK.space(data, a) == slotspace(i) ||
                 error("TKTensor: slot $a is $(TK.space(data, a)), index wants $(slotspace(i))")
@@ -189,9 +189,15 @@ function _fock_range(i::TKIndex, c)
     return error("sector $c not found in $(V)")
 end
 
+#Normalize to the all-codomain partition (a copy; used by the basis-sensitive cold
+#paths — intermediates from contraction are generally two-sided).
+_onesided(t::TKTensor) = TK.numin(t.data) == 0 ? t :
+    TKTensor(t.inds, TK.permute(t.data, (Tuple(1:ndims(t)), ())))
+
 #NOTE: only trustworthy for all-non-dual tensors (states); dual slots involve duality
 #bends whose basis convention is TensorKit-internal. Ops are built two-sided instead.
 function TensorInterface.array(t::TKTensor)
+    t = _onesided(t)
     out = zeros(eltype(t), Int[dimof(i) for i in t.inds]...)
     N = ndims(t)
     for (f1, f2) in TK.fusiontrees(t.data)
@@ -232,7 +238,11 @@ TensorInterface.sim(t::TKTensor) = _mapinds(TensorInterface.sim, t)
 function TensorInterface.dag(t::TKTensor)
     N = ndims(t)
     dd = TK.permute(adjoint(t.data), (Tuple(1:N), ()))
-    return TKTensor(KIndex[TensorInterface.dag(i) for i in t.inds], dd)
+    #the adjoint swaps the codomain and domain blocks (order preserved within each), so
+    #the index list reorders to match the adjoint's slot numbering
+    no = TK.numout(t.data)
+    order = no == N ? (1:N) : vcat((no + 1):N, 1:no)
+    return TKTensor(KIndex[TensorInterface.dag(t.inds[k]) for k in order], dd)
 end
 
 #Relabels by identity; the per-copy dual flag is data bookkeeping and is PRESERVED from
@@ -268,15 +278,17 @@ Base.:*(t::TKTensor, x::Number) = TKTensor(copy(t.inds), t.data * x)
 Base.:*(x::Number, t::TKTensor) = t * x
 Base.:/(t::TKTensor, x::Number) = t * inv(x)
 
-#b's data with slots permuted into a's index order (TensorKit threads the signs)
+#b's data with slots permuted into a's index order and partition (TensorKit threads
+#the signs)
 function _aligned_data(a::TKTensor, b::TKTensor)
+    nout = TK.numout(a.data)
     p = map(a.inds) do i
         k = findfirst(==(i), b.inds)
         k === nothing && error("tensors do not share index $(i)")
         b.inds[k].dual == i.dual || error("aligned combine: flag mismatch on $(i)")
         k
     end
-    return TK.permute(b.data, (Tuple(p), ()))
+    return TK.permute(b.data, (Tuple(p[1:nout]), Tuple(p[(nout + 1):end])))
 end
 
 Base.:+(a::TKTensor, b::TKTensor) = TKTensor(copy(a.inds), a.data + _aligned_data(a, b))
@@ -326,10 +338,22 @@ function Base.:*(a::TKTensor, b::TKTensor)
     for (x, j) in enumerate(ob)
         lb[j] = -(length(oa) + x)
     end
-    out = TensorOperations.ncon([a.data, b.data], [la, lb])
-    out isa Number && return out
-    oinds = vcat(a.inds[oa], b.inds[ob])
-    return TKTensor(oinds, TK.permute(out, (Tuple(1:length(oinds)), ())))
+    if isempty(oa) && isempty(ob)
+        out = TensorOperations.ncon([a.data, b.data], [la, lb])
+        return out::Number
+    end
+    #Low-level contraction with the output allocated directly in the GEMM-natural
+    #partition (A-opens ← B-opens): TensorKit then never stages a repacking copy of the
+    #output (its worst-case transient footprint drops from 3F to 2F per pairwise step —
+    #the repartitioned big operand plus the output). Intermediates stay two-sided; the
+    #wrapper's slot numbering spans codomain and domain uniformly.
+    pA = (Tuple(oa), Tuple(ca))
+    pB = (Tuple(cb), Tuple(ob))
+    pAB = (Tuple(1:length(oa)), Tuple((length(oa) + 1):(length(oa) + length(ob))))
+    TC = promote_type(eltype(a), eltype(b))
+    C = TensorOperations.tensoralloc_contract(TC, a.data, pA, false, b.data, pB, false, pAB, Val(false))
+    TensorOperations.tensorcontract!(C, a.data, pA, false, b.data, pB, false, pAB)
+    return TKTensor(vcat(a.inds[oa], b.inds[ob]), C)
 end
 
 function TensorInterface.contract(ts::Vector{<:TKTensor}; sequence = nothing, kwargs...)
@@ -637,6 +661,9 @@ TensorInterface.random_itensor(is::TKIndex...) = TensorInterface.random_itensor(
 #PSD representative by normalizing each diagonal block's trace to positive real. Any
 #unit-modulus per-sector gauge cancels in the M^½ · M^{-½} sandwich, so this is exact.
 function psd_gauge(t::TKTensor)
+    #block diagonals are read in the all-codomain shape; intermediates from contraction
+    #may arrive in any partition (messages are small — the copy is cheap)
+    t = _onesided(t)
     data = copy(t.data)
     for (f1, f2) in TK.fusiontrees(data)
         b = data[f1, f2]
