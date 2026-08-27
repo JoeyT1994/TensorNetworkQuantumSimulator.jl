@@ -183,7 +183,7 @@ end
 #fermionic branch) so that every vertex tensor is individually flux-zero — TensorMaps
 #enforce zero flux, so a charged site must be neutralized by its links. Summing the
 #per-vertex conditions, internal bonds cancel: only the TOTAL charge must vanish.
-function graded_tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dictionary; charge_leg::Bool = false)
+function graded_tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dictionary)
     vs = collect(vertices(g))
     svec = Dictionary(vs, [KTensors.state_vector(f(v), only(siteinds[v])) for v in vs])
     #accumulate subtree charges child → parent over a spanning tree
@@ -203,13 +203,11 @@ function graded_tensornetworkstate(eltype, f::Function, g::AbstractGraph, sitein
         end
         set!(acc, par, KTensors.fuse_sectors(acc[par], acc[c]))
     end
+    #A closed network of flux-zero tensors can only represent a chargeless state (the
+    #per-vertex conditions telescope over the bonds). A nonzero TOTAL charge is carried
+    #by a dangling dim-1 "Charge"-tagged leg on the root vertex, attached automatically;
+    #norm networks pair it bra-ket like an operator-free site leg (see norm_factors).
     triv = KTensors.trivial_sector(acc[root])
-    acc[root] == triv || charge_leg || error(
-        "tensornetworkstate: total charge $(acc[root]) ≠ 0 — a charged state is not " *
-            "representable by flux-zero tensors on a closed network. Pass " *
-            "`charge_leg = true` to carry the total on an explicit dangling " *
-            "\"Charge\"-tagged dim-1 leg at the root vertex."
-    )
     l = Dict(e => KTensors.charged_link_index(get(qedge, e, triv)) for e in edges(g))
     tensors = Dictionary{vertextype(g), Any}()
     for v in vs
@@ -219,8 +217,6 @@ function graded_tensornetworkstate(eltype, f::Function, g::AbstractGraph, sitein
             dst(e) == v && push!(links, dag(l[e]))
         end
         if v == root && acc[root] != triv
-            #dangling leg neutralizing the root tensor; norm networks pair it bra-ket
-            #directly (norm_factors unprimes "Charge"-tagged legs)
             push!(links, KTensors.charged_link_index(KTensors.dual_sector(acc[root]); tags = "Charge"))
         end
         set!(tensors, v, KTensors.product_vertex_tensor(eltype, svec[v], only(siteinds[v]), links))

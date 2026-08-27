@@ -36,17 +36,18 @@ end
 
 function evolve(g, occupied; tt = 1.0, dt = 0.05, nsteps = 10, χ = 16)
     s = siteinds("Fermion", g; sectors = [0 => 1, 1 => 1], symmetry = "fU1")
-    ψ = tensornetworkstate(ComplexF64, v -> v ∈ occupied ? "Occ" : "Emp", g, s; charge_leg = true)
+    ψ = tensornetworkstate(ComplexF64, v -> v ∈ occupied ? "Occ" : "Emp", g, s)
     #second-order Trotter layer: half-steps forward then reversed
     half = Any[]
     for ces in edge_color(g, 4)
         append!(half, ("F_hop", pair, -tt * dt / 2) for pair in ces)
     end
     layer = vcat(half, reverse(half))
+    ψ_bpc = update(BeliefPropagationCache(ψ))
     for _ in 1:nsteps
-        ψ, _ = apply_gates(layer, ψ; apply_kwargs = (; maxdim = χ, cutoff = 1.0e-12))
+        ψ_bpc, _ = apply_gates(layer, ψ_bpc; apply_kwargs = (; maxdim = χ, cutoff = 1.0e-12))
     end
-    return ψ, nsteps * dt
+    return network(ψ_bpc), nsteps * dt
 end
 
 function main(; tt = 1.0, dt = 0.01, nsteps = 50)

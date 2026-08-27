@@ -187,10 +187,11 @@ end
         sg = only(TNQS.siteinds(TNQS.tensornetwork(ψg))[(1, 1)])
         @test_throws Exception TI.op("X", sg)
         @test_throws Exception TI.state("↓", sg)   #charged SINGLE tensor: flux-odd
-        #an odd number of charged sites has nonzero total charge: not representable
+        #an odd number of charged sites: the nonzero total rides an automatic Charge leg
         gz = named_grid((3, 3))
         sz = siteinds("S=1/2", gz; sectors = [0 => 1, 1 => 1], symmetry = "Z2")
-        @test_throws Exception tensornetworkstate(ComplexF64, v -> v == (1, 1) ? "↓" : "↑", gz, sz)
+        ψz = tensornetworkstate(ComplexF64, v -> v == (1, 1) ? "↓" : "↑", gz, sz)
+        @test real(norm_sqr(ψz; alg = "exact")) ≈ 1.0
 
         #graded boundary MPS: random conserving init over convolved charged link spectra
         #(fermion-branch recipe; conservation itself is native — the init only picks link
@@ -286,8 +287,9 @@ end
             s = TNQS.siteinds("Fermion", g)
             ψ = tensornetworkstate(ComplexF64, v -> v in (2, 5) ? "Occ" : "Emp", g, s)
             @test real(norm_sqr(ψ; alg = "exact")) ≈ 1.0
-            #odd total parity is a nonzero total charge: not representable
-            @test_throws Exception tensornetworkstate(ComplexF64, v -> v == 1 ? "Occ" : "Emp", g, s)
+            #odd total parity rides an automatically attached "Charge" dummy leg
+            ψodd = tensornetworkstate(ComplexF64, v -> v == 1 ? "Occ" : "Emp", g, s)
+            @test real(norm_sqr(ψodd; alg = "exact")) ≈ 1.0
             layer = Any[]
             for _ in 1:3
                 append!(layer, ("F_pair", (v, v + 1), 0.29) for v in 1:2:(n - 1))
@@ -321,7 +323,7 @@ end
                 @test tn ≈ (ψv' * mat(v, w) * ψv) / nrm atol = 1.0e-12
             end
             #nonzero TOTAL charge carried by a dangling "Charge"-tagged dummy leg
-            ψc = tensornetworkstate(ComplexF64, v -> v in (2, 4, 5) ? "Occ" : "Emp", g, s; charge_leg = true)
+            ψc = tensornetworkstate(ComplexF64, v -> v in (2, 4, 5) ? "Occ" : "Emp", g, s)
             ψct, _ = apply_gates(layer, ψc; apply_kwargs = (; maxdim = 32, cutoff = 1.0e-14))
             ψcv = jw_evolve(layer, cs, Dict(v => v for v in 1:n), n; occupied = (2, 4, 5))
             nrmc = real(ψcv' * ψcv)
@@ -336,7 +338,7 @@ end
             g = NamedGraph(Graphs.path_graph(n))
             s = TNQS.siteinds("Fermion", g; sectors = [0 => 1, 1 => 1], symmetry = "fU1")
             #nonzero total N rides a dangling Charge leg
-            ψ = tensornetworkstate(ComplexF64, v -> v == 2 ? "Occ" : "Emp", g, s; charge_leg = true)
+            ψ = tensornetworkstate(ComplexF64, v -> v == 2 ? "Occ" : "Emp", g, s)
             @test real(norm_sqr(ψ; alg = "exact")) ≈ 1.0
             layer = Any[("F_hop", (v, v + 1), 0.37) for v in 1:(n - 1)]
             ψt, _ = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 8, cutoff = 1.0e-14))
@@ -366,8 +368,8 @@ end
             up(v) = 2v - 1
             dn(v) = 2v
             init = Dict(1 => "Up", 2 => "Dn", 3 => "UpDn", 4 => "Emp")
-            #charge_leg carries the nonzero total (N↑, N↓) under fU1xU1; no-op for parity
-            ψ = tensornetworkstate(ComplexF64, v -> init[v], g, s; charge_leg = true)
+            #the nonzero total (N↑, N↓) under fU1xU1 rides an automatic Charge leg
+            ψ = tensornetworkstate(ComplexF64, v -> init[v], g, s)
             @test real(norm_sqr(ψ; alg = "exact")) ≈ 1.0
             layer = Any[]
             for _ in 1:2
