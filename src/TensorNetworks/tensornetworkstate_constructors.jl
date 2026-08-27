@@ -37,7 +37,7 @@ function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = site
         end
         set!(ts, v, t)
     end
-    ts = Dictionary(collect(keys(ts)), identity.(collect(ts)))
+    ts = Dictionary(collect(keys(ts)), narrow_tensors(collect(ts)))
     return TensorNetworkState(TensorNetwork(ts, g), s)
 end
 
@@ -89,7 +89,7 @@ function toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_g
         end
         set!(tensors, v, state)
     end
-    tensors = Dictionary(collect(keys(tensors)), identity.(collect(tensors)))
+    tensors = Dictionary(collect(keys(tensors)), narrow_tensors(collect(tensors)))
     return TensorNetworkState(TensorNetwork(tensors, g), s)
 end
 
@@ -142,6 +142,6 @@ function ising_partitionfunction(g::NamedGraph, β::Real; Js::Dictionary = Dicti
         end
         set!(ts, v, t)
     end
-    ts = Dictionary(collect(keys(ts)), identity.(collect(ts)))
+    ts = Dictionary(collect(keys(ts)), narrow_tensors(collect(ts)))
     return TensorNetwork(ts, g)
 end

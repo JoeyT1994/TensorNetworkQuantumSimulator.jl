@@ -44,6 +44,13 @@ end
 # Adapt `t` to the storage datatype (eltype + device) of `ref`.
 adapt_like(ref, t) = adapt(datatype(ref))(t)
 
+#Collect tensors narrowed to their backend type with the type PARAMETERS stripped:
+#narrowing to a fully concrete eltype (what a plain `identity.(...)` does on
+#rank-uniform networks, e.g. a 2×2 grid or a periodic lattice) freezes the tensor
+#Dictionary's rank and rejects later rank-changing setindex! (sampling projections,
+#charge legs). Same convention as `tensortype` and the message vectors.
+narrow_tensors(ts) = collect(unspecify_type_parameters(mapreduce(typeof, typejoin, ts)), ts)
+
 #Dangling "Charge" legs (charged graded states and projectors) pair bra-ket directly,
 #like site legs with no operator: unprime them on a bra built as dag(prime(ket)).
 function unprime_charge_legs(bra, ket)

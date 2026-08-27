@@ -166,7 +166,7 @@ function graded_tensornetworkstate(eltype, f::Function, g::AbstractGraph, sitein
         end
         set!(tensors, v, KTensors.product_vertex_tensor(eltype, svec[v], only(siteinds[v]), links))
     end
-    tensors = Dictionary(vs, identity.(collect(tensors)))
+    tensors = Dictionary(vs, narrow_tensors(collect(tensors)))
     #explicit siteinds: a dangling "Charge" leg must not be auto-classified as a site
     return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
 end
@@ -237,6 +237,6 @@ function graded_identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary
             set!(ts, v, reduce(*, onehots))
         end
     end
-    ts = Dictionary(collect(keys(ts)), identity.(collect(ts)))
+    ts = Dictionary(collect(keys(ts)), narrow_tensors(collect(ts)))
     return TensorNetworkState(TensorNetwork(ts, g), s)
 end

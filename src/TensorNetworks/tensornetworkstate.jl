@@ -107,7 +107,7 @@ function random_tensornetworkstate(eltype, g::AbstractGraph, siteinds::Dictionar
         is = vcat(siteinds[v], [l[NamedEdge(v => vn)] for vn in neighbors(g, v)])
         set!(tensors, v, random_itensor(eltype, is))
     end
-    tensors = Dictionary(vs, identity.(collect(tensors)))
+    tensors = Dictionary(vs, narrow_tensors(collect(tensors)))
     return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
 end
 
@@ -170,7 +170,7 @@ function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dic
         tensors[src(e)] *= onehot(eltype, l[e] => 1)
         tensors[dst(e)] *= onehot(eltype, dag(l[e]) => 1)
     end
-    tensors = Dictionary(vs, identity.(collect(tensors)))
+    tensors = Dictionary(vs, narrow_tensors(collect(tensors)))
     return TensorNetworkState(tensors, g)
 end
 
