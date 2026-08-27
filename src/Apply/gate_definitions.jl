@@ -68,11 +68,15 @@ const GATES = Dict{String, GateSpec}(
     # F_hop_nn    = exp(-i (θ (c†ᵢcⱼ + c†ⱼcᵢ) + ϕ nᵢnⱼ))
     # F_phase(θ)  = exp(-iθ nᵢ)
     # F_pair(θ)   = exp(-iθ (c†ᵢc†ⱼ + cⱼcᵢ))
+    # F_hop_up/dn(θ) = per-spin hopping on spinful (d = 4) sites; F_int(θ) = exp(-iθ n↑n↓)
     "F_hop"    => GateSpec("F_hop";    paramkeys = (:θ,)),
     "F_nn"     => GateSpec("F_nn";     paramkeys = (:θ,)),
     "F_hop_nn" => GateSpec("F_hop_nn"; paramkeys = (:θ, :ϕ)),
     "F_pair"   => GateSpec("F_pair";   paramkeys = (:θ,)),
     "F_phase"  => GateSpec("F_phase";  paramkeys = (:θ,)),
+    "F_hop_up" => GateSpec("F_hop_up"; paramkeys = (:θ,)),
+    "F_hop_dn" => GateSpec("F_hop_dn"; paramkeys = (:θ,)),
+    "F_int"    => GateSpec("F_int";    paramkeys = (:θ,)),
 )
 
 # Snapshot of built-in canonical names taken at module load. Used to prevent

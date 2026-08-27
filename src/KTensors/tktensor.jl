@@ -336,19 +336,29 @@ const F_STATES = Dict{String, Vector{Float64}}(
     "1" => [0, 1], "Occ" => [0, 1], "Occupied" => [0, 1],
 )
 
+#Spinful (d = 4) fermionic states in the CHARGE-ORDERED basis (|0⟩, |↑↓⟩ | |↑⟩, |↓⟩):
+#even sector first, so the graded scatter lines up with Vect[FermionParity](0=>2, 1=>2).
+const F_STATES_4 = Dict{String, Vector{Float64}}(
+    "0" => [1, 0, 0, 0], "Emp" => [1, 0, 0, 0], "Empty" => [1, 0, 0, 0],
+    "UpDn" => [0, 1, 0, 0], "2" => [0, 1, 0, 0],
+    "Up" => [0, 0, 1, 0], "↑" => [0, 0, 1, 0],
+    "Dn" => [0, 0, 0, 1], "↓" => [0, 0, 0, 1],
+)
+
 #Resolve a local state (name or raw vector) on a graded site to its dense vector
 #(fermionic names for parity sites, the dense registry otherwise).
 function state_vector(namevec, i::TKIndex)
     vec = if namevec isa AbstractVector{<:Number}
         collect(namevec)
     elseif TK.sectortype(space(i)) === TK.FermionParity
-        dimof(i) == 2 || error("state: fermionic state library covers d = 2 sites only")
-        get(F_STATES, String(namevec), nothing)
+        table = dimof(i) == 2 ? F_STATES : dimof(i) == 4 ? F_STATES_4 :
+            error("state: fermionic state library covers d = 2 (spinless) and d = 4 (spinful) sites")
+        get(table, String(namevec), nothing)
     else
         TensorInterface.state(String(namevec), KIndex(dimof(i))).data
     end
     vec === nothing && error(
-        "state: unknown fermionic state \"$namevec\" (available: $(sort(collect(keys(F_STATES)))))"
+        "state: unknown fermionic state \"$namevec\" for a d = $(dimof(i)) site"
     )
     length(vec) == dimof(i) ||
         error("state: vector length $(length(vec)) ≠ site dimension $(dimof(i))")
@@ -409,7 +419,32 @@ const _F_NN = ComplexF64[0 0 0 0; 0 0 0 0; 0 0 0 0; 0 0 0 1]
 #c†₁c†₂ + c₂c₁ on adjacent modes: ⟨11|c†₁c†₂|00⟩ = ⟨00|c₂c₁|11⟩ = 1
 const _F_PAIR = ComplexF64[0 0 0 1; 0 0 0 0; 0 0 0 0; 1 0 0 0]
 
-function _f_op1_matrix(name::String; kwargs...)
+#Spinful (d = 4) single-site mode matrices, from the fermionic branch: mode basis
+#(|0⟩, |↑⟩, |↓⟩, |↑↓⟩) with the ↑-before-↓ intra-site Jordan-Wigner sign carried by a↓
+#(the −1 on |↑↓⟩ → |↑⟩). `_c4` permutes into the charge-ordered basis used by the
+#graded scatter: (|0⟩, |↑↓⟩ | |↑⟩, |↓⟩).
+const _P4 = [1, 4, 2, 3]
+_c4(M::AbstractMatrix) = M[_P4, _P4]
+const _F4_AUP = _c4(ComplexF64[0 1 0 0; 0 0 0 0; 0 0 0 1; 0 0 0 0])
+const _F4_ADN = _c4(ComplexF64[0 0 1 0; 0 0 0 -1; 0 0 0 0; 0 0 0 0])
+const _F4_NUP = _F4_AUP' * _F4_AUP
+const _F4_NDN = _F4_ADN' * _F4_ADN
+const _F4_I = Matrix{ComplexF64}(LinearAlgebra.I, 4, 4)
+#site-parity operator (−1)^n, the intra-block Jordan-Wigner string for 2-site operators
+const _F4_Z = _c4(ComplexF64[1 0 0 0; 0 -1 0 0; 0 0 -1 0; 0 0 0 1])
+
+function _f_op1_matrix(name::String, d::Int; kwargs...)
+    if d == 4
+        name == "I" && return _F4_I
+        name == "N" && return _F4_NUP + _F4_NDN
+        name == "Nup" && return _F4_NUP
+        name == "Ndn" && return _F4_NDN
+        name == "NupNdn" && return _F4_NUP * _F4_NDN
+        name == "Sz" && return 0.5 * (_F4_NUP - _F4_NDN)
+        name == "F_int" && return exp(-im * kwargs[:θ] * _F4_NUP * _F4_NDN)
+        name == "F_phase" && return exp(-im * kwargs[:θ] * (_F4_NUP + _F4_NDN))
+        return nothing
+    end
     name == "I" && return _F_I2
     name == "N" && return _F_N
     name == "F_phase" && return ComplexF64[1 0; 0 exp(-im * kwargs[:θ])]
@@ -420,7 +455,32 @@ function _f_op1_matrix(name::String; kwargs...)
     return nothing
 end
 
-function _f_op2_matrix(name::String; kwargs...)
+#Spinful two-site operators: 16×16 matrices over (site1 ⊗ site2) with site 1 slowest.
+#The inter-site Jordan-Wigner string is the site-parity _F4_Z on site 1 (intra-site
+#signs already live in the mode matrices); strings BETWEEN network sites come from the
+#category as usual.
+_f4_kron(A, B) = kron(A, B)   #site-1-slowest convention (matches _two_site_array)
+_f4_cdagc(Cσ) = _f4_kron(Cσ' * _F4_Z, Cσ)
+_f4_hop(Cσ) = _f4_cdagc(Cσ) + _f4_cdagc(Cσ)'
+
+function _f_op2_matrix4(name::String; kwargs...)
+    name == "hopping_up" && return _f4_hop(_F4_AUP)
+    name == "hopping_dn" && return _f4_hop(_F4_ADN)
+    name == "hopping" && return _f4_hop(_F4_AUP) + _f4_hop(_F4_ADN)
+    name == "CdagC_up" && return _f4_cdagc(_F4_AUP)
+    name == "CdagC_dn" && return _f4_cdagc(_F4_ADN)
+    name == "F_hop_up" && return exp(-im * kwargs[:θ] * _f4_hop(_F4_AUP))
+    name == "F_hop_dn" && return exp(-im * kwargs[:θ] * _f4_hop(_F4_ADN))
+    name == "F_hop" && return exp(-im * kwargs[:θ] * (_f4_hop(_F4_AUP) + _f4_hop(_F4_ADN)))
+    return nothing
+end
+
+function _f_op2_matrix(name::String, d::Int; kwargs...)
+    if d == 4
+        M = _f_op2_matrix4(name; kwargs...)
+        M === nothing && error("op: unknown spinful fermionic 2-site operator \"$name\"")
+        return M
+    end
     name == "hopping" && return _F_HOP
     name == "NN" && return _F_NN
     name == "pairing" && return _F_PAIR
@@ -449,14 +509,15 @@ _two_site_array(M::AbstractMatrix, d1::Int, d2::Int) =
 #The dense operator array ⟨u…|O|s…⟩ with legs (u1..un, s1..sn) for the named operator.
 function _graded_op_array(name::String, sites::Vector{<:TKIndex}; kwargs...)
     if TK.sectortype(space(first(sites))) === TK.FermionParity
-        all(i -> dimof(i) == 2, sites) ||
-            error("op: fermionic operator library covers d = 2 sites only")
+        d = dimof(first(sites))
+        (d in (2, 4) && all(i -> dimof(i) == d, sites)) ||
+            error("op: fermionic operator library covers uniform d = 2 (spinless) or d = 4 (spinful) sites")
         if length(sites) == 1
-            M = _f_op1_matrix(name; kwargs...)
+            M = _f_op1_matrix(name, d; kwargs...)
             M === nothing || return M
         else
-            M = _f_op2_matrix(name; kwargs...)
-            M === nothing || return _two_site_array(M, 2, 2)
+            M = _f_op2_matrix(name, d; kwargs...)
+            M === nothing || return _two_site_array(M, d, d)
         end
         error("op: unknown fermionic operator \"$name\"")
     end

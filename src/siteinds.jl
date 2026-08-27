@@ -18,6 +18,10 @@ function siteinds(sitetype::String, g::AbstractGraph, sitedimension::Integer = s
         #fermionic (Z2-parity, TensorKit-backed) site indices: |0⟩ even, |1⟩ odd
         return Dictionary(vs, [[KTensors.new_fermion_index(1, 1; tags = site_tag(sitetype)) for i in 1:inds_per_site] for v in vs])
     end
+    if replace(lowercase(sitetype), " " => "") ∈ ["spinfulfermion", "electron"]
+        #spinful fermionic sites, charge-ordered basis (|0⟩, |↑↓⟩ | |↑⟩, |↓⟩)
+        return Dictionary(vs, [[KTensors.new_fermion_index(2, 2; tags = site_tag(sitetype)) for i in 1:inds_per_site] for v in vs])
+    end
     return Dictionary(vs, [[new_index(sitedimension; tags = site_tag(sitetype)) for i in 1:inds_per_site] for v in vs])
 end
 
@@ -25,6 +29,7 @@ function site_dimension(sitetype::String)
     sitetype = replace(lowercase(sitetype), " " => "")
     sitetype ∈ ["s=1/2", "qubit", "spin1/2", "spinhalf"] && return 2
     sitetype ∈ ["fermion", "spinlessfermion"] && return 2
+    sitetype ∈ ["spinfulfermion", "electron"] && return 4
     sitetype ∈ ["qutrit", "s=1", "spin1"]  && return 3
     error("Don't know what physical space that site type should be")
 end
@@ -34,5 +39,6 @@ function site_tag(sitetype::String)
     sitetype ∈ ["s=1/2", "qubit", "spin1/2", "spinhalf"] && return "S=1/2"
     sitetype ∈ ["qutrit", "s=1", "spin1"] && return "S=1"
     sitetype ∈ ["fermion", "spinlessfermion"] && return "Fermion"
-    error("Don't know how to interpret that site type. Supported: S=1/2, S=1, Fermion.")
+    sitetype ∈ ["spinfulfermion", "electron"] && return "SpinfulFermion"
+    error("Don't know how to interpret that site type. Supported: S=1/2, S=1, Fermion, SpinfulFermion.")
 end

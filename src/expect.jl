@@ -179,6 +179,9 @@ function collectobservable(obs::Tuple, g::NamedGraph)
         return op, verts, coeff
     end
 
+    #a single vertex takes one operator name of any length (e.g. "Nup", "NupNdn")
+    op isa String && length(verts) == 1 && return [op], verts, coeff
+
     length(op) != length(verts) && error("Invalid observable: need as many operators as vertices passed.")
     if op isa String
         op_strings = [string(o) for o in op]
