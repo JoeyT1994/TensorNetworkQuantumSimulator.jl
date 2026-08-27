@@ -38,11 +38,58 @@ A TensorKit graded space from `charge => dimension` pairs. `symmetry` is one of
 """
 function graded_space(symmetry::String, sectors)
     key = replace(lowercase(symmetry), " " => "")
+    #fermions with conserved particle number(s): the parity factor (which carries the
+    #braiding) is locked to the U(1) charge(s)
+    if key in ("fu1", "fermionnumber")
+        I = TK.:⊠(TK.U1Irrep, TK.FermionParity)
+        return TK.Vect[I]((I(q, mod(q, 2)) => Int(d) for (q, d) in sectors)...)
+    elseif key in ("fu1xu1", "fu1u1")
+        I = TK.:⊠(TK.U1Irrep, TK.U1Irrep, TK.FermionParity)
+        return TK.Vect[I]((I(a, b, mod(a + b, 2)) => Int(d) for ((a, b), d) in sectors)...)
+    end
     I = key in ("z2",) ? TK.Z2Irrep :
         key in ("u1", "u(1)") ? TK.U1Irrep :
         key in ("fz2", "fermion", "fermionparity") ? TK.FermionParity :
-        error("graded_space: unknown symmetry \"$symmetry\" (supported: Z2, U1, fZ2)")
+        error("graded_space: unknown symmetry \"$symmetry\" (supported: Z2, U1, fZ2, fU1, fU1xU1)")
     return TK.Vect[I]((q => Int(d) for (q, d) in sectors)...)
+end
+
+#Does the grading carry fermionic statistics (a FermionParity factor)?
+is_fermionic(::Type{TK.FermionParity}) = true
+is_fermionic(::Type{TK.TensorKitSectors.ProductSector{T}}) where {T} = any(is_fermionic, fieldtypes(T))
+is_fermionic(::Type{<:TK.Sector}) = false
+is_fermionic(i::TKIndex) = is_fermionic(TK.sectortype(space(i)))
+
+_nfactors(::Type{<:TK.Sector}) = 1
+_nfactors(::Type{TK.TensorKitSectors.ProductSector{T}}) where {T} = fieldcount(T)
+
+#Mode-basis occupation labels: d = 2 → (n,), d = 4 → (n↑, n↓) over (|0⟩, |↑⟩, |↓⟩, |↑↓⟩)
+_mode_occupations(d::Int) = d == 2 ? [(0,), (1,)] : [(0, 0), (1, 0), (0, 1), (1, 1)]
+
+#The sector a mode-basis state carries under the index's grading (factor order as built
+#by graded_space: U(1) charge(s) first, FermionParity last)
+function _mode_sector(I::Type, occ::Tuple)
+    I === TK.FermionParity && return TK.FermionParity(mod(sum(occ), 2))
+    n = _nfactors(I)
+    n == 2 && return I(sum(occ), mod(sum(occ), 2))
+    (n == 3 && length(occ) == 2) && return I(occ[1], occ[2], mod(sum(occ), 2))
+    return error("op/state: unsupported fermionic grading $(I) for a d = $(2^length(occ)) site")
+end
+
+#Position of each mode-basis state in the index's sector-ordered dense layout: the
+#operator/state tables live in the mode basis and are permuted per site space, so any
+#grading (parity, fU1, dual U(1)) with any sector order works.
+function _mode_perm(i::TKIndex)
+    I = TK.sectortype(space(i))
+    counts = Dict{Any, Int}()
+    perm = Int[]
+    for occ in _mode_occupations(dimof(i))
+        c = _mode_sector(I, occ)
+        k = get(counts, c, 0)
+        counts[c] = k + 1
+        push!(perm, first(_fock_range(i, c)) + k)
+    end
+    return perm
 end
 
 fermion_space(d0::Integer = 1, d1::Integer = 1) = graded_space("fZ2", [0 => d0, 1 => d1])
@@ -336,21 +383,22 @@ const F_STATES = Dict{String, Vector{Float64}}(
     "1" => [0, 1], "Occ" => [0, 1], "Occupied" => [0, 1],
 )
 
-#Spinful (d = 4) fermionic states in the CHARGE-ORDERED basis (|0⟩, |↑↓⟩ | |↑⟩, |↓⟩):
-#even sector first, so the graded scatter lines up with Vect[FermionParity](0=>2, 1=>2).
+#Spinful (d = 4) fermionic states in the MODE basis (|0⟩, |↑⟩, |↓⟩, |↑↓⟩); permuted to
+#the site space's sector-ordered layout by _mode_perm at construction.
 const F_STATES_4 = Dict{String, Vector{Float64}}(
     "0" => [1, 0, 0, 0], "Emp" => [1, 0, 0, 0], "Empty" => [1, 0, 0, 0],
-    "UpDn" => [0, 1, 0, 0], "2" => [0, 1, 0, 0],
-    "Up" => [0, 0, 1, 0], "↑" => [0, 0, 1, 0],
-    "Dn" => [0, 0, 0, 1], "↓" => [0, 0, 0, 1],
+    "Up" => [0, 1, 0, 0], "↑" => [0, 1, 0, 0],
+    "Dn" => [0, 0, 1, 0], "↓" => [0, 0, 1, 0],
+    "UpDn" => [0, 0, 0, 1], "2" => [0, 0, 0, 1],
 )
 
 #Resolve a local state (name or raw vector) on a graded site to its dense vector
 #(fermionic names for parity sites, the dense registry otherwise).
 function state_vector(namevec, i::TKIndex)
+    fermionic = is_fermionic(i)
     vec = if namevec isa AbstractVector{<:Number}
         collect(namevec)
-    elseif TK.sectortype(space(i)) === TK.FermionParity
+    elseif fermionic
         table = dimof(i) == 2 ? F_STATES : dimof(i) == 4 ? F_STATES_4 :
             error("state: fermionic state library covers d = 2 (spinless) and d = 4 (spinful) sites")
         get(table, String(namevec), nothing)
@@ -362,6 +410,12 @@ function state_vector(namevec, i::TKIndex)
     )
     length(vec) == dimof(i) ||
         error("state: vector length $(length(vec)) ≠ site dimension $(dimof(i))")
+    #fermionic inputs are in the mode basis; reorder into the space's sector layout
+    if fermionic
+        out = zeros(eltype(vec), dimof(i))
+        out[_mode_perm(i)] .= vec
+        return out
+    end
     return vec
 end
 
@@ -419,19 +473,17 @@ const _F_NN = ComplexF64[0 0 0 0; 0 0 0 0; 0 0 0 0; 0 0 0 1]
 #c†₁c†₂ + c₂c₁ on adjacent modes: ⟨11|c†₁c†₂|00⟩ = ⟨00|c₂c₁|11⟩ = 1
 const _F_PAIR = ComplexF64[0 0 0 1; 0 0 0 0; 0 0 0 0; 1 0 0 0]
 
-#Spinful (d = 4) single-site mode matrices, from the fermionic branch: mode basis
+#Spinful (d = 4) single-site matrices, from the fermionic branch: MODE basis
 #(|0⟩, |↑⟩, |↓⟩, |↑↓⟩) with the ↑-before-↓ intra-site Jordan-Wigner sign carried by a↓
-#(the −1 on |↑↓⟩ → |↑⟩). `_c4` permutes into the charge-ordered basis used by the
-#graded scatter: (|0⟩, |↑↓⟩ | |↑⟩, |↓⟩).
-const _P4 = [1, 4, 2, 3]
-_c4(M::AbstractMatrix) = M[_P4, _P4]
-const _F4_AUP = _c4(ComplexF64[0 1 0 0; 0 0 0 0; 0 0 0 1; 0 0 0 0])
-const _F4_ADN = _c4(ComplexF64[0 0 1 0; 0 0 0 -1; 0 0 0 0; 0 0 0 0])
+#(the −1 on |↑↓⟩ → |↑⟩). Permutation into each site space's sector layout happens in
+#_graded_op_array via _mode_perm.
+const _F4_AUP = ComplexF64[0 1 0 0; 0 0 0 0; 0 0 0 1; 0 0 0 0]
+const _F4_ADN = ComplexF64[0 0 1 0; 0 0 0 -1; 0 0 0 0; 0 0 0 0]
 const _F4_NUP = _F4_AUP' * _F4_AUP
 const _F4_NDN = _F4_ADN' * _F4_ADN
 const _F4_I = Matrix{ComplexF64}(LinearAlgebra.I, 4, 4)
 #site-parity operator (−1)^n, the intra-block Jordan-Wigner string for 2-site operators
-const _F4_Z = _c4(ComplexF64[1 0 0 0; 0 -1 0 0; 0 0 -1 0; 0 0 0 1])
+const _F4_Z = ComplexF64[1 0 0 0; 0 -1 0 0; 0 0 -1 0; 0 0 0 1]
 
 function _f_op1_matrix(name::String, d::Int; kwargs...)
     if d == 4
@@ -508,18 +560,20 @@ _two_site_array(M::AbstractMatrix, d1::Int, d2::Int) =
 
 #The dense operator array ⟨u…|O|s…⟩ with legs (u1..un, s1..sn) for the named operator.
 function _graded_op_array(name::String, sites::Vector{<:TKIndex}; kwargs...)
-    if TK.sectortype(space(first(sites))) === TK.FermionParity
+    if is_fermionic(first(sites))
         d = dimof(first(sites))
         (d in (2, 4) && all(i -> dimof(i) == d, sites)) ||
             error("op: fermionic operator library covers uniform d = 2 (spinless) or d = 4 (spinful) sites")
-        if length(sites) == 1
-            M = _f_op1_matrix(name, d; kwargs...)
-            M === nothing || return M
+        A = if length(sites) == 1
+            _f_op1_matrix(name, d; kwargs...)
         else
             M = _f_op2_matrix(name, d; kwargs...)
-            M === nothing || return _two_site_array(M, d, d)
+            M === nothing ? nothing : _two_site_array(M, d, d)
         end
-        error("op: unknown fermionic operator \"$name\"")
+        A === nothing && error("op: unknown fermionic operator \"$name\"")
+        #tables are in the mode basis; reorder each leg into its site's sector layout
+        ips = [invperm(_mode_perm(i)) for i in sites]
+        return A[vcat(ips, ips)...]
     end
     #bosonic sectors: the dense registry array is the ground truth
     dense = TensorInterface.op(name, (KIndex(dimof(i)) for i in sites)...; kwargs...)

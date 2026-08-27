@@ -331,16 +331,43 @@ end
             @test tnc ≈ (ψcv' * (cs[1]' * cs[5]) * ψcv) / nrmc atol = 1.0e-12
         end
 
-        @testset "spinful (d = 4) Hubbard chain ≡ dense JW (2 modes/site)" begin
+        @testset "fU1: number conservation is structural" begin
+            n = 4
+            g = NamedGraph(Graphs.path_graph(n))
+            s = TNQS.siteinds("Fermion", g; sectors = [0 => 1, 1 => 1], symmetry = "fU1")
+            #nonzero total N rides a dangling Charge leg
+            ψ = tensornetworkstate(ComplexF64, v -> v == 2 ? "Occ" : "Emp", g, s; charge_leg = true)
+            @test real(norm_sqr(ψ; alg = "exact")) ≈ 1.0
+            layer = Any[("F_hop", (v, v + 1), 0.37) for v in 1:(n - 1)]
+            ψt, _ = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 8, cutoff = 1.0e-14))
+            cs = jw_ops(n)
+            ψv = jw_evolve(layer, cs, Dict(v => v for v in 1:n), n; occupied = (2,))
+            nrm = real(ψv' * ψv)
+            for v in 1:n
+                occ = real(only(expect(ψt, ("N", [v]); alg = "bp")))
+                @test occ ≈ real(ψv' * (cs[v]' * cs[v]) * ψv) / nrm atol = 1.0e-12
+            end
+            c_tn = only(expect(ψt, ("CdagC", (1, 4)); alg = "bp"))
+            @test c_tn ≈ (ψv' * (cs[1]' * cs[4]) * ψv) / nrm atol = 1.0e-12
+            #pair creation does not commute with particle number: must error
+            @test_throws Exception TI.op("F_pair", only(s[1]), only(s[2]); θ = 0.1)
+        end
+
+        @testset "spinful (d = 4) Hubbard chain ≡ dense JW (2 modes/site)" for symm in ("fZ2", "fU1xU1")
             n = 4
             nm = 2n
             g = NamedGraph(Graphs.path_graph(n))
-            s = TNQS.siteinds("SpinfulFermion", g)
+            s = symm == "fZ2" ? TNQS.siteinds("SpinfulFermion", g) :
+                TNQS.siteinds(
+                "SpinfulFermion", g;
+                sectors = [(0, 0) => 1, (1, 0) => 1, (0, 1) => 1, (1, 1) => 1], symmetry = "fU1xU1"
+            )
             cs = jw_ops(nm)
             up(v) = 2v - 1
             dn(v) = 2v
             init = Dict(1 => "Up", 2 => "Dn", 3 => "UpDn", 4 => "Emp")
-            ψ = tensornetworkstate(ComplexF64, v -> init[v], g, s)
+            #charge_leg carries the nonzero total (N↑, N↓) under fU1xU1; no-op for parity
+            ψ = tensornetworkstate(ComplexF64, v -> init[v], g, s; charge_leg = true)
             @test real(norm_sqr(ψ; alg = "exact")) ≈ 1.0
             layer = Any[]
             for _ in 1:2

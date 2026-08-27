@@ -1,10 +1,13 @@
-# Fermionic quench dynamics with the TensorKit (fZ2) backend.
+# Fermionic quench dynamics with the TensorKit backend, at full fU(1) symmetry:
+# fermionic statistics ⊠ conserved particle number (TensorKit's FermionNumber sectors).
 #
 # Spinless free fermions: a charge-density-wave product state quenched under
 # nearest-neighbour hopping H = -t Σ (c†ᵢcⱼ + h.c.). Everything fermionic is native:
-# sites are Vect[FermionParity] spaces, odd site charges are routed through dim-1 links
-# (T-join), gates are LOCAL matrix exponentials — Jordan-Wigner strings emerge from
-# TensorKit's graded category, including inside the two-point correlators.
+# site charges are routed through dim-1 links (T-join) with the nonzero TOTAL particle
+# number carried by a dangling "Charge" dummy leg, gates are LOCAL matrix exponentials —
+# Jordan-Wigner strings emerge from the graded category, including inside the two-point
+# correlators — and number conservation is enforced structurally (a pair-creation gate
+# would error as non-conserving).
 #
 # The model is Gaussian, so exact dynamics at any size follows from the single-particle
 # correlation matrix C(T) = V* C(0) Vᵀ, V = exp(-i T h). Two checks:
@@ -32,7 +35,7 @@ function correlation_matrix(g, tt, T, occupied)
 end
 
 function evolve(g, occupied; tt = 1.0, dt = 0.05, nsteps = 10, χ = 16)
-    s = siteinds("Fermion", g)
+    s = siteinds("Fermion", g; sectors = [0 => 1, 1 => 1], symmetry = "fU1")
     ψ = tensornetworkstate(ComplexF64, v -> v ∈ occupied ? "Occ" : "Emp", g, s; charge_leg = true)
     #second-order Trotter layer: half-steps forward then reversed
     half = Any[]
@@ -46,7 +49,7 @@ function evolve(g, occupied; tt = 1.0, dt = 0.05, nsteps = 10, χ = 16)
     return ψ, nsteps * dt
 end
 
-function main(; tt = 1.0, dt = 0.05, nsteps = 10)
+function main(; tt = 1.0, dt = 0.01, nsteps = 50)
     println("== 1. Comb tree: BP is exact, deviation = Trotter only ==")
     g = named_comb_tree((3, 3))
     occupied = filter(v -> isodd(sum(v)), collect(vertices(g)))
@@ -62,7 +65,7 @@ function main(; tt = 1.0, dt = 0.05, nsteps = 10)
     C, idx = correlation_matrix(g, tt, T, occupied)
     v, w = (2, 1), (2, 2)   #an edge inside a single boundary-MPS partition
     cdagc_exact = C[idx[v], idx[w]]
-    bmps = update(BoundaryMPSCache(ψ, 8))
+    bmps = update(BoundaryMPSCache(ψ, 16))
     cdagc_bmps = only(expect(bmps, ("CdagC", (v, w)); alg = "boundarymps"))
     cdagc_bp = only(expect(ψ, ("CdagC", (v, w)); alg = "bp"))
     println("T = $T:  ⟨c†_$(v) c_$(w)⟩")
