@@ -250,12 +250,28 @@ function set_graded_interpartition_messages!(bmps_cache::BoundaryMPSCache, es::V
     return bmps_cache
 end
 
-#Switch the message tensors on partition edges with their reverse (and dagger them)
+#Crossing legs of an interpartition message: the network's virtual index/indices on this
+#edge plus their primes (ket + bra rails). Everything else on a message tensor is a
+#virtual MPS bond shared with a neighbour along the partition boundary.
+function _crossing_inds(bmps_cache::BoundaryMPSCache, e::NamedEdge)
+    cinds = virtualinds(network(bmps_cache), e)
+    return vcat(cinds, prime.(cinds))
+end
+
+#The adjoint of a boundary-MPS message in the fitting metric: for graded (fermionic)
+#tensors dag with the supertrace twist on the CROSSING legs only (see
+#KTensors.fit_adjoint); plain dag otherwise.
+fit_adjoint_message(bmps_cache::BoundaryMPSCache, e::NamedEdge, m) = dag(m)
+function fit_adjoint_message(bmps_cache::BoundaryMPSCache, e::NamedEdge, m::KTensors.TKTensor)
+    return KTensors.fit_adjoint(m, _crossing_inds(bmps_cache, e))
+end
+
+#Switch the message tensors on partition edges with their reverse (and fit-adjoint them)
 function switch_message!(bmps_cache::BoundaryMPSCache, e::NamedEdge)
     ms = messages(bmps_cache)
     me, mer = message(bmps_cache, e), message(bmps_cache, reverse(e))
-    set!(ms, e, dag(mer))
-    set!(ms, reverse(e), dag(me))
+    set!(ms, e, fit_adjoint_message(bmps_cache, e, mer))
+    set!(ms, reverse(e), fit_adjoint_message(bmps_cache, e, me))
     return bmps_cache
 end
 
@@ -352,7 +368,7 @@ function inserter!(
         update_e::NamedEdge,
         m
     )
-    setmessage!(bmps_cache, reverse(update_e), dag(m))
+    setmessage!(bmps_cache, reverse(update_e), fit_adjoint_message(bmps_cache, update_e, m))
     return bmps_cache
 end
 
@@ -654,8 +670,24 @@ end
 
 function path_contract(
         cache::BoundaryMPSCache, vs::Vector{<:Any}, op_string_f::Function; bmps_messages_up_to_date = false,
-        calculate_denom = true
+        calculate_denom = true, joint_op = nothing
     )
+    #A joint operator tensor spans the region's (primed) site legs; it is pushed into
+    #the contraction once, at the first of its vertices the path walk reaches. The
+    #caller marks the joint vertices "ρ" in op_string_f so their site legs stay primed.
+    jop_tensor = if joint_op === nothing
+        nothing
+    else
+        jinds = [only(siteinds(network(cache), v)) for v in last(joint_op)]
+        adapt_like(network(cache)[first(last(joint_op))], op(first(joint_op), jinds...))
+    end
+    jop_pushed = false
+    function push_joint!(contract_list, v)
+        (jop_tensor === nothing || jop_pushed || v ∉ last(joint_op)) && return nothing
+        push!(contract_list, jop_tensor)
+        jop_pushed = true
+        return nothing
+    end
 
     #For boundary MPS, must stay in partition
     partitions = unique(quotientvertices(cache, vs))
@@ -680,6 +712,7 @@ function path_contract(
             ignore_edges = prev_edge == nothing ? typeof(e)[reverse(e)] : typeof(e)[reverse(e), prev_edge]
             incoming_ms = incoming_messages(cache, src(e); ignore_edges)
             contract_list = norm_factors(network(cache), [src(e)]; op_strings = op_string_f)
+            push_joint!(contract_list, src(e))
             append!(contract_list, incoming_ms)
             m != nothing && push!(contract_list, m)
 
@@ -689,6 +722,7 @@ function path_contract(
         end
 
         contract_list = norm_factors(network(cache), [lv2]; op_strings = op_string_f)
+        push_joint!(contract_list, lv2)
         incoming_ms = incoming_messages(cache, lv2; ignore_edges = typeof(last(path))[last(path)])
         append!(contract_list, incoming_ms)
         push!(contract_list, m)

@@ -708,6 +708,21 @@ function LinearAlgebra.eigen(t::TKTensor; ishermitian::Bool = false, kwargs...)
     return D, TensorInterface.replaceinds(U, rv, lv)
 end
 
+#Fit adjoint for boundary-MPS bra-rail tensors: dag with the parity/supertrace twist
+#applied ONLY on the given (crossing) legs — where the bra rail closes against the ket
+#across a physical bond — and among those only on legs whose ORIGINAL arrow was
+#outgoing (non-dual; after the dag flip they are the dual slots). Never on the virtual
+#MPS bonds, which the Euclidean QR orthogonalises: a metric there, or on the wrong leg
+#subset, leaves the two fitting sweep directions inconsistent and the alternating
+#iteration converges to a wrong fixed point. Trivial for bosonic sectors. This is the
+#fermionic-branch recipe, with TensorKit's twist supplying the metric diag((−1)^p).
+function fit_adjoint(t::TKTensor, metric_legs)
+    td = TensorInterface.dag(t)
+    slots = Tuple(a for (a, i) in enumerate(td.inds) if i.dual && i ∈ metric_legs)
+    isempty(slots) && return td
+    return TKTensor(td.inds, TK.twist(td.data, slots))
+end
+
 # ── Boundary-MPS link-sector allocation (init recipe; used by boundarympscache.jl) ──────
 
 #Charge spectrum reachable by one message site: the convolution of its legs' carried

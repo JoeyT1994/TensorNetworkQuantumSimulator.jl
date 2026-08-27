@@ -97,13 +97,14 @@ function expect(
     )
     op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
     iszero(coeff) && return zero(coeff)
-    op_strings isa String && error(
-        "Joint region operators (\"$(op_strings)\") are currently only supported with alg = \"bp\"."
-    )
 
-    op_string_f = op_string_function(op_strings, obs_vs)
+    #A String op_strings marks a joint region operator (see collectobservable): the
+    #joint vertices' site legs stay primed ("ρ") and the operator tensor bridges them.
+    joint_op = op_strings isa String ? (op_strings, obs_vs) : nothing
+    op_string_f = joint_op === nothing ? op_string_function(op_strings, obs_vs) :
+        (v -> v ∈ obs_vs ? "ρ" : "I")
 
-    numer, denom = path_contract(cache, obs_vs, op_string_f; bmps_messages_up_to_date)
+    numer, denom = path_contract(cache, obs_vs, op_string_f; bmps_messages_up_to_date, joint_op)
     return coeff * scalar(numer) / denom
 end
 
