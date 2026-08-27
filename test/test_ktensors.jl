@@ -202,6 +202,31 @@ end
         nb = real(norm_sqr(ψg; alg = "boundarymps", mps_bond_dimension = 20))
         @test abs(nb / ne - 1) < 5e-3
 
+        #graded purification: the infinite-T identity state pairs ket sites with
+        #DUAL-representation ancillas (flux-zero per site); U(1) Heisenberg imaginary
+        #time matches the dense twin exactly when truncation has rank headroom (bound
+        #truncation differs only by degenerate tie-breaking)
+        function thermal_logz(symmetry)
+            gt = named_grid((2, 2))
+            st = symmetry === nothing ? siteinds("S=1/2", gt; inds_per_site = 2) :
+                siteinds("S=1/2", gt; inds_per_site = 2, symmetry)
+            ψth = identity_tensornetworkstate(ComplexF64, gt, st)
+            ψ_bpc = update(BeliefPropagationCache(ψth))
+            gates = []
+            for ces in edge_color(gt, 4)
+                append!(gates, [op("Rxxyyzz", st[src(e)][1], st[dst(e)][1], θ = -0.01im) for e in ces])
+            end
+            logz = -TNQS.freenergy(ψ_bpc)
+            rescale!(ψ_bpc)
+            for _ in 1:2
+                ψ_bpc, _ = apply_gates(gates, ψ_bpc; apply_kwargs = (; maxdim = 32, cutoff = 1.0e-14))
+                logz -= TNQS.freenergy(ψ_bpc)
+                rescale!(ψ_bpc)
+            end
+            return logz
+        end
+        @test thermal_logz("U1") ≈ thermal_logz(nothing) atol = 1.0e-11
+
         #graded factorization round-trip on a generic conserving 4-leg tensor
         si = KTensors.KIndex(KTensors.graded_space("Z2", [0 => 1, 1 => 2]), "a")
         sj = KTensors.KIndex(KTensors.graded_space("Z2", [0 => 2, 1 => 1]), "b")

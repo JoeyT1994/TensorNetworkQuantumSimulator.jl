@@ -19,6 +19,8 @@ first half being the "ket" indices and the second half the "bra" indices; index 
 index `n/2 + i`.
 """
 function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2))
+    first(Iterators.flatten(s)) isa KTensors.TKIndex &&
+        return graded_identity_tensornetworkstate(eltype, g, s)
     links = Dictionary(edges(g), [new_index(1; tags = "e$(src(e))_$(dst(e))") for e in edges(g)])
     links = merge(links, Dictionary(reverse.(edges(g)), [links[e] for e in edges(g)]))
 

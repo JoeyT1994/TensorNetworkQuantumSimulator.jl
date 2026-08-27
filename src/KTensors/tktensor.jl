@@ -436,6 +436,7 @@ trivial_sector(c) = one(c)
 
 #A dim-1 link index carrying charge `q` (used for routing charges through product states)
 charged_link_index(q; tags = "Link") = KIndex(TK.Vect[typeof(q)](q => 1), tags)
+trivial_link_index(ref::TKIndex; tags = "Link") = charged_link_index(one(TK.sectortype(space(ref))); tags)
 
 #States scatter the dense state vector; the from_array flux guard rejects charged
 #states loudly (as SINGLE tensors — networks route charges through links instead, see
@@ -820,6 +821,23 @@ function LinearAlgebra.eigen(t::TKTensor; ishermitian::Bool = false, kwargs...)
     rv = collect(KIndex, TensorInterface.prime.(lv))
     D, U = LinearAlgebra.eigen(t, lv, rv; ishermitian, kwargs...)
     return D, TensorInterface.replaceinds(U, rv, lv)
+end
+
+#Purification pairing state Σₛ |s⟩_kets ⊗ ⟨s|_ancillas as a one-sided tensor: the
+#ancilla legs carry the DUAL representation (dag'd index copies), which is what makes
+#the infinite-temperature identity state flux-zero per site — the data is TensorKit's
+#identity map, nothing hand-rolled.
+function pairing_tensor(elt::Type, kets, ancs)
+    kv, av = collect(KIndex, kets), collect(KIndex, ancs)
+    length(kv) == length(av) || error("pairing_tensor: need as many ancillas as kets")
+    all(i -> !i.dual, kv) && all(i -> i.dual, av) ||
+        error("pairing_tensor: kets must be non-dual and ancillas dual copies")
+    all(space(kv[a]) == space(av[a]) for a in eachindex(kv)) ||
+        error("pairing_tensor: ket/ancilla spaces must match pairwise")
+    k = length(kv)
+    P = TK.ProductSpace(map(space, kv)...)
+    data = TK.permute(TK.id(elt, P), (Tuple(1:(2k)), ()))
+    return TKTensor(vcat(kv, av), data)
 end
 
 #Fit adjoint for boundary-MPS bra-rail tensors: dag with the parity/supertrace twist

@@ -112,6 +112,13 @@ function apply_gates(circuit::Vector{<:KTensor}, ψ_bpc::BeliefPropagationCache;
     return _apply_gate_tensors(circuit, ψ_bpc; kwargs...)
 end
 
+#Backend tensor gates inside generic (e.g. Any-typed) circuit vectors pass through the
+#circuit-tuple path unchanged; the acting vertices are inferred from the site indices.
+function toitensor(gate::Union{KTensor, KTensors.TKTensor}, g::NamedGraph, sinds::Dictionary)
+    verts = [v for v in keys(sinds) if any(i -> i ∈ inds(gate), sinds[v])]
+    return gate, verts
+end
+
 # ── TKTensor (graded / fermionic) capability methods ────────────────────────────────────
 # Backend-specific counterparts of generic entry points, gathered here with the fused
 # dense kernels so the generic files stay backend-agnostic.
@@ -209,4 +216,27 @@ end
 #KTensors.fit_adjoint); the generic fallback in boundarympscache.jl is a plain dag.
 function fit_adjoint_message(bmps_cache::BoundaryMPSCache, e::NamedEdge, m::KTensors.TKTensor)
     return KTensors.fit_adjoint(m, _crossing_inds(bmps_cache, e))
+end
+
+#Graded purification (infinite-temperature identity) state: per vertex the pairing
+#Σₛ |s⟩⟨s| between the ket site legs and their dual-rep ancillas (see
+#KTensors.pairing_tensor) — flux-zero per site, so all links are trivial dim-1 with the
+#usual src(out)/dst(in) orientation.
+function graded_identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary)
+    ref = first(Iterators.flatten(s))
+    l = Dict(e => KTensors.trivial_link_index(ref; tags = "e$(src(e))_$(dst(e))") for e in edges(g))
+    ts = Dictionary{vertextype(g), Any}()
+    for v in vertices(g)
+        ninds = length(s[v])
+        ninds % 2 == 0 || error("identity state: odd number of siteinds on vertex $v")
+        onehots = [onehot(eltype, (src(e) == v ? l[e] : dag(l[e])) => 1) for e in edges(g) if src(e) == v || dst(e) == v]
+        if ninds > 0
+            t = KTensors.pairing_tensor(eltype, s[v][1:(ninds ÷ 2)], s[v][((ninds ÷ 2) + 1):ninds])
+            set!(ts, v, reduce(*, onehots; init = t))
+        else
+            set!(ts, v, reduce(*, onehots))
+        end
+    end
+    ts = Dictionary(collect(keys(ts)), identity.(collect(ts)))
+    return TensorNetworkState(TensorNetwork(ts, g), s)
 end

@@ -20,7 +20,11 @@ function siteinds(sitetype::String, g::AbstractGraph, sitedimension::Integer = s
         sum(last.(sectors)) == sitedimension ||
             error("siteinds: sector dimensions $(sectors) do not sum to the site dimension $(sitedimension)")
         sp = KTensors.graded_space(symmetry, sectors)
-        return Dictionary(vs, [[KTensors.KIndex(sp, site_tag(sitetype)) for i in 1:inds_per_site] for v in vs])
+        #with an even number of inds per site (purifications), the second half are
+        #ancillas and carry the DUAL representation (dag'd copies) so the identity
+        #state is flux-zero per site
+        anc(i) = iseven(inds_per_site) && i > inds_per_site ÷ 2
+        return Dictionary(vs, [[(ind = KTensors.KIndex(sp, site_tag(sitetype)); anc(i) ? dag(ind) : ind) for i in 1:inds_per_site] for v in vs])
     end
     return Dictionary(vs, [[new_index(sitedimension; tags = site_tag(sitetype)) for i in 1:inds_per_site] for v in vs])
 end
