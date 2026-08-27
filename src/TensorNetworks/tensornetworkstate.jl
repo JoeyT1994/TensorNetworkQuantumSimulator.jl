@@ -52,11 +52,7 @@ function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Functi
     for v in verts
         sinds = siteinds(tns, v)
         tnv = tns[v]
-        tnv_dag = dag(prime(tnv))
-        #dangling charge legs (charged states, see graded_tensornetworkstate) pair
-        #bra-ket directly, like site legs with no operator
-        cinds = filter(i -> occursin("Charge", tags(i)), collect(inds(tnv)))
-        isempty(cinds) || (tnv_dag = replaceinds(tnv_dag, prime.(cinds), cinds))
+        tnv_dag = unprime_charge_legs(dag(prime(tnv)), tnv)
         if v ∈ jverts
             #site legs stay primed; the joint operator tensor bridges them below
             append!(factors, [tnv, tnv_dag])

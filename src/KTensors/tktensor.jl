@@ -823,6 +823,45 @@ function LinearAlgebra.eigen(t::TKTensor; ishermitian::Bool = false, kwargs...)
     return D, TensorInterface.replaceinds(U, rv, lv)
 end
 
+#Projector ⟨v| onto basis state v of site i, as a flux-zero tensor: the site copy is
+#dualized, and when the state's sector is nontrivial its charge rides a dim-1 dangling
+#"Charge"-tagged leg — paired bra-ket automatically in double-layer networks
+#(norm_factors), riding as a spectator through single-layer (amplitude) contractions.
+#Configurations whose total charge is wrong then contract to exactly zero.
+function TensorInterface.projector(elt::Type, p::Pair{<:TKIndex, <:Integer})
+    i, v = p
+    i.dual && error("projector: expected a non-dual (ket) site index")
+    id = TensorInterface.dag(i)
+    c = only(c for c in TK.sectors(space(i)) if v ∈ _fock_range(i, c))
+    c == one(c) && return TensorInterface.onehot(elt, id => v)
+    ch = charged_link_index(c; tags = "Charge")
+    data = zeros(elt, TK.ProductSpace(slotspace(id), slotspace(ch)))
+    for (f1, f2) in TK.fusiontrees(data)
+        r = _fock_range(id, f1.uncoupled[1])
+        v ∈ r && (data[f1, f2][v - first(r) + 1, 1] = one(elt))
+    end
+    return TKTensor([id, ch], data)
+end
+
+#Trace of a 2-leg (s, s′) tensor, defined to agree with sum(diag(array(t))) — the
+#convention the sampler's probability bookkeeping reads its diagonal in.
+function LinearAlgebra.tr(t::TKTensor)
+    ndims(t) == 2 || error("tr: expected a 2-index TKTensor")
+    return sum(LinearAlgebra.diag(TensorInterface.array(t)))
+end
+
+#Fully-projected graded networks contract down to spectator dim-1 charge legs rather
+#than a bare number; the entry is the amplitude (zero when the total charge is wrong,
+#i.e. no flux-zero tree survives).
+function TensorInterface.scalar(t::TKTensor)
+    all(i -> dimof(i) == 1, t.inds) ||
+        error("scalar: TKTensor with inds $(t.inds) is not a scalar")
+    for (f1, f2) in TK.fusiontrees(t.data)
+        return only(t.data[f1, f2])
+    end
+    return zero(eltype(t))
+end
+
 #Purification pairing state Σₛ |s⟩_kets ⊗ ⟨s|_ancillas as a one-sided tensor: the
 #ancilla legs carry the DUAL representation (dag'd index copies), which is what makes
 #the infinite-temperature identity state flux-zero per site — the data is TensorKit's

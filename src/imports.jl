@@ -47,7 +47,8 @@ using .TensorInterface: Algorithm, @Algorithm_str
 using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, noncommoninds,
     hascommoninds, dim, plev, tags,
     dag, prime, noprime, sim, replaceind, replaceinds,
-    onehot, delta, combiner, combinedind, random_itensor, directsum,
+    onehot,
+    projector, delta, combiner, combinedind, random_itensor, directsum,
     op, state,
     scalar, apply, map_diag, map_diag!, factorize_svd,
     array, data, new_index, from_array

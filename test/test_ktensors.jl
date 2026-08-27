@@ -202,6 +202,27 @@ end
         nb = real(norm_sqr(ψg; alg = "boundarymps", mps_bond_dimension = 20))
         @test abs(nb / ne - 1) < 5e-3
 
+        #sampling: projected amplitudes agree with the dense twin exactly (deterministic),
+        #and certified boundary-MPS sampling runs with positive finite certificates
+        function amp2(ψt, bits)
+            sd = TNQS.siteinds(ψt)
+            tnp = copy(TNQS.tensornetwork(ψt))
+            for v in vertices(tnp)
+                P = TNQS.adapt_like(tnp[v], TI.projector(ComplexF64, only(sd[v]) => bits(v)))
+                TNQS.setindex_preserve!(tnp, tnp[v] * P, v)
+            end
+            ts = [tnp[v] for v in vertices(tnp)]
+            amp = TI.scalar(TI.contract(ts; sequence = TNQS.contraction_sequence(ts; alg = "optimal")))
+            return abs2(amp) / real(norm_sqr(ψt; alg = "exact"))
+        end
+        bits = v -> iseven(v[1]) ? 1 : 2
+        @test amp2(ψg, bits) ≈ amp2(ψd, bits) atol = 1.0e-10
+        gsamples = sample_directly_certified(
+            ψg, 2; alg = "boundarymps", gauge_state = false,
+            norm_mps_bond_dimension = 12, projected_mps_bond_dimension = 12
+        )
+        @test all(x -> isfinite(real(x.poverq)) && real(x.poverq) > 0, gsamples)
+
         #graded purification: the infinite-T identity state pairs ket sites with
         #DUAL-representation ancillas (flux-zero per site); U(1) Heisenberg imaginary
         #time matches the dense twin exactly when truncation has rank headroom (bound
@@ -356,6 +377,21 @@ end
             @test occ3 ≈ real(ψcv' * (cs[3]' * cs[3]) * ψcv) / nrmc atol = 1.0e-12
             tnc = only(expect(ψct, ("CdagC", (1, 5)); alg = "bp"))
             @test tnc ≈ (ψcv' * (cs[1]' * cs[5]) * ψcv) / nrmc atol = 1.0e-12
+            #projected amplitudes (the sampling primitive): full projection onto a
+            #basis configuration — projector charge legs + the root Charge leg all
+            #fuse; configurations in the wrong total sector give exactly zero
+            for x in ((0, 1, 0, 1, 1, 0), (1, 1, 1, 1, 1, 0))
+                p_jw = abs2(ψcv[1 + sum(v -> x[v] * 2^(n - v), 1:n)]) / nrmc
+                sd = TNQS.siteinds(ψct)
+                tnp = copy(TNQS.tensornetwork(ψct))
+                for v in vertices(tnp)
+                    P = TNQS.adapt_like(tnp[v], TI.projector(ComplexF64, only(sd[v]) => x[v] + 1))
+                    TNQS.setindex_preserve!(tnp, tnp[v] * P, v)
+                end
+                ts = [tnp[v] for v in vertices(tnp)]
+                amp = TI.scalar(TI.contract(ts; sequence = TNQS.contraction_sequence(ts; alg = "optimal")))
+                @test abs2(amp) / real(norm_sqr(ψct; alg = "exact")) ≈ p_jw atol = 1.0e-12
+            end
         end
 
         @testset "fU1: number conservation is structural" begin
@@ -460,6 +496,15 @@ end
             @test hop ≈ real(ψv' * (cs[j]' * cs[k] + cs[k]' * cs[j]) * ψv) / nrm atol = 1.0e-12
             pr = real(only(expect(ψt, ("pairing", (v1, v2)); alg = "exact")))
             @test pr ≈ real(ψv' * (cs[j]' * cs[k]' + cs[k] * cs[j]) * ψv) / nrm atol = 1.0e-12
+            #certified sampling on the fermionic state: certificates positive and finite
+            #(ρ closures psd_gauged before their diagonals are read), and every sampled
+            #configuration lands in the physical charge sector (even parity here)
+            samples = sample_directly_certified(
+                ψt, 2; alg = "boundarymps", gauge_state = false,
+                norm_mps_bond_dimension = 8, projected_mps_bond_dimension = 8
+            )
+            @test all(x -> isfinite(real(x.poverq)) && real(x.poverq) > 0, samples)
+            @test all(x -> iseven(sum(values(x.bitstring))), samples)
             #fermionic boundary MPS: fitted seam messages (fit-adjoint supertrace metric
             #on out-arrow crossing legs) + a joint odd-pair operator through the walk.
             #Residual ~1e-4 is the known fixed-link-sector fitting allocation.

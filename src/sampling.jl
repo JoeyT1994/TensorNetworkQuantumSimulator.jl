@@ -23,7 +23,9 @@ function sample(
             ψv, ψv_dag = network(projected_bp_cache)[v], dag(prime(network(projected_bp_cache)[v]))
             push!(tensors, ψv, ψv_dag)
             seq = contraction_sequence(tensors; alg = "optimal")
-            ρ = contract(tensors; sequence = seq)
+            #graded closures carry a per-sector parity gauge; fix to the PSD
+            #representative so the diagonal is the physical distribution (dense no-op)
+            ρ = parity_message_gauge(contract(tensors; sequence = seq))
 
             ρ_tr = tr(ρ)
             ρ *= inv(ρ_tr)
@@ -32,7 +34,7 @@ function sample(
             # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
             set!(bit_string, v, config - 1)
             s_ind = inds(ρ)[findfirst(i -> plev(i) == 0, inds(ρ))]
-            P = adapt_like(ρ, onehot(s_ind => config))
+            P = adapt_like(ρ, projector(scalartype(ρ), s_ind => config))
             setindex_preserve!(projected_bp_cache, ψv * P, v)
 
             if v != last(vertices(ψ))
@@ -200,7 +202,8 @@ function get_one_sample(
             es = sorted_edges(norm_bmps_cache, pe)
 
             for (i, e) in enumerate(es)
-                setmessage!(norm_bmps_cache, e, [outgoing_mps[i], prime(dag(outgoing_mps[i]))])
+                bra = unprime_charge_legs(prime(dag(outgoing_mps[i])), outgoing_mps[i])
+                setmessage!(norm_bmps_cache, e, [outgoing_mps[i], bra])
             end
 
             incoming_mps = outgoing_mps
@@ -230,10 +233,12 @@ function sample_partition!(
         !isnothing(prev_v) && update_partition!(norm_bmps_cache, [NamedEdge(prev_v => v)])
         incoming_ms = incoming_messages(norm_bmps_cache, [v])
         ψv = network(norm_bmps_cache)[v]
-        ψvdag = dag(prime(ψv))
+        ψvdag = unprime_charge_legs(dag(prime(ψv)), ψv)
         ts = [incoming_ms; [ψv, ψvdag]]
         seq = contraction_sequence(ts; alg = "optimal")
-        ρ = contract(ts; sequence = seq)
+        #graded closures carry a per-sector parity gauge; fix to the PSD representative
+        #so the diagonal is the physical distribution (dense no-op)
+        ρ = parity_message_gauge(contract(ts; sequence = seq))
         ρ_tr = tr(ρ)
         push!(traces, ρ_tr)
         ρ *= inv(ρ_tr)
@@ -242,7 +247,7 @@ function sample_partition!(
         # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
         set!(bit_string, v, config - 1)
         s_ind = inds(ρ)[findfirst(i -> plev(i) == 0, inds(ρ))]
-        P = adapt_like(ρ, onehot(s_ind => config))
+        P = adapt_like(ρ, projector(scalartype(ρ), s_ind => config))
         q = ρ_diag[config]
         logq += log(q)
         Pψv = copy(network(norm_bmps_cache)[v]) * inv(sqrt(q)) * P
@@ -270,7 +275,7 @@ function certify_sample(
     s = siteinds(ψ)
     qv = sqrt(exp(inv(oftype(logq, length(vertices(ψ)))) * logq))
     for v in vertices(ψ)
-        P = adapt_like(ψproj[v], onehot(only(s[v]) => bitstring[v] + 1))
+        P = adapt_like(ψproj[v], projector(scalartype(ψproj[v]), only(s[v]) => bitstring[v] + 1))
         setindex_preserve!(ψproj, ψproj[v] * P * inv(qv), v)
     end
 

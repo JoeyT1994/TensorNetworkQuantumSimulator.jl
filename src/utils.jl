@@ -44,6 +44,13 @@ end
 # Adapt `t` to the storage datatype (eltype + device) of `ref`.
 adapt_like(ref, t) = adapt(datatype(ref))(t)
 
+#Dangling "Charge" legs (charged graded states and projectors) pair bra-ket directly,
+#like site legs with no operator: unprime them on a bra built as dag(prime(ket)).
+function unprime_charge_legs(bra, ket)
+    cinds = filter(i -> occursin("Charge", tags(i)), collect(inds(ket)))
+    return isempty(cinds) ? bra : replaceinds(bra, prime.(cinds), cinds)
+end
+
 function identity_tensor(eltype, row_inds::Vector, col_inds::Vector)
     c_row, c_col = combiner(row_inds),combiner(col_inds)
     t = delta(eltype, combinedind(c_row), combinedind(c_col))

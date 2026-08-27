@@ -72,7 +72,7 @@ for f in [
         # index/tensor transforms
         :dag, :prime, :noprime, :sim, :replaceind, :replaceinds,
         # construction
-        :onehot, :delta, :combiner, :combinedind, :random_itensor,
+        :onehot, :projector, :delta, :combiner, :combinedind, :random_itensor,
         :directsum, :op, :state, :new_index, :from_array,
         # contraction / evaluation
         :contract, :scalar, :apply, :inner,
@@ -100,6 +100,12 @@ scalartype(::Type{<:AbstractArray{T}}) where {T} = T
 #Backends whose full contractions produce raw numbers (e.g. the fermionic TensorMap
 #backend) flow those through scalar unchanged.
 scalar(x::Number) = x
+
+#Projector ⟨v| onto basis state v of a site index: for dense backends this is the same
+#unit vector as onehot; graded backends dualize the site copy and carry a nontrivial
+#state charge on a dim-1 dangling "Charge" leg.
+projector(p::Pair) = projector(Float64, p)
+projector(elt::Type, p::Pair) = onehot(elt, p)
 datatype(A::AbstractArray) = typeof(A)
 
 export Algorithm, @Algorithm_str
