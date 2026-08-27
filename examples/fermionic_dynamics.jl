@@ -35,7 +35,7 @@ function correlation_matrix(g, tt, T, occupied)
 end
 
 function evolve(g, occupied; tt = 1.0, dt = 0.05, nsteps = 10, χ = 16)
-    s = siteinds("Fermion", g; sectors = [0 => 1, 1 => 1], symmetry = "fU1")
+    s = siteinds("Fermion", g; symmetry = "fU1")
     ψ = tensornetworkstate(ComplexF64, v -> v ∈ occupied ? "Occ" : "Emp", g, s)
     #second-order Trotter layer: half-steps forward then reversed
     half = Any[]

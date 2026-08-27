@@ -336,7 +336,7 @@ end
         @testset "fU1: number conservation is structural" begin
             n = 4
             g = NamedGraph(Graphs.path_graph(n))
-            s = TNQS.siteinds("Fermion", g; sectors = [0 => 1, 1 => 1], symmetry = "fU1")
+            s = TNQS.siteinds("Fermion", g; symmetry = "fU1")
             #nonzero total N rides a dangling Charge leg
             ψ = tensornetworkstate(ComplexF64, v -> v == 2 ? "Occ" : "Emp", g, s)
             @test real(norm_sqr(ψ; alg = "exact")) ≈ 1.0
@@ -359,11 +359,7 @@ end
             n = 4
             nm = 2n
             g = NamedGraph(Graphs.path_graph(n))
-            s = symm == "fZ2" ? TNQS.siteinds("SpinfulFermion", g) :
-                TNQS.siteinds(
-                "SpinfulFermion", g;
-                sectors = [(0, 0) => 1, (1, 0) => 1, (0, 1) => 1, (1, 1) => 1], symmetry = "fU1xU1"
-            )
+            s = TNQS.siteinds("SpinfulFermion", g; symmetry = symm)
             cs = jw_ops(nm)
             up(v) = 2v - 1
             dn(v) = 2v
