@@ -1,8 +1,10 @@
 @eval module $(gensym())
-using Test: @test, @testset
+using Test: @test, @testset, @test_throws
 using TensorNetworkQuantumSimulator
 const TNQS = TensorNetworkQuantumSimulator
-using TensorNetworkQuantumSimulator.KTensors: KIndex, KTensor
+using TensorNetworkQuantumSimulator.KTensors: KTensors, KIndex, KTensor
+using Graphs: Graphs
+using NamedGraphs: NamedGraph
 const TI = TensorNetworkQuantumSimulator.TensorInterface
 using LinearAlgebra: LinearAlgebra, norm, qr, factorize
 
@@ -222,6 +224,101 @@ end
         _, z33, zz33 = digest(named_grid((3, 3)))
         @test z33 ≈ 4.482750429812405 atol = 1e-8
         @test zz33 ≈ 3.930327161012339 atol = 1e-8
+    end
+
+    @testset "fermionic (TensorKit fZ2) backend" begin
+        #Ground truth throughout: dense Jordan-Wigner evolution. The TN applies LOCAL
+        #gate matrices only — all strings come from TensorKit's graded category.
+        a = ComplexF64[0 1; 0 0]
+        Zm = ComplexF64[1 0; 0 -1]
+        id2 = Matrix{ComplexF64}(LinearAlgebra.I, 2, 2)
+        jw_ops(n) = [reduce(kron, [k < j ? Zm : (k == j ? a : id2) for k in 1:n]) for j in 1:n]
+        function jw_evolve(layer, cs, mode, n)
+            ψv = zeros(ComplexF64, 2^n)
+            ψv[1] = 1.0   # vacuum
+            return foldl(layer; init = ψv) do ϕv, gate
+                if gate[1] == "F_phase"
+                    j = mode[only(gate[2])]
+                    exp(-im * gate[3] * (cs[j]' * cs[j])) * ϕv
+                else
+                    j, k = mode[gate[2][1]], mode[gate[2][2]]
+                    H = gate[1] == "F_hop" ? (cs[j]' * cs[k] + cs[k]' * cs[j]) :
+                        (cs[j]' * cs[k]' + cs[k] * cs[j])
+                    exp(-im * gate[3] * H) * ϕv
+                end
+            end
+        end
+
+        @testset "unit checks" begin
+            s1 = KTensors.new_fermion_index(1, 1; tags = "s1")
+            s2 = KTensors.new_fermion_index(1, 1; tags = "s2")
+            t = TI.random_itensor(ComplexF64, s1, s2)
+            @test real(TI.dag(t) * t) ≈ norm(t)^2
+            F1, F2, _ = TI.factorize_svd(t, [s1])
+            @test norm(TI.array(F1 * F2) - TI.array(t)) < 1.0e-13
+            Q, R = qr(t, [s1])
+            @test norm(TI.array(Q * R) - TI.array(t)) < 1.0e-13
+            #occupied product states are flux-odd and must fail loudly
+            @test_throws Exception TI.state("Occ", s1)
+        end
+
+        @testset "Kitaev-chain quench ≡ dense JW (tree ⇒ BP exact)" begin
+            n = 6
+            g = NamedGraph(Graphs.path_graph(n))
+            s = TNQS.siteinds("Fermion", g)
+            ψ = tensornetworkstate(ComplexF64, v -> "Emp", g, s)
+            layer = Any[]
+            for _ in 1:3
+                append!(layer, ("F_pair", (v, v + 1), 0.29) for v in 1:2:(n - 1))
+                append!(layer, ("F_hop", (v, v + 1), 0.37) for v in 2:2:(n - 1))
+                append!(layer, ("F_hop", (v, v + 1), 0.37) for v in 1:2:(n - 1))
+                append!(layer, ("F_phase", [v], 0.21) for v in 1:n)
+            end
+            ψt, errs = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 32, cutoff = 1.0e-14))
+            @test maximum(errs) < 1.0e-12
+            cs = jw_ops(n)
+            ψv = jw_evolve(layer, cs, Dict(v => v for v in 1:n), n)
+            nrm = real(ψv' * ψv)
+            for v in 1:n
+                occ = real(only(expect(ψt, ("N", [v]); alg = "bp")))
+                @test occ ≈ real(ψv' * (cs[v]' * cs[v]) * ψv) / nrm atol = 1.0e-12
+            end
+            #joint two-site observables (odd⊗odd operators spanning a region)
+            hop = real(only(expect(ψt, ("hopping", (3, 4)); alg = "bp")))
+            @test hop ≈ real(ψv' * (cs[3]' * cs[4] + cs[4]' * cs[3]) * ψv) / nrm atol = 1.0e-12
+            pr = real(only(expect(ψt, ("pairing", (3, 4)); alg = "bp")))
+            @test pr ≈ real(ψv' * (cs[3]' * cs[4]' + cs[4] * cs[3]) * ψv) / nrm atol = 1.0e-12
+        end
+
+        @testset "2D grid ≡ dense JW (strings on vertical bonds)" begin
+            g = named_grid((2, 3))
+            vs = sort(collect(vertices(g)))
+            n = length(vs)
+            mode = Dict(v => i for (i, v) in enumerate(vs))
+            s = TNQS.siteinds("Fermion", g)
+            ψ = tensornetworkstate(ComplexF64, v -> "Emp", g, s)
+            es = collect(edges(g))
+            layer = Any[]
+            append!(layer, ("F_pair", (src(e), dst(e)), 0.29) for e in es)
+            append!(layer, ("F_hop", (src(e), dst(e)), 0.37) for e in es)
+            append!(layer, ("F_phase", [v], 0.21) for v in vs)
+            ψt, errs = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 64))
+            @test maximum(errs) < 1.0e-12
+            cs = jw_ops(n)
+            ψv = jw_evolve(layer, cs, mode, n)
+            nrm = real(ψv' * ψv)
+            occ_tn = [real(only(expect(ψt, ("N", [v]); alg = "exact"))) for v in vs]
+            occ_jw = [real(ψv' * (cs[mode[v]]' * cs[mode[v]]) * ψv) / nrm for v in vs]
+            @test maximum(abs.(occ_tn .- occ_jw)) < 1.0e-12
+            #vertical edge: non-adjacent JW modes — the string must come out of the category
+            e_v = first(filter(e -> src(e)[1] != dst(e)[1], es))
+            v1, v2 = src(e_v), dst(e_v)
+            j, k = mode[v1], mode[v2]
+            hop = real(only(expect(ψt, ("hopping", (v1, v2)); alg = "exact")))
+            @test hop ≈ real(ψv' * (cs[j]' * cs[k] + cs[k]' * cs[j]) * ψv) / nrm atol = 1.0e-12
+            pr = real(only(expect(ψt, ("pairing", (v1, v2)); alg = "exact")))
+            @test pr ≈ real(ψv' * (cs[j]' * cs[k]' + cs[k] * cs[j]) * ψv) / nrm atol = 1.0e-12
+        end
     end
 end
 end

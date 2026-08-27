@@ -30,9 +30,10 @@ using MatrixAlgebraKit: MatrixAlgebraKit, qr_compact, qr_compact!, svd_compact, 
 using TensorOperations: TensorOperations, ncon
 using VectorInterface: VectorInterface
 using Adapt: Adapt, adapt
+import TensorKit as TK
 using ..TensorInterface: TensorInterface
 
-export KIndex, KTensor, BlockTensor, GradedSpace, register_op!
+export KIndex, KTensor, BlockTensor, GradedSpace, register_op!, FTensor, new_fermion_index
 
 # ── Index ───────────────────────────────────────────────────────────────────────────────
 
@@ -226,6 +227,7 @@ TensorInterface.onehot(p::Pair{<:KIndex, <:Integer}) = TensorInterface.onehot(Fl
 function TensorInterface.delta(elt::Type, is::AbstractVector{<:KIndex})
     isempty(is) && return KTensor(one(elt))
     all(i -> space(i) isa GradedSpace, is) && return _delta_graded(elt, is)
+    all(i -> space(i) isa FermionSpace, is) && return _delta_f(elt, is)
     data = zeros(elt, TensorInterface.dim.(is)...)
     for k in 1:minimum(TensorInterface.dim.(is))
         data[ntuple(_ -> k, length(is))...] = one(elt)
@@ -961,5 +963,6 @@ function TensorInterface.state(name::String, i::KIndex)
 end
 
 include("blocktensor.jl")
+include("ftensor.jl")
 
 end

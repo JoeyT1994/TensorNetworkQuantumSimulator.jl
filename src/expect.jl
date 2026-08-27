@@ -13,8 +13,10 @@ function expect(
             push!(out, zero(coeff))
             continue
         end
-        op_string_f = op_string_function(op_strings, vs)
-        ψOψ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
+        #A String op_strings marks a joint region operator (see collectobservable)
+        joint_op = op_strings isa String ? (op_strings, vs) : nothing
+        op_string_f = joint_op === nothing ? op_string_function(op_strings, vs) : (v -> "I")
+        ψOψ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f, joint_op)
         numer_seq = contraction_sequence(ψOψ_tensors; contraction_sequence_kwargs...)
         numer = scalar(contract(ψOψ_tensors; sequence = numer_seq))
         push!(out, coeff * (numer / denom))
@@ -67,17 +69,22 @@ function expect(
     incoming_ms = incoming_messages(cache, steiner_vs)
 
     #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
-    function contract_region(op_string_f)
-        fast = norm_scalar_kernel(network(cache), steiner_vs, incoming_ms; op_strings = op_string_f)
-        fast !== nothing && return fast
-        tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
+    function contract_region(op_string_f; joint_op = nothing)
+        if joint_op === nothing
+            fast = norm_scalar_kernel(network(cache), steiner_vs, incoming_ms; op_strings = op_string_f)
+            fast !== nothing && return fast
+        end
+        tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f, joint_op)
         append!(tensors, incoming_ms)
         seq = contraction_sequence(tensors; alg = "optimal")
         return scalar(contract(tensors; sequence = seq))
     end
 
     denom = contract_region(v -> "I")
-    numer = contract_region(op_string_function(op_strings, obs_vs))
+    #A String op_strings marks a joint region operator (see collectobservable)
+    numer = op_strings isa String ?
+        contract_region(v -> "I"; joint_op = (op_strings, obs_vs)) :
+        contract_region(op_string_function(op_strings, obs_vs))
 
     return coeff * numer / denom
 end
@@ -90,6 +97,9 @@ function expect(
     )
     op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
     iszero(coeff) && return zero(coeff)
+    op_strings isa String && error(
+        "Joint region operators (\"$(op_strings)\") are currently only supported with alg = \"bp\"."
+    )
 
     op_string_f = op_string_function(op_strings, obs_vs)
 
@@ -159,6 +169,14 @@ function collectobservable(obs::Tuple, g::NamedGraph)
     coeff = length(obs) == 2 ? 1 : last(obs)
     verts = observables_vertices(obs, g)
     op = obs[1]
+
+    #A multi-character name on a multi-vertex region is a JOINT operator spanning the
+    #region (e.g. fermionic ("hopping", (v, w))); returned as a bare String sentinel.
+    #Single-character-per-vertex Pauli strings keep their factorized meaning.
+    if op isa String && length(op) != length(verts) && length(verts) > 1
+        length(verts) == 2 || error("Joint operator observables currently support two-vertex regions, got $(length(verts)) vertices.")
+        return op, verts, coeff
+    end
 
     length(op) != length(verts) && error("Invalid observable: need as many operators as vertices passed.")
     if op isa String

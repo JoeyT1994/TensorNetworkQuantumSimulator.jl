@@ -694,6 +694,7 @@ end
 function TensorInterface.contract(ts::Vector; kwargs...)
     all(t -> t isa KTensor, ts) && return TensorInterface.contract(collect(KTensor, ts); kwargs...)
     all(t -> t isa BlockTensor, ts) && return TensorInterface.contract(collect(BlockTensor, ts); kwargs...)
+    all(t -> t isa FTensor, ts) && return TensorInterface.contract(collect(FTensor, ts); kwargs...)
     return error("contract: expected a homogeneous tensor list, got $(unique(typeof.(ts)))")
 end
 

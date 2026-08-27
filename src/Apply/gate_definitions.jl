@@ -61,6 +61,18 @@ const GATES = Dict{String, GateSpec}(
     "Rxxyy"      => GateSpec("Rxxyy";      paramkeys = (:θ,)),
     "Rxxyyzz"    => GateSpec("Rxxyyzz";    paramkeys = (:θ,)),
     "xx_plus_yy" => GateSpec("xx_plus_yy"; paramkeys = (:θ, :β)),
+
+    # Fermionic gates (spinless, Z2-parity sites; resolved by the fermionic op methods).
+    # F_hop(θ)    = exp(-iθ (c†ᵢcⱼ + c†ⱼcᵢ))
+    # F_nn(θ)     = exp(-iθ nᵢnⱼ)
+    # F_hop_nn    = exp(-i (θ (c†ᵢcⱼ + c†ⱼcᵢ) + ϕ nᵢnⱼ))
+    # F_phase(θ)  = exp(-iθ nᵢ)
+    # F_pair(θ)   = exp(-iθ (c†ᵢc†ⱼ + cⱼcᵢ))
+    "F_hop"    => GateSpec("F_hop";    paramkeys = (:θ,)),
+    "F_nn"     => GateSpec("F_nn";     paramkeys = (:θ,)),
+    "F_hop_nn" => GateSpec("F_hop_nn"; paramkeys = (:θ, :ϕ)),
+    "F_pair"   => GateSpec("F_pair";   paramkeys = (:θ,)),
+    "F_phase"  => GateSpec("F_phase";  paramkeys = (:θ,)),
 )
 
 # Snapshot of built-in canonical names taken at module load. Used to prevent

@@ -15,8 +15,15 @@ function is_ring_graph(g::AbstractGraph)
     return is_line_graph(g_mod)
 end
 
+#Fermionic messages carry a per-message parity gauge (odd-sector sign); square roots
+#need the PSD representative. Identity for non-fermionic backends; see psd_gauge in
+#ftensor.jl.
+parity_message_gauge(M) = M
+parity_message_gauge(M::KTensors.FTensor) = KTensors.psd_gauge(M)
+
 function pseudo_sqrt_inv_sqrt(M; cutoff = 10 * eps(real(scalartype(M))))
     @assert length(inds(M)) == 2
+    M = parity_message_gauge(M)
     Q, D, Qdag = eigendecomp(M, inds(M)[1], inds(M)[2]; ishermitian = true)
     D_sqrt = map_diag(x -> iszero(x) || abs(x) < cutoff ? 0 : sqrt(x), D)
     D_inv_sqrt = map_diag(x -> iszero(x) || abs(x) < cutoff ? 0 : inv(sqrt(x)), D)

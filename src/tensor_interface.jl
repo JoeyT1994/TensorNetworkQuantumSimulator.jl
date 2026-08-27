@@ -96,6 +96,10 @@ const truncate = Base.truncate
 scalartype(x) = scalartype(typeof(x))
 scalartype(T::Type{<:Number}) = T
 scalartype(::Type{<:AbstractArray{T}}) where {T} = T
+
+#Backends whose full contractions produce raw numbers (e.g. the fermionic TensorMap
+#backend) flow those through scalar unchanged.
+scalar(x::Number) = x
 datatype(A::AbstractArray) = typeof(A)
 
 export Algorithm, @Algorithm_str

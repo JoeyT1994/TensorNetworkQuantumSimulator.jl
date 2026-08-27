@@ -46,13 +46,17 @@ function Base.setindex!(tns::TensorNetworkState, value, v)
     return tns
 end
 
-function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I")
+function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I", joint_op = nothing)
     factors = tensortype(tns)[]
+    jverts = joint_op === nothing ? () : last(joint_op)
     for v in verts
         sinds = siteinds(tns, v)
         tnv = tns[v]
         tnv_dag = dag(prime(tnv))
-        if op_strings(v) == "ρ" || isempty(sinds)
+        if v ∈ jverts
+            #site legs stay primed; the joint operator tensor bridges them below
+            append!(factors, [tnv, tnv_dag])
+        elseif op_strings(v) == "ρ" || isempty(sinds)
             append!(factors, [tnv, tnv_dag])
         elseif op_strings(v) == "I"
             tnv_dag = replaceinds(tnv_dag, prime.(sinds), sinds)
@@ -61,6 +65,11 @@ function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Functi
             op_tensor = adapt_like(tnv, op(op_strings(v), only(sinds)))
             append!(factors, [tnv, tnv_dag, op_tensor])
         end
+    end
+    if joint_op !== nothing
+        #one operator tensor spanning the whole region (e.g. fermionic "hopping")
+        jinds = [only(siteinds(tns, v)) for v in jverts]
+        push!(factors, adapt_like(tns[first(jverts)], op(first(joint_op), jinds...)))
     end
     return factors
 end
@@ -154,8 +163,10 @@ function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dic
 
     l = Dict(e => new_index(only(siteinds[src(e)]), 1) for e in edges(g))
     for e in edges(g)
+        #src carries the outgoing copy, dst the dag'd (incoming) copy — the flag is
+        #inert for dense/block-sparse data but sets the bond orientation for fermions
         tensors[src(e)] *= onehot(eltype, l[e] => 1)
-        tensors[dst(e)] *= onehot(eltype, l[e] => 1)
+        tensors[dst(e)] *= onehot(eltype, dag(l[e]) => 1)
     end
     tensors = Dictionary(vs, identity.(collect(tensors)))
     return TensorNetworkState(tensors, g)
