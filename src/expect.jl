@@ -170,10 +170,10 @@ function collectobservable(obs::Tuple, g::NamedGraph)
     verts = observables_vertices(obs, g)
     op = obs[1]
 
-    #A multi-character name on a multi-vertex region is a JOINT operator spanning the
-    #region (e.g. fermionic ("hopping", (v, w))); returned as a bare String sentinel.
-    #Single-character-per-vertex Pauli strings keep their factorized meaning.
-    if op isa String && length(op) != length(verts) && length(verts) > 1
+    #A non-Pauli name on a multi-vertex region is a JOINT operator spanning the region
+    #(e.g. fermionic ("hopping", (v, w)) or ("CC", (v, w))); returned as a bare String
+    #sentinel. Single-character-per-vertex Pauli strings keep their factorized meaning.
+    if op isa String && length(verts) > 1 && (length(op) != length(verts) || !_ispaulistring(op))
         length(verts) == 2 || error("Joint operator observables currently support two-vertex regions, got $(length(verts)) vertices.")
         return op, verts, coeff
     end

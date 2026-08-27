@@ -309,6 +309,26 @@ end
             @test hop ≈ real(ψv' * (cs[3]' * cs[4] + cs[4]' * cs[3]) * ψv) / nrm atol = 1.0e-12
             pr = real(only(expect(ψt, ("pairing", (3, 4)); alg = "bp")))
             @test pr ≈ real(ψv' * (cs[3]' * cs[4]' + cs[4] * cs[3]) * ψv) / nrm atol = 1.0e-12
+            #odd-pair two-point functions at ANY distance: the operator has legs only on
+            #(v, w) — the category threads the string; BP Steiner-completes the region
+            for (name, mat, (v, w)) in (
+                    ("CdagC", (j, k) -> cs[j]' * cs[k], (1, 6)),
+                    ("CCdag", (j, k) -> cs[j] * cs[k]', (2, 4)),
+                    ("CdagCdag", (j, k) -> cs[j]' * cs[k]', (3, 5)),
+                    ("CC", (j, k) -> cs[j] * cs[k], (1, 4)),
+                )
+                tn = only(expect(ψt, (name, (v, w)); alg = "bp"))
+                @test tn ≈ (ψv' * mat(v, w) * ψv) / nrm atol = 1.0e-12
+            end
+            #nonzero TOTAL charge carried by a dangling "Charge"-tagged dummy leg
+            ψc = tensornetworkstate(ComplexF64, v -> v in (2, 4, 5) ? "Occ" : "Emp", g, s; charge_leg = true)
+            ψct, _ = apply_gates(layer, ψc; apply_kwargs = (; maxdim = 32, cutoff = 1.0e-14))
+            ψcv = jw_evolve(layer, cs, Dict(v => v for v in 1:n), n; occupied = (2, 4, 5))
+            nrmc = real(ψcv' * ψcv)
+            occ3 = real(only(expect(ψct, ("N", [3]); alg = "bp")))
+            @test occ3 ≈ real(ψcv' * (cs[3]' * cs[3]) * ψcv) / nrmc atol = 1.0e-12
+            tnc = only(expect(ψct, ("CdagC", (1, 5)); alg = "bp"))
+            @test tnc ≈ (ψcv' * (cs[1]' * cs[5]) * ψcv) / nrmc atol = 1.0e-12
         end
 
         @testset "2D grid ≡ dense JW (strings on vertical bonds)" begin

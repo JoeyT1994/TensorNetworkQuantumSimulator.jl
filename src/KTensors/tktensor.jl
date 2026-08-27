@@ -424,6 +424,14 @@ function _f_op2_matrix(name::String; kwargs...)
     name == "hopping" && return _F_HOP
     name == "NN" && return _F_NN
     name == "pairing" && return _F_PAIR
+    #Odd-pair two-point operators, in the two-mode ordered basis of the pair (v, w) —
+    #the category threads the string over everything in between (any distance; the BP
+    #expect path Steiner-completes the region). Signs from the in-block anticommutation:
+    #c_v c†_w = −c†_w c_v etc.
+    name == "CdagC" && return ComplexF64[0 0 0 0; 0 0 0 0; 0 1 0 0; 0 0 0 0]   # c†_v c_w
+    name == "CCdag" && return ComplexF64[0 0 0 0; 0 0 -1 0; 0 0 0 0; 0 0 0 0]  # c_v c†_w
+    name == "CdagCdag" && return ComplexF64[0 0 0 0; 0 0 0 0; 0 0 0 0; 1 0 0 0] # c†_v c†_w
+    name == "CC" && return ComplexF64[0 0 0 -1; 0 0 0 0; 0 0 0 0; 0 0 0 0]      # c_v c_w
     name == "F_hop" && return exp(-im * kwargs[:θ] * _F_HOP)
     name == "F_nn" && return exp(-im * kwargs[:θ] * _F_NN)
     name == "F_pair" && return exp(-im * kwargs[:θ] * _F_PAIR)
