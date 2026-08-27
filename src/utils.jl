@@ -19,7 +19,7 @@ end
 #need the PSD representative. Identity for non-fermionic backends; see psd_gauge in
 #ftensor.jl.
 parity_message_gauge(M) = M
-parity_message_gauge(M::KTensors.FTensor) = KTensors.psd_gauge(M)
+parity_message_gauge(M::KTensors.TKTensor) = KTensors.psd_gauge(M)
 
 function pseudo_sqrt_inv_sqrt(M; cutoff = 10 * eps(real(scalartype(M))))
     @assert length(inds(M)) == 2

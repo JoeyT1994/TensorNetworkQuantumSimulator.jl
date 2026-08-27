@@ -33,41 +33,19 @@ using Adapt: Adapt, adapt
 import TensorKit as TK
 using ..TensorInterface: TensorInterface
 
-export KIndex, KTensor, BlockTensor, GradedSpace, register_op!, FTensor, new_fermion_index
+export KIndex, KTensor, TKTensor, register_op!, graded_space, new_fermion_index
 
 # ── Index ───────────────────────────────────────────────────────────────────────────────
 
-"""
-    GradedSpace(charges => dims...)
-
-An abelian graded vector space: a list of `charge => dimension` sectors. Used as the
-space of a `KIndex` to make tensors block-sparse under the corresponding U(1)/Zₙ symmetry.
-"""
-struct GradedSpace
-    charges::Vector{Int}
-    dims::Vector{Int}
-    function GradedSpace(charges::Vector{Int}, dims::Vector{Int})
-        length(charges) == length(dims) || error("GradedSpace: charges/dims length mismatch")
-        #repeated charges are permitted: sectors are positional (block keys index into this
-        #list), and factorizations may produce several disconnected classes of equal charge
-        return new(charges, dims)
-    end
-end
-GradedSpace(sectors::Pair{<:Integer, <:Integer}...) = GradedSpace(Int[first.(sectors)...], Int[last.(sectors)...])
-Base.:(==)(a::GradedSpace, b::GradedSpace) = a.charges == b.charges && a.dims == b.dims
-
 space_dim(s::Integer) = Int(s)
-space_dim(s::GradedSpace) = sum(s.dims)
-nsectors(s::GradedSpace) = length(s.charges)
-#Position range of sector k within the dense (charge-ordered) index
-sector_range(s::GradedSpace, k::Int) = (sum(s.dims[1:(k - 1)]) + 1):sum(s.dims[1:k])
 
 """
     KIndex(d::Integer, tags = "")
-    KIndex(space::GradedSpace, tags = "")
+    KIndex(space, tags = "")
 
 A named tensor index: identified by `(id, plev)`, carrying a space (a plain dimension for
-dense tensors, a `GradedSpace` for block-sparse ones), cosmetic tags, and a dual/arrow flag.
+dense tensors, a TensorKit `GradedSpace` for symmetric ones), cosmetic tags, and a
+dual/arrow flag.
 """
 struct KIndex{S}
     id::UInt64
@@ -78,7 +56,6 @@ struct KIndex{S}
 end
 
 KIndex(d::Integer, tags::AbstractString = "") = KIndex(rand(UInt64), Int(d), 0, String(tags), false)
-KIndex(s::GradedSpace, tags::AbstractString = "") = KIndex(rand(UInt64), s, 0, String(tags), false)
 dimof(i::KIndex) = space_dim(i.space)
 space(i::KIndex) = i.space
 
@@ -208,7 +185,6 @@ TensorInterface.from_array(A::AbstractArray, is::KIndex{<:Integer}...) = KTensor
 TensorInterface.from_array(A::AbstractVector, i::KIndex{<:Integer}) = KTensor(KIndex[i], copy(A))
 
 function TensorInterface.random_itensor(elt::Type, is::AbstractVector{<:KIndex})
-    any(i -> space(i) isa GradedSpace, is) && error("random_itensor: not yet implemented for graded indices")
     return KTensor(collect(is), randn(elt, TensorInterface.dim.(is)...))
 end
 TensorInterface.random_itensor(elt::Type, is::KIndex...) = TensorInterface.random_itensor(elt, collect(is))
@@ -226,8 +202,7 @@ TensorInterface.onehot(p::Pair{<:KIndex, <:Integer}) = TensorInterface.onehot(Fl
 #Index vectors are often abstractly typed, so the dense/graded split is decided by content
 function TensorInterface.delta(elt::Type, is::AbstractVector{<:KIndex})
     isempty(is) && return KTensor(one(elt))
-    all(i -> space(i) isa GradedSpace, is) && return _delta_graded(elt, is)
-    all(i -> space(i) isa FermionSpace, is) && return _delta_f(elt, is)
+    all(i -> space(i) isa TK.GradedSpace, is) && return _delta_tk(elt, is)
     data = zeros(elt, TensorInterface.dim.(is)...)
     for k in 1:minimum(TensorInterface.dim.(is))
         data[ntuple(_ -> k, length(is))...] = one(elt)
@@ -962,7 +937,6 @@ function TensorInterface.state(name::String, i::KIndex)
     return KTensor(KIndex[i], copy(vecmap[name]))
 end
 
-include("blocktensor.jl")
-include("ftensor.jl")
+include("tktensor.jl")
 
 end

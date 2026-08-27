@@ -146,14 +146,17 @@ end
         end
     end
 
-    @testset "graded (block-sparse) backend" begin
-        using TensorNetworkQuantumSimulator.KTensors: BlockTensor, GradedSpace
+    @testset "graded (TensorKit Z2) backend" begin
+        using TensorNetworkQuantumSimulator.KTensors: TKTensor
+        #Conserving workload: all-↑ start (flux zero per vertex — TensorMaps enforce total
+        #charge) with a Z2-symmetric circuit; Rxx creates ↓↓ pairs, xx_plus_yy moves them.
         function graded_digest(sectors)
             g = named_grid((3, 3))
-            s = siteinds("S=1/2", g; sectors)
-            ψ = tensornetworkstate(ComplexF64, v -> iseven(v[1] + v[2]) ? "↑" : "↓", g, s)
+            s = siteinds("S=1/2", g; sectors, symmetry = "Z2")
+            ψ = tensornetworkstate(ComplexF64, v -> "↑", g, s)
             layer = Any[("Rz", [v], 0.4) for v in vertices(g)]
             for ces in edge_color(g, 4)
+                append!(layer, ("Rxx", pair, 0.7) for pair in ces)
                 append!(layer, ("xx_plus_yy", pair, (0.7, 0.3)) for pair in ces)
                 append!(layer, ("Rzz", pair, 0.2) for pair in ces)
             end
@@ -166,29 +169,37 @@ end
         end
         ψd, zd, zxd, ed = graded_digest(nothing)
         ψg, zg, zxg, eg = graded_digest([0 => 1, 1 => 1])
-        @test ψg[(1, 1)] isa BlockTensor
+        @test ψg[(1, 1)] isa TKTensor
         @test zd ≈ zg atol = 1e-10
         @test zxd ≈ zxg atol = 1e-10
         @test ed ≈ eg atol = 1e-12
-        #the particle-conserving circuit leaves the state genuinely block-sparse
-        nstored = sum(sum(length, values(ψg[v].blocks); init = 0) for v in vertices(ψg))
+        #the conserving circuit leaves the state genuinely block-sparse: the flux-zero
+        #constraint keeps exactly half the product basis for balanced parity sectors
+        nstored = sum(
+            sum(p -> length(ψg[v].data[p[1], p[2]]), KTensors.TK.fusiontrees(ψg[v].data); init = 0)
+                for v in vertices(ψg)
+        )
         nfull = sum(prod(Int[TI.dim(i) for i in TI.inds(ψg[v])]) for v in vertices(ψg))
-        @test nstored < 0.5 * nfull
+        @test nstored <= 0.5 * nfull
 
-        #graded boundary MPS + certified sampling: random conserving init over convolved
-        #charged link spectra (fermion-branch recipe). Fixed per-sector allocation makes
-        #this variational at ~1e-4 (adaptive link expansion is future work); the sampling
-        #importance ratios are much tighter.
+        #non-conserving pieces must fail loudly: that is the point of the symmetry
+        sg = only(TNQS.siteinds(TNQS.tensornetwork(ψg))[(1, 1)])
+        @test_throws Exception TI.op("X", sg)
+        @test_throws Exception TI.state("↓", sg)
+
+        #graded boundary MPS: random conserving init over convolved charged link spectra
+        #(fermion-branch recipe; conservation itself is native — the init only picks link
+        #sectors). Fixed per-sector allocation makes this variational at ~1e-4. Certified
+        #sampling needs single-layer (amplitude) messages, which carry net flux — that
+        #waits for charged dummy legs.
         ne = real(norm_sqr(ψg; alg = "exact"))
         nb = real(norm_sqr(ψg; alg = "boundarymps", mps_bond_dimension = 20))
         @test abs(nb / ne - 1) < 5e-3
-        certified = sample_certified(ψg, 4; alg = "boundarymps", norm_mps_bond_dimension = 20, projected_mps_bond_dimension = 20)
-        @test all(x -> isfinite(real(first(x))), certified)
 
-        #graded factorization round-trip on a generic 4-leg block tensor
-        si = TI.new_index([0 => 1, 1 => 2]; tags = "a")
-        sj = TI.new_index([0 => 2, 1 => 1]; tags = "b")
-        T4 = TI.from_array(rand(ComplexF64, 3, 3, 3, 3), si', sj', si, sj)
+        #graded factorization round-trip on a generic conserving 4-leg tensor
+        si = KTensors.KIndex(KTensors.graded_space("Z2", [0 => 1, 1 => 2]), "a")
+        sj = KTensors.KIndex(KTensors.graded_space("Z2", [0 => 2, 1 => 1]), "b")
+        T4 = TI.random_itensor(ComplexF64, si', sj', TI.dag(si), TI.dag(sj))
         svr = Ref{Any}(nothing)
         F1, F2, spec = TI.factorize_svd(T4, [si', sj']; ortho = "none", singular_values! = svr)
         @test norm(F1 * F2 - T4) < 1e-10
