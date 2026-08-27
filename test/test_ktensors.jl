@@ -148,12 +148,13 @@ end
 
     @testset "graded (TensorKit Z2) backend" begin
         using TensorNetworkQuantumSimulator.KTensors: TKTensor
-        #Conserving workload: all-↑ start (flux zero per vertex — TensorMaps enforce total
-        #charge) with a Z2-symmetric circuit; Rxx creates ↓↓ pairs, xx_plus_yy moves them.
+        #Z2-symmetric workload on a CHARGED product state: the ↓ sites' charges are routed
+        #through dim-1 links along a spanning tree (T-join) so every vertex tensor is
+        #flux-zero; the checkerboard has an even number of ↓s, so the total vanishes.
         function graded_digest(sectors)
             g = named_grid((3, 3))
             s = siteinds("S=1/2", g; sectors, symmetry = "Z2")
-            ψ = tensornetworkstate(ComplexF64, v -> "↑", g, s)
+            ψ = tensornetworkstate(ComplexF64, v -> iseven(sum(v)) ? "↑" : "↓", g, s)
             layer = Any[("Rz", [v], 0.4) for v in vertices(g)]
             for ces in edge_color(g, 4)
                 append!(layer, ("Rxx", pair, 0.7) for pair in ces)
@@ -185,7 +186,11 @@ end
         #non-conserving pieces must fail loudly: that is the point of the symmetry
         sg = only(TNQS.siteinds(TNQS.tensornetwork(ψg))[(1, 1)])
         @test_throws Exception TI.op("X", sg)
-        @test_throws Exception TI.state("↓", sg)
+        @test_throws Exception TI.state("↓", sg)   #charged SINGLE tensor: flux-odd
+        #an odd number of charged sites has nonzero total charge: not representable
+        gz = named_grid((3, 3))
+        sz = siteinds("S=1/2", gz; sectors = [0 => 1, 1 => 1], symmetry = "Z2")
+        @test_throws Exception tensornetworkstate(ComplexF64, v -> v == (1, 1) ? "↓" : "↑", gz, sz)
 
         #graded boundary MPS: random conserving init over convolved charged link spectra
         #(fermion-branch recipe; conservation itself is native — the init only picks link
@@ -244,9 +249,9 @@ end
         Zm = ComplexF64[1 0; 0 -1]
         id2 = Matrix{ComplexF64}(LinearAlgebra.I, 2, 2)
         jw_ops(n) = [reduce(kron, [k < j ? Zm : (k == j ? a : id2) for k in 1:n]) for j in 1:n]
-        function jw_evolve(layer, cs, mode, n)
+        function jw_evolve(layer, cs, mode, n; occupied = ())
             ψv = zeros(ComplexF64, 2^n)
-            ψv[1] = 1.0   # vacuum
+            ψv[1 + sum(v -> 2^(n - mode[v]), occupied; init = 0)] = 1.0
             return foldl(layer; init = ψv) do ϕv, gate
                 if gate[1] == "F_phase"
                     j = mode[only(gate[2])]
@@ -274,10 +279,15 @@ end
         end
 
         @testset "Kitaev-chain quench ≡ dense JW (tree ⇒ BP exact)" begin
+            #charged initial state: two occupied sites (even total parity), routed
+            #through dim-1 odd links along the chain (T-join)
             n = 6
             g = NamedGraph(Graphs.path_graph(n))
             s = TNQS.siteinds("Fermion", g)
-            ψ = tensornetworkstate(ComplexF64, v -> "Emp", g, s)
+            ψ = tensornetworkstate(ComplexF64, v -> v in (2, 5) ? "Occ" : "Emp", g, s)
+            @test real(norm_sqr(ψ; alg = "exact")) ≈ 1.0
+            #odd total parity is a nonzero total charge: not representable
+            @test_throws Exception tensornetworkstate(ComplexF64, v -> v == 1 ? "Occ" : "Emp", g, s)
             layer = Any[]
             for _ in 1:3
                 append!(layer, ("F_pair", (v, v + 1), 0.29) for v in 1:2:(n - 1))
@@ -288,7 +298,7 @@ end
             ψt, errs = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 32, cutoff = 1.0e-14))
             @test maximum(errs) < 1.0e-12
             cs = jw_ops(n)
-            ψv = jw_evolve(layer, cs, Dict(v => v for v in 1:n), n)
+            ψv = jw_evolve(layer, cs, Dict(v => v for v in 1:n), n; occupied = (2, 5))
             nrm = real(ψv' * ψv)
             for v in 1:n
                 occ = real(only(expect(ψt, ("N", [v]); alg = "bp")))

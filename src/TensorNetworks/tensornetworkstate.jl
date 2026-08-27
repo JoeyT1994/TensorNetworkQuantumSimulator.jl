@@ -149,6 +149,8 @@ The local states can be given as strings (e.g. `"↑"`, `"↓"`, `"0"`, `"1"`) o
 """
 function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dictionary = default_siteinds(g))
     vs = collect(vertices(g))
+    only(siteinds[first(vs)]) isa KTensors.TKIndex &&
+        return graded_tensornetworkstate(eltype, f, g, siteinds)
     tensors = Dictionary{vertextype(g), Any}()
     for v in vs
         tnv = f(v)
@@ -167,6 +169,51 @@ function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dic
         #inert for dense/block-sparse data but sets the bond orientation for fermions
         tensors[src(e)] *= onehot(eltype, l[e] => 1)
         tensors[dst(e)] *= onehot(eltype, dag(l[e]) => 1)
+    end
+    tensors = Dictionary(vs, identity.(collect(tensors)))
+    return TensorNetworkState(tensors, g)
+end
+
+#Charged product states on graded (TensorKit-backed) sites: local charges are routed
+#through dim-1 links along a spanning tree (a T-join, the recipe validated on the
+#fermionic branch) so that every vertex tensor is individually flux-zero — TensorMaps
+#enforce zero flux, so a charged site must be neutralized by its links. Summing the
+#per-vertex conditions, internal bonds cancel: only the TOTAL charge must vanish.
+function graded_tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dictionary)
+    vs = collect(vertices(g))
+    svec = Dictionary(vs, [KTensors.state_vector(f(v), only(siteinds[v])) for v in vs])
+    #accumulate subtree charges child → parent over a spanning tree
+    acc = Dictionary(vs, [KTensors.vector_sector(svec[v], only(siteinds[v])) for v in vs])
+    I = typeof(acc[first(vs)])
+    root = first(vs)
+    stored = Set(edges(g))
+    qedge = Dict{NamedEdge{vertextype(g)}, I}()
+    for e in post_order_dfs_edges(g, root)
+        c, par = src(e), dst(e)
+        #the stored edge carries +q on its src copy, −q on its dst (dual) copy; the
+        #subtree below `c` must export its accumulated charge through this bond
+        if NamedEdge(c => par) ∈ stored
+            qedge[NamedEdge(c => par)] = KTensors.dual_sector(acc[c])
+        else
+            qedge[NamedEdge(par => c)] = acc[c]
+        end
+        set!(acc, par, KTensors.fuse_sectors(acc[par], acc[c]))
+    end
+    triv = KTensors.trivial_sector(acc[root])
+    acc[root] == triv || error(
+        "tensornetworkstate: total charge $(acc[root]) ≠ 0 — a charged state is not " *
+            "representable by flux-zero tensors on a closed network; it needs an " *
+            "explicit charged (dummy) leg"
+    )
+    l = Dict(e => KTensors.charged_link_index(get(qedge, e, triv)) for e in edges(g))
+    tensors = Dictionary{vertextype(g), Any}()
+    for v in vs
+        links = KTensors.KIndex[]
+        for e in edges(g)
+            src(e) == v && push!(links, l[e])
+            dst(e) == v && push!(links, dag(l[e]))
+        end
+        set!(tensors, v, KTensors.product_vertex_tensor(eltype, svec[v], only(siteinds[v]), links))
     end
     tensors = Dictionary(vs, identity.(collect(tensors)))
     return TensorNetworkState(tensors, g)

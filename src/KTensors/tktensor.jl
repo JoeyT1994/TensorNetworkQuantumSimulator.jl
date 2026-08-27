@@ -336,19 +336,63 @@ const F_STATES = Dict{String, Vector{Float64}}(
     "1" => [0, 1], "Occ" => [0, 1], "Occupied" => [0, 1],
 )
 
-#States scatter the dense state vector (fermionic names for parity sites, the dense
-#registry otherwise); the from_array flux guard rejects charged states loudly.
-function TensorInterface.state(name::String, i::TKIndex)
-    vec = if TK.sectortype(space(i)) === TK.FermionParity
+#Resolve a local state (name or raw vector) on a graded site to its dense vector
+#(fermionic names for parity sites, the dense registry otherwise).
+function state_vector(namevec, i::TKIndex)
+    vec = if namevec isa AbstractVector{<:Number}
+        collect(namevec)
+    elseif TK.sectortype(space(i)) === TK.FermionParity
         dimof(i) == 2 || error("state: fermionic state library covers d = 2 sites only")
-        get(F_STATES, name, nothing)
+        get(F_STATES, String(namevec), nothing)
     else
-        TensorInterface.state(name, KIndex(dimof(i))).data
+        TensorInterface.state(String(namevec), KIndex(dimof(i))).data
     end
     vec === nothing && error(
-        "state: unknown fermionic state \"$name\" (available: $(sort(collect(keys(F_STATES)))))"
+        "state: unknown fermionic state \"$namevec\" (available: $(sort(collect(keys(F_STATES)))))"
     )
-    return TensorInterface.from_array(vec, i)
+    length(vec) == dimof(i) ||
+        error("state: vector length $(length(vec)) ≠ site dimension $(dimof(i))")
+    return vec
+end
+
+#The (single) charge sector a state vector lives in; graded product states must have
+#definite local charge.
+function vector_sector(vec::AbstractVector, i::TKIndex)
+    secs = [c for c in TK.sectors(space(i)) if any(!iszero, vec[_fock_range(i, c)])]
+    length(secs) == 1 || error(
+        "state on a graded site must carry a definite charge; found support in sectors $(secs)"
+    )
+    return only(secs)
+end
+
+fuse_sectors(a, b) = only(TK.otimes(a, b))
+dual_sector(c) = TK.dual(c)
+trivial_sector(c) = one(c)
+
+#A dim-1 link index carrying charge `q` (used for routing charges through product states)
+charged_link_index(q; tags = "Link") = KIndex(TK.Vect[typeof(q)](q => 1), tags)
+
+#States scatter the dense state vector; the from_array flux guard rejects charged
+#states loudly (as SINGLE tensors — networks route charges through links instead, see
+#product_vertex_tensor).
+TensorInterface.state(name::String, i::TKIndex) = TensorInterface.from_array(state_vector(name, i), i)
+
+#Product-state vertex tensor: the site's state vector with dim-1 (possibly charged,
+#possibly dual) link legs attached in a single tree assignment — charged legs cannot be
+#attached by outer products, since a lone charged leg has no flux-zero trees. Any
+#TensorKit-internal phase convention on dual dim-1 slots is a per-bond gauge amounting
+#to at most a global phase of the state.
+function product_vertex_tensor(elt::Type, vec::AbstractVector, site::TKIndex, links::AbstractVector{<:KIndex})
+    iv = vcat(KIndex[site], collect(KIndex, links))
+    all(l -> dimof(l) == 1, links) || error("product_vertex_tensor: links must be dim-1")
+    data = zeros(elt, TK.ProductSpace(map(slotspace, iv)...))
+    for (f1, f2) in TK.fusiontrees(data)
+        data[f1, f2][:] .= elt.(vec[_fock_range(site, f1.uncoupled[1])])
+    end
+    LinearAlgebra.norm(data) ≈ LinearAlgebra.norm(vec) || error(
+        "product_vertex_tensor: the link charges do not neutralize the site charge"
+    )
+    return TKTensor(iv, data)
 end
 
 # ── Operators: dense operator arrays tree-assigned on two-sided maps ────────────────────
@@ -463,18 +507,23 @@ TensorInterface.random_itensor(is::TKIndex...) = TensorInterface.random_itensor(
 #trivial twists, so psd_gauge is the identity there.
 parity_twisted(t::TKTensor) = TKTensor(copy(t.inds), TK.twist(t.data, 1))
 
-_sector_twist(c) = real(TK.TensorKitSectors.twist(c))
-
+#The gauge freedom is PER SECTOR: scaling sector c of a message by a unit-modulus α_c
+#(with 1/α_c on its reverse partner) gives an equally valid fixed point, and update
+#history determines which representative BP produces — the fermionic parity twist
+#(α_odd = −1) is one instance, complex phases from scalar rescales another. Select the
+#PSD representative by normalizing each diagonal block's trace to positive real. Any
+#unit-modulus per-sector gauge cancels in the M^½ · M^{-½} sandwich, so this is exact.
 function psd_gauge(t::TKTensor)
-    oddtr = zero(real(eltype(t)))
-    for (f1, f2) in TK.fusiontrees(t.data)
-        _sector_twist(f1.uncoupled[1]) < 0 || continue
-        b = t.data[f1, f2]
+    data = copy(t.data)
+    for (f1, f2) in TK.fusiontrees(data)
+        b = data[f1, f2]
+        z = zero(eltype(t))
         for x in 1:minimum(size(b))
-            oddtr += real(b[x, x])
+            z += b[x, x]
         end
+        iszero(z) || (b .*= conj(z) / abs(z))
     end
-    return oddtr < 0 ? parity_twisted(t) : t
+    return TKTensor(copy(t.inds), data)
 end
 
 # ── Diagonal operations ─────────────────────────────────────────────────────────────────
