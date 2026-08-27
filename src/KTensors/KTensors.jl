@@ -18,9 +18,14 @@ the first-index-fastest matrix convention; conventions were validated against th
 historical ITensors implementation, which survives as a test-only cross-check
 (test/test_ktensors.jl).
 
-Next increment: graded/symmetric data (TensorKit `TensorMap`) behind these same types —
-`KIndex.dual` is already maintained by `dag` so bond orientations are in place, and
-sectors enter through the space type without touching the seam or call sites.
+The second data layer is `TKTensor` (tktensor.jl): the same `KIndex` labels over a
+TensorKit `TensorMap`, serving every graded backend — bosonic Z2/U(1), fermionic parity,
+fU(1) and dual fU(1)×U(1) product sectors — through one code path. Nothing algebraic is
+implemented there (hard rule): contraction, permutation signs (Jordan-Wigner strings
+emerge from the braiding), and blockwise factorizations all delegate to TensorKit and
+MatrixAlgebraKit; the file is label↔slot bookkeeping plus the operator/state quack layer.
+The per-copy `KIndex.dual` flag carries bond orientation (live for TKTensor, inert for
+dense KTensor).
 =#
 module KTensors
 

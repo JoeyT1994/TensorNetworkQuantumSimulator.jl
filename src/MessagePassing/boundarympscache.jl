@@ -209,47 +209,6 @@ function set_interpartition_messages!(
     return bmps_cache
 end
 
-#Graded boundary-MPS message initialization, following the recipe validated on the
-#fermionic branch: a random conserving tensor over centre-biased charged links, instead
-#of the rank-1 delta join. The delta join is an exactly symmetric starting point whose
-#invariant subspace the (exactly block-preserving) graded fitting cannot leave; a random
-#structure-compatible full-rank start converges properly. Conservation itself is free:
-#TensorMaps only populate flux-zero trees, so `random_itensor` over correctly-oriented
-#legs is the conserving initializer — this function only chooses the link sectors.
-function set_graded_interpartition_messages!(bmps_cache::BoundaryMPSCache, es::Vector{<:NamedEdge}; link_sectors = nothing)
-    n = length(es)
-    #Link i carries the CUMULATIVE charge imbalance of message sites 1..i, so its sector
-    #support is the convolution of the per-site charge spectra from the left, intersected
-    #(weight-multiplied) with the reachable spectrum from the right. The resulting
-    #weights are naturally centre-heavy — for a parity grading this reproduces the
-    #even-biased (even ≥ odd) split validated on the fermionic branch.
-    spectra = [KTensors.site_charge_spectrum(message(bmps_cache, e)) for e in es]
-    prefix = accumulate(KTensors.convolve_charge_spectra, spectra)
-    suffix = reverse(accumulate(KTensors.convolve_charge_spectra, reverse(spectra)))
-    links = KIndex[]
-    for i in 1:(n - 1)
-        virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
-        sp = link_sectors === nothing ?
-            KTensors.allocate_link_space(prefix[i], suffix[i + 1], virt_dim) :
-            link_sectors(virt_dim)
-        push!(links, KIndex(sp, "m$(i)$(i + 1)"))
-    end
-    for i in 1:n
-        m = message(bmps_cache, es[i])
-        legs = collect(KIndex, inds(m))
-        #left link incoming (non-dual), right link outgoing (dual)
-        i > 1 && push!(legs, links[i - 1])
-        i < n && push!(legs, dag(links[i]))
-        t = adapt_like(m, random_itensor(scalartype(m), legs...))
-        iszero(norm(t)) && error(
-            "set_graded_interpartition_messages!: no flux-zero blocks on the chosen " *
-                "link sectors — the message column carries net charge"
-        )
-        setmessage!(bmps_cache, es[i], t)
-    end
-    return bmps_cache
-end
-
 #Crossing legs of an interpartition message: the network's virtual index/indices on this
 #edge plus their primes (ket + bra rails). Everything else on a message tensor is a
 #virtual MPS bond shared with a neighbour along the partition boundary.
@@ -262,9 +221,6 @@ end
 #tensors dag with the supertrace twist on the CROSSING legs only (see
 #KTensors.fit_adjoint); plain dag otherwise.
 fit_adjoint_message(bmps_cache::BoundaryMPSCache, e::NamedEdge, m) = dag(m)
-function fit_adjoint_message(bmps_cache::BoundaryMPSCache, e::NamedEdge, m::KTensors.TKTensor)
-    return KTensors.fit_adjoint(m, _crossing_inds(bmps_cache, e))
-end
 
 #Switch the message tensors on partition edges with their reverse (and fit-adjoint them)
 function switch_message!(bmps_cache::BoundaryMPSCache, e::NamedEdge)

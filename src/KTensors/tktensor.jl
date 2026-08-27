@@ -18,12 +18,12 @@
 #     evaluate to physical inner products.
 #   * Operators are built by fusion-tree assignment of the dense operator array
 #     ⟨u…|O|s…⟩ on a two-sided (outs ← ins) map, then permuted one-sided. For abelian
-#     sectors the tree basis coincides with the charge-ordered product basis. Elements
-#     outside the conserving blocks error loudly (that is the point of the symmetry);
-#     controlled violations are future work via explicitly tracked charged dummy legs.
-#   * TensorMaps enforce zero total flux. Flux-odd product states (e.g. an occupied
-#     fermion site) are not representable per-vertex — start from even states and use
-#     conserving gates (e.g. pair creation from the vacuum).
+#     sectors the tree basis coincides with the sector-ordered product basis; tables
+#     live in the mode basis and are permuted per site space (_mode_perm). Elements
+#     outside the conserving blocks error loudly (that is the point of the symmetry).
+#   * TensorMaps enforce zero total flux. Charged product states route their site
+#     charges through dim-1 links (T-join, see kernel_hooks.jl); a nonzero TOTAL charge
+#     rides an automatically attached dim-1 "Charge"-tagged dangling leg.
 #   * Every contraction requires the two copies of a contracted index to carry opposite
 #     flags; a same-flag pairing is a network-construction bug and errors loudly.
 
@@ -34,7 +34,8 @@ const TKIndex = KIndex{<:TKSpace}
     graded_space(symmetry::String, sectors)
 
 A TensorKit graded space from `charge => dimension` pairs. `symmetry` is one of
-`"Z2"`, `"U1"`, `"fZ2"` (fermionic parity; aliases `"fermion"`, `"fermionparity"`).
+`"Z2"`, `"U1"`, `"fZ2"` (fermionic parity), `"fU1"` (fermions with conserved particle
+number), or `"fU1xU1"` (fermions with separately conserved N↑, N↓; charges are tuples).
 """
 function graded_space(symmetry::String, sectors)
     key = replace(lowercase(symmetry), " " => "")
@@ -628,8 +629,6 @@ TensorInterface.random_itensor(is::TKIndex...) = TensorInterface.random_itensor(
 #the gauge from the twist-carrying block trace and twist into the PSD representative —
 #the twist cancels in any M^½ · M^{-½} sandwich, so this is exact. Bosonic sectors have
 #trivial twists, so psd_gauge is the identity there.
-parity_twisted(t::TKTensor) = TKTensor(copy(t.inds), TK.twist(t.data, 1))
-
 #The gauge freedom is PER SECTOR: scaling sector c of a message by a unit-modulus α_c
 #(with 1/α_c on its reverse partner) gives an equally valid fixed point, and update
 #history determines which representative BP produces — the fermionic parity twist

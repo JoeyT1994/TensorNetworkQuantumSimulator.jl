@@ -111,3 +111,102 @@ end
 function apply_gates(circuit::Vector{<:KTensor}, ψ_bpc::BeliefPropagationCache; kwargs...)
     return _apply_gate_tensors(circuit, ψ_bpc; kwargs...)
 end
+
+# ── TKTensor (graded / fermionic) capability methods ────────────────────────────────────
+# Backend-specific counterparts of generic entry points, gathered here with the fused
+# dense kernels so the generic files stay backend-agnostic.
+
+#Charged product states on graded (TensorKit-backed) sites: local charges are routed
+#through dim-1 links along a spanning tree (a T-join, the recipe validated on the
+#fermionic branch) so that every vertex tensor is individually flux-zero — TensorMaps
+#enforce zero flux, so a charged site must be neutralized by its links. Summing the
+#per-vertex conditions, internal bonds cancel: only the TOTAL charge must vanish.
+function graded_tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dictionary)
+    vs = collect(vertices(g))
+    svec = Dictionary(vs, [KTensors.state_vector(f(v), only(siteinds[v])) for v in vs])
+    #accumulate subtree charges child → parent over a spanning tree
+    acc = Dictionary(vs, [KTensors.vector_sector(svec[v], only(siteinds[v])) for v in vs])
+    I = typeof(acc[first(vs)])
+    root = first(vs)
+    stored = Set(edges(g))
+    qedge = Dict{NamedEdge{vertextype(g)}, I}()
+    for e in post_order_dfs_edges(g, root)
+        c, par = src(e), dst(e)
+        #the stored edge carries +q on its src copy, −q on its dst (dual) copy; the
+        #subtree below `c` must export its accumulated charge through this bond
+        if NamedEdge(c => par) ∈ stored
+            qedge[NamedEdge(c => par)] = KTensors.dual_sector(acc[c])
+        else
+            qedge[NamedEdge(par => c)] = acc[c]
+        end
+        set!(acc, par, KTensors.fuse_sectors(acc[par], acc[c]))
+    end
+    #A closed network of flux-zero tensors can only represent a chargeless state (the
+    #per-vertex conditions telescope over the bonds). A nonzero TOTAL charge is carried
+    #by a dangling dim-1 "Charge"-tagged leg on the root vertex, attached automatically;
+    #norm networks pair it bra-ket like an operator-free site leg (see norm_factors).
+    triv = KTensors.trivial_sector(acc[root])
+    l = Dict(e => KTensors.charged_link_index(get(qedge, e, triv)) for e in edges(g))
+    tensors = Dictionary{vertextype(g), Any}()
+    for v in vs
+        links = KTensors.KIndex[]
+        for e in edges(g)
+            src(e) == v && push!(links, l[e])
+            dst(e) == v && push!(links, dag(l[e]))
+        end
+        if v == root && acc[root] != triv
+            push!(links, KTensors.charged_link_index(KTensors.dual_sector(acc[root]); tags = "Charge"))
+        end
+        set!(tensors, v, KTensors.product_vertex_tensor(eltype, svec[v], only(siteinds[v]), links))
+    end
+    tensors = Dictionary(vs, identity.(collect(tensors)))
+    #explicit siteinds: a dangling "Charge" leg must not be auto-classified as a site
+    return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
+end
+
+#Graded boundary-MPS message initialization, following the recipe validated on the
+#fermionic branch: a random conserving tensor over centre-biased charged links, instead
+#of the rank-1 delta join. The delta join is an exactly symmetric starting point whose
+#invariant subspace the (exactly block-preserving) graded fitting cannot leave; a random
+#structure-compatible full-rank start converges properly. Conservation itself is free:
+#TensorMaps only populate flux-zero trees, so `random_itensor` over correctly-oriented
+#legs is the conserving initializer — this function only chooses the link sectors.
+function set_graded_interpartition_messages!(bmps_cache::BoundaryMPSCache, es::Vector{<:NamedEdge}; link_sectors = nothing)
+    n = length(es)
+    #Link i carries the CUMULATIVE charge imbalance of message sites 1..i, so its sector
+    #support is the convolution of the per-site charge spectra from the left, intersected
+    #(weight-multiplied) with the reachable spectrum from the right. The resulting
+    #weights are naturally centre-heavy — for a parity grading this reproduces the
+    #even-biased (even ≥ odd) split validated on the fermionic branch.
+    spectra = [KTensors.site_charge_spectrum(message(bmps_cache, e)) for e in es]
+    prefix = accumulate(KTensors.convolve_charge_spectra, spectra)
+    suffix = reverse(accumulate(KTensors.convolve_charge_spectra, reverse(spectra)))
+    links = KIndex[]
+    for i in 1:(n - 1)
+        virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
+        sp = link_sectors === nothing ?
+            KTensors.allocate_link_space(prefix[i], suffix[i + 1], virt_dim) :
+            link_sectors(virt_dim)
+        push!(links, KIndex(sp, "m$(i)$(i + 1)"))
+    end
+    for i in 1:n
+        m = message(bmps_cache, es[i])
+        legs = collect(KIndex, inds(m))
+        #left link incoming (non-dual), right link outgoing (dual)
+        i > 1 && push!(legs, links[i - 1])
+        i < n && push!(legs, dag(links[i]))
+        t = adapt_like(m, random_itensor(scalartype(m), legs...))
+        iszero(norm(t)) && error(
+            "set_graded_interpartition_messages!: no flux-zero blocks on the chosen " *
+                "link sectors — the message column carries net charge"
+        )
+        setmessage!(bmps_cache, es[i], t)
+    end
+    return bmps_cache
+end
+
+#The adjoint of a graded boundary-MPS message in the fitting metric (see
+#KTensors.fit_adjoint); the generic fallback in boundarympscache.jl is a plain dag.
+function fit_adjoint_message(bmps_cache::BoundaryMPSCache, e::NamedEdge, m::KTensors.TKTensor)
+    return KTensors.fit_adjoint(m, _crossing_inds(bmps_cache, e))
+end
