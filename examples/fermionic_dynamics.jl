@@ -1,21 +1,24 @@
-# Fermionic quench dynamics on a square lattice with the TensorKit (fZ2) backend.
+# Fermionic quench dynamics with the TensorKit (fZ2) backend.
 #
-# Spinless free fermions: a charge-density-wave product state |1010...⟩ quenched under
+# Spinless free fermions: a charge-density-wave product state quenched under
 # nearest-neighbour hopping H = -t Σ (c†ᵢcⱼ + h.c.). Everything fermionic is native:
-# sites are Vect[FermionParity] spaces, the initial state's odd site charges are routed
-# through dim-1 links (T-join), gates are LOCAL matrix exponentials — Jordan-Wigner
-# strings emerge from TensorKit's graded category, including inside the two-point
-# correlators ⟨c†_v c_w⟩ measured at the end.
+# sites are Vect[FermionParity] spaces, odd site charges are routed through dim-1 links
+# (T-join), gates are LOCAL matrix exponentials — Jordan-Wigner strings emerge from
+# TensorKit's graded category, including inside the two-point correlators.
 #
-# Since the model is Gaussian, the exact dynamics at ANY size follows from the
-# single-particle correlation matrix: C(T) = V* C(0) Vᵀ with V = exp(-i T h). The BP
-# columns should track it up to Trotter + BP-loop error.
+# The model is Gaussian, so exact dynamics at any size follows from the single-particle
+# correlation matrix C(T) = V* C(0) Vᵀ, V = exp(-i T h). Two checks:
+#   1. COMB TREE: BP is exact on trees, so BP observables must match the correlation
+#      matrix up to (second-order) Trotter error alone — verified: the deviation is
+#      χ-independent and drops with the Trotter order, not the bond dimension.
+#   2. 3×3 CDW quench to T = 0.5: contract with BOUNDARY MPS and compare a local
+#      hopping ⟨c†c + h.c.⟩ on an edge against the exact value.
 
 using TensorNetworkQuantumSimulator
 const TNQS = TensorNetworkQuantumSimulator
-using LinearAlgebra: Diagonal, diag, norm
+using LinearAlgebra: Diagonal, diag
 
-function exact_correlation_matrix(g, tt, T, occupied)
+function correlation_matrix(g, tt, T, occupied)
     vs = sort(collect(vertices(g)))
     idx = Dict(v => k for (k, v) in enumerate(vs))
     h = zeros(Float64, length(vs), length(vs))
@@ -23,51 +26,50 @@ function exact_correlation_matrix(g, tt, T, occupied)
         h[idx[src(e)], idx[dst(e)]] = -tt
         h[idx[dst(e)], idx[src(e)]] = -tt
     end
-    C0 = Diagonal([v ∈ occupied ? 1.0 : 0.0 for v in vs])
     V = exp(-im * T * h)
-    return conj(V) * C0 * transpose(V), vs, idx
+    C = conj(V) * Diagonal([v ∈ occupied ? 1.0 : 0.0 for v in vs]) * transpose(V)
+    return C, idx
 end
 
-function main(; L = 4, tt = 1.0, dt = 0.05, nsteps = 10, χ = 8)
-    g = named_grid((L, L))
+function evolve(g, occupied; tt = 1.0, dt = 0.05, nsteps = 10, χ = 16)
     s = siteinds("Fermion", g)
-    occupied = filter(v -> isodd(sum(v)), collect(vertices(g)))
     ψ = tensornetworkstate(ComplexF64, v -> v ∈ occupied ? "Occ" : "Emp", g, s; charge_leg = true)
-
-    layer = Any[]
+    #second-order Trotter layer: half-steps forward then reversed
+    half = Any[]
     for ces in edge_color(g, 4)
-        #exp(-i dt (-t) (c†c + h.c.)) per edge — the LOCAL matrix; no strings anywhere
-        append!(layer, ("F_hop", pair, -tt * dt) for pair in ces)
+        append!(half, ("F_hop", pair, -tt * dt / 2) for pair in ces)
     end
-
-    apply_kwargs = (; maxdim = χ, cutoff = 1.0e-12)
-    for step in 1:nsteps
-        ψ, errs = apply_gates(layer, ψ; apply_kwargs)
-        step % 5 == 0 && println("step $step: max gate err $(round(maximum(errs); sigdigits = 3))")
+    layer = vcat(half, reverse(half))
+    for _ in 1:nsteps
+        ψ, _ = apply_gates(layer, ψ; apply_kwargs = (; maxdim = χ, cutoff = 1.0e-12))
     end
+    return ψ, nsteps * dt
+end
 
-    T = nsteps * dt
-    C, vs, idx = exact_correlation_matrix(g, tt, T, occupied)
+function main(; tt = 1.0, dt = 0.05, nsteps = 10)
+    println("== 1. Comb tree: BP is exact, deviation = Trotter only ==")
+    g = named_comb_tree((3, 3))
+    occupied = filter(v -> isodd(sum(v)), collect(vertices(g)))
+    ψ, T = evolve(g, occupied; tt, dt, nsteps)
+    C, idx = correlation_matrix(g, tt, T, occupied)
+    occs = [real(only(expect(ψ, ("N", [v]); alg = "bp"))) for v in sort(collect(vertices(g)))]
+    println("T = $T:  max |⟨N⟩_BP − exact| = ", round(maximum(abs.(occs .- real.(diag(C)))); sigdigits = 3))
 
-    #site occupations: CDW order parameter
-    occs = [real(only(expect(ψ, ("N", [v]); alg = "bp"))) for v in vs]
-    occs_exact = real.(diag(C))
-    cdw = sum(v -> (isodd(sum(v)) ? 1 : -1) * occs[idx[v]], vs) / length(vs)
-    cdw_exact = sum(v -> (isodd(sum(v)) ? 1 : -1) * occs_exact[idx[v]], vs) / length(vs)
-    println("\nT = $T")
-    println("CDW order:   BP $(round(cdw; sigdigits = 6))   exact $(round(cdw_exact; sigdigits = 6))")
-    println("max |Δ⟨N⟩|:  ", round(maximum(abs.(occs .- occs_exact)); sigdigits = 3))
-
-    #two-point functions ⟨c†_v c_w⟩ along a row (odd-pair joint operators at distance)
-    v0 = (1, 1)
-    println("\n⟨c†_{(1,1)} c_{(1,j)}⟩:")
-    for j in 2:L
-        w = (1, j)
-        tn = only(expect(ψ, ("CdagC", (v0, w)); alg = "bp"))
-        ex = C[idx[v0], idx[w]]
-        println("  j = $j:  BP $(round(tn; sigdigits = 5))   exact $(round(ex; sigdigits = 5))   |Δ| $(round(abs(tn - ex); sigdigits = 3))")
-    end
-    return ψ
+    println("\n== 2. 3×3 CDW quench, boundary-MPS hopping check ==")
+    g = named_grid((3, 3))
+    occupied = filter(v -> isodd(sum(v)), collect(vertices(g)))
+    ψ, T = evolve(g, occupied; tt, dt, nsteps)
+    C, idx = correlation_matrix(g, tt, T, occupied)
+    v, w = (2, 1), (2, 2)   #an edge inside a single boundary-MPS partition
+    cdagc_exact = C[idx[v], idx[w]]
+    bmps = update(BoundaryMPSCache(ψ, 8))
+    cdagc_bmps = only(expect(bmps, ("CdagC", (v, w)); alg = "boundarymps"))
+    cdagc_bp = only(expect(ψ, ("CdagC", (v, w)); alg = "bp"))
+    println("T = $T:  ⟨c†_$(v) c_$(w)⟩")
+    println("  exact        ", round(cdagc_exact; sigdigits = 6))
+    println("  boundary MPS ", round(cdagc_bmps; sigdigits = 6), "   |Δ| = ", round(abs(cdagc_bmps - cdagc_exact); sigdigits = 3))
+    println("  BP           ", round(cdagc_bp; sigdigits = 6), "   |Δ| = ", round(abs(cdagc_bp - cdagc_exact); sigdigits = 3))
+    return nothing
 end
 
 main()

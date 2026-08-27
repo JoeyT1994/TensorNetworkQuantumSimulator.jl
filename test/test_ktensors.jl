@@ -359,6 +359,16 @@ end
             @test hop ≈ real(ψv' * (cs[j]' * cs[k] + cs[k]' * cs[j]) * ψv) / nrm atol = 1.0e-12
             pr = real(only(expect(ψt, ("pairing", (v1, v2)); alg = "exact")))
             @test pr ≈ real(ψv' * (cs[j]' * cs[k]' + cs[k] * cs[j]) * ψv) / nrm atol = 1.0e-12
+            #fermionic boundary MPS: fitted seam messages (fit-adjoint supertrace metric
+            #on out-arrow crossing legs) + a joint odd-pair operator through the walk.
+            #Residual ~1e-4 is the known fixed-link-sector fitting allocation.
+            bmps = update(BoundaryMPSCache(ψt, 8))
+            e_h = first(filter(e -> src(e)[1] == dst(e)[1], es))
+            w1, w2 = src(e_h), dst(e_h)
+            n_bmps = real(only(expect(bmps, ("N", [w1]); alg = "boundarymps")))
+            @test n_bmps ≈ real(ψv' * (cs[mode[w1]]' * cs[mode[w1]]) * ψv) / nrm atol = 1.0e-3
+            c_bmps = only(expect(bmps, ("CdagC", (w1, w2)); alg = "boundarymps"))
+            @test c_bmps ≈ (ψv' * (cs[mode[w1]]' * cs[mode[w2]]) * ψv) / nrm atol = 1.0e-3
         end
     end
 end
