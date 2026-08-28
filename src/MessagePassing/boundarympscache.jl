@@ -192,14 +192,14 @@ function set_interpartition_messages!(
                 setmessage!(bmps_cache, e, default_message(bmps_cache, e))
             end
         end
-        if tensortype(bmps_cache) <: KTensors.TKTensor
+        if tensortype(bmps_cache) <: Tensors.TKTensor
             set_graded_interpartition_messages!(bmps_cache, es; link_sectors)
         else
             for i in 1:(length(es) - 1)
                 virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
                 m1, m2 = message(bmps_cache, es[i]), message(bmps_cache, es[i + 1])
                 ind = link_sectors === nothing ? new_index(m1, virt_dim; tags = "m$(i)$(i + 1)") :
-                    KIndex(link_sectors(virt_dim), "m$(i)$(i + 1)")
+                    Index(link_sectors(virt_dim), "m$(i)$(i + 1)")
                 t = adapt_like(m1, delta(ind))
                 setmessage!(bmps_cache, es[i], m1 * t)
                 setmessage!(bmps_cache, es[i + 1], m2 * t)
@@ -219,7 +219,7 @@ end
 
 #The adjoint of a boundary-MPS message in the fitting metric: for graded (fermionic)
 #tensors dag with the supertrace twist on the CROSSING legs only (see
-#KTensors.fit_adjoint); plain dag otherwise.
+#Tensors.fit_adjoint); plain dag otherwise.
 fit_adjoint_message(bmps_cache::BoundaryMPSCache, e::NamedEdge, m) = dag(m)
 
 #Switch the message tensors on partition edges with their reverse (and fit-adjoint them)

@@ -1,7 +1,7 @@
 @eval module $(gensym())
 using Dictionaries: Dictionary
 using TensorNetworkQuantumSimulator: dag, inds, prime, random_itensor, new_index
-using TensorNetworkQuantumSimulator.KTensors: KIndex
+using TensorNetworkQuantumSimulator.Tensors: Index
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test, @test_throws
@@ -45,7 +45,7 @@ using Test: @testset, @test, @test_throws
     s = siteinds("S=1/2", g)
     @test s isa Dictionary
     @test keys(s) == vertices(g)
-    @test all([s[v] isa Vector{<:KIndex} for v in vertices(g)])
+    @test all([s[v] isa Vector{<:Index} for v in vertices(g)])
     @test all([length(s[v]) == 1 for v in vertices(g)])
 
     #TensorNetworkState

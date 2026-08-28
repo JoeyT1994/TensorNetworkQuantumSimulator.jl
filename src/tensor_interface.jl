@@ -2,8 +2,8 @@
 TensorInterface: the seam between TensorNetworkQuantumSimulator and the tensor backend.
 
 Every tensor-level verb the package uses is a generic function owned by this module. The
-KTensors module (the sole backend: named-index tensors over dense arrays, TensorOperations
-contraction, MatrixAlgebraKit factorizations) implements them for its `KIndex`/`Tensor`
+Tensors module (the sole backend: named-index tensors over dense arrays, TensorOperations
+contraction, MatrixAlgebraKit factorizations) implements them for its `Index`/`Tensor`
 types; a future graded/symmetric backend (TensorKit `TensorMap` data) adds its own methods
 here without touching call sites.
 

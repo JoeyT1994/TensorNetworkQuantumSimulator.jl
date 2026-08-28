@@ -1,7 +1,7 @@
 #=
-KTensors: the tensor engine — named-index tensors over dense arrays.
+Tensors: the tensor engine — named-index tensors over dense arrays.
 
-A `Tensor` is a dense N-d array plus a vector of `KIndex` labels. Index identity
+A `Tensor` is a dense N-d array plus a vector of `Index` labels. Index identity
 (id, plev) — not position — drives contraction. Contraction is executed by
 TensorOperations with dynamically generated labels; factorizations run through
 MatrixAlgebraKit (which also supplies the in-place variants and the CUSOLVER/ROCSOLVER
@@ -16,18 +16,18 @@ structure doesn't match.
 The operator/state library is a runtime registry (`register_op!`) covering S=1/2 gates in
 the first-index-fastest matrix convention; conventions were validated against the
 historical ITensors implementation, which survives as a test-only cross-check
-(test/test_ktensors.jl).
+(test/test_tensors.jl).
 
-The second data layer is `TKTensor` (tktensor.jl): the same `KIndex` labels over a
+The second data layer is `TKTensor` (tktensor.jl): the same `Index` labels over a
 TensorKit `TensorMap`, serving every graded backend — bosonic Z2/U(1), fermionic parity,
 fU(1) and dual fU(1)×U(1) product sectors — through one code path. Nothing algebraic is
 implemented there (hard rule): contraction, permutation signs (Jordan-Wigner strings
 emerge from the braiding), and blockwise factorizations all delegate to TensorKit and
 MatrixAlgebraKit; the file is label↔slot bookkeeping plus the operator/state quack layer.
-The per-copy `KIndex.dual` flag carries bond orientation (live for TKTensor, inert for
+The per-copy `Index.dual` flag carries bond orientation (live for TKTensor, inert for
 dense Tensor).
 =#
-module KTensors
+module Tensors
 
 using LinearAlgebra: LinearAlgebra, Hermitian, Diagonal, norm, mul!, diag, rmul!, BlasFloat
 using MatrixAlgebraKit: MatrixAlgebraKit, qr_compact, qr_compact!, svd_compact, svd_trunc,
@@ -38,21 +38,21 @@ using Adapt: Adapt, adapt
 import TensorKit as TK
 using ..TensorInterface: TensorInterface
 
-export KIndex, Tensor, TKTensor, register_op!, graded_space, new_fermion_index
+export Index, Tensor, TKTensor, register_op!, graded_space, new_fermion_index
 
 # ── Index ───────────────────────────────────────────────────────────────────────────────
 
 space_dim(s::Integer) = Int(s)
 
 """
-    KIndex(d::Integer, tags = "")
-    KIndex(space, tags = "")
+    Index(d::Integer, tags = "")
+    Index(space, tags = "")
 
 A named tensor index: identified by `(id, plev)`, carrying a space (a plain dimension for
 dense tensors, a TensorKit `GradedSpace` for symmetric ones), cosmetic tags, and a
 dual/arrow flag.
 """
-struct KIndex{S}
+struct Index{S}
     id::UInt64
     space::S
     plev::Int
@@ -60,39 +60,39 @@ struct KIndex{S}
     dual::Bool   # bond orientation (arrow); inert for dense data
 end
 
-KIndex(d::Integer, tags::AbstractString = "") = KIndex(rand(UInt64), Int(d), 0, String(tags), false)
-dimof(i::KIndex) = space_dim(i.space)
-space(i::KIndex) = i.space
+Index(d::Integer, tags::AbstractString = "") = Index(rand(UInt64), Int(d), 0, String(tags), false)
+dimof(i::Index) = space_dim(i.space)
+space(i::Index) = i.space
 
 # Identity is (id, plev): `dag` (dual flip) and tag changes never change which index this is.
-Base.:(==)(a::KIndex, b::KIndex) = a.id == b.id && a.plev == b.plev
-Base.hash(i::KIndex, h::UInt) = hash((i.id, i.plev), h)
-Base.adjoint(i::KIndex) = TensorInterface.prime(i)
-Base.copy(i::KIndex) = i
+Base.:(==)(a::Index, b::Index) = a.id == b.id && a.plev == b.plev
+Base.hash(i::Index, h::UInt) = hash((i.id, i.plev), h)
+Base.adjoint(i::Index) = TensorInterface.prime(i)
+Base.copy(i::Index) = i
 
-function Base.show(io::IO, i::KIndex)
+function Base.show(io::IO, i::Index)
     print(io, "(d=", dimof(i), "|id=", repr(i.id % UInt16), "|\"", i.tags, "\")", "'"^i.plev, i.dual ? "†" : "")
     return nothing
 end
 
-TensorInterface.dim(i::KIndex) = dimof(i)
-TensorInterface.dim(is::AbstractVector{<:KIndex}) = prod(TensorInterface.dim.(is); init = 1)
-TensorInterface.plev(i::KIndex) = i.plev
-TensorInterface.tags(i::KIndex) = i.tags
-TensorInterface.dag(i::KIndex) = KIndex(i.id, i.space, i.plev, i.tags, !i.dual)
-TensorInterface.prime(i::KIndex, n::Integer = 1) = KIndex(i.id, i.space, i.plev + n, i.tags, i.dual)
-TensorInterface.noprime(i::KIndex) = KIndex(i.id, i.space, 0, i.tags, i.dual)
-TensorInterface.sim(i::KIndex) = KIndex(rand(UInt64), i.space, i.plev, i.tags, i.dual)
+TensorInterface.dim(i::Index) = dimof(i)
+TensorInterface.dim(is::AbstractVector{<:Index}) = prod(TensorInterface.dim.(is); init = 1)
+TensorInterface.plev(i::Index) = i.plev
+TensorInterface.tags(i::Index) = i.tags
+TensorInterface.dag(i::Index) = Index(i.id, i.space, i.plev, i.tags, !i.dual)
+TensorInterface.prime(i::Index, n::Integer = 1) = Index(i.id, i.space, i.plev + n, i.tags, i.dual)
+TensorInterface.noprime(i::Index) = Index(i.id, i.space, 0, i.tags, i.dual)
+TensorInterface.sim(i::Index) = Index(rand(UInt64), i.space, i.plev, i.tags, i.dual)
 
 for f in [:dag, :prime, :noprime, :sim]
-    @eval TensorInterface.$f(is::AbstractVector{<:KIndex}, args...) = map(i -> TensorInterface.$f(i, args...), is)
+    @eval TensorInterface.$f(is::AbstractVector{<:Index}, args...) = map(i -> TensorInterface.$f(i, args...), is)
 end
 
-TensorInterface.new_index(::Union{KIndex, AbstractVector{<:KIndex}}, d::Integer; tags = "") = KIndex(d, tags)
+TensorInterface.new_index(::Union{Index, AbstractVector{<:Index}}, d::Integer; tags = "") = Index(d, tags)
 
 # ── AbstractTensor ──────────────────────────────────────────────────────────────────────
 # Common supertype of the backends' tensor types (dense `Tensor`, graded `TKTensor`).
-# Every subtype carries `inds::Vector{<:KIndex}` + `data` and implements the structural
+# Every subtype carries `inds::Vector{<:Index}` + `data` and implements the structural
 # primitive `_like(t, inds, data)` (same backend, new labels/data). Everything here is
 # label bookkeeping — the data never moves.
 
@@ -118,17 +118,17 @@ TensorInterface.scalartype(t::AbstractTensor) = eltype(t)
 TensorInterface.prime(t::AbstractTensor, n::Integer = 1) = _mapinds(i -> TensorInterface.prime(i, n), t)
 TensorInterface.noprime(t::AbstractTensor) = _mapinds(TensorInterface.noprime, t)
 TensorInterface.sim(t::AbstractTensor) = _mapinds(TensorInterface.sim, t)
-TensorInterface.replaceind(t::AbstractTensor, old::KIndex, new::KIndex) = TensorInterface.replaceinds(t, [old], [new])
+TensorInterface.replaceind(t::AbstractTensor, old::Index, new::Index) = TensorInterface.replaceinds(t, [old], [new])
 TensorInterface.replaceinds(t::AbstractTensor, p::Pair) = TensorInterface.replaceinds(t, first(p), last(p))
 TensorInterface.apply(o::AbstractTensor, t::AbstractTensor) = TensorInterface.noprime(o * t)
 
 # ── Tensor ──────────────────────────────────────────────────────────────────────────────
 
 struct Tensor{T, N, A <: AbstractArray{T, N}} <: AbstractTensor
-    inds::Vector{<:KIndex}
+    inds::Vector{<:Index}
     data::A
     function Tensor(inds::AbstractVector, data::A) where {T, N, A <: AbstractArray{T, N}}
-        inds = collect(KIndex, inds)
+        inds = collect(Index, inds)
         length(inds) == N || error("Tensor: $(length(inds)) indices for a rank-$N array")
         all(i -> dimof(i) == size(data, findfirst(==(i), inds)), unique(inds)) ||
             error("Tensor: index dimensions $(TensorInterface.dim.(inds)) don't match array size $(size(data))")
@@ -136,7 +136,7 @@ struct Tensor{T, N, A <: AbstractArray{T, N}} <: AbstractTensor
     end
 end
 
-Tensor(x::Number) = Tensor(KIndex[], fill(x))
+Tensor(x::Number) = Tensor(Index[], fill(x))
 
 _like(t::Tensor, inds, data) = Tensor(inds, data)
 
@@ -146,7 +146,7 @@ Base.sum(t::Tensor) = sum(t.data)
 TensorInterface.datatype(::Tensor{T, N, A}) where {T, N, A <: Array} = Vector{T}
 TensorInterface.array(t::Tensor) = t.data
 TensorInterface.data(t::Tensor) = vec(t.data)
-TensorInterface.new_index(t::Tensor, d::Integer; tags = "") = KIndex(d, tags)
+TensorInterface.new_index(t::Tensor, d::Integer; tags = "") = Index(d, tags)
 
 function TensorInterface.scalar(t::Tensor)
     length(t.data) == 1 || error("scalar: Tensor with inds $(t.inds) is not a scalar")
@@ -155,28 +155,28 @@ end
 
 # ── Index-set queries ───────────────────────────────────────────────────────────────────
 
-_indvec(i::KIndex) = KIndex[i]
-_indvec(is::AbstractVector) = collect(KIndex, is)
-_indvec(is::Tuple) = collect(KIndex, is)
+_indvec(i::Index) = Index[i]
+_indvec(is::AbstractVector) = collect(Index, is)
+_indvec(is::Tuple) = collect(Index, is)
 
-const KIndsLike = Union{AbstractTensor, KIndex, AbstractVector{<:KIndex}, Tuple{KIndex, Vararg{KIndex}}}
+const IndsLike = Union{AbstractTensor, Index, AbstractVector{<:Index}, Tuple{Index, Vararg{Index}}}
 
-TensorInterface.commoninds(a::KIndsLike, b::KIndsLike) = filter(i -> i ∈ _indvec(b), _indvec(a))
+TensorInterface.commoninds(a::IndsLike, b::IndsLike) = filter(i -> i ∈ _indvec(b), _indvec(a))
 # ITensors convention: the singular forms return the FIRST match (or nothing), not `only`.
-function TensorInterface.commonind(a::KIndsLike, b::KIndsLike)
+function TensorInterface.commonind(a::IndsLike, b::IndsLike)
     cs = TensorInterface.commoninds(a, b)
     return isempty(cs) ? nothing : first(cs)
 end
-TensorInterface.uniqueinds(a::KIndsLike, b::KIndsLike) = filter(i -> i ∉ _indvec(b), _indvec(a))
-TensorInterface.unioninds(a::KIndsLike, b::KIndsLike) = unique(vcat(_indvec(a), _indvec(b)))
-function TensorInterface.noncommoninds(a::KIndsLike, b::KIndsLike)
+TensorInterface.uniqueinds(a::IndsLike, b::IndsLike) = filter(i -> i ∉ _indvec(b), _indvec(a))
+TensorInterface.unioninds(a::IndsLike, b::IndsLike) = unique(vcat(_indvec(a), _indvec(b)))
+function TensorInterface.noncommoninds(a::IndsLike, b::IndsLike)
     return vcat(TensorInterface.uniqueinds(a, b), TensorInterface.uniqueinds(b, a))
 end
-function TensorInterface.noncommonind(a::KIndsLike, b::KIndsLike)
+function TensorInterface.noncommonind(a::IndsLike, b::IndsLike)
     ns = TensorInterface.noncommoninds(a, b)
     return isempty(ns) ? nothing : first(ns)
 end
-TensorInterface.hascommoninds(a::KIndsLike, b::KIndsLike) = !isempty(TensorInterface.commoninds(a, b))
+TensorInterface.hascommoninds(a::IndsLike, b::IndsLike) = !isempty(TensorInterface.commoninds(a, b))
 
 # ── Index transforms on tensors (relabeling only, no data movement) ─────────────────────
 
@@ -200,26 +200,26 @@ end
 
 # ── Construction ────────────────────────────────────────────────────────────────────────
 
-TensorInterface.from_array(A::AbstractArray, is::KIndex{<:Integer}...) = Tensor(collect(KIndex, is), reshape(copy(A), TensorInterface.dim.(is)...))
-TensorInterface.from_array(A::AbstractVector, i::KIndex{<:Integer}) = Tensor(KIndex[i], copy(A))
+TensorInterface.from_array(A::AbstractArray, is::Index{<:Integer}...) = Tensor(collect(Index, is), reshape(copy(A), TensorInterface.dim.(is)...))
+TensorInterface.from_array(A::AbstractVector, i::Index{<:Integer}) = Tensor(Index[i], copy(A))
 
-function TensorInterface.random_itensor(elt::Type, is::AbstractVector{<:KIndex})
+function TensorInterface.random_itensor(elt::Type, is::AbstractVector{<:Index})
     return Tensor(collect(is), randn(elt, TensorInterface.dim.(is)...))
 end
-TensorInterface.random_itensor(elt::Type, is::KIndex...) = TensorInterface.random_itensor(elt, collect(is))
-TensorInterface.random_itensor(is::AbstractVector{<:KIndex}) = TensorInterface.random_itensor(Float64, is)
-TensorInterface.random_itensor(is::KIndex...) = TensorInterface.random_itensor(Float64, collect(is))
+TensorInterface.random_itensor(elt::Type, is::Index...) = TensorInterface.random_itensor(elt, collect(is))
+TensorInterface.random_itensor(is::AbstractVector{<:Index}) = TensorInterface.random_itensor(Float64, is)
+TensorInterface.random_itensor(is::Index...) = TensorInterface.random_itensor(Float64, collect(is))
 
-function TensorInterface.onehot(elt::Type, p::Pair{<:KIndex, <:Integer})
+function TensorInterface.onehot(elt::Type, p::Pair{<:Index, <:Integer})
     i, v = p
     data = zeros(elt, dimof(i))
     data[v] = one(elt)
-    return Tensor(KIndex[i], data)
+    return Tensor(Index[i], data)
 end
-TensorInterface.onehot(p::Pair{<:KIndex, <:Integer}) = TensorInterface.onehot(Float64, p)
+TensorInterface.onehot(p::Pair{<:Index, <:Integer}) = TensorInterface.onehot(Float64, p)
 
 #Index vectors are often abstractly typed, so the dense/graded split is decided by content
-function TensorInterface.delta(elt::Type, is::AbstractVector{<:KIndex})
+function TensorInterface.delta(elt::Type, is::AbstractVector{<:Index})
     isempty(is) && return Tensor(one(elt))
     all(i -> space(i) isa TK.GradedSpace, is) && return _delta_tk(elt, is)
     data = zeros(elt, TensorInterface.dim.(is)...)
@@ -228,30 +228,30 @@ function TensorInterface.delta(elt::Type, is::AbstractVector{<:KIndex})
     end
     return Tensor(collect(is), data)
 end
-TensorInterface.delta(is::AbstractVector{<:KIndex}) = TensorInterface.delta(Float64, is)
-TensorInterface.delta(elt::Type, is::KIndex...) = TensorInterface.delta(elt, collect(is))
-TensorInterface.delta(is::KIndex...) = TensorInterface.delta(Float64, collect(is))
+TensorInterface.delta(is::AbstractVector{<:Index}) = TensorInterface.delta(Float64, is)
+TensorInterface.delta(elt::Type, is::Index...) = TensorInterface.delta(elt, collect(is))
+TensorInterface.delta(is::Index...) = TensorInterface.delta(Float64, collect(is))
 
 # A combiner is an explicit reshape isometry: identity data between the combined index
 # (first) and the product of the combined indices. `t * C` combines; multiplying by `C`
 # again splits back.
-function TensorInterface.combiner(is::AbstractVector{<:KIndex}; tags = "CMB,Link")
+function TensorInterface.combiner(is::AbstractVector{<:Index}; tags = "CMB,Link")
     isempty(is) && error("combiner: no indices to combine")
     D = prod(TensorInterface.dim.(is))
-    c = KIndex(D, String(tags))
+    c = Index(D, String(tags))
     data = reshape(Matrix{Float64}(LinearAlgebra.I, D, D), (D, TensorInterface.dim.(is)...))
-    return Tensor(vcat([c], collect(KIndex, is)), data)
+    return Tensor(vcat([c], collect(Index, is)), data)
 end
-TensorInterface.combiner(is::KIndex...; kwargs...) = TensorInterface.combiner(collect(KIndex, is); kwargs...)
+TensorInterface.combiner(is::Index...; kwargs...) = TensorInterface.combiner(collect(Index, is); kwargs...)
 TensorInterface.combinedind(C::Tensor) = first(C.inds)
 
 # Direct sum of two tensors along the paired index axes (`olds1[k]`/`olds2[k]` → `news[k]`,
 # with dim(news[k]) = dim(olds1[k]) + dim(olds2[k])); all other indices must coincide.
 function TensorInterface.directsum(
-        news::AbstractVector{<:KIndex}, p1::Pair{<:Tensor}, p2::Pair{<:Tensor}
+        news::AbstractVector{<:Index}, p1::Pair{<:Tensor}, p2::Pair{<:Tensor}
     )
-    t1, olds1 = first(p1), collect(KIndex, last(p1))
-    t2, olds2 = first(p2), collect(KIndex, last(p2))
+    t1, olds1 = first(p1), collect(Index, last(p1))
+    t2, olds2 = first(p2), collect(Index, last(p2))
     length(news) == length(olds1) == length(olds2) || error("directsum: length mismatch")
     oinds = map(t1.inds) do i
         k = findfirst(==(i), olds1)
@@ -280,7 +280,7 @@ function TensorInterface.directsum(
 end
 
 #Default-backend index constructor (no reference index/tensor in scope, e.g. fresh networks)
-TensorInterface.new_index(d::Integer; tags = "") = KIndex(d, String(tags))
+TensorInterface.new_index(d::Integer; tags = "") = Index(d, String(tags))
 
 # ── Arithmetic, contraction ─────────────────────────────────────────────────────────────
 
@@ -326,7 +326,7 @@ function Base.:*(a::Tensor, b::Tensor)
     bopen = TensorInterface.uniqueinds(b, a)
 
     nextlabel = Ref(0)
-    labels = Dict{KIndex, Int}()
+    labels = Dict{Index, Int}()
     for i in common
         labels[i] = (nextlabel[] += 1)
     end
@@ -348,7 +348,7 @@ function _trace_all(t::Tensor)
     # contract each plev-1 index with its plev-0 partner (same id), matching ITensors tr
     lo = filter(i -> i.plev == 0, t.inds)
     hi = filter(i -> i.plev == 1, t.inds)
-    labels = Dict{KIndex, Int}()
+    labels = Dict{Index, Int}()
     n = 0
     for i in lo
         j = findfirst(x -> x.id == i.id, hi)
@@ -468,7 +468,7 @@ struct KSpectrum
 end
 
 # Permute+reshape to a (linds...) × (rest...) matrix. Returns matrix, left inds, right inds.
-function _matricize(t::Tensor, linds::Vector{<:KIndex})
+function _matricize(t::Tensor, linds::Vector{<:Index})
     rinds = TensorInterface.uniqueinds(t, linds)
     perm = map(i -> findfirst(==(i), t.inds), vcat(linds, rinds))
     any(isnothing, perm) && error("factorize: indices $(linds) not all found on tensor $(t.inds)")
@@ -491,7 +491,7 @@ end
 function LinearAlgebra.qr(t::Tensor, linds; kwargs...)
     A, li, ri = _matricize(t, _indvec(linds))
     Q, R = qr_compact(A)
-    b = KIndex(size(Q, 2), "Link,qr")
+    b = Index(size(Q, 2), "Link,qr")
     Qt = Tensor(vcat(li, [b]), reshape(Q, (Int[dimof(i) for i in li]..., size(Q, 2))))
     Rt = Tensor(vcat([b], ri), reshape(R, (size(R, 1), Int[dimof(i) for i in ri]...)))
     return Qt, Rt
@@ -513,8 +513,8 @@ function _svd_matrix(A::AbstractMatrix; maxdim = nothing, cutoff = nothing)
     return U, diag(S), Vt, truncerr
 end
 
-function _svd_split(t::Tensor, linds::Vector{<:KIndex}; maxdim = nothing, cutoff = nothing, mindim = 1)
-    mindim > 1 && error("_svd_split: mindim > 1 is not supported by the KTensors backend yet")
+function _svd_split(t::Tensor, linds::Vector{<:Index}; maxdim = nothing, cutoff = nothing, mindim = 1)
+    mindim > 1 && error("_svd_split: mindim > 1 is not supported by the Tensors backend yet")
     A, li, ri = _matricize(t, linds)
     U, S, Vt, truncerr = _svd_matrix(A; maxdim, cutoff)
     return U, S, Vt, li, ri, truncerr
@@ -533,8 +533,8 @@ function TensorInterface.factorize_svd(
     U, S, Vt, li, ri, truncerr = _svd_split(t, _indvec(linds); maxdim, cutoff, mindim)
     k = length(S)
     T = eltype(U)
-    u = KIndex(k, "Link,u")
-    v = KIndex(k, "Link,v")
+    u = Index(k, "Link,u")
+    v = Index(k, "Link,v")
     up = TensorInterface.prime(u)
 
     if ortho == "none"
@@ -554,7 +554,7 @@ function TensorInterface.factorize_svd(
     end
 
     if singular_values! !== nothing
-        singular_values![] = Tensor(KIndex[u, v], Matrix(Diagonal(S)))
+        singular_values![] = Tensor(Index[u, v], Matrix(Diagonal(S)))
     end
     return F1, F2, KSpectrum(abs2.(S), truncerr)
 end
@@ -565,13 +565,13 @@ function LinearAlgebra.factorize(
         t::Tensor, linds...;
         ortho = "left", maxdim = nothing, cutoff = nothing, mindim = 1, tags = "Link,fact", kwargs...,
     )
-    lv = length(linds) == 1 ? _indvec(only(linds)) : collect(KIndex, linds)
+    lv = length(linds) == 1 ? _indvec(only(linds)) : collect(Index, linds)
     # ITensors convention: entries of linds not present on the tensor are ignored
     lv = filter(i -> i ∈ t.inds, lv)
     U, S, Vt, li, ri, _ = _svd_split(t, lv; maxdim, cutoff, mindim)
     k = length(S)
     T = eltype(U)
-    b = KIndex(k, String(tags))
+    b = Index(k, String(tags))
     if ortho == "left"
         L = Tensor(vcat(li, [b]), reshape(U, (Int[dimof(i) for i in li]..., k)))
         R = Tensor(vcat([b], ri), reshape(Diagonal(T.(S)) * Vt, (k, Int[dimof(i) for i in ri]...)))
@@ -588,10 +588,10 @@ end
 function LinearAlgebra.svd(t::Tensor, linds; maxdim = nothing, cutoff = nothing, mindim = 1, kwargs...)
     U, S, Vt, li, ri, _ = _svd_split(t, filter(i -> i ∈ t.inds, _indvec(linds)); maxdim, cutoff, mindim)
     k = length(S)
-    u = KIndex(k, "Link,u")
-    v = KIndex(k, "Link,v")
+    u = Index(k, "Link,u")
+    v = Index(k, "Link,v")
     Ut = Tensor(vcat(li, [u]), reshape(U, (Int[dimof(i) for i in li]..., k)))
-    St = Tensor(KIndex[u, v], Matrix(Diagonal(S)))
+    St = Tensor(Index[u, v], Matrix(Diagonal(S)))
     Vt_ = Tensor(vcat(ri, [v]), reshape(copy(transpose(Vt)), (Int[dimof(i) for i in ri]..., k)))
     return Ut, St, Vt_
 end
@@ -601,7 +601,7 @@ end
 # U · D · prime(dag(U)) reconstructs the tensor (the convention symmetric_gauge relies on).
 function LinearAlgebra.eigen(t::Tensor; ishermitian::Bool = false, kwargs...)
     lv = filter(i -> i.plev == 0, t.inds)
-    rv = collect(KIndex, TensorInterface.prime.(lv))
+    rv = collect(Index, TensorInterface.prime.(lv))
     D, U = LinearAlgebra.eigen(t, lv, rv; ishermitian, kwargs...)
     return D, TensorInterface.replaceinds(U, rv, lv)
 end
@@ -609,15 +609,15 @@ end
 # eigen matching the ITensors hermitian convention probed empirically:
 # D on (link′, link) with the eigenvalues, U on (rinds..., link); Ul·D·dag(U) reconstructs.
 function LinearAlgebra.eigen(t::Tensor, linds, rinds; ishermitian::Bool = false, kwargs...)
-    ishermitian || error("eigen: only ishermitian = true is implemented for KTensors")
+    ishermitian || error("eigen: only ishermitian = true is implemented for Tensors")
     lv, rv = _indvec(linds), _indvec(rinds)
     A, li, ri = _matricize(t, lv)
     ri == rv || error("eigen: rinds don't match the remaining indices")
     D, vecs = eigh_full((A + A') / 2)
     vals = diag(D)
     k = length(vals)
-    lk = KIndex(k, "Link,eigen")
-    D = Tensor(KIndex[TensorInterface.prime(lk), lk], Matrix(Diagonal(vals)))
+    lk = Index(k, "Link,eigen")
+    D = Tensor(Index[TensorInterface.prime(lk), lk], Matrix(Diagonal(vals)))
     U = Tensor(vcat(rv, [lk]), reshape(vecs, (Int[dimof(i) for i in rv]..., k)))
     return D, U
 end
@@ -644,7 +644,7 @@ end
 # `a` it should contract with (identity for plain absorption; the site/prime partner map for
 # the closing bra contraction). Returns (data, out_inds).
 function _tc_pair(
-        da, ia::Vector{<:KIndex}, db, ib::Vector{<:KIndex}, conjB::Bool, pairfn,
+        da, ia::Vector{<:Index}, db, ib::Vector{<:Index}, conjB::Bool, pairfn,
         istemp::Val, allocator
     )
     ca, cb = Int[], Int[]
@@ -669,7 +669,7 @@ end
 
 # Pattern check: `m` must be a standard doubled norm-network message for `ψ` — every index
 # either a plev-0 index of ψ (ket side) or the prime of one (bra side).
-function _is_norm_message(m::Tensor, ψinds::Vector{<:KIndex})
+function _is_norm_message(m::Tensor, ψinds::Vector{<:Index})
     return all(m.inds) do i
         (i.plev == 0 && i ∈ ψinds) || (i.plev == 1 && TensorInterface.noprime(i) ∈ ψinds)
     end
@@ -683,7 +683,7 @@ message update) come out as an unprimed/primed pair; a fully surrounded vertex c
 scalar (0-index) tensor. Returns `nothing` when the structure doesn't match.
 """
 function fused_norm_closure(
-        ψ::Tensor, sinds::Vector{<:KIndex}, incoming::Vector{<:Tensor};
+        ψ::Tensor, sinds::Vector{<:Index}, incoming::Vector{<:Tensor};
         op::Union{Nothing, Tensor} = nothing
     )
     ψ.data isa Array || return nothing
@@ -697,7 +697,7 @@ function fused_norm_closure(
         X, oa, ob = _tc_pair(X, ix, m.data, m.inds, false, identity, Val(true), buf)
         ix = vcat(oa, ob)
     end
-    covered = op === nothing ? KIndex[] : KIndex[i for i in op.inds if i.plev == 0]
+    covered = op === nothing ? Index[] : Index[i for i in op.inds if i.plev == 0]
     if op !== nothing
         X, oa, ob = _tc_pair(X, ix, op.data, op.inds, false, identity, Val(true), buf)
         ix = vcat(oa, ob)
@@ -720,7 +720,7 @@ given standard doubled `incoming` messages. Returns `nothing` when the structure
 match (caller falls back to the generic contraction path).
 """
 function fused_norm_message(
-        ψ::Tensor, sinds::Vector{<:KIndex}, incoming::Vector{<:Tensor};
+        ψ::Tensor, sinds::Vector{<:Index}, incoming::Vector{<:Tensor};
         normalize::Bool = true
     )
     m = fused_norm_closure(ψ, sinds, incoming)
@@ -740,7 +740,7 @@ end
 # two updated site tensors and the singular-value tensor escape to the heap.
 
 # Buffered permute+reshape to a (linds × rest) matrix. Returns (matrix, linds, rinds).
-function _matricize_temp(da, ia::Vector{<:KIndex}, linds::Vector{<:KIndex}, buf)
+function _matricize_temp(da, ia::Vector{<:Index}, linds::Vector{<:Index}, buf)
     rinds = filter(i -> i ∉ linds, ia)
     perm = map(i -> findfirst(==(i), ia), vcat(linds, rinds))
     T = eltype(da)
@@ -763,7 +763,7 @@ function _qr_temp(Amat::AbstractMatrix, buf)
 end
 
 # Absorb a chain of 2-index gauge tensors into (X, ix) as buffer temps; conjB fuses dag.
-function _absorb_chain(X, ix::Vector{<:KIndex}, ms::Vector{<:Tensor}, conjB::Bool, buf)
+function _absorb_chain(X, ix::Vector{<:Index}, ms::Vector{<:Tensor}, conjB::Bool, buf)
     for m in ms
         X, oa, ob = _tc_pair(X, ix, m.data, m.inds, conjB, identity, Val(true), buf)
         ix = vcat(oa, ob)
@@ -775,7 +775,7 @@ function fused_two_site_gate(
         o::Tensor, ψ1::Tensor, ψ2::Tensor,
         sqrt1::Vector{<:Tensor}, inv1::Vector{<:Tensor},
         sqrt2::Vector{<:Tensor}, inv2::Vector{<:Tensor},
-        s1::Vector{<:KIndex}, s2::Vector{<:KIndex};
+        s1::Vector{<:Index}, s2::Vector{<:Index};
         maxdim = nothing, cutoff = nothing,
     )
     buf = _kernel_buffer()
@@ -792,8 +792,8 @@ function fused_two_site_gate(
     A2, l2, r2 = _matricize_temp(X2, ix2, ql2, buf)
     Q1m, R1m = _qr_temp(A1, buf)
     Q2m, R2m = _qr_temp(A2, buf)
-    b1 = KIndex(size(Q1m, 2), "Link,qr")
-    b2 = KIndex(size(Q2m, 2), "Link,qr")
+    b1 = Index(size(Q1m, 2), "Link,qr")
+    b2 = Index(size(Q2m, 2), "Link,qr")
     iR1 = vcat([b1], r1)
     iR2 = vcat([b2], r2)
     R1 = reshape(R1m, (dimof(b1), Int[dimof(i) for i in r1]...))
@@ -812,8 +812,8 @@ function fused_two_site_gate(
     AoR, lo, ro = _matricize_temp(oR, ioR, vcat([b1], s1), buf)
     U, S, Vt, truncerr = _svd_matrix(AoR; maxdim, cutoff)
     k = length(S)
-    u = KIndex(k, "Link,u")
-    v = KIndex(k, "Link,v")
+    u = Index(k, "Link,u")
+    v = Index(k, "Link,v")
     up = TensorInterface.prime(u)
     TS = promote_type(eltype(U), eltype(S))
     sq = sqrt.(S)
@@ -834,7 +834,7 @@ function fused_two_site_gate(
     T2, oa, ob = _tc_pair(Y2, iy2, F2, iF2, false, identity, Val(false), buf)
     iT2 = vcat(oa, ob)
 
-    s_values = Tensor(KIndex[u, v], Matrix(Diagonal(S)))
+    s_values = Tensor(Index[u, v], Matrix(Diagonal(S)))
     TensorOperations.allocator_reset!(buf, cp)
 
     return Tensor(iT1, T1), Tensor(iT2, T2), s_values, truncerr
@@ -847,12 +847,12 @@ const _σx = ComplexF64[0 1; 1 0]
 const _σy = ComplexF64[0 -im; im 0]
 const _σz = ComplexF64[1 0; 0 -1]
 
-_is_spinhalf(i::KIndex) = dimof(i) == 2
+_is_spinhalf(i::Index) = dimof(i) == 2
 
 """
     register_op!(name::String, f::Function; nsites::Int = 1)
 
-Register a custom operator matrix for the KTensors backend. `f(; kwargs...)` must return
+Register a custom operator matrix for the Tensors backend. `f(; kwargs...)` must return
 the operator matrix: 2×2 for `nsites = 1`, 4×4 for `nsites = 2` in the first-index-fastest
 (column-major) basis convention. Overwrites any existing entry with the same name.
 """
@@ -883,7 +883,7 @@ _op1(name::String; kwargs...) = haskey(OP1_REGISTRY, name) ? OP1_REGISTRY[name](
 
 # Two-site 4×4 matrices in the (first index fastest) convention that maps onto
 # data[s1', s2', s1, s2] via column-major reshape. Conventions validated against the
-# historical ITensors library (test/test_ktensors.jl).
+# historical ITensors library (test/test_tensors.jl).
 _kr(A, B) = kron(B, A)   # s1 fastest
 
 const OP2_REGISTRY = Dict{String, Function}(
@@ -924,31 +924,31 @@ function _controlled(u::AbstractMatrix)
     return m
 end
 
-function TensorInterface.op(name::String, i::KIndex; kwargs...)
-    _is_spinhalf(i) || error("op: KTensors operator library currently covers d=2 (S=1/2) sites only")
+function TensorInterface.op(name::String, i::Index; kwargs...)
+    _is_spinhalf(i) || error("op: Tensors operator library currently covers d=2 (S=1/2) sites only")
     m = _op1(name; kwargs...)
-    m === nothing && error("op: unknown single-site operator \"$name\" for the KTensors backend")
-    return Tensor(KIndex[TensorInterface.prime(i), i], copy(m))
+    m === nothing && error("op: unknown single-site operator \"$name\" for the Tensors backend")
+    return Tensor(Index[TensorInterface.prime(i), i], copy(m))
 end
 
-function TensorInterface.op(name::String, i1::KIndex, i2::KIndex; kwargs...)
-    (_is_spinhalf(i1) && _is_spinhalf(i2)) || error("op: KTensors operator library currently covers d=2 (S=1/2) sites only")
+function TensorInterface.op(name::String, i1::Index, i2::Index; kwargs...)
+    (_is_spinhalf(i1) && _is_spinhalf(i2)) || error("op: Tensors operator library currently covers d=2 (S=1/2) sites only")
     m = _op2(name; kwargs...)
-    m === nothing && error("op: unknown two-site operator \"$name\" for the KTensors backend")
+    m === nothing && error("op: unknown two-site operator \"$name\" for the Tensors backend")
     data = reshape(copy(m), 2, 2, 2, 2)
-    return Tensor(KIndex[TensorInterface.prime(i1), TensorInterface.prime(i2), i1, i2], data)
+    return Tensor(Index[TensorInterface.prime(i1), TensorInterface.prime(i2), i1, i2], data)
 end
 
-function TensorInterface.state(name::String, i::KIndex)
-    _is_spinhalf(i) || error("state: KTensors state library currently covers d=2 (S=1/2) sites only")
+function TensorInterface.state(name::String, i::Index)
+    _is_spinhalf(i) || error("state: Tensors state library currently covers d=2 (S=1/2) sites only")
     vecmap = Dict(
         "↑" => [1.0, 0.0], "0" => [1.0, 0.0], "Up" => [1.0, 0.0], "Z+" => [1.0, 0.0],
         "↓" => [0.0, 1.0], "1" => [0.0, 1.0], "Dn" => [0.0, 1.0], "Z-" => [0.0, 1.0],
         "+" => [1.0, 1.0] / sqrt(2), "X+" => [1.0, 1.0] / sqrt(2),
         "-" => [1.0, -1.0] / sqrt(2), "X-" => [1.0, -1.0] / sqrt(2),
     )
-    haskey(vecmap, name) || error("state: unknown state \"$name\" for the KTensors backend")
-    return Tensor(KIndex[i], copy(vecmap[name]))
+    haskey(vecmap, name) || error("state: unknown state \"$name\" for the Tensors backend")
+    return Tensor(Index[i], copy(vecmap[name]))
 end
 
 include("tktensor.jl")

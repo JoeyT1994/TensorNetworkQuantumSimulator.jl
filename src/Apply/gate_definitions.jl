@@ -252,6 +252,6 @@ function unregister_gate!(name::String)
 end
 
 # --- In-house gate definitions ----------------------------------------------
-# The operator matrices themselves live in the KTensors registry (see
-# `KTensors.register_op!` and OP1_REGISTRY/OP2_REGISTRY): Rxxyy, Rxxyyzz and the
+# The operator matrices themselves live in the Tensors registry (see
+# `Tensors.register_op!` and OP1_REGISTRY/OP2_REGISTRY): Rxxyy, Rxxyyzz and the
 # qiskit-convention xx_plus_yy are registered there alongside the standard gates.

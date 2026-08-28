@@ -2,7 +2,7 @@ module TensorNetworkQuantumSimulator
 
 
 include("tensor_interface.jl")
-include("KTensors/KTensors.jl")
+include("Tensors/Tensors.jl")
 include("imports.jl")
 
 include("siteinds.jl")

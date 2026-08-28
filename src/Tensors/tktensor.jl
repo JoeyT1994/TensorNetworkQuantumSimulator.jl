@@ -1,17 +1,17 @@
-# Symmetric backend: KIndex-labelled wrapper around a TensorKit TensorMap over any
+# Symmetric backend: Index-labelled wrapper around a TensorKit TensorMap over any
 # graded (sector-carrying) space — bosonic Z2/U(1) irreps and fermionic parity alike.
 #
 # HARD RULE: nothing algebraic is implemented here. Contraction, permutation (including
 # every Koszul sign for fermionic sectors — Jordan-Wigner strings emerge from the
 # braiding), blockwise factorizations and truncation all delegate to TensorKit and
-# MatrixAlgebraKit. This file is bookkeeping between KIndex labels and TensorMap slots,
+# MatrixAlgebraKit. This file is bookkeeping between Index labels and TensorMap slots,
 # plus the operator/state quack layer.
 #
 # Conventions (validated against dense ground truth — Jordan-Wigner for fermions, the
 # dense Tensor backend for bosonic sectors):
 #   * Slot `a` of the data holds `slotspace(inds[a])`: the index's base space, dualed
 #     when the per-copy `dual` flag is set. The flag is per tensor copy — the same
-#     KIndex identity (id, plev) appears with opposite flags on the two tensors sharing
+#     Index identity (id, plev) appears with opposite flags on the two tensors sharing
 #     a bond (src = false, dst = true), and `dag` flips all flags.
 #   * `dag` is the plain categorical adjoint permuted back to the codomain — no twists.
 #     Site legs are non-dual on kets; with that convention closed bra-ket networks
@@ -28,7 +28,7 @@
 #     flags; a same-flag pairing is a network-construction bug and errors loudly.
 
 const TKSpace = TK.GradedSpace
-const TKIndex = KIndex{<:TKSpace}
+const TKIndex = Index{<:TKSpace}
 
 """
     graded_space(symmetry::String, sectors)
@@ -95,8 +95,8 @@ end
 
 fermion_space(d0::Integer = 1, d1::Integer = 1) = graded_space("fZ2", [0 => d0, 1 => d1])
 
-KIndex(space::TKSpace, tags::AbstractString = "") =
-    KIndex(rand(UInt64), space, 0, String(tags), false)
+Index(space::TKSpace, tags::AbstractString = "") =
+    Index(rand(UInt64), space, 0, String(tags), false)
 
 """
     new_fermion_index(d0 = 1, d1 = 1; tags = "")
@@ -104,7 +104,7 @@ KIndex(space::TKSpace, tags::AbstractString = "") =
 A fresh fermionic (Z2-parity graded) index with `d0` even and `d1` odd states.
 """
 new_fermion_index(d0::Integer = 1, d1::Integer = 1; tags = "") =
-    KIndex(fermion_space(d0, d1), tags)
+    Index(fermion_space(d0, d1), tags)
 
 space_dim(s::TKSpace) = TK.dim(s)
 
@@ -115,18 +115,18 @@ function TensorInterface.new_index(ref::TKIndex, d::Integer; tags = "")
     I = TK.sectortype(space(ref))
     d0, d1 = cld(Int(d), 2), fld(Int(d), 2)
     sp = d1 == 0 ? TK.Vect[I](one(I) => d0) : TK.Vect[I](one(I) => d0, I(1) => d1)
-    return KIndex(sp, tags)
+    return Index(sp, tags)
 end
 
 slotspace(i::TKIndex) = i.dual ? TK.dual(space(i)) : space(i)
 
 struct TKTensor{S <: TKSpace, TM <: TK.AbstractTensorMap} <: AbstractTensor
-    inds::Vector{KIndex{S}}
+    inds::Vector{Index{S}}
     data::TM
     function TKTensor(inds::AbstractVector, data::TK.AbstractTensorMap)
         isempty(inds) && error("TKTensor: fully-contracted results are plain Numbers")
         S = typeof(space(first(inds)))
-        iv = collect(KIndex{S}, inds)
+        iv = collect(Index{S}, inds)
         TK.numout(data) + TK.numin(data) == length(iv) ||
             error("TKTensor: $(length(iv)) indices for data with $(TK.numout(data) + TK.numin(data)) legs")
         for (a, i) in enumerate(iv)
@@ -198,7 +198,7 @@ function TensorInterface.array(t::TKTensor)
 end
 
 function TensorInterface.from_array(A::AbstractArray, is::TKIndex...)
-    iv = collect(KIndex, is)
+    iv = collect(Index, is)
     all(i -> !i.dual, iv) ||
         error("from_array: graded scatter is only defined for non-dual indices")
     N = length(iv)
@@ -226,7 +226,7 @@ function TensorInterface.dag(t::TKTensor)
     #the index list reorders to match the adjoint's slot numbering
     no = TK.numout(t.data)
     order = no == N ? (1:N) : vcat((no + 1):N, 1:no)
-    return TKTensor(KIndex[TensorInterface.dag(t.inds[k]) for k in order], dd)
+    return TKTensor(Index[TensorInterface.dag(t.inds[k]) for k in order], dd)
 end
 
 #Relabels by identity; the per-copy dual flag is data bookkeeping and is PRESERVED from
@@ -239,7 +239,7 @@ function TensorInterface.replaceinds(t::TKTensor, old, new)
         k === nothing && return i
         n = newv[k]
         space(n) == space(i) || error("replaceinds: space mismatch $(i) → $(n)")
-        return KIndex(n.id, n.space, n.plev, n.tags, i.dual)
+        return Index(n.id, n.space, n.plev, n.tags, i.dual)
     end
     return TKTensor(newinds, t.data)
 end
@@ -353,7 +353,7 @@ TensorInterface.onehot(p::Pair{<:TKIndex, <:Integer}) = TensorInterface.onehot(F
 #Identity between a pair of same-space, opposite-orientation indices (same id — BP
 #message inits from `delta(vcat(linds, prime(dag(linds))))` — or distinct ids, e.g. the
 #loop-correction projectors); longer lists pair up by id.
-function _delta_pair(elt::Type, i1::KIndex, i2::KIndex)
+function _delta_pair(elt::Type, i1::Index, i2::Index)
     space(i1) == space(i2) || error("delta: paired indices must share a space")
     i1.dual != i2.dual || error("delta: paired indices must have opposite orientations")
     #the one-sided bend of the identity has a handedness: building TK.id on the
@@ -363,7 +363,7 @@ function _delta_pair(elt::Type, i1::KIndex, i2::KIndex)
     return TKTensor([a, b], TK.permute(TK.id(elt, slotspace(a)), ((1, 2), ())))
 end
 
-function _delta_tk(elt::Type, is::AbstractVector{<:KIndex})
+function _delta_tk(elt::Type, is::AbstractVector{<:Index})
     length(is) == 2 && return _delta_pair(elt, is[1], is[2])
     ids = unique([i.id for i in is])
     parts = map(ids) do id
@@ -373,8 +373,8 @@ function _delta_tk(elt::Type, is::AbstractVector{<:KIndex})
     end
     return reduce(*, parts)
 end
-TensorInterface.delta(elt::Type, is::TKIndex...) = _delta_tk(elt, collect(KIndex, is))
-TensorInterface.delta(is::TKIndex...) = _delta_tk(Float64, collect(KIndex, is))
+TensorInterface.delta(elt::Type, is::TKIndex...) = _delta_tk(elt, collect(Index, is))
+TensorInterface.delta(is::TKIndex...) = _delta_tk(Float64, collect(Index, is))
 
 #Combiner: the fuse isometry, TensorKit-native. Mirrors the dense conventions (combined
 #index FIRST; `t * C` combines, `x * dag(C)` splits) — the stored copies are dag'd so
@@ -385,10 +385,10 @@ function TensorInterface.combiner(is::AbstractVector{<:TKIndex}; tags = "CMB,Lin
     iso = TK.isomorphism(Float64, TK.fuse(P), P)
     n = length(is)
     data = TK.permute(iso, (Tuple(1:(n + 1)), ()))
-    c = KIndex(TK.fuse(P), String(tags))
+    c = Index(TK.fuse(P), String(tags))
     return TKTensor(vcat([c], [TensorInterface.dag(i) for i in is]), data)
 end
-TensorInterface.combiner(is::TKIndex...; kwargs...) = TensorInterface.combiner(collect(KIndex, is); kwargs...)
+TensorInterface.combiner(is::TKIndex...; kwargs...) = TensorInterface.combiner(collect(Index, is); kwargs...)
 TensorInterface.combinedind(C::TKTensor) = first(C.inds)
 
 const F_STATES = Dict{String, Vector{Float64}}(
@@ -416,7 +416,7 @@ function state_vector(namevec, i::TKIndex)
             error("state: fermionic state library covers d = 2 (spinless) and d = 4 (spinful) sites")
         get(table, String(namevec), nothing)
     else
-        TensorInterface.state(String(namevec), KIndex(dimof(i))).data
+        TensorInterface.state(String(namevec), Index(dimof(i))).data
     end
     vec === nothing && error(
         "state: unknown fermionic state \"$namevec\" for a d = $(dimof(i)) site"
@@ -447,7 +447,7 @@ dual_sector(c) = TK.dual(c)
 trivial_sector(c) = one(c)
 
 #A dim-1 link index carrying charge `q` (used for routing charges through product states)
-charged_link_index(q; tags = "Link") = KIndex(TK.Vect[typeof(q)](q => 1), tags)
+charged_link_index(q; tags = "Link") = Index(TK.Vect[typeof(q)](q => 1), tags)
 trivial_link_index(ref::TKIndex; tags = "Link") = charged_link_index(one(TK.sectortype(space(ref))); tags)
 
 #States scatter the dense state vector; the from_array flux guard rejects charged
@@ -460,8 +460,8 @@ TensorInterface.state(name::String, i::TKIndex) = TensorInterface.from_array(sta
 #attached by outer products, since a lone charged leg has no flux-zero trees. Any
 #TensorKit-internal phase convention on dual dim-1 slots is a per-bond gauge amounting
 #to at most a global phase of the state.
-function product_vertex_tensor(elt::Type, vec::AbstractVector, site::TKIndex, links::AbstractVector{<:KIndex})
-    iv = vcat(KIndex[site], collect(KIndex, links))
+function product_vertex_tensor(elt::Type, vec::AbstractVector, site::TKIndex, links::AbstractVector{<:Index})
+    iv = vcat(Index[site], collect(Index, links))
     all(l -> dimof(l) == 1, links) || error("product_vertex_tensor: links must be dim-1")
     data = zeros(elt, TK.ProductSpace(map(slotspace, iv)...))
     for (f1, f2) in TK.fusiontrees(data)
@@ -590,7 +590,7 @@ function _graded_op_array(name::String, sites::Vector{<:TKIndex}; kwargs...)
         return A[vcat(ips, ips)...]
     end
     #bosonic sectors: the dense registry array is the ground truth
-    dense = TensorInterface.op(name, (KIndex(dimof(i)) for i in sites)...; kwargs...)
+    dense = TensorInterface.op(name, (Index(dimof(i)) for i in sites)...; kwargs...)
     return dense.data
 end
 
@@ -629,7 +629,7 @@ end
 #Random tensors: a TensorMap only populates flux-zero trees, so plain randn is already
 #the symmetric random initializer.
 function TensorInterface.random_itensor(elt::Type{<:Number}, is::TKIndex...)
-    iv = collect(KIndex, is)
+    iv = collect(Index, is)
     data = randn(elt, TK.ProductSpace(map(slotspace, iv)...))
     return TKTensor(iv, data)
 end
@@ -685,18 +685,18 @@ end
 
 # ── Factorizations (MatrixAlgebraKit API through TensorKit, blockwise with signs) ───────
 
-function _tk_split_positions(t::TKTensor, lv::Vector{<:KIndex})
+function _tk_split_positions(t::TKTensor, lv::Vector{<:Index})
     lpos = Int[a for (a, i) in enumerate(t.inds) if i ∈ lv]
     rpos = Int[a for (a, i) in enumerate(t.inds) if i ∉ lv]
     return lpos, rpos, t.inds[lpos], t.inds[rpos]
 end
 
-#Wrap a TensorKit space as (base space, dual flag) for a fresh KIndex copy.
+#Wrap a TensorKit space as (base space, dual flag) for a fresh Index copy.
 _wrap_slot(sp) = TK.isdual(sp) ? (TK.dual(sp), true) : (sp, false)
 
-_with_flag(i::TKIndex, dual::Bool) = KIndex(i.id, i.space, i.plev, i.tags, dual)
+_with_flag(i::TKIndex, dual::Bool) = Index(i.id, i.space, i.plev, i.tags, dual)
 
-function _tksvd_core(t::TKTensor, lv::Vector{<:KIndex}; maxdim = nothing, cutoff = nothing)
+function _tksvd_core(t::TKTensor, lv::Vector{<:Index}; maxdim = nothing, cutoff = nothing)
     lpos, rpos, li, ri = _tk_split_positions(t, lv)
     tp = TK.permute(t.data, (Tuple(lpos), Tuple(rpos)))
     if maxdim === nothing && cutoff === nothing
@@ -720,12 +720,12 @@ function _tksvd_core(t::TKTensor, lv::Vector{<:KIndex}; maxdim = nothing, cutoff
 end
 
 #Rewrap map factors as TKTensors: L carries (li..., bond dual), R carries (bond, ri...).
-function _tk_wrap_left(U, li::Vector{<:KIndex}, b::TKIndex)
+function _tk_wrap_left(U, li::Vector{<:Index}, b::TKIndex)
     nl = length(li)
     Uc = TK.permute(U, (Tuple(1:(nl + 1)), ()))
     return TKTensor(vcat(li, [_with_flag(b, true)]), Uc)
 end
-function _tk_wrap_right(Vh, ri::Vector{<:KIndex}, b::TKIndex)
+function _tk_wrap_right(Vh, ri::Vector{<:Index}, b::TKIndex)
     nr = length(ri)
     Vc = TK.permute(Vh, (Tuple(1:(nr + 1)), ()))
     return TKTensor(vcat([_with_flag(b, false)], ri), Vc)
@@ -734,7 +734,7 @@ end
 function _tk_bond_index(S, tags::String)
     sp, isdual = _wrap_slot(TK.space(S, 1))
     isdual && error("factorize: unexpected dual bond space from the factorization")
-    return KIndex(sp, tags)
+    return Index(sp, tags)
 end
 
 function TensorInterface.factorize_svd(
@@ -747,7 +747,7 @@ function TensorInterface.factorize_svd(
     _, _, li, ri, U, S, Vh, kept_s2, truncerr = _tksvd_core(t, lv; maxdim, cutoff)
     sq = sqrt(S)
     u = _tk_bond_index(S, "Link,u")
-    v = KIndex(u.space, "Link,v")
+    v = Index(u.space, "Link,v")
     up = TensorInterface.prime(u)
     F1 = _tk_wrap_left(U * sq, li, up)
     F2 = _tk_wrap_right(sq * Vh, ri, up)
@@ -762,7 +762,7 @@ function LinearAlgebra.factorize(
         t::TKTensor, linds...;
         ortho = "left", maxdim = nothing, cutoff = nothing, tags = "Link,fact", kwargs...,
     )
-    lv = length(linds) == 1 ? _indvec(only(linds)) : collect(KIndex, linds)
+    lv = length(linds) == 1 ? _indvec(only(linds)) : collect(Index, linds)
     lv = filter(i -> i ∈ t.inds, lv)
     _, _, li, ri, U, S, Vh, _, _ = _tksvd_core(t, lv; maxdim, cutoff)
     b = _tk_bond_index(S, String(tags))
@@ -779,7 +779,7 @@ function LinearAlgebra.svd(t::TKTensor, linds; maxdim = nothing, cutoff = nothin
     lv = filter(i -> i ∈ t.inds, _indvec(linds))
     _, _, li, ri, U, S, Vh, _, _ = _tksvd_core(t, lv; maxdim, cutoff)
     u = _tk_bond_index(S, "Link,u")
-    v = KIndex(u.space, "Link,v")
+    v = Index(u.space, "Link,v")
     Ut = _tk_wrap_left(U, li, u)
     Sc = TK.permute(S, ((1, 2), ()))
     St = TKTensor([_with_flag(u, false), _with_flag(v, true)], Sc)
@@ -797,7 +797,7 @@ function LinearAlgebra.qr(t::TKTensor, linds; kwargs...)
     Q, R = qr_compact(tp)
     sp, isdual = _wrap_slot(TK.space(R, 1))
     isdual && error("qr: unexpected dual bond space")
-    b = KIndex(sp, "Link,qr")
+    b = Index(sp, "Link,qr")
     return _tk_wrap_left(Q, li, b), _tk_wrap_right(R, ri, b)
 end
 
@@ -815,16 +815,16 @@ function LinearAlgebra.eigen(t::TKTensor, linds, rinds; ishermitian::Bool = fals
     tp = TK.permute(t.data, (Tuple(lpos), Tuple(rpos)))
     H = (tp + adjoint(tp)) / 2
     D, Vec = eigh_full(H)
-    lk = KIndex(_wrap_slot(TK.space(D, 1))[1], "Link,eigen")
+    lk = Index(_wrap_slot(TK.space(D, 1))[1], "Link,eigen")
     nr = length(rv)
     Uc = TK.permute(Vec, (Tuple(1:(nr + 1)), ()))
-    uinds = KIndex[
+    uinds = Index[
         [_with_flag(rv[k], TK.isdual(TK.space(Uc, k))) for k in 1:nr];
         _with_flag(lk, TK.isdual(TK.space(Uc, nr + 1)))
     ]
     U = TKTensor(uinds, Uc)
     Dc = TK.permute(D, ((1, 2), ()))
-    dinds = KIndex[
+    dinds = Index[
         TensorInterface.prime(_with_flag(lk, TK.isdual(TK.space(Dc, 1)))),
         _with_flag(lk, TK.isdual(TK.space(Dc, 2))),
     ]
@@ -833,7 +833,7 @@ end
 
 function LinearAlgebra.eigen(t::TKTensor; ishermitian::Bool = false, kwargs...)
     lv = filter(i -> i.plev == 0, t.inds)
-    rv = collect(KIndex, TensorInterface.prime.(lv))
+    rv = collect(Index, TensorInterface.prime.(lv))
     D, U = LinearAlgebra.eigen(t, lv, rv; ishermitian, kwargs...)
     return D, TensorInterface.replaceinds(U, rv, lv)
 end
@@ -882,7 +882,7 @@ end
 #the infinite-temperature identity state flux-zero per site — the data is TensorKit's
 #identity map, nothing hand-rolled.
 function pairing_tensor(elt::Type, kets, ancs)
-    kv, av = collect(KIndex, kets), collect(KIndex, ancs)
+    kv, av = collect(Index, kets), collect(Index, ancs)
     length(kv) == length(av) || error("pairing_tensor: need as many ancillas as kets")
     all(i -> !i.dual, kv) && all(i -> i.dual, av) ||
         error("pairing_tensor: kets must be non-dual and ancillas dual copies")

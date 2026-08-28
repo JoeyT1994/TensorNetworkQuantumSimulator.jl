@@ -94,7 +94,7 @@ optimise_p_q
 ## Custom Gate Definitions
 
 ```@docs
-TensorNetworkQuantumSimulator.KTensors.register_op!
+TensorNetworkQuantumSimulator.Tensors.register_op!
 ```
 
 ## Tensor Backend Internals
@@ -102,8 +102,8 @@ TensorNetworkQuantumSimulator.KTensors.register_op!
 ```@docs
 TensorNetworkQuantumSimulator.TensorInterface.Algorithm
 TensorNetworkQuantumSimulator.TensorInterface.factorize_svd
-TensorNetworkQuantumSimulator.KTensors.fused_norm_message
-TensorNetworkQuantumSimulator.KTensors.fused_norm_closure
+TensorNetworkQuantumSimulator.Tensors.fused_norm_message
+TensorNetworkQuantumSimulator.Tensors.fused_norm_closure
 ```
 
 ## Index

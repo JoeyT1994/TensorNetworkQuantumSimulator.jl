@@ -53,7 +53,7 @@ using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, no
     scalar, apply, map_diag, map_diag!, factorize_svd,
     array, data, new_index, from_array, has_closure_gauge
 import .TensorInterface: contract, truncate, inner, uniqueinds, datatype, scalartype
-using .KTensors: KTensors, KIndex, Tensor, register_op!
+using .Tensors: Tensors, Index, Tensor, register_op!
 
 using Adapt: adapt
 
