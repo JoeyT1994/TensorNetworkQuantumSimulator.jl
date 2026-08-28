@@ -262,7 +262,9 @@ Custom gates can be defined by building the corresponding tensor with `op` on th
 
 ## GPU Support
 
-GPU support is enabled for all operations. Load the relevant Julia GPU package (e.g. CUDA.jl or Metal.jl) and transfer the state or cache:
+Both backends run on GPU end to end — gate application, belief propagation, boundary MPS, loop corrections, reduced density matrices, truncation, and sampling. The dense backend's fused hot-path kernels carve their workspace buffers from device memory (TensorOperations ≥ 5.8); the symmetric (graded) backend runs blockwise on device through TensorKit's GPU support, fermions included. Every path is validated against the reference `AbstractGPUArray` implementation under `allowscalar(false)` in `test/test_gpu_paths.jl`; factorizations dispatch to the vendor solver (CUSOLVER/ROCSOLVER) through MatrixAlgebraKit.
+
+Load the relevant Julia GPU package (e.g. CUDA.jl) and transfer the state or cache:
 
 ```julia
 using TensorNetworkQuantumSimulator

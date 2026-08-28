@@ -81,6 +81,9 @@ function fused_simple_update(
     isempty(envs) && return nothing
     all(env -> env isa Tensor && ndims(env) == 2, envs) || return nothing
     isempty(setdiff(keys(apply_kwargs), (:maxdim, :cutoff))) || return nothing
+    #all participating tensors must share one supported storage family (host, or one GPU
+    #array family) — the kernel's workspace buffer is carved from that same memory
+    Tensors._uniform_kernel_storage(o.data, (t.data for t in ψ⃗)..., (env.data for env in envs)...) === nothing && return nothing
 
     sqrt_cutoff = isnothing(sqrt_cutoff) ? 10 * eps(real(scalartype(first(envs)))) : sqrt_cutoff
     envs_v1 = filter(env -> hascommoninds(env, ψ⃗[1]), envs)

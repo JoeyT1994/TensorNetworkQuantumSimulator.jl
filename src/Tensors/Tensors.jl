@@ -35,6 +35,8 @@ using MatrixAlgebraKit: MatrixAlgebraKit, qr_compact, qr_compact!, svd_compact, 
 using TensorOperations: TensorOperations, ncon
 using VectorInterface: VectorInterface
 using Adapt: Adapt, adapt
+using GPUArraysCore: AbstractGPUArray
+using StridedViews: StridedViews
 import TensorKit as TK
 using ..TensorInterface: TensorInterface
 
@@ -143,14 +145,15 @@ _like(t::Tensor, inds, data) = Tensor(inds, data)
 Base.eltype(::Tensor{T}) where {T} = T
 Base.sum(t::Tensor) = sum(t.data)
 
-TensorInterface.datatype(::Tensor{T, N, A}) where {T, N, A <: Array} = Vector{T}
+TensorInterface.datatype(t::Tensor) = typeof(vec(t.data))
 TensorInterface.array(t::Tensor) = t.data
 TensorInterface.data(t::Tensor) = vec(t.data)
 TensorInterface.new_index(t::Tensor, d::Integer; tags = "") = Index(d, tags)
 
 function TensorInterface.scalar(t::Tensor)
     length(t.data) == 1 || error("scalar: Tensor with inds $(t.inds) is not a scalar")
-    return t.data[Base.firstindex(t.data)]
+    #single-element reduce: reads the value without scalar indexing on GPU arrays
+    return sum(t.data)
 end
 
 # ── Index-set queries ───────────────────────────────────────────────────────────────────
@@ -373,11 +376,11 @@ const SEQ_BUFFER_MAXBYTES = Ref(2^30)
 function TensorInterface.contract(ts::Vector{<:Tensor}; sequence = nothing, kwargs...)
     isnothing(sequence) && return reduce(*, ts)
     sequence isa Integer && return ts[sequence]
-    if all(t -> t.data isa Array, ts)
+    if _uniform_kernel_storage((t.data for t in ts)...) !== nothing
         elsize = sizeof(promote_type(map(eltype, ts)...))
         _, total = _seq_temp_bytes(ts, sequence, elsize)
         if total <= SEQ_BUFFER_MAXBYTES[]
-            buf = _kernel_buffer()
+            buf = _kernel_buffer(first(ts).data)
             cp = TensorOperations.allocator_checkpoint!(buf)
             data, is = _exec_seq(ts, sequence, buf, true)
             TensorOperations.allocator_reset!(buf, cp)
@@ -446,15 +449,16 @@ function TensorInterface.map_diag!(f::Function, out::Tensor, t::Tensor)
     ndims(t) == 2 || error("map_diag: expected a 2-index Tensor")
     d = _align(out, t)
     d === out.data || copyto!(out.data, d)
-    for k in 1:minimum(size(out.data))
-        out.data[k, k] = f(out.data[k, k])
-    end
+    #broadcast over a diagonal view (device-friendly: no scalar indexing on GPU arrays)
+    dv = view(out.data, LinearAlgebra.diagind(out.data)[1:minimum(size(out.data))])
+    dv .= f.(dv)
     return out
 end
 
 # ── Adapt / storage ─────────────────────────────────────────────────────────────────────
 
-Adapt.adapt_structure(elt::Type{<:Number}, t::Tensor) = Tensor(copy(t.inds), convert(Array{elt}, t.data))
+#eltype conversion preserves the storage container (GPU arrays stay on device)
+Adapt.adapt_structure(elt::Type{<:Number}, t::Tensor) = Tensor(copy(t.inds), elt.(t.data))
 function Adapt.adapt_structure(to::Type{<:AbstractVector}, t::Tensor)
     return Tensor(copy(t.inds), reshape(adapt(to, vec(copy(t.data))), size(t.data)))
 end
@@ -495,6 +499,15 @@ function LinearAlgebra.qr(t::Tensor, linds; kwargs...)
     Qt = Tensor(vcat(li, [b]), reshape(Q, (Int[dimof(i) for i in li]..., size(Q, 2))))
     Rt = Tensor(vcat([b], ri), reshape(R, (size(R, 1), Int[dimof(i) for i in ri]...)))
     return Qt, Rt
+end
+
+#Dense diagonal matrix in the same storage family as `S` (device-friendly: broadcast
+#into a diagind view, no scalar indexing).
+function _diag_matrix(S::AbstractVector)
+    M = similar(S, length(S), length(S))
+    fill!(M, zero(eltype(S)))
+    view(M, LinearAlgebra.diagind(M)) .= S
+    return M
 end
 
 # Matrix-level truncated SVD with the seam truncerr convention (discarded Σs²/total).
@@ -554,7 +567,7 @@ function TensorInterface.factorize_svd(
     end
 
     if singular_values! !== nothing
-        singular_values![] = Tensor(Index[u, v], Matrix(Diagonal(S)))
+        singular_values![] = Tensor(Index[u, v], _diag_matrix(S))
     end
     return F1, F2, KSpectrum(abs2.(S), truncerr)
 end
@@ -591,7 +604,7 @@ function LinearAlgebra.svd(t::Tensor, linds; maxdim = nothing, cutoff = nothing,
     u = Index(k, "Link,u")
     v = Index(k, "Link,v")
     Ut = Tensor(vcat(li, [u]), reshape(U, (Int[dimof(i) for i in li]..., k)))
-    St = Tensor(Index[u, v], Matrix(Diagonal(S)))
+    St = Tensor(Index[u, v], _diag_matrix(S))
     Vt_ = Tensor(vcat(ri, [v]), reshape(copy(transpose(Vt)), (Int[dimof(i) for i in ri]..., k)))
     return Ut, St, Vt_
 end
@@ -617,7 +630,7 @@ function LinearAlgebra.eigen(t::Tensor, linds, rinds; ishermitian::Bool = false,
     vals = diag(D)
     k = length(vals)
     lk = Index(k, "Link,eigen")
-    D = Tensor(Index[TensorInterface.prime(lk), lk], Matrix(Diagonal(vals)))
+    D = Tensor(Index[TensorInterface.prime(lk), lk], _diag_matrix(vals))
     U = Tensor(vcat(rv, [lk]), reshape(vecs, (Int[dimof(i) for i in rv]..., k)))
     return D, U
 end
@@ -634,10 +647,33 @@ end
 # Steady-state heap cost per call: the output message + O(1) bookkeeping — the "2F + out"
 # target, with the 2F living in the reused buffer.
 
-function _kernel_buffer()
-    return get!(task_local_storage(), :ktensors_kernel_buffer) do
-        TensorOperations.BufferAllocator()
-    end::TensorOperations.BufferAllocator
+#Task-local reusable buffers, one per storage family: host tensors get the default
+#(Memory-backed) buffer; GPU tensors get a buffer carved from their own device memory
+#(TensorOperations ≥ 5.8 hands out device temporaries from device-backed buffers), so the
+#fused kernels keep their allocation discipline on device too.
+_buffer_storage(::Array) = TensorOperations.DefaultStorageType
+_buffer_storage(A::AbstractArray) = typeof(similar(A, UInt8, 0))
+function _kernel_buffer(A::AbstractArray)
+    S = _buffer_storage(A)
+    d = get!(task_local_storage(), :ktensors_kernel_buffers) do
+        Dict{DataType, TensorOperations.BufferAllocator}()
+    end::Dict{DataType, TensorOperations.BufferAllocator}
+    return get!(d, S) do
+        TensorOperations.BufferAllocator{S}()
+    end::TensorOperations.BufferAllocator{S}
+end
+
+#Storage families the fused kernels support: host arrays and GPU arrays (via
+#TensorOperations' GPUArrays-backed buffer and contraction extensions). All participating
+#tensors must share one family — mixed-device calls take the generic path.
+_kernel_storage_ok(A::Array) = true
+_kernel_storage_ok(A::AbstractGPUArray) = true
+_kernel_storage_ok(A) = false
+function _uniform_kernel_storage(arrays...)
+    all(_kernel_storage_ok, arrays) || return nothing
+    S = typeof(first(arrays))
+    all(a -> typeof(a).name.wrapper === S.name.wrapper, arrays) || return nothing
+    return first(arrays)
 end
 
 # One pairwise contraction at the data level. `pairfn` maps an index of `b` to the index of
@@ -686,11 +722,13 @@ function fused_norm_closure(
         ψ::Tensor, sinds::Vector{<:Index}, incoming::Vector{<:Tensor};
         op::Union{Nothing, Tensor} = nothing
     )
-    ψ.data isa Array || return nothing
-    all(m -> m.data isa Array && _is_norm_message(m, ψ.inds), incoming) || return nothing
-    op === nothing || op.data isa Array || return nothing
+    arrays = Any[ψ.data]
+    append!(arrays, (m.data for m in incoming))
+    op === nothing || push!(arrays, op.data)
+    _uniform_kernel_storage(arrays...) === nothing && return nothing
+    all(m -> _is_norm_message(m, ψ.inds), incoming) || return nothing
 
-    buf = _kernel_buffer()
+    buf = _kernel_buffer(ψ.data)
     cp = TensorOperations.allocator_checkpoint!(buf)
     X, ix = ψ.data, ψ.inds
     for m in incoming
@@ -740,12 +778,16 @@ end
 # two updated site tensors and the singular-value tensor escape to the heap.
 
 # Buffered permute+reshape to a (linds × rest) matrix. Returns (matrix, linds, rinds).
+#Buffer-temp array type in the same storage family as `ref` (host Array for host
+#tensors, the matching GPU array type on device).
+_temp_arraytype(ref::AbstractArray, T::Type, N::Integer) = Base.typename(typeof(ref)).wrapper{T, N}
+
 function _matricize_temp(da, ia::Vector{<:Index}, linds::Vector{<:Index}, buf)
     rinds = filter(i -> i ∉ linds, ia)
     perm = map(i -> findfirst(==(i), ia), vcat(linds, rinds))
     T = eltype(da)
     dims = ntuple(k -> size(da, perm[k]), ndims(da))
-    C = TensorOperations.tensoralloc(Array{T, ndims(da)}, dims, Val(true), buf)
+    C = TensorOperations.tensoralloc(_temp_arraytype(da, T, ndims(da)), dims, Val(true), buf)
     TensorOperations.tensoradd!(C, da, (Tuple(perm), ()), false, one(T), zero(T))
     dl = prod(Int[dimof(i) for i in linds]; init = 1)
     return reshape(C, dl, :), linds, rinds
@@ -756,8 +798,8 @@ function _qr_temp(Amat::AbstractMatrix, buf)
     m, n = size(Amat)
     k = min(m, n)
     T = eltype(Amat)
-    Q = TensorOperations.tensoralloc(Matrix{T}, (m, k), Val(true), buf)
-    R = TensorOperations.tensoralloc(Matrix{T}, (k, n), Val(true), buf)
+    Q = TensorOperations.tensoralloc(_temp_arraytype(Amat, T, 2), (m, k), Val(true), buf)
+    R = TensorOperations.tensoralloc(_temp_arraytype(Amat, T, 2), (k, n), Val(true), buf)
     qr_compact!(Amat, (Q, R))
     return Q, R
 end
@@ -778,7 +820,7 @@ function fused_two_site_gate(
         s1::Vector{<:Index}, s2::Vector{<:Index};
         maxdim = nothing, cutoff = nothing,
     )
-    buf = _kernel_buffer()
+    buf = _kernel_buffer(ψ1.data)
     cp = TensorOperations.allocator_checkpoint!(buf)
 
     # Gauge: X_k = ψ_k · ∏ √env (buffer temps)
@@ -834,7 +876,7 @@ function fused_two_site_gate(
     T2, oa, ob = _tc_pair(Y2, iy2, F2, iF2, false, identity, Val(false), buf)
     iT2 = vcat(oa, ob)
 
-    s_values = Tensor(Index[u, v], Matrix(Diagonal(S)))
+    s_values = Tensor(Index[u, v], _diag_matrix(S))
     TensorOperations.allocator_reset!(buf, cp)
 
     return Tensor(iT1, T1), Tensor(iT2, T2), s_values, truncerr

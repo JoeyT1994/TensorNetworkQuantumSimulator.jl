@@ -159,7 +159,7 @@ function Base.sum(t::GradedTensor)
     return iszero(lead) ? zero(eltype(t)) : (lead / abs(lead)) * tot
 end
 
-TensorInterface.datatype(t::GradedTensor) = Vector{TK.scalartype(t.data)}
+TensorInterface.datatype(t::GradedTensor) = typeof(t.data.data)
 TensorInterface.data(t::GradedTensor) = t
 
 # ── Charge-ordered basis conversion (tree basis ≡ sector-ordered product basis) ─────────
@@ -276,6 +276,8 @@ end
 function Adapt.adapt_structure(elt::Type{<:Number}, t::GradedTensor)
     return GradedTensor(copy(t.inds), one(elt) * t.data)
 end
+#storage adapt (GPU transfer): TensorKit's own TensorMap adapt moves the block storage
+Adapt.adapt_structure(to, t::GradedTensor) = GradedTensor(copy(t.inds), adapt(to, t.data))
 
 # ── Contraction ─────────────────────────────────────────────────────────────────────────
 
@@ -635,6 +637,17 @@ function TensorInterface.random_tensor(elt::Type{<:Number}, is::GradedIndex...)
 end
 TensorInterface.random_tensor(is::GradedIndex...) = TensorInterface.random_tensor(Float64, is...)
 
+#Diagonal of a block without scalar indexing: TensorKit hands out StridedViews over the
+#storage vector, which fall outside GPUArrays' wrapper unions — take the diagonal as a
+#strided view of the PARENT storage so reads and writes run on device.
+function _diag_view(b::StridedViews.StridedView{<:Any, 2})
+    n = min(size(b, 1), size(b, 2))
+    r = range(b.offset + 1; step = LinearAlgebra.stride(b, 1) + LinearAlgebra.stride(b, 2), length = n)
+    return view(parent(b), r)
+end
+_diag_view(b::AbstractMatrix) = view(b, LinearAlgebra.diagind(b)[1:min(size(b, 1), size(b, 2))])
+_diag_sum(b::AbstractMatrix) = (n = min(size(b, 1), size(b, 2)); n == 0 ? zero(eltype(b)) : sum(_diag_view(b)))
+
 #Fermionic BP messages carry a per-message parity gauge: m and its parity twist (odd
 #sector negated) are equally valid fixed points, and update history determines which
 #one BP produces (both appear in practice, always in closure-consistent pairs). For
@@ -655,10 +668,7 @@ function psd_gauge(t::GradedTensor)
     data = copy(t.data)
     for (f1, f2) in TK.fusiontrees(data)
         b = data[f1, f2]
-        z = zero(eltype(t))
-        for x in 1:minimum(size(b))
-            z += b[x, x]
-        end
+        z = _diag_sum(b)
         iszero(z) || (b .*= conj(z) / abs(z))
     end
     return GradedTensor(copy(t.inds), data)
@@ -670,10 +680,8 @@ function TensorInterface.map_diag!(f::Function, out::GradedTensor, t::GradedTens
     ndims(t) == 2 || error("map_diag: expected a 2-index GradedTensor")
     out === t || error("map_diag!: graded backend only supports in-place (out === t)")
     for (f1, f2) in TK.fusiontrees(t.data)
-        b = t.data[f1, f2]
-        for x in 1:minimum(size(b))
-            b[x, x] = f(b[x, x])
-        end
+        dv = _diag_view(t.data[f1, f2])
+        dv .= f.(dv)
     end
     return out
 end
@@ -684,6 +692,21 @@ function TensorInterface.map_diag(f::Function, t::GradedTensor)
 end
 
 # ── Factorizations (MatrixAlgebraKit API through TensorKit, blockwise with signs) ───────
+
+#UPSTREAM WORKAROUND (TensorKit ≤ 0.17 GPUArraysExt): the ext adapts truncation masks
+#back to host for single strategies ("returning a GPUSectorVector wrecks things in
+#truncate_{co}domain") but misses TruncationIntersection — the maxdim + cutoff
+#combination every truncated gate uses — so device Bool masks reach TensorKit's
+#Bool-mask views and error. Same host-adapt, for the intersection strategy. Remove once
+#TensorKit's GPUArraysExt covers intersection strategies.
+function MatrixAlgebraKit.findtruncated_svd(
+        values::TK.SectorVector{T, I, <:Union{AbstractGPUArray{T, 1}, SubArray{T, 1, <:AbstractGPUArray}}},
+        strategy::MatrixAlgebraKit.TruncationIntersection
+    ) where {T, I}
+    return _hostmask(MatrixAlgebraKit.findtruncated(values, strategy))
+end
+_hostmask(x) = adapt(Vector, x)
+_hostmask(d::TK.SortedVectorDict) = TK.SortedVectorDict(k => Array(v) for (k, v) in d)
 
 function _tk_split_positions(t::GradedTensor, lv::Vector{<:Index})
     lpos = Int[a for (a, i) in enumerate(t.inds) if i ∈ lv]

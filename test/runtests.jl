@@ -12,4 +12,5 @@ using Test
     include("test_truncate.jl")
     include("test_contraction_sequences.jl")
     include("test_tensors.jl")
+    include("test_gpu_paths.jl")
 end
