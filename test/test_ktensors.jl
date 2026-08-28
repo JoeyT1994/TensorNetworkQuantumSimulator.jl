@@ -2,7 +2,7 @@
 using Test: @test, @testset, @test_throws
 using TensorNetworkQuantumSimulator
 const TNQS = TensorNetworkQuantumSimulator
-using TensorNetworkQuantumSimulator.KTensors: KTensors, KIndex, KTensor
+using TensorNetworkQuantumSimulator.KTensors: KTensors, KIndex, Tensor
 using Graphs: Graphs
 using NamedGraphs: NamedGraph
 const TI = TensorNetworkQuantumSimulator.TensorInterface
@@ -13,8 +13,8 @@ using LinearAlgebra: LinearAlgebra, norm, qr, factorize
 const HAS_ITENSORS = !isnothing(Base.find_package("ITensors"))
 HAS_ITENSORS || @info "ITensors not available: skipping cross-backend conformance checks"
 
-# Array of a KTensor in a requested index order
-function karray(t::KTensor, is...)
+# Array of a Tensor in a requested index order
+function karray(t::Tensor, is...)
     perm = map(i -> findfirst(==(i), t.inds), collect(is))
     return permutedims(t.data, perm)
 end
@@ -36,19 +36,19 @@ end
         ki, kj, kk = KIndex(3, "i"), KIndex(4, "j"), KIndex(2, "k")
         A = rand(3, 4)
         B = rand(4, 2)
-        Ak = KTensor([ki, kj], copy(A))
-        Bk = KTensor([kj, kk], copy(B))
+        Ak = Tensor([ki, kj], copy(A))
+        Bk = Tensor([kj, kk], copy(B))
         @test karray(Ak * Bk, ki, kk) ≈ A * B
         # outer product
-        Ck = KTensor([kk], rand(2))
+        Ck = Tensor([kk], rand(2))
         @test length(vec((Ak * Ck).data)) == 24
         # scalar contraction and sequence execution agree
-        @test TI.scalar(Ak * KTensor([ki, kj], copy(A))) ≈ TI.scalar(TI.contract([Ak, Ak]; sequence = [1, 2]))
+        @test TI.scalar(Ak * Tensor([ki, kj], copy(A))) ≈ TI.scalar(TI.contract([Ak, Ak]; sequence = [1, 2]))
     end
 
     @testset "combiner and directsum" begin
         ki, kj, kk = KIndex(2, "i"), KIndex(3, "j"), KIndex(2, "k")
-        T = KTensor([ki, kj, kk], rand(2, 3, 2))
+        T = Tensor([ki, kj, kk], rand(2, 3, 2))
         C = TI.combiner([ki, kj])
         c = TI.combinedind(C)
         Tc = T * C
@@ -56,8 +56,8 @@ end
         @test karray(Tc * C, ki, kj, kk) ≈ T.data     # combine then split is the identity
         # directsum block-embeds along the paired axes
         l1, l2, ln = KIndex(2, "l1"), KIndex(3, "l2"), KIndex(5, "ln")
-        A = KTensor([ki, l1], rand(2, 2))
-        B = KTensor([ki, l2], rand(2, 3))
+        A = Tensor([ki, l1], rand(2, 2))
+        B = Tensor([ki, l2], rand(2, 3))
         D = TI.directsum([ln], A => (l1,), B => (l2,))
         @test karray(D, ki, ln)[:, 1:2] ≈ A.data
         @test karray(D, ki, ln)[:, 3:5] ≈ B.data
@@ -66,7 +66,7 @@ end
     @testset "factorizations" begin
         ki, kj, kk, kl = KIndex(3, "i"), KIndex(4, "j"), KIndex(3, "k"), KIndex(2, "l")
         A = rand(ComplexF64, 3, 4, 3, 2)
-        Tk = KTensor([ki, kj, kk, kl], copy(A))
+        Tk = Tensor([ki, kj, kk, kl], copy(A))
 
         Qk, Rk = qr(Tk, [ki, kj])
         @test karray(Qk * Rk, ki, kj, kk, kl) ≈ A
@@ -92,7 +92,7 @@ end
         m = rand(ComplexF64, 5, 5)
         M = m + m' + 20.0 * one(m)     # comfortably PSD
         hi1, hi2 = KIndex(5, "h"), KIndex(5, "h2")
-        Ms, Mis = TNQS.pseudo_sqrt_inv_sqrt(KTensor([hi1, hi2], copy(M)))
+        Ms, Mis = TNQS.pseudo_sqrt_inv_sqrt(Tensor([hi1, hi2], copy(M)))
         @test karray(Ms, hi1, hi2) * karray(Ms, hi1, hi2) ≈ M
         @test karray(Ms, hi1, hi2) * karray(Mis, hi1, hi2) ≈ one(M)
     end
@@ -132,7 +132,7 @@ end
             ki, kj, kk, kl = KIndex(3, "i"), KIndex(4, "j"), KIndex(3, "k"), KIndex(2, "l")
             A = rand(ComplexF64, 3, 4, 3, 2)
             Ti = ITensors.ITensor(A, i, j, k, l)
-            Tk = KTensor([ki, kj, kk, kl], copy(A))
+            Tk = Tensor([ki, kj, kk, kl], copy(A))
             for maxdim in (6, 3)
                 svi = Ref{Any}(nothing)
                 F1i, F2i, speci = ITensors.factorize_svd(Ti, (i, j); ortho = "none", singular_values! = svi, maxdim)

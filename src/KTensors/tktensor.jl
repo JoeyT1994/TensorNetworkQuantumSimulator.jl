@@ -8,7 +8,7 @@
 # plus the operator/state quack layer.
 #
 # Conventions (validated against dense ground truth — Jordan-Wigner for fermions, the
-# dense KTensor backend for bosonic sectors):
+# dense Tensor backend for bosonic sectors):
 #   * Slot `a` of the data holds `slotspace(inds[a])`: the index's base space, dualed
 #     when the per-copy `dual` flag is set. The flag is per tensor copy — the same
 #     KIndex identity (id, plev) appears with opposite flags on the two tensors sharing
@@ -120,7 +120,7 @@ end
 
 slotspace(i::TKIndex) = i.dual ? TK.dual(space(i)) : space(i)
 
-struct TKTensor{S <: TKSpace, TM <: TK.AbstractTensorMap}
+struct TKTensor{S <: TKSpace, TM <: TK.AbstractTensorMap} <: AbstractTensor
     inds::Vector{KIndex{S}}
     data::TM
     function TKTensor(inds::AbstractVector, data::TK.AbstractTensorMap)
@@ -137,9 +137,9 @@ struct TKTensor{S <: TKSpace, TM <: TK.AbstractTensorMap}
     end
 end
 
+_like(t::TKTensor, inds, data) = TKTensor(inds, data)
+
 Base.eltype(t::TKTensor) = TK.scalartype(t.data)
-Base.ndims(t::TKTensor) = length(t.inds)
-Base.copy(t::TKTensor) = TKTensor(copy(t.inds), copy(t.data))
 
 #Normalization functional (BP normalizes messages by sum). Two requirements meet here:
 #(a) parity-gauge insensitivity — fermionic messages appear in either parity gauge (the
@@ -159,16 +159,6 @@ function Base.sum(t::TKTensor)
     return iszero(lead) ? zero(eltype(t)) : (lead / abs(lead)) * tot
 end
 
-function Base.show(io::IO, t::TKTensor)
-    return print(io, "TKTensor{$(eltype(t))} inds=", t.inds)
-end
-
-function TensorInterface.inds(t::TKTensor; plev = nothing)
-    plev === nothing && return t.inds
-    return filter(i -> i.plev == plev, t.inds)
-end
-
-TensorInterface.scalartype(t::TKTensor) = TK.scalartype(t.data)
 TensorInterface.datatype(t::TKTensor) = Vector{TK.scalartype(t.data)}
 TensorInterface.data(t::TKTensor) = t
 
@@ -229,12 +219,6 @@ end
 
 # ── Index transforms (labels only; the data never moves) ───────────────────────────────
 
-_mapinds(f, t::TKTensor) = TKTensor(map(f, t.inds), t.data)
-
-TensorInterface.prime(t::TKTensor, n::Integer = 1) = _mapinds(i -> TensorInterface.prime(i, n), t)
-TensorInterface.noprime(t::TKTensor) = _mapinds(TensorInterface.noprime, t)
-TensorInterface.sim(t::TKTensor) = _mapinds(TensorInterface.sim, t)
-
 function TensorInterface.dag(t::TKTensor)
     N = ndims(t)
     dd = TK.permute(adjoint(t.data), (Tuple(1:N), ()))
@@ -259,24 +243,7 @@ function TensorInterface.replaceinds(t::TKTensor, old, new)
     end
     return TKTensor(newinds, t.data)
 end
-TensorInterface.replaceind(t::TKTensor, old::KIndex, new::KIndex) = TensorInterface.replaceinds(t, [old], [new])
-TensorInterface.replaceinds(t::TKTensor, p::Pair) = TensorInterface.replaceinds(t, first(p), last(p))
-
-_indvec(t::TKTensor) = t.inds
-
-for f in [:commoninds, :commonind, :uniqueinds, :unioninds, :noncommoninds, :noncommonind, :hascommoninds]
-    @eval begin
-        TensorInterface.$f(a::TKTensor, b) = TensorInterface.$f(a.inds, _indvec(b))
-        TensorInterface.$f(a, b::TKTensor) = TensorInterface.$f(_indvec(a), b.inds)
-        TensorInterface.$f(a::TKTensor, b::TKTensor) = TensorInterface.$f(a.inds, b.inds)
-    end
-end
-
 # ── Arithmetic ──────────────────────────────────────────────────────────────────────────
-
-Base.:*(t::TKTensor, x::Number) = TKTensor(copy(t.inds), t.data * x)
-Base.:*(x::Number, t::TKTensor) = t * x
-Base.:/(t::TKTensor, x::Number) = t * inv(x)
 
 #b's data with slots permuted into a's index order and partition (TensorKit threads
 #the signs)
@@ -294,7 +261,6 @@ end
 Base.:+(a::TKTensor, b::TKTensor) = TKTensor(copy(a.inds), a.data + _aligned_data(a, b))
 Base.:-(a::TKTensor, b::TKTensor) = TKTensor(copy(a.inds), a.data - _aligned_data(a, b))
 
-LinearAlgebra.norm(t::TKTensor) = LinearAlgebra.norm(t.data)
 LinearAlgebra.dot(a::TKTensor, b::TKTensor) = LinearAlgebra.dot(a.data, _aligned_data(a, b))
 
 function LinearAlgebra.rmul!(t::TKTensor, x::Number)
@@ -365,12 +331,11 @@ _contract_seq_tk(ts, s::Union{Vector, Tuple}) = mapreduce(x -> _contract_seq_tk(
 
 #Abstractly-typed tensor lists (e.g. from Any-valued network dictionaries) route here
 function TensorInterface.contract(ts::Vector; kwargs...)
-    all(t -> t isa KTensor, ts) && return TensorInterface.contract(collect(KTensor, ts); kwargs...)
+    all(t -> t isa Tensor, ts) && return TensorInterface.contract(collect(Tensor, ts); kwargs...)
     all(t -> t isa TKTensor, ts) && return TensorInterface.contract(collect(TKTensor, ts); kwargs...)
     return error("contract: expected a homogeneous tensor list, got $(unique(typeof.(ts)))")
 end
 
-TensorInterface.apply(o::TKTensor, t::TKTensor) = TensorInterface.noprime(o * t)
 
 # ── Construction: onehot, delta, state, op, random ──────────────────────────────────────
 

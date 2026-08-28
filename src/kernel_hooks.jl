@@ -14,9 +14,9 @@ structure (site indices, environment lists) into kernel inputs.
 #Fused fast path for the double-layer BP message update (see KTensors.fused_norm_message).
 #Falls through to the generic contraction path when the message structure doesn't match
 #(e.g. boundary-MPS messages with link indices).
-function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector{<:KTensor}; normalize)
+function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector{<:Tensor}; normalize)
     ψ = tns[v]
-    ψ isa KTensor || return nothing
+    ψ isa Tensor || return nothing
     sinds = siteinds(tns, v)
     all(i -> i isa KIndex, sinds) || return nothing
     return KTensors.fused_norm_message(ψ, collect(KIndex, sinds), incoming_ms; normalize)
@@ -26,12 +26,12 @@ end
 #vertex scalars): one- and two-vertex regions close through the same fused kernel — a
 #two-vertex region is "message from v1 with its operator inserted" followed by a full
 #closure at v2. Larger Steiner regions and non-standard structures fall back.
-function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Vector{<:KTensor}; op_strings::Function)
+function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Vector{<:Tensor}; op_strings::Function)
     1 <= length(vs) <= 2 || return nothing
-    ψs, sindss, ops = KTensor[], Vector{KIndex}[], Union{Nothing, KTensor}[]
+    ψs, sindss, ops = Tensor[], Vector{KIndex}[], Union{Nothing, Tensor}[]
     for v in vs
         ψ = tns[v]
-        ψ isa KTensor || return nothing
+        ψ isa Tensor || return nothing
         sinds = siteinds(tns, v)
         all(i -> i isa KIndex, sinds) || return nothing
         str = op_strings(v)
@@ -53,7 +53,7 @@ function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Ve
     end
 
     #Partition the region's incoming messages by which vertex tensor they attach to
-    ms1, ms2 = KTensor[], KTensor[]
+    ms1, ms2 = Tensor[], Tensor[]
     for m in incoming_ms
         ket_legs = filter(i -> plev(i) == 0, inds(m))
         if all(i -> i ∈ inds(ψs[1]), ket_legs)
@@ -74,12 +74,12 @@ end
 #Fused fast path for the two-site gate (see KTensors.fused_two_site_gate). Falls back on
 #unusual apply_kwargs, empty environments, or non-2-index environments.
 function fused_simple_update(
-        o::KTensor, ψ⃗::Vector{<:KTensor};
+        o::Tensor, ψ⃗::Vector{<:Tensor};
         envs, normalize_tensors = true, sqrt_cutoff = nothing, apply_kwargs...
     )
     length(ψ⃗) == 2 || return nothing
     isempty(envs) && return nothing
-    all(env -> env isa KTensor && ndims(env) == 2, envs) || return nothing
+    all(env -> env isa Tensor && ndims(env) == 2, envs) || return nothing
     isempty(setdiff(keys(apply_kwargs), (:maxdim, :cutoff))) || return nothing
 
     sqrt_cutoff = isnothing(sqrt_cutoff) ? 10 * eps(real(scalartype(first(envs)))) : sqrt_cutoff
@@ -92,8 +92,8 @@ function fused_simple_update(
 
     t1, t2, s_values, err = KTensors.fused_two_site_gate(
         o, ψ⃗[1], ψ⃗[2],
-        collect(KTensor, first.(ssi1)), collect(KTensor, last.(ssi1)),
-        collect(KTensor, first.(ssi2)), collect(KTensor, last.(ssi2)),
+        collect(Tensor, first.(ssi1)), collect(Tensor, last.(ssi1)),
+        collect(Tensor, first.(ssi2)), collect(Tensor, last.(ssi2)),
         s1, s2; apply_kwargs...
     )
     updated_tensors = [t1, t2]
@@ -108,13 +108,13 @@ function fused_simple_update(
 end
 
 #Direct entry point for circuits already given as backend tensors
-function apply_gates(circuit::Vector{<:KTensor}, ψ_bpc::BeliefPropagationCache; kwargs...)
+function apply_gates(circuit::Vector{<:Tensor}, ψ_bpc::BeliefPropagationCache; kwargs...)
     return _apply_gate_tensors(circuit, ψ_bpc; kwargs...)
 end
 
 #Backend tensor gates inside generic (e.g. Any-typed) circuit vectors pass through the
 #circuit-tuple path unchanged; the acting vertices are inferred from the site indices.
-function toitensor(gate::Union{KTensor, KTensors.TKTensor}, g::NamedGraph, sinds::Dictionary)
+function toitensor(gate::Union{Tensor, KTensors.TKTensor}, g::NamedGraph, sinds::Dictionary)
     verts = [v for v in keys(sinds) if any(i -> i ∈ inds(gate), sinds[v])]
     return gate, verts
 end

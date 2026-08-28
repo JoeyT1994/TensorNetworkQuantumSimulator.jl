@@ -9,7 +9,7 @@ tensors(tn::AbstractTensorNetwork) = not_implemented()
 NamedGraphs.rem_vertex!(tn::AbstractTensorNetwork, v) = not_implemented()
 add_tensor!(tn::AbstractTensorNetwork, tensor, v) = not_implemented()
 
-#The tensor type this network holds (e.g. KTensor), stripped of type parameters
+#The tensor type this network holds (e.g. Tensor), stripped of type parameters
 #since derived tensors (e.g. real singular-value messages in a complex network) may differ in
 #eltype or rank.
 tensortype(tn::AbstractTensorNetwork) = unspecify_type_parameters(eltype(tensors(tn)))
