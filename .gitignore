@@ -8,3 +8,6 @@
 Manifest.toml
 .vscode/
 .DS_Store
+.CondaPkg/
+__pycache__/
+.claude/

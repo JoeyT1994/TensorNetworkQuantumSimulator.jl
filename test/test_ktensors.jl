@@ -183,6 +183,16 @@ end
         nfull = sum(prod(Int[TI.dim(i) for i in TI.inds(ψg[v])]) for v in vertices(ψg))
         @test nstored <= 0.5 * nfull
 
+        #graded combiner: fuse isometry with dense conventions (combine with C, split
+        #with dag(C)); round trip is exact
+        vg = (2, 2)
+        cis = collect(TI.inds(ψg[vg]))[1:2]
+        Cg = TI.combiner(cis)
+        tc = ψg[vg] * Cg
+        @test TI.dim(TI.combinedind(Cg)) == prod(TI.dim.(cis))
+        trt = tc * TI.dag(Cg)
+        @test trt ≈ ψg[vg] atol = 1e-13
+
         #non-conserving pieces must fail loudly: that is the point of the symmetry
         sg = only(TNQS.siteinds(TNQS.tensornetwork(ψg))[(1, 1)])
         @test_throws Exception TI.op("X", sg)
@@ -515,6 +525,26 @@ end
             @test n_bmps ≈ real(ψv' * (cs[mode[w1]]' * cs[mode[w1]]) * ψv) / nrm atol = 1.0e-3
             c_bmps = only(expect(bmps, ("CdagC", (w1, w2)); alg = "boundarymps"))
             @test c_bmps ≈ (ψv' * (cs[mode[w1]]' * cs[mode[w2]]) * ψv) / nrm atol = 1.0e-3
+        end
+
+        @testset "loop corrections at odd total parity (charge-leg gauge line)" begin
+            #3 fermions on a 2x3 grid: odd total parity hangs a fermion-odd Charge leg on
+            #the T-join root. Loop weights of regions threaded by that gauge line need
+            #the baseline-closure normalization; the mcs=8 series is complete on this
+            #graph, so the corrected norm must converge to exact.
+            g = named_grid((2, 3))
+            s = TNQS.siteinds("Fermion", g)
+            ψ = tensornetworkstate(ComplexF64, v -> isodd(sum(v)) ? "Occ" : "Emp", g, s)
+            half = Any[]
+            for ces in edge_color(g, 4)
+                append!(half, ("F_hop", pair, -0.05) for pair in ces)
+            end
+            ψt, _ = apply_gates(vcat(half, reverse(half)), ψ; apply_kwargs = (; maxdim = 8, cutoff = 1.0e-12))
+            ne = real(norm_sqr(ψt; alg = "exact"))
+            err(mcs) = abs(real(norm_sqr(ψt; alg = "loopcorrections", max_configuration_size = mcs)) - ne) / ne
+            e0, e4, e8 = err(0), err(4), err(8)
+            @test e4 < 0.01 * e0    #squares captured
+            @test e8 < 1.0e-12      #complete series ⇒ exact
         end
     end
 end

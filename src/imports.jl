@@ -51,7 +51,7 @@ using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, no
     projector, delta, combiner, combinedind, random_itensor, directsum,
     op, state,
     scalar, apply, map_diag, map_diag!, factorize_svd,
-    array, data, new_index, from_array
+    array, data, new_index, from_array, has_closure_gauge
 import .TensorInterface: contract, truncate, inner, uniqueinds, datatype, scalartype
 using .KTensors: KTensors, KIndex, KTensor, register_op!
 

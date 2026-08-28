@@ -385,23 +385,46 @@ function TensorInterface.onehot(elt::Type, p::Pair{<:TKIndex, <:Integer})
 end
 TensorInterface.onehot(p::Pair{<:TKIndex, <:Integer}) = TensorInterface.onehot(Float64, p)
 
-#Identity messages: indices come in (i, i′)-style pairs sharing an id, with opposite
-#per-copy flags (e.g. from `delta(vcat(linds, prime(dag(linds))))`).
+#Identity between a pair of same-space, opposite-orientation indices (same id — BP
+#message inits from `delta(vcat(linds, prime(dag(linds))))` — or distinct ids, e.g. the
+#loop-correction projectors); longer lists pair up by id.
+function _delta_pair(elt::Type, i1::KIndex, i2::KIndex)
+    space(i1) == space(i2) || error("delta: paired indices must share a space")
+    i1.dual != i2.dual || error("delta: paired indices must have opposite orientations")
+    #the one-sided bend of the identity has a handedness: building TK.id on the
+    #non-dual copy's space is the twist-free insertion on fermionic bonds (the other
+    #order picks up a parity twist on odd sectors; both coincide for bosonic spaces)
+    a, b = i1.dual ? (i2, i1) : (i1, i2)
+    return TKTensor([a, b], TK.permute(TK.id(elt, slotspace(a)), ((1, 2), ())))
+end
+
 function _delta_tk(elt::Type, is::AbstractVector{<:KIndex})
+    length(is) == 2 && return _delta_pair(elt, is[1], is[2])
     ids = unique([i.id for i in is])
     parts = map(ids) do id
         pair = filter(i -> i.id == id, is)
-        length(pair) == 2 || error("delta: graded delta needs indices in (i, i′)-style pairs")
-        i1, i2 = pair
-        space(i1) == space(i2) || error("delta: paired indices must share a space")
-        i1.dual != i2.dual || error("delta: paired indices must have opposite orientations")
-        data = TK.permute(TK.id(elt, slotspace(i1)), ((1, 2), ()))
-        TKTensor([i1, i2], data)
+        length(pair) == 2 || error("delta: graded delta needs indices in same-space pairs")
+        _delta_pair(elt, pair[1], pair[2])
     end
     return reduce(*, parts)
 end
 TensorInterface.delta(elt::Type, is::TKIndex...) = _delta_tk(elt, collect(KIndex, is))
 TensorInterface.delta(is::TKIndex...) = _delta_tk(Float64, collect(KIndex, is))
+
+#Combiner: the fuse isometry, TensorKit-native. Mirrors the dense conventions (combined
+#index FIRST; `t * C` combines, `x * dag(C)` splits) — the stored copies are dag'd so
+#they pair against the caller's own copies.
+function TensorInterface.combiner(is::AbstractVector{<:TKIndex}; tags = "CMB,Link")
+    isempty(is) && error("combiner: no indices to combine")
+    P = TK.ProductSpace(map(slotspace, is)...)
+    iso = TK.isomorphism(Float64, TK.fuse(P), P)
+    n = length(is)
+    data = TK.permute(iso, (Tuple(1:(n + 1)), ()))
+    c = KIndex(TK.fuse(P), String(tags))
+    return TKTensor(vcat([c], [TensorInterface.dag(i) for i in is]), data)
+end
+TensorInterface.combiner(is::TKIndex...; kwargs...) = TensorInterface.combiner(collect(KIndex, is); kwargs...)
+TensorInterface.combinedind(C::TKTensor) = first(C.inds)
 
 const F_STATES = Dict{String, Vector{Float64}}(
     "0" => [1, 0], "Emp" => [1, 0], "Empty" => [1, 0],
@@ -904,6 +927,19 @@ function pairing_tensor(elt::Type, kets, ancs)
     P = TK.ProductSpace(map(space, kv)...)
     data = TK.permute(TK.id(elt, P), (Tuple(1:(2k)), ()))
     return TKTensor(vcat(kv, av), data)
+end
+
+#A tensor anchors a parity-gauge line iff it carries a "Charge"-tagged dangling leg
+#whose sector has a nontrivial fermionic twist (odd total fermion number): multi-vertex
+#closures of regions containing such a tensor pick up a gauge sign, so additive
+#closure-derived quantities (loop-correction weights) must normalize by a baseline
+#closure of the same region. Bosonic charge legs (net U(1) magnetization etc.) have
+#trivial twists and are exempt.
+function TensorInterface.has_closure_gauge(t::TKTensor)
+    return any(t.inds) do i
+        occursin("Charge", i.tags) &&
+            any(c -> real(TK.twist(c)) < 0, TK.sectors(space(i)))
+    end
 end
 
 #Fit adjoint for boundary-MPS bra-rail tensors: dag with the parity/supertrace twist

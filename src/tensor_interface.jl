@@ -106,6 +106,12 @@ scalar(x::Number) = x
 #state charge on a dim-1 dangling "Charge" leg.
 projector(p::Pair) = projector(Float64, p)
 projector(elt::Type, p::Pair) = onehot(elt, p)
+
+#True for backends whose multi-vertex closures can carry a parity-gauge sign (fermionic
+#sectors): additive quantities built from closures must then be normalized by a baseline
+#closure of the same region (ratios of closures are always gauge-immune).
+has_closure_gauge(::Type) = false
+has_closure_gauge(x) = has_closure_gauge(typeof(x))
 datatype(A::AbstractArray) = typeof(A)
 
 export Algorithm, @Algorithm_str
