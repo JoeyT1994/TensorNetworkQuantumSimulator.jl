@@ -147,7 +147,7 @@ end
     end
 
     @testset "graded (TensorKit Z2) backend" begin
-        using TensorNetworkQuantumSimulator.Tensors: TKTensor
+        using TensorNetworkQuantumSimulator.Tensors: GradedTensor
         #Z2-symmetric workload on a CHARGED product state: the ↓ sites' charges are routed
         #through dim-1 links along a spanning tree (T-join) so every vertex tensor is
         #flux-zero; the checkerboard has an even number of ↓s, so the total vanishes.
@@ -170,7 +170,7 @@ end
         end
         ψd, zd, zxd, ed = graded_digest(nothing)
         ψg, zg, zxg, eg = graded_digest([0 => 1, 1 => 1])
-        @test ψg[(1, 1)] isa TKTensor
+        @test ψg[(1, 1)] isa GradedTensor
         @test zd ≈ zg atol = 1e-10
         @test zxd ≈ zxg atol = 1e-10
         @test ed ≈ eg atol = 1e-12

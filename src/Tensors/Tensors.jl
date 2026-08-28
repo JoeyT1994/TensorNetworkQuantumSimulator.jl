@@ -18,13 +18,13 @@ the first-index-fastest matrix convention; conventions were validated against th
 historical ITensors implementation, which survives as a test-only cross-check
 (test/test_tensors.jl).
 
-The second data layer is `TKTensor` (tktensor.jl): the same `Index` labels over a
+The second data layer is `GradedTensor` (gradedtensor.jl): the same `Index` labels over a
 TensorKit `TensorMap`, serving every graded backend — bosonic Z2/U(1), fermionic parity,
 fU(1) and dual fU(1)×U(1) product sectors — through one code path. Nothing algebraic is
 implemented there (hard rule): contraction, permutation signs (Jordan-Wigner strings
 emerge from the braiding), and blockwise factorizations all delegate to TensorKit and
 MatrixAlgebraKit; the file is label↔slot bookkeeping plus the operator/state quack layer.
-The per-copy `Index.dual` flag carries bond orientation (live for TKTensor, inert for
+The per-copy `Index.dual` flag carries bond orientation (live for GradedTensor, inert for
 dense Tensor).
 =#
 module Tensors
@@ -38,7 +38,7 @@ using Adapt: Adapt, adapt
 import TensorKit as TK
 using ..TensorInterface: TensorInterface
 
-export Index, Tensor, TKTensor, register_op!, graded_space, new_fermion_index
+export Index, Tensor, GradedTensor, register_op!, graded_space, new_fermion_index
 
 # ── Index ───────────────────────────────────────────────────────────────────────────────
 
@@ -91,7 +91,7 @@ end
 TensorInterface.new_index(::Union{Index, AbstractVector{<:Index}}, d::Integer; tags = "") = Index(d, tags)
 
 # ── AbstractTensor ──────────────────────────────────────────────────────────────────────
-# Common supertype of the backends' tensor types (dense `Tensor`, graded `TKTensor`).
+# Common supertype of the backends' tensor types (dense `Tensor`, graded `GradedTensor`).
 # Every subtype carries `inds::Vector{<:Index}` + `data` and implements the structural
 # primitive `_like(t, inds, data)` (same backend, new labels/data). Everything here is
 # label bookkeeping — the data never moves.
@@ -951,6 +951,6 @@ function TensorInterface.state(name::String, i::Index)
     return Tensor(Index[i], copy(vecmap[name]))
 end
 
-include("tktensor.jl")
+include("gradedtensor.jl")
 
 end

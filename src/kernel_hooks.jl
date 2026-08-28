@@ -114,12 +114,12 @@ end
 
 #Backend tensor gates inside generic (e.g. Any-typed) circuit vectors pass through the
 #circuit-tuple path unchanged; the acting vertices are inferred from the site indices.
-function toitensor(gate::Union{Tensor, Tensors.TKTensor}, g::NamedGraph, sinds::Dictionary)
+function toitensor(gate::Union{Tensor, Tensors.GradedTensor}, g::NamedGraph, sinds::Dictionary)
     verts = [v for v in keys(sinds) if any(i -> i ∈ inds(gate), sinds[v])]
     return gate, verts
 end
 
-# ── TKTensor (graded / fermionic) capability methods ────────────────────────────────────
+# ── GradedTensor (graded / fermionic) capability methods ────────────────────────────────────
 # Backend-specific counterparts of generic entry points, gathered here with the fused
 # dense kernels so the generic files stay backend-agnostic.
 
@@ -214,7 +214,7 @@ end
 
 #The adjoint of a graded boundary-MPS message in the fitting metric (see
 #Tensors.fit_adjoint); the generic fallback in boundarympscache.jl is a plain dag.
-function fit_adjoint_message(bmps_cache::BoundaryMPSCache, e::NamedEdge, m::Tensors.TKTensor)
+function fit_adjoint_message(bmps_cache::BoundaryMPSCache, e::NamedEdge, m::Tensors.GradedTensor)
     return Tensors.fit_adjoint(m, _crossing_inds(bmps_cache, e))
 end
 

@@ -28,7 +28,7 @@
 #     flags; a same-flag pairing is a network-construction bug and errors loudly.
 
 const TKSpace = TK.GradedSpace
-const TKIndex = Index{<:TKSpace}
+const GradedIndex = Index{<:TKSpace}
 
 """
     graded_space(symmetry::String, sectors)
@@ -59,7 +59,7 @@ end
 is_fermionic(::Type{TK.FermionParity}) = true
 is_fermionic(::Type{TK.TensorKitSectors.ProductSector{T}}) where {T} = any(is_fermionic, fieldtypes(T))
 is_fermionic(::Type{<:TK.Sector}) = false
-is_fermionic(i::TKIndex) = is_fermionic(TK.sectortype(space(i)))
+is_fermionic(i::GradedIndex) = is_fermionic(TK.sectortype(space(i)))
 
 _nfactors(::Type{<:TK.Sector}) = 1
 _nfactors(::Type{TK.TensorKitSectors.ProductSector{T}}) where {T} = fieldcount(T)
@@ -80,7 +80,7 @@ end
 #Position of each mode-basis state in the index's sector-ordered dense layout: the
 #operator/state tables live in the mode basis and are permuted per site space, so any
 #grading (parity, fU1, dual U(1)) with any sector order works.
-function _mode_perm(i::TKIndex)
+function _mode_perm(i::GradedIndex)
     I = TK.sectortype(space(i))
     counts = Dict{Any, Int}()
     perm = Int[]
@@ -111,35 +111,35 @@ space_dim(s::TKSpace) = TK.dim(s)
 #Trivial-dominant split for a fresh link of total dimension d (fermion-branch recipe:
 #double-layer networks are trivial-sector dominant, so links need at least as many
 #trivial-sector states as charged ones).
-function TensorInterface.new_index(ref::TKIndex, d::Integer; tags = "")
+function TensorInterface.new_index(ref::GradedIndex, d::Integer; tags = "")
     I = TK.sectortype(space(ref))
     d0, d1 = cld(Int(d), 2), fld(Int(d), 2)
     sp = d1 == 0 ? TK.Vect[I](one(I) => d0) : TK.Vect[I](one(I) => d0, I(1) => d1)
     return Index(sp, tags)
 end
 
-slotspace(i::TKIndex) = i.dual ? TK.dual(space(i)) : space(i)
+slotspace(i::GradedIndex) = i.dual ? TK.dual(space(i)) : space(i)
 
-struct TKTensor{S <: TKSpace, TM <: TK.AbstractTensorMap} <: AbstractTensor
+struct GradedTensor{S <: TKSpace, TM <: TK.AbstractTensorMap} <: AbstractTensor
     inds::Vector{Index{S}}
     data::TM
-    function TKTensor(inds::AbstractVector, data::TK.AbstractTensorMap)
-        isempty(inds) && error("TKTensor: fully-contracted results are plain Numbers")
+    function GradedTensor(inds::AbstractVector, data::TK.AbstractTensorMap)
+        isempty(inds) && error("GradedTensor: fully-contracted results are plain Numbers")
         S = typeof(space(first(inds)))
         iv = collect(Index{S}, inds)
         TK.numout(data) + TK.numin(data) == length(iv) ||
-            error("TKTensor: $(length(iv)) indices for data with $(TK.numout(data) + TK.numin(data)) legs")
+            error("GradedTensor: $(length(iv)) indices for data with $(TK.numout(data) + TK.numin(data)) legs")
         for (a, i) in enumerate(iv)
             TK.space(data, a) == slotspace(i) ||
-                error("TKTensor: slot $a is $(TK.space(data, a)), index wants $(slotspace(i))")
+                error("GradedTensor: slot $a is $(TK.space(data, a)), index wants $(slotspace(i))")
         end
         return new{S, typeof(data)}(iv, data)
     end
 end
 
-_like(t::TKTensor, inds, data) = TKTensor(inds, data)
+_like(t::GradedTensor, inds, data) = GradedTensor(inds, data)
 
-Base.eltype(t::TKTensor) = TK.scalartype(t.data)
+Base.eltype(t::GradedTensor) = TK.scalartype(t.data)
 
 #Normalization functional (BP normalizes messages by sum). Two requirements meet here:
 #(a) parity-gauge insensitivity — fermionic messages appear in either parity gauge (the
@@ -148,7 +148,7 @@ Base.eltype(t::TKTensor) = TK.scalartype(t.data)
 #must remove a global phase (messages pick those up from complex scalar rescales; the
 #dense backend dephases for free through its linear complex sum): carry the dominant
 #tree's phase.
-function Base.sum(t::TKTensor)
+function Base.sum(t::GradedTensor)
     tot = zero(real(eltype(t)))
     lead = zero(eltype(t))
     for (f1, f2) in TK.fusiontrees(t.data)
@@ -159,15 +159,15 @@ function Base.sum(t::TKTensor)
     return iszero(lead) ? zero(eltype(t)) : (lead / abs(lead)) * tot
 end
 
-TensorInterface.datatype(t::TKTensor) = Vector{TK.scalartype(t.data)}
-TensorInterface.data(t::TKTensor) = t
+TensorInterface.datatype(t::GradedTensor) = Vector{TK.scalartype(t.data)}
+TensorInterface.data(t::GradedTensor) = t
 
 # ── Charge-ordered basis conversion (tree basis ≡ sector-ordered product basis) ─────────
 
 #Position range of sector `c` within an index, in the base space's own sector order.
 #`c` is the sector carried by the tensor's slot: for a dual slot that is the dual
 #sector, so map it back to the base space's label first.
-function _fock_range(i::TKIndex, c)
+function _fock_range(i::GradedIndex, c)
     V = space(i)
     cb = i.dual ? TK.dual(c) : c
     off = 0
@@ -181,12 +181,12 @@ end
 
 #Normalize to the all-codomain partition (a copy; used by the basis-sensitive cold
 #paths — intermediates from contraction are generally two-sided).
-_onesided(t::TKTensor) = TK.numin(t.data) == 0 ? t :
-    TKTensor(t.inds, TK.permute(t.data, (Tuple(1:ndims(t)), ())))
+_onesided(t::GradedTensor) = TK.numin(t.data) == 0 ? t :
+    GradedTensor(t.inds, TK.permute(t.data, (Tuple(1:ndims(t)), ())))
 
 #NOTE: only trustworthy for all-non-dual tensors (states); dual slots involve duality
 #bends whose basis convention is TensorKit-internal. Ops are built two-sided instead.
-function TensorInterface.array(t::TKTensor)
+function TensorInterface.array(t::GradedTensor)
     t = _onesided(t)
     out = zeros(eltype(t), Int[dimof(i) for i in t.inds]...)
     N = ndims(t)
@@ -197,7 +197,7 @@ function TensorInterface.array(t::TKTensor)
     return out
 end
 
-function TensorInterface.from_array(A::AbstractArray, is::TKIndex...)
+function TensorInterface.from_array(A::AbstractArray, is::GradedIndex...)
     iv = collect(Index, is)
     all(i -> !i.dual, iv) ||
         error("from_array: graded scatter is only defined for non-dual indices")
@@ -214,24 +214,24 @@ function TensorInterface.from_array(A::AbstractArray, is::TKIndex...)
             "\"↓\" under U1) are not representable per-vertex; start from neutral " *
             "states and use charge-conserving gates (e.g. \"F_pair\" from the vacuum)."
     )
-    return TKTensor(iv, data)
+    return GradedTensor(iv, data)
 end
 
 # ── Index transforms (labels only; the data never moves) ───────────────────────────────
 
-function TensorInterface.dag(t::TKTensor)
+function TensorInterface.dag(t::GradedTensor)
     N = ndims(t)
     dd = TK.permute(adjoint(t.data), (Tuple(1:N), ()))
     #the adjoint swaps the codomain and domain blocks (order preserved within each), so
     #the index list reorders to match the adjoint's slot numbering
     no = TK.numout(t.data)
     order = no == N ? (1:N) : vcat((no + 1):N, 1:no)
-    return TKTensor(Index[TensorInterface.dag(t.inds[k]) for k in order], dd)
+    return GradedTensor(Index[TensorInterface.dag(t.inds[k]) for k in order], dd)
 end
 
 #Relabels by identity; the per-copy dual flag is data bookkeeping and is PRESERVED from
 #the existing copy (generic code passes replacement labels with arbitrary flags).
-function TensorInterface.replaceinds(t::TKTensor, old, new)
+function TensorInterface.replaceinds(t::GradedTensor, old, new)
     oldv, newv = _indvec(old), _indvec(new)
     length(oldv) == length(newv) || error("replaceinds: length mismatch")
     newinds = map(t.inds) do i
@@ -241,13 +241,13 @@ function TensorInterface.replaceinds(t::TKTensor, old, new)
         space(n) == space(i) || error("replaceinds: space mismatch $(i) → $(n)")
         return Index(n.id, n.space, n.plev, n.tags, i.dual)
     end
-    return TKTensor(newinds, t.data)
+    return GradedTensor(newinds, t.data)
 end
 # ── Arithmetic ──────────────────────────────────────────────────────────────────────────
 
 #b's data with slots permuted into a's index order and partition (TensorKit threads
 #the signs)
-function _aligned_data(a::TKTensor, b::TKTensor)
+function _aligned_data(a::GradedTensor, b::GradedTensor)
     nout = TK.numout(a.data)
     p = map(a.inds) do i
         k = findfirst(==(i), b.inds)
@@ -258,28 +258,28 @@ function _aligned_data(a::TKTensor, b::TKTensor)
     return TK.permute(b.data, (Tuple(p[1:nout]), Tuple(p[(nout + 1):end])))
 end
 
-Base.:+(a::TKTensor, b::TKTensor) = TKTensor(copy(a.inds), a.data + _aligned_data(a, b))
-Base.:-(a::TKTensor, b::TKTensor) = TKTensor(copy(a.inds), a.data - _aligned_data(a, b))
+Base.:+(a::GradedTensor, b::GradedTensor) = GradedTensor(copy(a.inds), a.data + _aligned_data(a, b))
+Base.:-(a::GradedTensor, b::GradedTensor) = GradedTensor(copy(a.inds), a.data - _aligned_data(a, b))
 
-LinearAlgebra.dot(a::TKTensor, b::TKTensor) = LinearAlgebra.dot(a.data, _aligned_data(a, b))
+LinearAlgebra.dot(a::GradedTensor, b::GradedTensor) = LinearAlgebra.dot(a.data, _aligned_data(a, b))
 
-function LinearAlgebra.rmul!(t::TKTensor, x::Number)
+function LinearAlgebra.rmul!(t::GradedTensor, x::Number)
     LinearAlgebra.rmul!(t.data, x)
     return t
 end
 
-function Base.isapprox(a::TKTensor, b::TKTensor; atol = 0, rtol = nothing)
+function Base.isapprox(a::GradedTensor, b::GradedTensor; atol = 0, rtol = nothing)
     rt = rtol === nothing ? sqrt(eps(real(promote_type(eltype(a), eltype(b))))) : rtol
     return LinearAlgebra.norm(a - b) <= max(atol, rt * max(LinearAlgebra.norm(a), LinearAlgebra.norm(b)))
 end
 
-function Adapt.adapt_structure(elt::Type{<:Number}, t::TKTensor)
-    return TKTensor(copy(t.inds), one(elt) * t.data)
+function Adapt.adapt_structure(elt::Type{<:Number}, t::GradedTensor)
+    return GradedTensor(copy(t.inds), one(elt) * t.data)
 end
 
 # ── Contraction ─────────────────────────────────────────────────────────────────────────
 
-function Base.:*(a::TKTensor, b::TKTensor)
+function Base.:*(a::GradedTensor, b::GradedTensor)
     ca, cb = Int[], Int[]
     for (j, bj) in enumerate(b.inds)
         i = findfirst(==(bj), a.inds)
@@ -319,10 +319,10 @@ function Base.:*(a::TKTensor, b::TKTensor)
     TC = promote_type(eltype(a), eltype(b))
     C = TensorOperations.tensoralloc_contract(TC, a.data, pA, false, b.data, pB, false, pAB, Val(false))
     TensorOperations.tensorcontract!(C, a.data, pA, false, b.data, pB, false, pAB)
-    return TKTensor(vcat(a.inds[oa], b.inds[ob]), C)
+    return GradedTensor(vcat(a.inds[oa], b.inds[ob]), C)
 end
 
-function TensorInterface.contract(ts::Vector{<:TKTensor}; sequence = nothing, kwargs...)
+function TensorInterface.contract(ts::Vector{<:GradedTensor}; sequence = nothing, kwargs...)
     isnothing(sequence) && return reduce(*, ts)
     return _contract_seq_tk(ts, sequence)
 end
@@ -332,23 +332,23 @@ _contract_seq_tk(ts, s::Union{Vector, Tuple}) = mapreduce(x -> _contract_seq_tk(
 #Abstractly-typed tensor lists (e.g. from Any-valued network dictionaries) route here
 function TensorInterface.contract(ts::Vector; kwargs...)
     all(t -> t isa Tensor, ts) && return TensorInterface.contract(collect(Tensor, ts); kwargs...)
-    all(t -> t isa TKTensor, ts) && return TensorInterface.contract(collect(TKTensor, ts); kwargs...)
+    all(t -> t isa GradedTensor, ts) && return TensorInterface.contract(collect(GradedTensor, ts); kwargs...)
     return error("contract: expected a homogeneous tensor list, got $(unique(typeof.(ts)))")
 end
 
 
 # ── Construction: onehot, delta, state, op, random ──────────────────────────────────────
 
-function TensorInterface.onehot(elt::Type, p::Pair{<:TKIndex, <:Integer})
+function TensorInterface.onehot(elt::Type, p::Pair{<:GradedIndex, <:Integer})
     i, v = p
     data = zeros(elt, TK.ProductSpace(slotspace(i)))
     for (f1, f2) in TK.fusiontrees(data)
         r = _fock_range(i, f1.uncoupled[1])
         v ∈ r && (data[f1, f2][v - first(r) + 1] = one(elt))
     end
-    return TKTensor([i], data)
+    return GradedTensor([i], data)
 end
-TensorInterface.onehot(p::Pair{<:TKIndex, <:Integer}) = TensorInterface.onehot(Float64, p)
+TensorInterface.onehot(p::Pair{<:GradedIndex, <:Integer}) = TensorInterface.onehot(Float64, p)
 
 #Identity between a pair of same-space, opposite-orientation indices (same id — BP
 #message inits from `delta(vcat(linds, prime(dag(linds))))` — or distinct ids, e.g. the
@@ -360,7 +360,7 @@ function _delta_pair(elt::Type, i1::Index, i2::Index)
     #non-dual copy's space is the twist-free insertion on fermionic bonds (the other
     #order picks up a parity twist on odd sectors; both coincide for bosonic spaces)
     a, b = i1.dual ? (i2, i1) : (i1, i2)
-    return TKTensor([a, b], TK.permute(TK.id(elt, slotspace(a)), ((1, 2), ())))
+    return GradedTensor([a, b], TK.permute(TK.id(elt, slotspace(a)), ((1, 2), ())))
 end
 
 function _delta_tk(elt::Type, is::AbstractVector{<:Index})
@@ -373,23 +373,23 @@ function _delta_tk(elt::Type, is::AbstractVector{<:Index})
     end
     return reduce(*, parts)
 end
-TensorInterface.delta(elt::Type, is::TKIndex...) = _delta_tk(elt, collect(Index, is))
-TensorInterface.delta(is::TKIndex...) = _delta_tk(Float64, collect(Index, is))
+TensorInterface.delta(elt::Type, is::GradedIndex...) = _delta_tk(elt, collect(Index, is))
+TensorInterface.delta(is::GradedIndex...) = _delta_tk(Float64, collect(Index, is))
 
 #Combiner: the fuse isometry, TensorKit-native. Mirrors the dense conventions (combined
 #index FIRST; `t * C` combines, `x * dag(C)` splits) — the stored copies are dag'd so
 #they pair against the caller's own copies.
-function TensorInterface.combiner(is::AbstractVector{<:TKIndex}; tags = "CMB,Link")
+function TensorInterface.combiner(is::AbstractVector{<:GradedIndex}; tags = "CMB,Link")
     isempty(is) && error("combiner: no indices to combine")
     P = TK.ProductSpace(map(slotspace, is)...)
     iso = TK.isomorphism(Float64, TK.fuse(P), P)
     n = length(is)
     data = TK.permute(iso, (Tuple(1:(n + 1)), ()))
     c = Index(TK.fuse(P), String(tags))
-    return TKTensor(vcat([c], [TensorInterface.dag(i) for i in is]), data)
+    return GradedTensor(vcat([c], [TensorInterface.dag(i) for i in is]), data)
 end
-TensorInterface.combiner(is::TKIndex...; kwargs...) = TensorInterface.combiner(collect(Index, is); kwargs...)
-TensorInterface.combinedind(C::TKTensor) = first(C.inds)
+TensorInterface.combiner(is::GradedIndex...; kwargs...) = TensorInterface.combiner(collect(Index, is); kwargs...)
+TensorInterface.combinedind(C::GradedTensor) = first(C.inds)
 
 const F_STATES = Dict{String, Vector{Float64}}(
     "0" => [1, 0], "Emp" => [1, 0], "Empty" => [1, 0],
@@ -407,7 +407,7 @@ const F_STATES_4 = Dict{String, Vector{Float64}}(
 
 #Resolve a local state (name or raw vector) on a graded site to its dense vector
 #(fermionic names for parity sites, the dense registry otherwise).
-function state_vector(namevec, i::TKIndex)
+function state_vector(namevec, i::GradedIndex)
     fermionic = is_fermionic(i)
     vec = if namevec isa AbstractVector{<:Number}
         collect(namevec)
@@ -434,7 +434,7 @@ end
 
 #The (single) charge sector a state vector lives in; graded product states must have
 #definite local charge.
-function vector_sector(vec::AbstractVector, i::TKIndex)
+function vector_sector(vec::AbstractVector, i::GradedIndex)
     secs = [c for c in TK.sectors(space(i)) if any(!iszero, vec[_fock_range(i, c)])]
     length(secs) == 1 || error(
         "state on a graded site must carry a definite charge; found support in sectors $(secs)"
@@ -448,19 +448,19 @@ trivial_sector(c) = one(c)
 
 #A dim-1 link index carrying charge `q` (used for routing charges through product states)
 charged_link_index(q; tags = "Link") = Index(TK.Vect[typeof(q)](q => 1), tags)
-trivial_link_index(ref::TKIndex; tags = "Link") = charged_link_index(one(TK.sectortype(space(ref))); tags)
+trivial_link_index(ref::GradedIndex; tags = "Link") = charged_link_index(one(TK.sectortype(space(ref))); tags)
 
 #States scatter the dense state vector; the from_array flux guard rejects charged
 #states loudly (as SINGLE tensors — networks route charges through links instead, see
 #product_vertex_tensor).
-TensorInterface.state(name::String, i::TKIndex) = TensorInterface.from_array(state_vector(name, i), i)
+TensorInterface.state(name::String, i::GradedIndex) = TensorInterface.from_array(state_vector(name, i), i)
 
 #Product-state vertex tensor: the site's state vector with dim-1 (possibly charged,
 #possibly dual) link legs attached in a single tree assignment — charged legs cannot be
 #attached by outer products, since a lone charged leg has no flux-zero trees. Any
 #TensorKit-internal phase convention on dual dim-1 slots is a per-bond gauge amounting
 #to at most a global phase of the state.
-function product_vertex_tensor(elt::Type, vec::AbstractVector, site::TKIndex, links::AbstractVector{<:Index})
+function product_vertex_tensor(elt::Type, vec::AbstractVector, site::GradedIndex, links::AbstractVector{<:Index})
     iv = vcat(Index[site], collect(Index, links))
     all(l -> dimof(l) == 1, links) || error("product_vertex_tensor: links must be dim-1")
     data = zeros(elt, TK.ProductSpace(map(slotspace, iv)...))
@@ -470,7 +470,7 @@ function product_vertex_tensor(elt::Type, vec::AbstractVector, site::TKIndex, li
     LinearAlgebra.norm(data) ≈ LinearAlgebra.norm(vec) || error(
         "product_vertex_tensor: the link charges do not neutralize the site charge"
     )
-    return TKTensor(iv, data)
+    return GradedTensor(iv, data)
 end
 
 # ── Operators: dense operator arrays tree-assigned on two-sided maps ────────────────────
@@ -573,7 +573,7 @@ _two_site_array(M::AbstractMatrix, d1::Int, d2::Int) =
     permutedims(reshape(M, d2, d1, d2, d1), (2, 1, 4, 3))
 
 #The dense operator array ⟨u…|O|s…⟩ with legs (u1..un, s1..sn) for the named operator.
-function _graded_op_array(name::String, sites::Vector{<:TKIndex}; kwargs...)
+function _graded_op_array(name::String, sites::Vector{<:GradedIndex}; kwargs...)
     if is_fermionic(first(sites))
         d = dimof(first(sites))
         (d in (2, 4) && all(i -> dimof(i) == d, sites)) ||
@@ -594,12 +594,12 @@ function _graded_op_array(name::String, sites::Vector{<:TKIndex}; kwargs...)
     return dense.data
 end
 
-#Wrap an operator array A[u..., s...] as a TKTensor with legs (u..., s...): u = prime(s)
+#Wrap an operator array A[u..., s...] as a GradedTensor with legs (u..., s...): u = prime(s)
 #non-dual OUT legs, s dual IN legs. Built two-sided (outs ← ins) by tree assignment,
 #then permuted one-sided (the construction validated against dense Jordan-Wigner).
 #Weight outside the conserving blocks errors: a symmetric backend only holds symmetric
 #operators (controlled violations are future charged-dummy-leg work).
-function _op_from_array(A::AbstractArray, name::String, sites::Vector{<:TKIndex})
+function _op_from_array(A::AbstractArray, name::String, sites::Vector{<:GradedIndex})
     all(i -> !i.dual, sites) || error("op: expected non-dual site indices")
     n = length(sites)
     P = TK.ProductSpace(map(i -> space(i), sites)...)
@@ -616,24 +616,24 @@ function _op_from_array(A::AbstractArray, name::String, sites::Vector{<:TKIndex}
     Gc = TK.permute(G, (Tuple(1:(2n)), ()))
     us = [TensorInterface.prime(i) for i in sites]
     ss = [TensorInterface.dag(i) for i in sites]
-    return TKTensor(vcat(us, ss), Gc)
+    return GradedTensor(vcat(us, ss), Gc)
 end
 
-function TensorInterface.op(name::String, i::TKIndex; kwargs...)
+function TensorInterface.op(name::String, i::GradedIndex; kwargs...)
     return _op_from_array(_graded_op_array(name, [i]; kwargs...), name, [i])
 end
-function TensorInterface.op(name::String, i1::TKIndex, i2::TKIndex; kwargs...)
+function TensorInterface.op(name::String, i1::GradedIndex, i2::GradedIndex; kwargs...)
     return _op_from_array(_graded_op_array(name, [i1, i2]; kwargs...), name, [i1, i2])
 end
 
 #Random tensors: a TensorMap only populates flux-zero trees, so plain randn is already
 #the symmetric random initializer.
-function TensorInterface.random_itensor(elt::Type{<:Number}, is::TKIndex...)
+function TensorInterface.random_itensor(elt::Type{<:Number}, is::GradedIndex...)
     iv = collect(Index, is)
     data = randn(elt, TK.ProductSpace(map(slotspace, iv)...))
-    return TKTensor(iv, data)
+    return GradedTensor(iv, data)
 end
-TensorInterface.random_itensor(is::TKIndex...) = TensorInterface.random_itensor(Float64, is...)
+TensorInterface.random_itensor(is::GradedIndex...) = TensorInterface.random_itensor(Float64, is...)
 
 #Fermionic BP messages carry a per-message parity gauge: m and its parity twist (odd
 #sector negated) are equally valid fixed points, and update history determines which
@@ -648,7 +648,7 @@ TensorInterface.random_itensor(is::TKIndex...) = TensorInterface.random_itensor(
 #(α_odd = −1) is one instance, complex phases from scalar rescales another. Select the
 #PSD representative by normalizing each diagonal block's trace to positive real. Any
 #unit-modulus per-sector gauge cancels in the M^½ · M^{-½} sandwich, so this is exact.
-function psd_gauge(t::TKTensor)
+function psd_gauge(t::GradedTensor)
     #block diagonals are read in the all-codomain shape; intermediates from contraction
     #may arrive in any partition (messages are small — the copy is cheap)
     t = _onesided(t)
@@ -661,13 +661,13 @@ function psd_gauge(t::TKTensor)
         end
         iszero(z) || (b .*= conj(z) / abs(z))
     end
-    return TKTensor(copy(t.inds), data)
+    return GradedTensor(copy(t.inds), data)
 end
 
 # ── Diagonal operations ─────────────────────────────────────────────────────────────────
 
-function TensorInterface.map_diag!(f::Function, out::TKTensor, t::TKTensor)
-    ndims(t) == 2 || error("map_diag: expected a 2-index TKTensor")
+function TensorInterface.map_diag!(f::Function, out::GradedTensor, t::GradedTensor)
+    ndims(t) == 2 || error("map_diag: expected a 2-index GradedTensor")
     out === t || error("map_diag!: graded backend only supports in-place (out === t)")
     for (f1, f2) in TK.fusiontrees(t.data)
         b = t.data[f1, f2]
@@ -677,7 +677,7 @@ function TensorInterface.map_diag!(f::Function, out::TKTensor, t::TKTensor)
     end
     return out
 end
-function TensorInterface.map_diag(f::Function, t::TKTensor)
+function TensorInterface.map_diag(f::Function, t::GradedTensor)
     out = copy(t)
     TensorInterface.map_diag!(f, out, out)
     return out
@@ -685,7 +685,7 @@ end
 
 # ── Factorizations (MatrixAlgebraKit API through TensorKit, blockwise with signs) ───────
 
-function _tk_split_positions(t::TKTensor, lv::Vector{<:Index})
+function _tk_split_positions(t::GradedTensor, lv::Vector{<:Index})
     lpos = Int[a for (a, i) in enumerate(t.inds) if i ∈ lv]
     rpos = Int[a for (a, i) in enumerate(t.inds) if i ∉ lv]
     return lpos, rpos, t.inds[lpos], t.inds[rpos]
@@ -694,9 +694,9 @@ end
 #Wrap a TensorKit space as (base space, dual flag) for a fresh Index copy.
 _wrap_slot(sp) = TK.isdual(sp) ? (TK.dual(sp), true) : (sp, false)
 
-_with_flag(i::TKIndex, dual::Bool) = Index(i.id, i.space, i.plev, i.tags, dual)
+_with_flag(i::GradedIndex, dual::Bool) = Index(i.id, i.space, i.plev, i.tags, dual)
 
-function _tksvd_core(t::TKTensor, lv::Vector{<:Index}; maxdim = nothing, cutoff = nothing)
+function _tksvd_core(t::GradedTensor, lv::Vector{<:Index}; maxdim = nothing, cutoff = nothing)
     lpos, rpos, li, ri = _tk_split_positions(t, lv)
     tp = TK.permute(t.data, (Tuple(lpos), Tuple(rpos)))
     if maxdim === nothing && cutoff === nothing
@@ -719,16 +719,16 @@ function _tksvd_core(t::TKTensor, lv::Vector{<:Index}; maxdim = nothing, cutoff 
     return lpos, rpos, li, ri, U, S, Vh, kept_s2, truncerr
 end
 
-#Rewrap map factors as TKTensors: L carries (li..., bond dual), R carries (bond, ri...).
-function _tk_wrap_left(U, li::Vector{<:Index}, b::TKIndex)
+#Rewrap map factors as GradedTensors: L carries (li..., bond dual), R carries (bond, ri...).
+function _tk_wrap_left(U, li::Vector{<:Index}, b::GradedIndex)
     nl = length(li)
     Uc = TK.permute(U, (Tuple(1:(nl + 1)), ()))
-    return TKTensor(vcat(li, [_with_flag(b, true)]), Uc)
+    return GradedTensor(vcat(li, [_with_flag(b, true)]), Uc)
 end
-function _tk_wrap_right(Vh, ri::Vector{<:Index}, b::TKIndex)
+function _tk_wrap_right(Vh, ri::Vector{<:Index}, b::GradedIndex)
     nr = length(ri)
     Vc = TK.permute(Vh, (Tuple(1:(nr + 1)), ()))
-    return TKTensor(vcat([_with_flag(b, false)], ri), Vc)
+    return GradedTensor(vcat([_with_flag(b, false)], ri), Vc)
 end
 
 function _tk_bond_index(S, tags::String)
@@ -738,7 +738,7 @@ function _tk_bond_index(S, tags::String)
 end
 
 function TensorInterface.factorize_svd(
-        t::TKTensor, linds;
+        t::GradedTensor, linds;
         ortho = "none", singular_values! = nothing,
         maxdim = nothing, cutoff = nothing, kwargs...,
     )
@@ -753,13 +753,13 @@ function TensorInterface.factorize_svd(
     F2 = _tk_wrap_right(sq * Vh, ri, up)
     if singular_values! !== nothing
         Sc = TK.permute(S, ((1, 2), ()))
-        singular_values![] = TKTensor([_with_flag(u, false), _with_flag(v, true)], Sc)
+        singular_values![] = GradedTensor([_with_flag(u, false), _with_flag(v, true)], Sc)
     end
     return F1, F2, KSpectrum(kept_s2, truncerr)
 end
 
 function LinearAlgebra.factorize(
-        t::TKTensor, linds...;
+        t::GradedTensor, linds...;
         ortho = "left", maxdim = nothing, cutoff = nothing, tags = "Link,fact", kwargs...,
     )
     lv = length(linds) == 1 ? _indvec(only(linds)) : collect(Index, linds)
@@ -775,22 +775,22 @@ function LinearAlgebra.factorize(
     end
 end
 
-function LinearAlgebra.svd(t::TKTensor, linds; maxdim = nothing, cutoff = nothing, kwargs...)
+function LinearAlgebra.svd(t::GradedTensor, linds; maxdim = nothing, cutoff = nothing, kwargs...)
     lv = filter(i -> i ∈ t.inds, _indvec(linds))
     _, _, li, ri, U, S, Vh, _, _ = _tksvd_core(t, lv; maxdim, cutoff)
     u = _tk_bond_index(S, "Link,u")
     v = Index(u.space, "Link,v")
     Ut = _tk_wrap_left(U, li, u)
     Sc = TK.permute(S, ((1, 2), ()))
-    St = TKTensor([_with_flag(u, false), _with_flag(v, true)], Sc)
+    St = GradedTensor([_with_flag(u, false), _with_flag(v, true)], Sc)
     #V carries (ri..., v) with the bond last and non-dual
     nr = length(ri)
     Vc = TK.permute(Vh, (Tuple([2:(nr + 1); 1]), ()))
-    Vt = TKTensor(vcat(ri, [_with_flag(v, false)]), Vc)
+    Vt = GradedTensor(vcat(ri, [_with_flag(v, false)]), Vc)
     return Ut, St, Vt
 end
 
-function LinearAlgebra.qr(t::TKTensor, linds; kwargs...)
+function LinearAlgebra.qr(t::GradedTensor, linds; kwargs...)
     lv = filter(i -> i ∈ t.inds, _indvec(linds))
     lpos, rpos, li, ri = _tk_split_positions(t, lv)
     tp = TK.permute(t.data, (Tuple(lpos), Tuple(rpos)))
@@ -804,8 +804,8 @@ end
 #Hermitian eigendecomposition, ITensors-style conventions: D on (prime(lk), lk), U on
 #(rinds..., lk). Per-copy flags are read off the actual data slots, so every shared
 #identity ends up with opposite orientations on its two holders.
-function LinearAlgebra.eigen(t::TKTensor, linds, rinds; ishermitian::Bool = false, kwargs...)
-    ishermitian || error("eigen: only ishermitian = true is implemented for TKTensors")
+function LinearAlgebra.eigen(t::GradedTensor, linds, rinds; ishermitian::Bool = false, kwargs...)
+    ishermitian || error("eigen: only ishermitian = true is implemented for GradedTensors")
     lv, rv = _indvec(linds), _indvec(rinds)
     lpos = Int[findfirst(==(i), t.inds) for i in lv]
     rpos = Int[findfirst(==(i), t.inds) for i in rv]
@@ -822,16 +822,16 @@ function LinearAlgebra.eigen(t::TKTensor, linds, rinds; ishermitian::Bool = fals
         [_with_flag(rv[k], TK.isdual(TK.space(Uc, k))) for k in 1:nr];
         _with_flag(lk, TK.isdual(TK.space(Uc, nr + 1)))
     ]
-    U = TKTensor(uinds, Uc)
+    U = GradedTensor(uinds, Uc)
     Dc = TK.permute(D, ((1, 2), ()))
     dinds = Index[
         TensorInterface.prime(_with_flag(lk, TK.isdual(TK.space(Dc, 1)))),
         _with_flag(lk, TK.isdual(TK.space(Dc, 2))),
     ]
-    return TKTensor(dinds, Dc), U
+    return GradedTensor(dinds, Dc), U
 end
 
-function LinearAlgebra.eigen(t::TKTensor; ishermitian::Bool = false, kwargs...)
+function LinearAlgebra.eigen(t::GradedTensor; ishermitian::Bool = false, kwargs...)
     lv = filter(i -> i.plev == 0, t.inds)
     rv = collect(Index, TensorInterface.prime.(lv))
     D, U = LinearAlgebra.eigen(t, lv, rv; ishermitian, kwargs...)
@@ -843,7 +843,7 @@ end
 #"Charge"-tagged leg — paired bra-ket automatically in double-layer networks
 #(norm_factors), riding as a spectator through single-layer (amplitude) contractions.
 #Configurations whose total charge is wrong then contract to exactly zero.
-function TensorInterface.projector(elt::Type, p::Pair{<:TKIndex, <:Integer})
+function TensorInterface.projector(elt::Type, p::Pair{<:GradedIndex, <:Integer})
     i, v = p
     i.dual && error("projector: expected a non-dual (ket) site index")
     id = TensorInterface.dag(i)
@@ -855,22 +855,22 @@ function TensorInterface.projector(elt::Type, p::Pair{<:TKIndex, <:Integer})
         r = _fock_range(id, f1.uncoupled[1])
         v ∈ r && (data[f1, f2][v - first(r) + 1, 1] = one(elt))
     end
-    return TKTensor([id, ch], data)
+    return GradedTensor([id, ch], data)
 end
 
 #Trace of a 2-leg (s, s′) tensor, defined to agree with sum(diag(array(t))) — the
 #convention the sampler's probability bookkeeping reads its diagonal in.
-function LinearAlgebra.tr(t::TKTensor)
-    ndims(t) == 2 || error("tr: expected a 2-index TKTensor")
+function LinearAlgebra.tr(t::GradedTensor)
+    ndims(t) == 2 || error("tr: expected a 2-index GradedTensor")
     return sum(LinearAlgebra.diag(TensorInterface.array(t)))
 end
 
 #Fully-projected graded networks contract down to spectator dim-1 charge legs rather
 #than a bare number; the entry is the amplitude (zero when the total charge is wrong,
 #i.e. no flux-zero tree survives).
-function TensorInterface.scalar(t::TKTensor)
+function TensorInterface.scalar(t::GradedTensor)
     all(i -> dimof(i) == 1, t.inds) ||
-        error("scalar: TKTensor with inds $(t.inds) is not a scalar")
+        error("scalar: GradedTensor with inds $(t.inds) is not a scalar")
     for (f1, f2) in TK.fusiontrees(t.data)
         return only(t.data[f1, f2])
     end
@@ -891,7 +891,7 @@ function pairing_tensor(elt::Type, kets, ancs)
     k = length(kv)
     P = TK.ProductSpace(map(space, kv)...)
     data = TK.permute(TK.id(elt, P), (Tuple(1:(2k)), ()))
-    return TKTensor(vcat(kv, av), data)
+    return GradedTensor(vcat(kv, av), data)
 end
 
 #A tensor anchors a parity-gauge line iff it carries a "Charge"-tagged dangling leg
@@ -900,7 +900,7 @@ end
 #closure-derived quantities (loop-correction weights) must normalize by a baseline
 #closure of the same region. Bosonic charge legs (net U(1) magnetization etc.) have
 #trivial twists and are exempt.
-function TensorInterface.has_closure_gauge(t::TKTensor)
+function TensorInterface.has_closure_gauge(t::GradedTensor)
     return any(t.inds) do i
         occursin("Charge", i.tags) &&
             any(c -> real(TK.twist(c)) < 0, TK.sectors(space(i)))
@@ -915,18 +915,18 @@ end
 #subset, leaves the two fitting sweep directions inconsistent and the alternating
 #iteration converges to a wrong fixed point. Trivial for bosonic sectors. This is the
 #fermionic-branch recipe, with TensorKit's twist supplying the metric diag((−1)^p).
-function fit_adjoint(t::TKTensor, metric_legs)
+function fit_adjoint(t::GradedTensor, metric_legs)
     td = TensorInterface.dag(t)
     slots = Tuple(a for (a, i) in enumerate(td.inds) if i.dual && i ∈ metric_legs)
     isempty(slots) && return td
-    return TKTensor(td.inds, TK.twist(td.data, slots))
+    return GradedTensor(td.inds, TK.twist(td.data, slots))
 end
 
 # ── Boundary-MPS link-sector allocation (init recipe; used by boundarympscache.jl) ──────
 
 #Charge spectrum reachable by one message site: the convolution of its legs' carried
 #sector spectra (dual legs contribute dual sectors), weight ∝ sector dimension.
-function site_charge_spectrum(m::TKTensor)
+function site_charge_spectrum(m::GradedTensor)
     I = TK.sectortype(space(first(m.inds)))
     w = Dict{I, Float64}(one(I) => 1.0)
     for l in m.inds

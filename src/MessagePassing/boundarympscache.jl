@@ -192,7 +192,7 @@ function set_interpartition_messages!(
                 setmessage!(bmps_cache, e, default_message(bmps_cache, e))
             end
         end
-        if tensortype(bmps_cache) <: Tensors.TKTensor
+        if tensortype(bmps_cache) <: Tensors.GradedTensor
             set_graded_interpartition_messages!(bmps_cache, es; link_sectors)
         else
             for i in 1:(length(es) - 1)
