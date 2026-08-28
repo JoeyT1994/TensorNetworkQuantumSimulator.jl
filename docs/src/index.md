@@ -16,6 +16,8 @@ A Julia package for simulating quantum circuits, quantum dynamics and equilibriu
 - **Expectation Values**: Belief propagation, boundary MPS, and exact contraction backends for computing expectation values of multi-point observables.
 - **Entanglement Entropy**: Von Neumann and Rényi entropies from BP messages (per bond) or from reduced density matrices (per subsystem).
 - **Sampling**: Sample from planar tensor network states using boundary MPS, with the MPS bond dimension controlling sample quality. Options to compute the importance-sampling ratio ``p(x)/q(x)`` for direct sample quality certification.
+- **Symmetries**: Abelian symmetries (`Z2`, `U1`) enforced structurally at the tensor level — states are stored block-sparse over conserved sectors and symmetry-violating gates error loudly. Charged states (nonzero total magnetization or particle number) work automatically.
+- **Fermions**: Native fermionic sites, spinless (d = 2) and spinful (d = 4), with optional particle-number conservation (`fZ2`, `fU1`, `fU1xU1`). Jordan-Wigner strings emerge from the graded tensor algebra on any lattice — gates and two-point observables are local operators, at any distance.
 - **Operators**: Operator evolution in the Heisenberg picture and density matrix representation.
 - **Performance**: The hot paths (belief-propagation message updates, gate application, expectation values) run as fused kernels with conjugation folded into the BLAS calls and intermediates in reusable workspaces, keeping heap allocations to the results themselves.
 - **Arbitrary Precision**: `Float32`, `Float64`, `ComplexF32`, `ComplexF64`, and other numeric types.

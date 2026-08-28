@@ -78,6 +78,48 @@ s = siteinds("S=1/2", g)
 
 Random states are useful for testing and benchmarking.
 
+### Symmetric States
+
+Pass `symmetry` to `siteinds` and the state is stored block-sparse over the conserved
+sectors of an abelian symmetry — enforced structurally, so a symmetry-violating gate
+raises an error rather than silently breaking conservation. Supported: `"Z2"`, `"U1"`,
+and the fermionic gradings `"fZ2"`, `"fU1"`, `"fU1xU1"`.
+
+```julia
+# U(1)-symmetric spins (conserved magnetization)
+s = siteinds("S=1/2", g; symmetry = "U1")
+ψ = tensornetworkstate(ComplexF64, v -> iseven(sum(v)) ? "↑" : "↓", g, s)
+
+# Custom sector layout (charge => dimension pairs) for the virtual structure
+s = siteinds("S=1/2", g; symmetry = "Z2", sectors = [0 => 1, 1 => 1])
+```
+
+Everything downstream — gates, BP, boundary MPS, loop corrections, sampling — works
+unchanged. Charged product states (nonzero total magnetization or particle number) are
+handled automatically: site charges are routed through dimension-1 link components along
+a spanning tree, and a nonzero total charge rides a dangling dimension-1 `"Charge"` leg.
+
+### Fermionic States
+
+Fermionic sites carry their statistics in the tensor backend: Jordan-Wigner strings
+emerge from the graded algebra on any lattice, so gates and observables are local
+operators with no string bookkeeping in user code.
+
+```julia
+# Spinless fermions; parity grading "fZ2" is the default,
+# "fU1" additionally conserves particle number structurally
+s = siteinds("Fermion", g; symmetry = "fU1")
+ψ = tensornetworkstate(ComplexF64, v -> v ∈ occupied ? "Occ" : "Emp", g, s)
+
+# Spinful (d = 4) sites: |0⟩, |↑⟩, |↓⟩, |↑↓⟩, with "fU1xU1" conserving N↑ and N↓
+s = siteinds("SpinfulFermion", g; symmetry = "fU1xU1")
+```
+
+Fermionic gates include `"F_hop"` (hopping), `"F_pair"` (pairing), and `"F_phase"`;
+observables include `"N"`, `"CdagC"` (any pair of vertices), `"hopping"`, and
+`"pairing"`. See `examples/fermionic_dynamics.jl` for a quench benchmarked against the
+exact free-fermion solution.
+
 ### Toric Code Ground State
 
 For benchmarking and exploration of topologically ordered states, the library provides an exact bond-dimension-2 representation of Kitaev's toric code ground state on an `n × n` torus:

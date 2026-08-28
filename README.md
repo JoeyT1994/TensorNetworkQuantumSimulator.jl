@@ -191,6 +191,49 @@ Reduce the bond dimension of an existing TNS:
 ψ_truncated = truncate(ψ; alg = "bp", maxdim = 4, cutoff = 1e-10)
 ```
 
+### Symmetries
+
+Abelian symmetries are enforced structurally at the tensor level: pass `symmetry` when
+building site indices and every tensor is stored block-sparse over the conserved sectors,
+with symmetry-violating gates raising an error. Supported symmetries are `"Z2"`, `"U1"`,
+and the fermionic gradings below.
+
+```julia
+# A U(1)-symmetric spin state (conserved magnetization)
+s = siteinds("S=1/2", g; symmetry = "U1")
+ψ = tensornetworkstate(ComplexF64, v -> iseven(sum(v)) ? "↑" : "↓", g, s)
+```
+
+Everything downstream — gate application, BP, boundary MPS, loop corrections, sampling,
+entanglement — works unchanged on symmetric states. Charged states (e.g. nonzero total
+magnetization or particle number) are handled automatically: site charges are routed
+through auxiliary dimension-1 link components, and any nonzero total charge rides a
+dangling dimension-1 "Charge" leg.
+
+### Fermions
+
+Fermionic sites are first-class: statistics live in the tensor backend (Jordan-Wigner
+strings emerge from the graded algebra, on any lattice), so gates and observables are
+just local operators.
+
+```julia
+# Spinless fermions with conserved particle number; "fZ2" (parity only) is the default
+s = siteinds("Fermion", g; symmetry = "fU1")
+ψ = tensornetworkstate(ComplexF64, v -> v ∈ occupied ? "Occ" : "Emp", g, s)
+
+# Trotterized hopping evolution exp(-i θ (c†ᵢcⱼ + c†ⱼcᵢ))
+circuit = [("F_hop", pair, θ) for pair in edge_pairs]
+ψ, errors = apply_gates(circuit, ψ; apply_kwargs)
+
+# Occupations and two-point functions (any pair of vertices, strings handled internally)
+n = expect(ψ, ("N", [v]); alg = "bp")
+c = expect(ψ, ("CdagC", (v1, v2)); alg = "boundarymps")
+```
+
+Spinful (d = 4) sites are available via `siteinds("SpinfulFermion", g)` with `"fU1xU1"`
+(separately conserved N↑, N↓). See `examples/fermionic_dynamics.jl` for a complete
+quench benchmarked against the exact free-fermion solution.
+
 ## Supported Gates
 
 Gates are specified as tuples of the form `(gate_string, vertices)` or `(gate_string, vertices, parameter)`. The vertices can be a vector of one or two graph vertices, or a `NamedEdge` for two-qubit gates. All parameterised gates follow the Qiskit convention.
@@ -288,8 +331,7 @@ or
 - J. Tindall and M. Fishman, "Gauging tensor networks with belief propagation," SciPost Physics **15**, 222 (2023). [Link](https://www.scipost.org/SciPostPhys.15.6.222)
 
 ## Upcoming Features
-- Fermions
-- Infinite tensor network states 
+- Infinite tensor network states
 
 ## Authors and Acknowledgements
 

@@ -4,6 +4,20 @@ function default_siteinds(g::AbstractGraph; kwargs...)
     return siteinds("S=1/2", g; kwargs...)
 end
 
+"""
+    siteinds(sitetype::String, g::AbstractGraph; inds_per_site = 1, symmetry = nothing, sectors = nothing)
+
+Site indices for every vertex of `g`. `sitetype` is one of `"S=1/2"`, `"S=1"`,
+`"Fermion"`, `"SpinfulFermion"` (aliases: `"Electron"`).
+
+Pass `symmetry` for structurally-enforced abelian conservation: `"Z2"`, `"U1"` for
+spins; `"fZ2"` (parity), `"fU1"` (particle number), `"fU1xU1"` (separate N↑, N↓) for
+fermions. Fermionic site types are graded by default (`"fZ2"` when no `symmetry` is
+given). Named site types derive their sector decomposition automatically; pass
+`sectors` (charge => dimension pairs summing to the site dimension) only for custom
+sites. With an even `inds_per_site` (purifications) the second half of each vertex's
+indices are dual-representation ancilla copies.
+"""
 function siteinds(sitetype::String, g::AbstractGraph, sitedimension::Integer = site_dimension(sitetype); inds_per_site::Integer = 1, sectors = nothing, symmetry::Union{String, Nothing} = nothing)
     vs = collect(vertices(g))
     st = replace(lowercase(sitetype), " " => "")

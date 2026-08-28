@@ -13,6 +13,7 @@ random_tensornetworkstate
 zerostate
 identity_tensornetworkstate
 toriccode_groundstate
+siteinds
 ```
 
 ## Classical Partition Functions
