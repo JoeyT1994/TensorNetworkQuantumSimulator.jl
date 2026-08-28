@@ -94,7 +94,7 @@ function main(; L = 10, maxdim = 8, nlayers = 10, elt = ComplexF64, J = 1.0, hx 
     return res
 end
 
-# Reference digest at the default parameters (validated against the historical ITensors
-# backend to ~1e-13 before its removal):
+# Reference digest at the default parameters (agreed with the original ITensors-backed
+# implementation to ~1e-13 before its removal):
 #   ⟨Z⟩ center = -0.16229418610571..., Σ ⟨Z⟩ = -24.7937337722159..., Σ ⟨ZZ⟩ = 62.8275875662148...
 main()

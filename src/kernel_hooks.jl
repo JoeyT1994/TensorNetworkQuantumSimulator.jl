@@ -114,7 +114,7 @@ end
 
 #Backend tensor gates inside generic (e.g. Any-typed) circuit vectors pass through the
 #circuit-tuple path unchanged; the acting vertices are inferred from the site indices.
-function toitensor(gate::Union{Tensor, Tensors.GradedTensor}, g::NamedGraph, sinds::Dictionary)
+function totensor(gate::Union{Tensor, Tensors.GradedTensor}, g::NamedGraph, sinds::Dictionary)
     verts = [v for v in keys(sinds) if any(i -> i ∈ inds(gate), sinds[v])]
     return gate, verts
 end
@@ -176,7 +176,7 @@ end
 #of the rank-1 delta join. The delta join is an exactly symmetric starting point whose
 #invariant subspace the (exactly block-preserving) graded fitting cannot leave; a random
 #structure-compatible full-rank start converges properly. Conservation itself is free:
-#TensorMaps only populate flux-zero trees, so `random_itensor` over correctly-oriented
+#TensorMaps only populate flux-zero trees, so `random_tensor` over correctly-oriented
 #legs is the conserving initializer — this function only chooses the link sectors.
 function set_graded_interpartition_messages!(bmps_cache::BoundaryMPSCache, es::Vector{<:NamedEdge}; link_sectors = nothing)
     n = length(es)
@@ -202,7 +202,7 @@ function set_graded_interpartition_messages!(bmps_cache::BoundaryMPSCache, es::V
         #left link incoming (non-dual), right link outgoing (dual)
         i > 1 && push!(legs, links[i - 1])
         i < n && push!(legs, dag(links[i]))
-        t = adapt_like(m, random_itensor(scalartype(m), legs...))
+        t = adapt_like(m, random_tensor(scalartype(m), legs...))
         iszero(norm(t)) && error(
             "set_graded_interpartition_messages!: no flux-zero blocks on the chosen " *
                 "link sectors — the message column carries net charge"

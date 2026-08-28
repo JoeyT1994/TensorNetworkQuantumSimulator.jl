@@ -408,7 +408,7 @@ function set_interpartition_message!(bmps_cache::BoundaryMPSCache, M::AbstractVe
 end
 
 # Position-indexed MPS·MPO application with truncation: a zip-up forward sweep followed by a
-# right-to-left SVD recompression. Works on a raw `Vector{ITensor}` chain so it needs no MPS/MPO
+# right-to-left SVD recompression. Works on a raw vector-of-tensors chain so it needs no MPS/MPO
 # wrapper types.
 #
 #   `mpo`        : the contiguous chain of tensors at positions 1:b.
@@ -417,7 +417,7 @@ end
 #   `right_inds` : per-position outgoing site legs (`right_inds[i]` may be empty); these become the
 #                  site indices of the result, one output tensor per non-empty entry.
 #
-# Returns the truncated result as a `Vector{ITensor}`, one tensor per non-empty `right_inds[i]`, in
+# Returns the truncated result as a vector of tensors, one per non-empty `right_inds[i]`, in
 # increasing position order.
 function generic_apply(
         mpo::Vector,

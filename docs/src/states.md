@@ -8,11 +8,11 @@ A `TensorNetwork` is the simpler of the two types: a collection of tensors livin
 
 ```julia
 using TensorNetworkQuantumSimulator
-using TensorNetworkQuantumSimulator: new_index, random_itensor
+using TensorNetworkQuantumSimulator: new_index, random_tensor
 using Dictionaries: Dictionary
 
 i, j = new_index(2; tags = "i"), new_index(2; tags = "j")
-t_a, t_b, t_c = random_itensor(Float64, i), random_itensor(Float64, i, j), random_itensor(Float64, j)
+t_a, t_b, t_c = random_tensor(Float64, i), random_tensor(Float64, i, j), random_tensor(Float64, j)
 # Construct from a dictionary of tensors (graph is inferred from shared indices)
 tn = TensorNetwork(Dictionary(["a", "b", "c"], [t_a, t_b, t_c]))
 

@@ -28,7 +28,7 @@ What a backend must implement, by group:
   Index queries      : inds, dim, plev, tags, commonind(s), uniqueinds, unioninds,
                        noncommonind(s), hascommoninds
   Index replacement  : replaceind(s) (relabeling, no data movement)
-  Construction       : from_array, random_itensor, onehot, delta, combiner (+
+  Construction       : from_array, random_tensor, onehot, delta, combiner (+
                        combinedind), directsum, op(name::String, siteinds...),
                        state(name::String, siteind)
   Contraction        : contract(ts::Vector; sequence), Base.:*, scalar, apply
@@ -38,7 +38,7 @@ What a backend must implement, by group:
 =#
 module TensorInterface
 
-# ── Algorithm-selection machinery (previously from ITensors/NDTensors) ─────────────────
+# ── Algorithm-selection machinery ───────────────────────────────────────────────────────
 """
     Algorithm{Alg, Kwargs}
 
@@ -72,7 +72,7 @@ for f in [
         # index/tensor transforms
         :dag, :prime, :noprime, :sim, :replaceind, :replaceinds,
         # construction
-        :onehot, :projector, :delta, :combiner, :combinedind, :random_itensor,
+        :onehot, :projector, :delta, :combiner, :combinedind, :random_tensor,
         :directsum, :op, :state, :new_index, :from_array,
         # contraction / evaluation
         :contract, :scalar, :apply, :inner,

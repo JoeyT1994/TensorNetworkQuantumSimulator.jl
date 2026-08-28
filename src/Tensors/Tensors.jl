@@ -14,9 +14,9 @@ src/kernel_hooks.jl and fall back to the plain seam-verb path whenever a network
 structure doesn't match.
 
 The operator/state library is a runtime registry (`register_op!`) covering S=1/2 gates in
-the first-index-fastest matrix convention; conventions were validated against the
-historical ITensors implementation, which survives as a test-only cross-check
-(test/test_tensors.jl).
+the first-index-fastest matrix convention; gate matrices and factorization conventions
+were validated against the original ITensors-backed implementation before its removal and
+are pinned by the frozen digests in test/test_tensors.jl.
 
 The second data layer is `GradedTensor` (gradedtensor.jl): the same `Index` labels over a
 TensorKit `TensorMap`, serving every graded backend — bosonic Z2/U(1), fermionic parity,
@@ -162,7 +162,7 @@ _indvec(is::Tuple) = collect(Index, is)
 const IndsLike = Union{AbstractTensor, Index, AbstractVector{<:Index}, Tuple{Index, Vararg{Index}}}
 
 TensorInterface.commoninds(a::IndsLike, b::IndsLike) = filter(i -> i ∈ _indvec(b), _indvec(a))
-# ITensors convention: the singular forms return the FIRST match (or nothing), not `only`.
+# Convention: the singular forms return the FIRST match (or nothing), not `only`.
 function TensorInterface.commonind(a::IndsLike, b::IndsLike)
     cs = TensorInterface.commoninds(a, b)
     return isempty(cs) ? nothing : first(cs)
@@ -203,12 +203,12 @@ end
 TensorInterface.from_array(A::AbstractArray, is::Index{<:Integer}...) = Tensor(collect(Index, is), reshape(copy(A), TensorInterface.dim.(is)...))
 TensorInterface.from_array(A::AbstractVector, i::Index{<:Integer}) = Tensor(Index[i], copy(A))
 
-function TensorInterface.random_itensor(elt::Type, is::AbstractVector{<:Index})
+function TensorInterface.random_tensor(elt::Type, is::AbstractVector{<:Index})
     return Tensor(collect(is), randn(elt, TensorInterface.dim.(is)...))
 end
-TensorInterface.random_itensor(elt::Type, is::Index...) = TensorInterface.random_itensor(elt, collect(is))
-TensorInterface.random_itensor(is::AbstractVector{<:Index}) = TensorInterface.random_itensor(Float64, is)
-TensorInterface.random_itensor(is::Index...) = TensorInterface.random_itensor(Float64, collect(is))
+TensorInterface.random_tensor(elt::Type, is::Index...) = TensorInterface.random_tensor(elt, collect(is))
+TensorInterface.random_tensor(is::AbstractVector{<:Index}) = TensorInterface.random_tensor(Float64, is)
+TensorInterface.random_tensor(is::Index...) = TensorInterface.random_tensor(Float64, collect(is))
 
 function TensorInterface.onehot(elt::Type, p::Pair{<:Index, <:Integer})
     i, v = p
@@ -345,7 +345,7 @@ function Base.:*(a::Tensor, b::Tensor)
 end
 
 function _trace_all(t::Tensor)
-    # contract each plev-1 index with its plev-0 partner (same id), matching ITensors tr
+    # contract each plev-1 index with its plev-0 partner (same id): the partial trace
     lo = filter(i -> i.plev == 0, t.inds)
     hi = filter(i -> i.plev == 1, t.inds)
     labels = Dict{Index, Int}()
@@ -478,7 +478,7 @@ function _matricize(t::Tensor, linds::Vector{<:Index})
     return reshape(A, dl, dr), linds, rinds
 end
 
-# ITensors-convention truncation as a MatrixAlgebraKit strategy: keep the smallest set of
+# Seam-convention truncation as a MatrixAlgebraKit strategy: keep the smallest set of
 # singular values whose discarded Σs² fraction is ≤ cutoff (⇔ 2-norm rtol = √cutoff),
 # capped at maxdim. `nothing` means no constraint.
 function _mak_trunc(; maxdim = nothing, cutoff = nothing)
@@ -497,7 +497,7 @@ function LinearAlgebra.qr(t::Tensor, linds; kwargs...)
     return Qt, Rt
 end
 
-# Matrix-level truncated SVD with the ITensors truncerr convention (discarded Σs²/total).
+# Matrix-level truncated SVD with the seam truncerr convention (discarded Σs²/total).
 function _svd_matrix(A::AbstractMatrix; maxdim = nothing, cutoff = nothing)
     trunc = _mak_trunc(; maxdim, cutoff)
     if trunc === nothing
@@ -505,7 +505,7 @@ function _svd_matrix(A::AbstractMatrix; maxdim = nothing, cutoff = nothing)
         truncerr = 0.0
     else
         U, S, Vt, err = svd_trunc(A; trunc)
-        # MAK reports ‖discarded‖₂; the ITensors convention is discarded Σs² / total Σs².
+        # MAK reports ‖discarded‖₂; the seam convention is discarded Σs² / total Σs².
         kept2 = sum(abs2, diag(S))
         total = kept2 + err^2
         truncerr = total > 0 ? err^2 / total : 0.0
@@ -521,7 +521,7 @@ function _svd_split(t::Tensor, linds::Vector{<:Index}; maxdim = nothing, cutoff 
 end
 
 """
-factorize_svd matching the ITensors convention used by `simple_update`:
+factorize_svd matching the seam convention used by `simple_update`:
 `ortho = "none"` returns F1 = U√S and F2 = √S·V sharing the primed bond `u′`, with the
 singular values reported on unprimed `(u, v)`; `spec.eigs` are the kept s².
 """
@@ -559,14 +559,14 @@ function TensorInterface.factorize_svd(
     return F1, F2, KSpectrum(abs2.(S), truncerr)
 end
 
-# ITensors-style factorize: L isometric for ortho="left" (L=U, R=SV), mirrored for "right".
+# factorize: L isometric for ortho="left" (L=U, R=SV), mirrored for "right".
 # The bond is unprimed and carries `tags`.
 function LinearAlgebra.factorize(
         t::Tensor, linds...;
         ortho = "left", maxdim = nothing, cutoff = nothing, mindim = 1, tags = "Link,fact", kwargs...,
     )
     lv = length(linds) == 1 ? _indvec(only(linds)) : collect(Index, linds)
-    # ITensors convention: entries of linds not present on the tensor are ignored
+    # Convention: entries of linds not present on the tensor are ignored
     lv = filter(i -> i ∈ t.inds, lv)
     U, S, Vt, li, ri, _ = _svd_split(t, lv; maxdim, cutoff, mindim)
     k = length(S)
@@ -584,7 +584,7 @@ function LinearAlgebra.factorize(
     return L, R
 end
 
-# ITensors-style svd: U(linds, u), S(u, v), V(rinds, v).
+# svd: U(linds, u), S(u, v), V(rinds, v).
 function LinearAlgebra.svd(t::Tensor, linds; maxdim = nothing, cutoff = nothing, mindim = 1, kwargs...)
     U, S, Vt, li, ri, _ = _svd_split(t, filter(i -> i ∈ t.inds, _indvec(linds)); maxdim, cutoff, mindim)
     k = length(S)
@@ -606,7 +606,7 @@ function LinearAlgebra.eigen(t::Tensor; ishermitian::Bool = false, kwargs...)
     return D, TensorInterface.replaceinds(U, rv, lv)
 end
 
-# eigen matching the ITensors hermitian convention probed empirically:
+# eigen, hermitian convention:
 # D on (link′, link) with the eigenvalues, U on (rinds..., link); Ul·D·dag(U) reconstructs.
 function LinearAlgebra.eigen(t::Tensor, linds, rinds; ishermitian::Bool = false, kwargs...)
     ishermitian || error("eigen: only ishermitian = true is implemented for Tensors")
@@ -840,7 +840,7 @@ function fused_two_site_gate(
     return Tensor(iT1, T1), Tensor(iT2, T2), s_values, truncerr
 end
 
-# ── S=1/2 operator & state library (conventions pinned against ITensors) ────────────────
+# ── S=1/2 operator & state library ──────────────────────────────────────────────────────
 
 const _σI = ComplexF64[1 0; 0 1]
 const _σx = ComplexF64[0 1; 1 0]
@@ -882,8 +882,8 @@ const OP1_REGISTRY = Dict{String, Function}(
 _op1(name::String; kwargs...) = haskey(OP1_REGISTRY, name) ? OP1_REGISTRY[name](; kwargs...) : nothing
 
 # Two-site 4×4 matrices in the (first index fastest) convention that maps onto
-# data[s1', s2', s1, s2] via column-major reshape. Conventions validated against the
-# historical ITensors library (test/test_tensors.jl).
+# data[s1', s2', s1, s2] via column-major reshape (pinned by the digests in
+# test/test_tensors.jl).
 _kr(A, B) = kron(B, A)   # s1 fastest
 
 const OP2_REGISTRY = Dict{String, Function}(

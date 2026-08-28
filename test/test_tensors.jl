@@ -8,11 +8,6 @@ using NamedGraphs: NamedGraph
 const TI = TensorNetworkQuantumSimulator.TensorInterface
 using LinearAlgebra: LinearAlgebra, norm, qr, factorize
 
-# Cross-checks against the historical ITensors implementation run when ITensors is
-# available (the Pkg.test target includes it); plain `julia --project=.` runs skip them.
-const HAS_ITENSORS = !isnothing(Base.find_package("ITensors"))
-HAS_ITENSORS || @info "ITensors not available: skipping cross-backend conformance checks"
-
 # Array of a Tensor in a requested index order
 function tarray(t::Tensor, is...)
     perm = map(i -> findfirst(==(i), t.inds), collect(is))
@@ -29,7 +24,7 @@ end
         @test TI.dag(i) == i           # dual flip preserves identity
         @test TI.sim(i) != i
         @test i' == TI.prime(i)
-        @test eltype(TI.random_itensor(i, TI.sim(i))) == Float64   # eltype defaults to Float64
+        @test eltype(TI.random_tensor(i, TI.sim(i))) == Float64   # eltype defaults to Float64
     end
 
     @testset "contraction" begin
@@ -95,55 +90,6 @@ end
         Ms, Mis = TNQS.pseudo_sqrt_inv_sqrt(Tensor([hi1, hi2], copy(M)))
         @test tarray(Ms, hi1, hi2) * tarray(Ms, hi1, hi2) ≈ M
         @test tarray(Ms, hi1, hi2) * tarray(Mis, hi1, hi2) ≈ one(M)
-    end
-
-    if HAS_ITENSORS
-        @eval using ITensors: ITensors
-        @testset "ops and states match ITensors" begin
-            s1i, s2i = ITensors.Index(2, "S=1/2,Site"), ITensors.Index(2, "S=1/2,Site")
-            k1, k2 = Index(2, "S=1/2,Site"), Index(2, "S=1/2,Site")
-            for name in ["X", "Y", "Z", "H", "I", "S+", "S-"]
-                @test tarray(TI.op(name, k1), k1', k1) ≈ Array(ITensors.op(name, s1i), s1i', s1i)
-            end
-            for (name, kw) in [("Rx", (θ = 0.37,)), ("Ry", (θ = 0.37,)), ("Rz", (θ = 0.37,)), ("P", (ϕ = 0.37,))]
-                @test tarray(TI.op(name, k1; kw...), k1', k1) ≈ Array(ITensors.op(name, s1i; kw...), s1i', s1i)
-            end
-            # Rxxyy / Rxxyyzz / xx_plus_yy were this package's own ITensors extensions
-            # (now retired), so vanilla ITensors can't cross-check them; their matrices
-            # were validated against those definitions before removal and are covered by
-            # the frozen end-to-end digests below.
-            for (name, kw) in [
-                    ("Rzz", (ϕ = 0.37,)), ("Rxx", (ϕ = 0.37,)), ("Ryy", (ϕ = 0.37,)),
-                    ("CZ", (;)), ("CNOT", (;)), ("CY", (;)), ("CPHASE", (ϕ = 0.37,)),
-                    ("SWAP", (;)), ("iSWAP", (;)), ("√SWAP", (;)), ("√iSWAP", (;)),
-                    ("CRx", (θ = 0.37,)), ("CRy", (θ = 0.37,)), ("CRz", (θ = 0.37,)),
-                ]
-                oit = isempty(kw) ? ITensors.op(name, s1i, s2i) : ITensors.op(name, s1i, s2i; kw...)
-                okt = isempty(kw) ? TI.op(name, k1, k2) : TI.op(name, k1, k2; kw...)
-                @test tarray(okt, k1', k2', k1, k2) ≈ Array(oit, s1i', s2i', s1i, s2i)
-            end
-            for st in ["↑", "↓", "+", "-"]
-                @test tarray(TI.state(st, k1), k1) ≈ Array(ITensors.state(st, s1i), s1i)
-            end
-        end
-
-        @testset "factorization conventions match ITensors" begin
-            i, j, k, l = ITensors.Index(3, "i"), ITensors.Index(4, "j"), ITensors.Index(3, "k"), ITensors.Index(2, "l")
-            ki, kj, kk, kl = Index(3, "i"), Index(4, "j"), Index(3, "k"), Index(2, "l")
-            A = rand(ComplexF64, 3, 4, 3, 2)
-            Ti = ITensors.ITensor(A, i, j, k, l)
-            Tk = Tensor([ki, kj, kk, kl], copy(A))
-            for maxdim in (6, 3)
-                svi = Ref{Any}(nothing)
-                F1i, F2i, speci = ITensors.factorize_svd(Ti, (i, j); ortho = "none", singular_values! = svi, maxdim)
-                svk = Ref{Any}(nothing)
-                F1k, F2k, speck = TI.factorize_svd(Tk, [ki, kj]; ortho = "none", singular_values! = svk, maxdim)
-                @test speck.truncerr ≈ speci.truncerr atol = 1e-13
-                @test tarray(F1k * F2k, ki, kj, kk, kl) ≈ Array(F1i * F2i, i, j, k, l)
-                @test sort(collect(ITensors.diag(svi[])); rev = true) ≈
-                    sort(real.(LinearAlgebra.diag(svk[].data)); rev = true)
-            end
-        end
     end
 
     @testset "graded (TensorKit Z2) backend" begin
@@ -261,7 +207,7 @@ end
         #graded factorization round-trip on a generic conserving 4-leg tensor
         si = Tensors.Index(Tensors.graded_space("Z2", [0 => 1, 1 => 2]), "a")
         sj = Tensors.Index(Tensors.graded_space("Z2", [0 => 2, 1 => 1]), "b")
-        T4 = TI.random_itensor(ComplexF64, si', sj', TI.dag(si), TI.dag(sj))
+        T4 = TI.random_tensor(ComplexF64, si', sj', TI.dag(si), TI.dag(sj))
         svr = Ref{Any}(nothing)
         F1, F2, spec = TI.factorize_svd(T4, [si', sj']; ortho = "none", singular_values! = svr)
         @test norm(F1 * F2 - T4) < 1e-10
@@ -325,7 +271,7 @@ end
         @testset "unit checks" begin
             s1 = Tensors.new_fermion_index(1, 1; tags = "s1")
             s2 = Tensors.new_fermion_index(1, 1; tags = "s2")
-            t = TI.random_itensor(ComplexF64, s1, s2)
+            t = TI.random_tensor(ComplexF64, s1, s2)
             @test real(TI.dag(t) * t) ≈ norm(t)^2
             F1, F2, _ = TI.factorize_svd(t, [s1])
             @test norm(TI.array(F1 * F2) - TI.array(t)) < 1.0e-13

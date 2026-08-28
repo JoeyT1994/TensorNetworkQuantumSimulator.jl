@@ -120,15 +120,15 @@ function _gate_suggestions(name::AbstractString; topk::Int = 3, maxdist::Int = 2
     return [first(p) for p in Iterators.take(scored, topk)]
 end
 
-# --- Circuit-tuple → ITensor -------------------------------------------------
+# --- Circuit-tuple → tensor ----------------------------------------------------
 
-# Vector of gates → vector of (ITensor, vertices)
-function toitensor(circuit::Vector, g::NamedGraph, sinds::Dictionary)
-    return [toitensor(gate, g, sinds) for gate in circuit]
+# Vector of gates → vector of (tensor, vertices)
+function totensor(circuit::Vector, g::NamedGraph, sinds::Dictionary)
+    return [totensor(gate, g, sinds) for gate in circuit]
 end
 
-# Single circuit tuple → (ITensor, vertices)
-function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
+# Single circuit tuple → (tensor, vertices)
+function totensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     name = gate[1]
     verts = collect_vertices(gate[2], g)
     s_inds = [only(siteinds[v]) for v in verts]

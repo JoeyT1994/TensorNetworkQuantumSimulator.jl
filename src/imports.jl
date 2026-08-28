@@ -48,7 +48,7 @@ using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, no
     hascommoninds, dim, plev, tags,
     dag, prime, noprime, sim, replaceind, replaceinds,
     onehot,
-    projector, delta, combiner, combinedind, random_itensor, directsum,
+    projector, delta, combiner, combinedind, random_tensor, directsum,
     op, state,
     scalar, apply, map_diag, map_diag!, factorize_svd,
     array, data, new_index, from_array, has_closure_gauge

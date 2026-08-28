@@ -77,7 +77,7 @@ function random_tensornetwork(eltype, g::AbstractGraph; bond_dimension::Integer 
     tensors = Dictionary{vertextype(g), Any}()
     for v in vs
         is = [l[NamedEdge(v => vn)] for vn in neighbors(g, v)]
-        set!(tensors, v, random_itensor(eltype, is))
+        set!(tensors, v, random_tensor(eltype, is))
     end
     tensors = Dictionary(vs, narrow_tensors(collect(tensors)))
     return TensorNetwork(tensors, g)

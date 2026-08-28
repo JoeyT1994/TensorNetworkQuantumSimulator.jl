@@ -32,7 +32,7 @@ function apply_gates(
         kwargs...,
     )
     g = graph(ψ_bpc)
-    circuit = toitensor(circuit, g, siteinds(network(ψ_bpc)))
+    circuit = totensor(circuit, g, siteinds(network(ψ_bpc)))
     gate_vertices = [gate[2] for gate in circuit]
     itensors = [gate[1] for gate in circuit]
     return _apply_gate_tensors(itensors, ψ_bpc; gate_vertices, kwargs...)

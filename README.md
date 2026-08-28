@@ -87,7 +87,7 @@ The optional first argument sets the element type (`Float64` by default). Use `C
 
 ### Building Circuits
 
-A circuit is a `Vector` of gates to be applied sequentially. Each gate is specified as a tuple `(gate_string, vertices, parameter)` or as a raw `ITensor`:
+A circuit is a `Vector` of gates to be applied sequentially. Each gate is specified as a tuple `(gate_string, vertices, parameter)` or as a raw tensor built with `op`:
 
 ```julia
 layer = []
@@ -158,7 +158,7 @@ n = norm(ψ; alg = "bp")
 ψ = normalize(ψ; alg = "bp")
 
 # Inner product between two states
-ip = ITensors.inner(ψ, ϕ; alg = "bp")
+ip = inner(ψ, ϕ; alg = "bp")
 
 # Reduced density matrix on a set of vertices
 ρ = reduced_density_matrix(ψ, [(3, 3)]; alg = "bp")
@@ -215,7 +215,7 @@ Gates are specified as tuples of the form `(gate_string, vertices)` or `(gate_st
 | `"Rxxyy"`, `"Rxxyyzz"` | angle | Multi-Pauli rotations |
 | `"CPHASE"` | phase | Controlled phase |
 
-Custom gates can be defined by constructing the corresponding `ITensor` acting on the physical indices of the target qubits.
+Custom gates can be defined by building the corresponding tensor with `op` on the physical indices of the target qubits, or by registering a reusable named gate matrix with `register_op!`.
 
 ## GPU Support
 
@@ -261,8 +261,7 @@ We encourage users to read the literature listed below and explore the [tests](t
 You can also work directly in the Heisenberg picture, representing a many-body operator as a TNS with two indices per site.
 
 ```julia
-using ITensors: noprime, op
-using TensorNetworkQuantumSimulator: setindex_preserve!
+using TensorNetworkQuantumSimulator: setindex_preserve!, noprime
 
 # Start with the Z operator on a single site vz, identity elsewhere
 s = siteinds("S=1/2", g; inds_per_site = 2)

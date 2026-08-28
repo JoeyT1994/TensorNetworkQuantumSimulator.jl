@@ -1,5 +1,5 @@
 @eval module $(gensym())
-using TensorNetworkQuantumSimulator: scalar, random_itensor, new_index, contract
+using TensorNetworkQuantumSimulator: scalar, random_tensor, new_index, contract
 using Random
 using TensorNetworkQuantumSimulator
 const TNQS = TensorNetworkQuantumSimulator
@@ -16,8 +16,8 @@ collect_leaves!(acc, x) = (for y in x; collect_leaves!(acc, y); end; acc)
     # --- to_eincode: tensors -> (EinCode, size_dict). Tests the omeinsum-specific
     #     input conversion directly (tensors -> EinCode), so a silent fallback to another backend can't pass it.
     i, j, k = new_index(2), new_index(3), new_index(4)
-    A = random_itensor(Float64, i, j)
-    B = random_itensor(Float64, j, k)
+    A = random_tensor(Float64, i, j)
+    B = random_tensor(Float64, j, k)
     code, size_dict = TNQS.to_eincode([A, B])
     @test Set(Set.(getixsv(code))) == Set([Set([i, j]), Set([j, k])])  # per-tensor index sets
     @test Set(getiyv(code)) == Set([i, k])                             # open indices (j is contracted)
@@ -53,9 +53,9 @@ collect_leaves!(acc, x) = (for y in x; collect_leaves!(acc, y); end; acc)
 
     # --- open network: result is a tensor with dangling indices (iy non-empty).
     p, q, r, s, t = new_index(2), new_index(3), new_index(2), new_index(3), new_index(2)
-    X = random_itensor(Float64, p, q)
-    Y = random_itensor(Float64, q, r, s)
-    Z = random_itensor(Float64, s, t)
+    X = random_tensor(Float64, p, q)
+    Y = random_tensor(Float64, q, r, s)
+    Z = random_tensor(Float64, s, t)
     open_tensors = [X, Y, Z]   # open indices: p, r, t
     seq_open = TNQS.contraction_sequence(open_tensors; alg = "omeinsum", optimizer = GreedyMethod())
     @test sort(collect_leaves!(Int[], seq_open)) == [1, 2, 3]

@@ -628,12 +628,12 @@ end
 
 #Random tensors: a TensorMap only populates flux-zero trees, so plain randn is already
 #the symmetric random initializer.
-function TensorInterface.random_itensor(elt::Type{<:Number}, is::GradedIndex...)
+function TensorInterface.random_tensor(elt::Type{<:Number}, is::GradedIndex...)
     iv = collect(Index, is)
     data = randn(elt, TK.ProductSpace(map(slotspace, iv)...))
     return GradedTensor(iv, data)
 end
-TensorInterface.random_itensor(is::GradedIndex...) = TensorInterface.random_itensor(Float64, is...)
+TensorInterface.random_tensor(is::GradedIndex...) = TensorInterface.random_tensor(Float64, is...)
 
 #Fermionic BP messages carry a per-message parity gauge: m and its parity twist (odd
 #sector negated) are equally valid fixed points, and update history determines which
@@ -801,7 +801,7 @@ function LinearAlgebra.qr(t::GradedTensor, linds; kwargs...)
     return _tk_wrap_left(Q, li, b), _tk_wrap_right(R, ri, b)
 end
 
-#Hermitian eigendecomposition, ITensors-style conventions: D on (prime(lk), lk), U on
+#Hermitian eigendecomposition, seam conventions: D on (prime(lk), lk), U on
 #(rinds..., lk). Per-copy flags are read off the actual data slots, so every shared
 #identity ends up with opposite orientations on its two holders.
 function LinearAlgebra.eigen(t::GradedTensor, linds, rinds; ishermitian::Bool = false, kwargs...)
