@@ -463,14 +463,16 @@ end
             @test all(x -> iseven(sum(values(x.bitstring))), samples)
             #fermionic boundary MPS: fitted seam messages (fit-adjoint supertrace metric
             #on out-arrow crossing legs) + a joint odd-pair operator through the walk.
-            #Residual ~1e-4 is the known fixed-link-sector fitting allocation.
-            bmps = update(BoundaryMPSCache(ψt, 8))
+            #One-site graded fitting is optimal at fixed χ: exact once χ reaches the
+            #doubled-column rank (here 16), and matching the SVD-optimal truncation
+            #below it — verified against a truncated-exact-message baseline.
+            bmps = update(BoundaryMPSCache(ψt, 16))
             e_h = first(filter(e -> src(e)[1] == dst(e)[1], es))
             w1, w2 = src(e_h), dst(e_h)
             n_bmps = real(only(expect(bmps, ("N", [w1]); alg = "boundarymps")))
-            @test n_bmps ≈ real(ψv' * (cs[mode[w1]]' * cs[mode[w1]]) * ψv) / nrm atol = 1.0e-3
+            @test n_bmps ≈ real(ψv' * (cs[mode[w1]]' * cs[mode[w1]]) * ψv) / nrm atol = 1.0e-10
             c_bmps = only(expect(bmps, ("CdagC", (w1, w2)); alg = "boundarymps"))
-            @test c_bmps ≈ (ψv' * (cs[mode[w1]]' * cs[mode[w2]]) * ψv) / nrm atol = 1.0e-3
+            @test c_bmps ≈ (ψv' * (cs[mode[w1]]' * cs[mode[w2]]) * ψv) / nrm atol = 1.0e-10
         end
 
         @testset "loop corrections at odd total parity (charge-leg gauge line)" begin
