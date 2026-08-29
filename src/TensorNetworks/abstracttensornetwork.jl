@@ -13,9 +13,9 @@ add_tensor!(tn::AbstractTensorNetwork, tensor::ITensor, v) = not_implemented()
 
 Graphs.is_directed(::Type{<:AbstractTensorNetwork}) = false
 
-NamedGraphs.vertex_positions(tn::AbstractTensorNetwork) = NamedGraphs.vertex_positions(graph(tn))
-NamedGraphs.ordered_vertices(tn::AbstractTensorNetwork) = NamedGraphs.ordered_vertices(graph(tn))
-NamedGraphs.position_graph(tn::AbstractTensorNetwork) = NamedGraphs.position_graph(graph(tn))
+NamedGraphs.encoded_vertex(tn::AbstractTensorNetwork, vertex) = NamedGraphs.encoded_vertex(graph(tn), vertex)
+NamedGraphs.decoded_vertex(tn::AbstractTensorNetwork, code::Integer) = NamedGraphs.decoded_vertex(graph(tn), code)
+NamedGraphs.encoded_graph(tn::AbstractTensorNetwork) = NamedGraphs.encoded_graph(graph(tn))
 NamedGraphs.vertices(tn::AbstractTensorNetwork) = NamedGraphs.vertices(graph(tn))
 NamedGraphs.edges(tn::AbstractTensorNetwork) = NamedGraphs.edges(graph(tn))
 NamedGraphs.edgetype(tn::AbstractTensorNetwork) = NamedGraphs.edgetype(graph(tn))
@@ -133,7 +133,7 @@ function add(tn1::AbstractTensorNetwork, tn2::AbstractTensorNetwork)
         @assert tn1 isa TensorNetwork && tn2 isa TensorNetwork
     end
 
-    es = edges(tn1)
+    es = collect(edges(tn1))
     tn12 = copy(tn1)
     new_edge_indices = Dict(
         zip(
