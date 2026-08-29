@@ -1,39 +1,30 @@
 #=
-Backend kernel hooks: the one place where backend-specific fast paths attach to the
-generic algorithms. Each generic entry point (`updated_message`, `expect`'s region
-contraction, `vertex_scalar`, `simple_update`) calls its hook first; the generic fallback
-methods (defined next to those entry points) return `nothing`, so removing this file — or
-running networks whose structure the pattern checks reject — leaves the library on the
-plain seam-verb path with identical results.
+Backend-specific methods, gathered in one file so the generic algorithms stay
+backend-agnostic. Two kinds of content:
+
+  * OPTIONAL fast paths: each generic entry point (`updated_message`, `expect`'s region
+    contraction, `vertex_scalar`, `simple_update`) calls its hook first, and the generic
+    fallbacks return `nothing` — a network whose structure a pattern check rejects takes
+    the plain seam-verb path with identical results.
+  * REQUIRED graded capability: charged product states (`graded_tensornetworkstate`),
+    graded identity/purification constructors, boundary-MPS message initialization over
+    charged link spectra, and the tensor-gate passthrough — these are the sole
+    implementations of their entry points.
 
 The kernels themselves (buffered contraction chains, fused conjugation, in-place
 factorizations) live in the Tensors module; these methods only translate network-level
 structure (site indices, environment lists) into kernel inputs.
 =#
 
-#Fused fast path for the double-layer BP message update (see Tensors.fused_norm_message).
-#Falls through to the generic contraction path when the message structure doesn't match
-#(e.g. boundary-MPS messages with link indices).
-function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector{<:Tensor}; normalize)
-    ψ = tns[v]
-    ψ isa Tensor || return nothing
-    sinds = siteinds(tns, v)
-    all(i -> i isa Index, sinds) || return nothing
-    return Tensors.fused_norm_message(ψ, collect(Index, sinds), incoming_ms; normalize)
-end
-
-#Fused fast path for BP region scalars (expectation-value numerators/denominators and
-#vertex scalars): one- and two-vertex regions close through the same fused kernel — a
-#two-vertex region is "message from v1 with its operator inserted" followed by a full
-#closure at v2. Larger Steiner regions and non-standard structures fall back.
-function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Vector{<:Tensor}; op_strings::Function)
-    1 <= length(vs) <= 2 || return nothing
-    ψs, sindss, ops = Tensor[], Vector{Index}[], Union{Nothing, Tensor}[]
+#Per-vertex operator triage shared by the dense and graded region-scalar kernels:
+#"I" → no operator, single-site names → adapted op tensors; ρ insertions and
+#multi-site-index vertices fall back to the generic path (returns nothing).
+function _region_site_ops(tns::TensorNetworkState, vs::Vector, op_strings::Function, ::Type{T}) where {T}
+    ψs, sindss, ops = T[], Vector{Index}[], Union{Nothing, T}[]
     for v in vs
         ψ = tns[v]
-        ψ isa Tensor || return nothing
+        ψ isa T || return nothing
         sinds = siteinds(tns, v)
-        all(i -> i isa Index, sinds) || return nothing
         str = op_strings(v)
         if str == "I"
             push!(ops, nothing)
@@ -45,6 +36,27 @@ function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Ve
         push!(ψs, ψ)
         push!(sindss, collect(Index, sinds))
     end
+    return ψs, sindss, ops
+end
+
+#Fused fast path for the double-layer BP message update (see Tensors.fused_norm_message).
+#Falls through to the generic contraction path when the message structure doesn't match
+#(e.g. boundary-MPS messages with link indices).
+function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector{<:Tensor}; normalize)
+    ψ = tns[v]
+    ψ isa Tensor || return nothing
+    return Tensors.fused_norm_message(ψ, collect(Index, siteinds(tns, v)), incoming_ms; normalize)
+end
+
+#Fused fast path for BP region scalars (expectation-value numerators/denominators and
+#vertex scalars): one- and two-vertex regions close through the same fused kernel — a
+#two-vertex region is "message from v1 with its operator inserted" followed by a full
+#closure at v2. Larger Steiner regions and non-standard structures fall back.
+function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Vector{<:Tensor}; op_strings::Function)
+    1 <= length(vs) <= 2 || return nothing
+    triage = _region_site_ops(tns, vs, op_strings, Tensor)
+    triage === nothing && return nothing
+    ψs, sindss, ops = triage
 
     if length(vs) == 1
         c = Tensors.fused_norm_closure(ψs[1], sindss[1], incoming_ms; op = ops[1])
@@ -83,20 +95,19 @@ function fused_simple_update(
     isempty(setdiff(keys(apply_kwargs), (:maxdim, :cutoff))) || return nothing
     #all participating tensors must share one supported storage family (host, or one GPU
     #array family) — the kernel's workspace buffer is carved from that same memory
-    Tensors._uniform_kernel_storage(o.data, (t.data for t in ψ⃗)..., (env.data for env in envs)...) === nothing && return nothing
+    arrays = Any[o.data]
+    append!(arrays, (t.data for t in ψ⃗))
+    append!(arrays, (env.data for env in envs))
+    Tensors._uniform_kernel_storage(arrays) === nothing && return nothing
 
-    sqrt_cutoff = isnothing(sqrt_cutoff) ? 10 * eps(real(scalartype(first(envs)))) : sqrt_cutoff
-    envs_v1 = filter(env -> hascommoninds(env, ψ⃗[1]), envs)
-    envs_v2 = filter(env -> hascommoninds(env, ψ⃗[2]), envs)
-    ssi1 = pseudo_sqrt_inv_sqrt.(envs_v1; cutoff = sqrt_cutoff)
-    ssi2 = pseudo_sqrt_inv_sqrt.(envs_v2; cutoff = sqrt_cutoff)
+    sqrt1, inv1, sqrt2, inv2 = gauged_env_pairs(ψ⃗, envs, sqrt_cutoff)
     s1 = collect(Index, commoninds(ψ⃗[1], o))
     s2 = collect(Index, commoninds(ψ⃗[2], o))
 
     t1, t2, s_values, err = Tensors.fused_two_site_gate(
         o, ψ⃗[1], ψ⃗[2],
-        collect(Tensor, first.(ssi1)), collect(Tensor, last.(ssi1)),
-        collect(Tensor, first.(ssi2)), collect(Tensor, last.(ssi2)),
+        collect(Tensor, sqrt1), collect(Tensor, inv1),
+        collect(Tensor, sqrt2), collect(Tensor, inv2),
         s1, s2; apply_kwargs...
     )
     updated_tensors = [t1, t2]
@@ -165,22 +176,9 @@ end
 
 function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Vector{<:Tensors.GradedTensor}; op_strings::Function)
     1 <= length(vs) <= 2 || return nothing
-    ψs, sindss, ops = Tensors.GradedTensor[], Vector[], Union{Nothing, Tensors.GradedTensor}[]
-    for v in vs
-        ψ = tns[v]
-        ψ isa Tensors.GradedTensor || return nothing
-        sinds = siteinds(tns, v)
-        str = op_strings(v)
-        if str == "I"
-            push!(ops, nothing)
-        elseif str == "ρ" || length(sinds) != 1
-            return nothing
-        else
-            push!(ops, adapt_like(ψ, op(str, only(sinds))))
-        end
-        push!(ψs, ψ)
-        push!(sindss, collect(sinds))
-    end
+    triage = _region_site_ops(tns, vs, op_strings, Tensors.GradedTensor)
+    triage === nothing && return nothing
+    ψs, sindss, ops = triage
     all(m -> any(ψ -> _is_norm_message(m, inds(ψ)), ψs), incoming_ms) || return nothing
 
     if length(vs) == 1
@@ -197,6 +195,19 @@ function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Ve
     T1 isa Number && return nothing   #disconnected region: fall back
     c = _graded_closure(ψs[2], sindss[2], vcat(ms2, [T1]); op_tensor = ops[2])
     return c isa Number ? c : nothing
+end
+
+#Graded (symmetric, TensorKit-backed) site indices: `sectors` is a list of
+#charge => dimension pairs under the group named by `symmetry`. With an even number of
+#inds per site (purifications), the second half are ancillas carrying the DUAL
+#representation (dag'd copies) so the identity state is flux-zero per site.
+function graded_siteinds(sitetype::String, vs::Vector, sitedimension::Integer, sectors, symmetry, inds_per_site::Integer)
+    symmetry === nothing && error("siteinds: explicit `sectors` need a `symmetry` name")
+    sum(last.(sectors)) == sitedimension ||
+        error("siteinds: sector dimensions $(sectors) do not sum to the site dimension $(sitedimension)")
+    sp = Tensors.graded_space(symmetry, sectors)
+    anc(i) = iseven(inds_per_site) && i > inds_per_site ÷ 2
+    return Dictionary(vs, [[(ind = Tensors.Index(sp, site_tag(sitetype)); anc(i) ? dag(ind) : ind) for i in 1:inds_per_site] for v in vs])
 end
 
 #Charged product states on graded (TensorKit-backed) sites: local charges are routed
@@ -254,7 +265,7 @@ end
 #structure-compatible full-rank start converges properly. Conservation itself is free:
 #TensorMaps only populate flux-zero trees, so `random_tensor` over correctly-oriented
 #legs is the conserving initializer — this function only chooses the link sectors.
-function set_graded_interpartition_messages!(bmps_cache::BoundaryMPSCache, es::Vector{<:NamedEdge}; link_sectors = nothing)
+function set_graded_interpartition_messages!(bmps_cache::BoundaryMPSCache, es::Vector{<:NamedEdge})
     n = length(es)
     #Link i carries the CUMULATIVE charge imbalance of message sites 1..i, so its sector
     #support is the convolution of the per-site charge spectra from the left, intersected
@@ -267,9 +278,7 @@ function set_graded_interpartition_messages!(bmps_cache::BoundaryMPSCache, es::V
     links = Index[]
     for i in 1:(n - 1)
         virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
-        sp = link_sectors === nothing ?
-            Tensors.allocate_link_space(prefix[i], suffix[i + 1], virt_dim) :
-            link_sectors(virt_dim)
+        sp = Tensors.allocate_link_space(prefix[i], suffix[i + 1], virt_dim)
         push!(links, Index(sp, "m$(i)$(i + 1)"))
     end
     for i in 1:n
@@ -304,7 +313,7 @@ function graded_identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary
     ts = Dictionary{vertextype(g), Any}()
     for v in vertices(g)
         ninds = length(s[v])
-        ninds % 2 == 0 || error("identity state: odd number of siteinds on vertex $v")
+        ninds % 2 == 0 || error("identity state: odd number of siteinds on vertex $v — cannot pair kets with bras")
         onehots = [onehot(eltype, (src(e) == v ? l[e] : dag(l[e])) => 1) for e in edges(g) if src(e) == v || dst(e) == v]
         if ninds > 0
             t = Tensors.pairing_tensor(eltype, s[v][1:(ninds ÷ 2)], s[v][((ninds ÷ 2) + 1):ninds])

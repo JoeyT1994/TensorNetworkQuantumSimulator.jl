@@ -34,7 +34,7 @@ function reduced_density_matrix(
         alg::Algorithm"exact",
         ψ::TensorNetworkState,
         verts::Vector;
-        contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod()),
+        contraction_sequence_kwargs = default_contraction_sequence_kwargs(),
         normalize = true
     )
     op_string_f = v -> v ∈ verts ? "ρ" : "I"
@@ -54,16 +54,8 @@ function reduced_density_matrix(
         vs::Vector;
         normalize = true
     )
-    steiner_vs = length(vs) == 1 ? vs : collect(vertices(steiner_tree(network(cache), vs)))
-    incoming_ms = incoming_messages(cache, steiner_vs)
-
-    op_string_f = v -> v ∈ vs ? "ρ" : "I"
-
-    #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
-    ρ_tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
-    append!(ρ_tensors, incoming_ms)
-    seq = contraction_sequence(ρ_tensors; alg = "optimal")
-    ρ = contract(ρ_tensors; sequence = seq)
+    steiner_vs, incoming_ms = bp_region(cache, vs)
+    ρ = contract_bp_region(cache, steiner_vs, incoming_ms; op_strings = v -> v ∈ vs ? "ρ" : "I")
 
     if normalize
         ρ = normalize_rdm(ρ)

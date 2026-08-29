@@ -92,12 +92,32 @@ function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetwor
         if f ∈ ["normalize", "sample", "sample_certified", "truncate"]
             return error("exact contraction not supported for this functionality yet")
         end
-    elseif alg ∉ ["exact", "bp", "loopcorrections", "boundarymps"]
-        return error("Unrecognized algorithm specified. Must be one of 'exact', 'bp', 'loopcorrections', or 'boundarymps'")
     else
-        return nothing
+        return error("Unrecognized algorithm specified. Must be one of 'exact', 'bp', 'loopcorrections', or 'boundarymps'")
     end
+    return nothing
 end
+
+#Steiner region for a set of vertices and its incoming BP messages (shared by expect
+#and reduced_density_matrix).
+function bp_region(cache::BeliefPropagationCache, vs::Vector)
+    steiner_vs = length(vs) == 1 ? vs : collect(vertices(steiner_tree(network(cache), vs)))
+    return steiner_vs, incoming_messages(cache, steiner_vs)
+end
+
+#Contraction of a region closure [norm factors; incoming messages] with an optimal
+#sequence. TODO: for large regions (≳100 tensors) the "optimal" search may become the
+#bottleneck and a custom sequence is warranted.
+function contract_bp_region(cache::BeliefPropagationCache, steiner_vs, incoming_ms; op_strings, joint_op = nothing)
+    tensors = norm_factors(network(cache), steiner_vs; op_strings, joint_op)
+    append!(tensors, incoming_ms)
+    seq = contraction_sequence(tensors; alg = "optimal")
+    return contract(tensors; sequence = seq)
+end
+
+#Default sequence-search settings for exact contractions (shared by expect, norm_sqr,
+#inner, rdm and contract).
+default_contraction_sequence_kwargs() = (; alg = "omeinsum", optimizer = GreedyMethod())
 
 default_alg(bp_cache::BeliefPropagationCache) = "bp"
 default_alg(bmps_cache::BoundaryMPSCache) = "boundarymps"

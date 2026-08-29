@@ -75,24 +75,6 @@ function Adapt.adapt_structure(to, tn::AbstractTensorNetwork)
     return map_tensors(x -> adapt(to)(x), tn)
 end
 
-function insert_virtualinds!(tn::AbstractTensorNetwork; bond_dimension::Integer = 1)
-    dtype = datatype(tn)
-    for e in edges(tn)
-        if isempty(commoninds(tn[src(e)], tn[dst(e)]))
-            l = new_index(tn[src(e)], bond_dimension)
-            p = adapt(dtype)(onehot(l => 1))
-            setindex_preserve!(tn, tn[src(e)] * p, src(e))
-            setindex_preserve!(tn, tn[dst(e)] * p, dst(e))
-        end
-    end
-    return tn
-end
-
-function insert_virtualinds(tn::AbstractTensorNetwork; kwargs...)
-    tn = copy(tn)
-    return insert_virtualinds!(tn; kwargs...)
-end
-
 function map_virtualinds!(f::Function, tn::AbstractTensorNetwork)
     for e in edges(tn)
         vinds = commoninds(tn[src(e)], tn[dst(e)])
@@ -108,32 +90,14 @@ function map_virtualinds(f::Function, tn::AbstractTensorNetwork)
     return map_virtualinds!(f, tn)
 end
 
-function combine_virtualinds!(tn::AbstractTensorNetwork)
-    dtype = datatype(tn)
-    for e in edges(tn)
-        vinds = commoninds(tn[src(e)], tn[dst(e)])
-        if length(vinds) > 1
-            C = adapt(dtype)(combiner(vinds))
-            setindex_preserve!(tn, tn[src(e)] * C, src(e))
-            setindex_preserve!(tn, tn[dst(e)] * C, dst(e))
-        end
-    end
-    return tn
-end
-
-function combine_virtualinds(tn::AbstractTensorNetwork)
-    tn = copy(tn)
-    return combine_virtualinds!(tn)
-end
-
 """Add two tensornetworks together. The network structures need to be have the same graph structure"""
 function add(tn1::AbstractTensorNetwork, tn2::AbstractTensorNetwork)
-    @assert graph(tn1) == graph(tn2)
-
+    graph(tn1) == graph(tn2) || error("add: the two networks must share the same graph")
     if tn1 isa TensorNetworkState && tn2 isa TensorNetworkState
-        @assert siteinds(tn1) == siteinds(tn2)
+        siteinds(tn1) == siteinds(tn2) || error("add: the two states must share the same site indices")
     else
-        @assert tn1 isa TensorNetwork && tn2 isa TensorNetwork
+        tn1 isa TensorNetwork && tn2 isa TensorNetwork ||
+            error("add: expected two TensorNetworks or two TensorNetworkStates")
     end
 
     es = edges(tn1)

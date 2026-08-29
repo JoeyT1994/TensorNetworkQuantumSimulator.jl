@@ -28,7 +28,7 @@ function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = site
     for v in vertices(g)
         es = incident_edges(g, v; dir = :in)
         ninds = length(s[v])
-        ninds % 2 != 0 && error("Odd number of siteinds on vertex $v - don't know how to partition into rows and column")
+        ninds % 2 != 0 && error("identity state: odd number of siteinds on vertex $v — cannot pair kets with bras")
         t = delta(eltype, [links[e] for e in es])
         if ninds > 0
             row_inds, col_inds = s[v][1:(ninds÷2)], s[v][((ninds÷2)+1):ninds]
@@ -44,7 +44,7 @@ end
 identity_tensornetworkstate(g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2)) = identity_tensornetworkstate(Float64, g, s)
 
 """
-    toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n, n); periodic = true)))
+    toriccode_groundstate([eltype], n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n, n); periodic = true)))
 
 Construct an exact bond-dimension-2 tensor network state for the ground state of
 Kitaev's toric code on an `n × n` torus. The state lives on a periodic `n × n`
@@ -60,9 +60,8 @@ of a periodic `n × n` named grid.
 
 Returns a [`TensorNetworkState`](@ref) of bond dimension 2.
 """
-function toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n,n); periodic = true)))
+function toriccode_groundstate(eltype::Type, n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n,n); periodic = true)))
     g = named_grid((n,n); periodic = true)
-    vs = collect(vertices(g))
     tensors = Dictionary{vertextype(g), Any}()
     es=  edges(g)
     e_dict = Dictionary(es, [new_index(2) for e in edges(g)])
@@ -73,7 +72,7 @@ function toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_g
         incoming_inds = [e_dict[e] for e in incoming_es]
         sv = only(s[v])
 
-        state = from_array(zeros(ComplexF64, (dim.([incoming_inds..., sv])...,)), incoming_inds..., sv)
+        t = from_array(zeros(eltype, (dim.([incoming_inds..., sv])...,)), incoming_inds..., sv)
 
         north_index = e_dict[NamedEdge((mod1(v[1]+1, n), v[2]) => v)]
         east_index = e_dict[NamedEdge((v[1], mod1(v[2]+1, n)) => v)]
@@ -81,17 +80,19 @@ function toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_g
         west_index = e_dict[NamedEdge(v => (v[1], mod1(v[2]-1, n)))]
 
         if iseven(sum(v))
-            state  = state + (onehot(north_index => 1) * onehot(east_index => 1) + onehot(north_index => 2) * onehot(east_index => 2)) * (onehot(south_index => 1) * onehot(west_index => 1) + onehot(south_index => 2) * onehot(west_index => 2)) * onehot(sv => 1)
-            state  = state + (onehot(north_index => 1) * onehot(east_index => 1) - onehot(north_index => 2) * onehot(east_index => 2)) * (onehot(south_index => 1) * onehot(west_index => 1) - onehot(south_index => 2) * onehot(west_index => 2)) * onehot(sv => 2)
+            t = t + (onehot(eltype, north_index => 1) * onehot(eltype, east_index => 1) + onehot(eltype, north_index => 2) * onehot(eltype, east_index => 2)) * (onehot(eltype, south_index => 1) * onehot(eltype, west_index => 1) + onehot(eltype, south_index => 2) * onehot(eltype, west_index => 2)) * onehot(eltype, sv => 1)
+            t = t + (onehot(eltype, north_index => 1) * onehot(eltype, east_index => 1) - onehot(eltype, north_index => 2) * onehot(eltype, east_index => 2)) * (onehot(eltype, south_index => 1) * onehot(eltype, west_index => 1) - onehot(eltype, south_index => 2) * onehot(eltype, west_index => 2)) * onehot(eltype, sv => 2)
         else
-            state  = state + (onehot(north_index => 1) * onehot(west_index => 1) + onehot(north_index => 2) * onehot(west_index => 2)) * (onehot(south_index => 1) * onehot(east_index => 1) + onehot(south_index => 2) * onehot(east_index => 2)) * onehot(sv => 1)
-            state  = state + (onehot(north_index => 1) * onehot(west_index => 1) - onehot(north_index => 2) * onehot(west_index => 2)) * (onehot(south_index => 1) * onehot(east_index => 1) - onehot(south_index => 2) * onehot(east_index => 2)) * onehot(sv => 2)
+            t = t + (onehot(eltype, north_index => 1) * onehot(eltype, west_index => 1) + onehot(eltype, north_index => 2) * onehot(eltype, west_index => 2)) * (onehot(eltype, south_index => 1) * onehot(eltype, east_index => 1) + onehot(eltype, south_index => 2) * onehot(eltype, east_index => 2)) * onehot(eltype, sv => 1)
+            t = t + (onehot(eltype, north_index => 1) * onehot(eltype, west_index => 1) - onehot(eltype, north_index => 2) * onehot(eltype, west_index => 2)) * (onehot(eltype, south_index => 1) * onehot(eltype, east_index => 1) - onehot(eltype, south_index => 2) * onehot(eltype, east_index => 2)) * onehot(eltype, sv => 2)
         end
-        set!(tensors, v, state)
+        set!(tensors, v, t)
     end
     tensors = Dictionary(collect(keys(tensors)), narrow_tensors(collect(tensors)))
     return TensorNetworkState(TensorNetwork(tensors, g), s)
 end
+
+toriccode_groundstate(n::Int, args...) = toriccode_groundstate(ComplexF64, n, args...)
 
 """
     ising_partitionfunction(g::NamedGraph, β::Real; Js::Dictionary = Dictionary(edges(g), [1.0 for e in edges(g)]))
@@ -122,15 +123,12 @@ function ising_partitionfunction(g::NamedGraph, β::Real; Js::Dictionary = Dicti
     for e in edges(g)
         arg = β*Js[e]
         arg = arg < 0 ? Complex(arg) : arg
-        W = [exp(arg)  exp(-arg);
-              exp(-arg) exp(arg)]
 	    λ1, λ2 = cosh(arg), sinh(arg)
         α = 0.5 * (sqrt(λ1) + sqrt(λ2))
         ϕ = 0.5 * (sqrt(λ1) - sqrt(λ2))
         sqrt_W = sqrt(2)*[α ϕ; ϕ α]
         set!(sqrt_Ws, e, sqrt_W)
         set!(sqrt_Ws, reverse(e), sqrt_W)
-        sqrt_W * sqrt_W ≈ W ? nothing : throw(AssertionError("$(sqrt_W * sqrt_W), $(W)"))
     end
     
     ts = Dictionary{vertextype(g), Any}()

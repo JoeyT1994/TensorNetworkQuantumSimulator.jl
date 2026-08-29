@@ -136,16 +136,19 @@ function deletemessages!(
 end
 
 function vertex_scalars(
-        bp_cache::AbstractBeliefPropagationCache, vertices = collect(Graphs.vertices(bp_cache)); kwargs...
+        bp_cache::AbstractBeliefPropagationCache, vertices = default_scalar_vertices(bp_cache)
     )
-    return map(v -> vertex_scalar(bp_cache, v; kwargs...), vertices)
+    return map(v -> vertex_scalar(bp_cache, v), vertices)
 end
 
 function edge_scalars(
-        bp_cache::AbstractBeliefPropagationCache, edges = Graphs.edges(bp_cache); kwargs...
+        bp_cache::AbstractBeliefPropagationCache, edges = default_scalar_edges(bp_cache)
     )
-    return map(e -> edge_scalar(bp_cache, e; kwargs...), edges)
+    return map(e -> edge_scalar(bp_cache, e), edges)
 end
+
+default_scalar_vertices(bp_cache::AbstractBeliefPropagationCache) = collect(Graphs.vertices(bp_cache))
+default_scalar_edges(bp_cache::AbstractBeliefPropagationCache) = Graphs.edges(bp_cache)
 
 function scalar_factors_quotient(bp_cache::AbstractBeliefPropagationCache)
     return vertex_scalars(bp_cache), edge_scalars(bp_cache)
@@ -161,6 +164,15 @@ end
 
 function incoming_messages(bp_cache::AbstractBeliefPropagationCache, vertex; kwargs...)
     return incoming_messages(bp_cache, [vertex]; kwargs...)
+end
+
+#Swap a tensor's (unique) index from `inds` for its counterpart in `inds_sim`; a tensor
+#carrying none of `inds` is returned unchanged.
+function replace_matching_ind(t, inds_list, inds_sim)
+    t_inds = filter(i -> i ∈ inds_list, inds(t))
+    isempty(t_inds) && return t
+    pos = findfirst(==(only(t_inds)), inds_list)
+    return replaceind(t, inds_list[pos], inds_sim[pos])
 end
 
 #Backend-specialized fast paths for the double-layer message update and region scalars.
@@ -202,14 +214,6 @@ function updated_message(
     return updated_message, (cache_key, sequence, seq_changed)
 end
 
-function updated_message(
-        bp_cache::AbstractBeliefPropagationCache,
-        edge::NamedEdge;
-        alg = default_message_update_alg(bp_cache),
-        kwargs...,
-    )
-    return updated_message(set_default_kwargs(Algorithm(alg; kwargs...)), bp_cache, edge)
-end
 
 """
 Do a sequential update of the message tensors on `edges`
@@ -324,18 +328,18 @@ function rescale_messages!(bp_cache::AbstractBeliefPropagationCache)
     return rescale_messages!(bp_cache, edges(bp_cache))
 end
 
-function rescale_vertices!(bpc::AbstractBeliefPropagationCache; kwargs...)
-    return rescale_vertices!(bpc, collect(vertices(bpc)); kwargs...)
+function rescale_vertices!(bpc::AbstractBeliefPropagationCache)
+    return rescale_vertices!(bpc, collect(vertices(bpc)))
 end
 
-function rescale!(bpc::AbstractBeliefPropagationCache, args...; kwargs...)
+function rescale!(bpc::AbstractBeliefPropagationCache, args...)
     rescale_messages!(bpc)
-    rescale_vertices!(bpc, args...; kwargs...)
+    rescale_vertices!(bpc, args...)
     return bpc
 end
 
-function rescale(bpc::AbstractBeliefPropagationCache, args...; kwargs...)
+function rescale(bpc::AbstractBeliefPropagationCache, args...)
     bpc = copy(bpc)
-    rescale!(bpc, args...; kwargs...)
+    rescale!(bpc, args...)
     return bpc
 end

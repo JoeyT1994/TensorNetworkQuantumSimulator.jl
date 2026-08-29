@@ -2,7 +2,7 @@ function expect(
         alg::Algorithm"exact",
         ψ::TensorNetworkState,
         observables::Vector{<:Tuple};
-        contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod())
+        contraction_sequence_kwargs = default_contraction_sequence_kwargs()
     )
 
     denom = norm_sqr(alg, ψ; contraction_sequence_kwargs)
@@ -65,19 +65,14 @@ function expect(
     op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
     iszero(coeff) && return zero(coeff)
 
-    steiner_vs = length(obs_vs) == 1 ? obs_vs : collect(vertices(steiner_tree(network(cache), obs_vs)))
-    incoming_ms = incoming_messages(cache, steiner_vs)
+    steiner_vs, incoming_ms = bp_region(cache, obs_vs)
 
-    #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
     function contract_region(op_string_f; joint_op = nothing)
         if joint_op === nothing
             fast = norm_scalar_kernel(network(cache), steiner_vs, incoming_ms; op_strings = op_string_f)
             fast !== nothing && return fast
         end
-        tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f, joint_op)
-        append!(tensors, incoming_ms)
-        seq = contraction_sequence(tensors; alg = "optimal")
-        return scalar(contract(tensors; sequence = seq))
+        return scalar(contract_bp_region(cache, steiner_vs, incoming_ms; op_strings = op_string_f, joint_op))
     end
 
     denom = contract_region(v -> "I")

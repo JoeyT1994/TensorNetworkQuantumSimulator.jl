@@ -147,10 +147,10 @@ The local states can be given as strings (e.g. `"↑"`, `"↓"`, `"0"`, `"1"`) o
 # Returns
 - A `TensorNetworkState` representing the constructed tensor network state.
 """
-function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dictionary = default_siteinds(g); kwargs...)
+function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dictionary = default_siteinds(g))
     vs = collect(vertices(g))
     only(siteinds[first(vs)]) isa Tensors.GradedIndex &&
-        return graded_tensornetworkstate(eltype, f, g, siteinds; kwargs...)
+        return graded_tensornetworkstate(eltype, f, g, siteinds)
     tensors = Dictionary{vertextype(g), Any}()
     for v in vs
         tnv = f(v)

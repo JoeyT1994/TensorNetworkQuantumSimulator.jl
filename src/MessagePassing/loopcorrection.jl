@@ -33,21 +33,16 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
             ms = messages(bpc)
             set!(ms, reverse(e), mer)
             t = network(bpc)[src(e)]
-            t_inds = filter(i -> i ∈ linds, inds(t))
-            if !isempty(t_inds)
-                t_ind = only(t_inds)
-                t_ind_pos = findfirst(x -> x == t_ind, linds)
-                t = replaceind(t, t_ind, linds_sim[t_ind_pos])
-                setindex_preserve!(bpc, t, src(e))
-            end
+            t2 = replace_matching_ind(t, linds, linds_sim)
+            t2 === t || setindex_preserve!(bpc, t2, src(e))
             push!(updated_es, e)
 
             if e ∈ edges(eg) || reverse(e) ∈ edges(eg)
                 #the identity part of the antiprojector: one identity per rail (ket and,
-                #for norm networks, bra). Built as per-rail deltas rather than the
-                #former fused-combiner sandwich — for fermionic sectors the fused detour
-                #picks up a parity twist on the odd fused sector and is NOT the identity
-                #morphism (verified numerically; identical for bosonic/dense data).
+                #for norm networks, bra), inserted as per-rail deltas. NEVER build this
+                #as a fused-combiner sandwich C† δ C: for fermionic sectors that detour
+                #picks up a parity twist on the odd fused sector and is not the identity
+                #morphism (verified numerically; the two coincide for bosonic/dense data).
                 parts = [delta(dag(l), ls) for (l, ls) in zip(linds, linds_sim)]
                 if network(bpc) isa TensorNetworkState
                     append!(parts, [delta(prime(l), dag(prime(ls))) for (l, ls) in zip(linds, linds_sim)])

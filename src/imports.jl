@@ -3,7 +3,7 @@ using StatsBase
 
 using Dictionaries: Dictionary, set!
 
-using Graphs: simplecycles_limited_length, has_edge, SimpleGraph, center, steiner_tree, is_tree, vertices, nv
+using Graphs: has_edge, SimpleGraph, center, steiner_tree, is_tree, vertices, nv
 
 using SimpleGraphConverter
 using SimpleGraphAlgorithms: edge_color

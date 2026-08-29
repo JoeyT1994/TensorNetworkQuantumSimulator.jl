@@ -106,7 +106,7 @@ function optimise_p_q(
         o;
         nfullupdatesweeps = 10,
         print_fidelity_loss = false,
-        envisposdef = true,
+        envisposdef = false,
         apply_kwargs...,
     )
     p_cur, q_cur = factorize(
@@ -162,4 +162,4 @@ function optimise_p_q(
     return p_cur, q_cur
 end
 
-partial = (f, a...; c...) -> (b...) -> f(a..., b...; c...)
+const partial = (f, a...; c...) -> (b...) -> f(a..., b...; c...)

@@ -2,6 +2,14 @@ using SimpleGraphAlgorithms: SimpleGraphAlgorithms
 
 default_truncate_alg(tns::TensorNetworkState) = nothing
 
+#Identity two-site gate on edge e (identity truncation: applying it with truncating
+#apply_kwargs compresses the bond)
+function _identity_gate(s::Dictionary, e::NamedEdge, dtype)
+    g1 = reduce(*, [op("I", sv) for sv in s[src(e)]])
+    g2 = reduce(*, [op("I", sv) for sv in s[dst(e)]])
+    return adapt(dtype)(g1 * g2)
+end
+
 function truncatable_edge(cache::AbstractBeliefPropagationCache, e::NamedEdge)
     vinds = virtualinds(cache, e)
     isempty(vinds) && return false
@@ -27,16 +35,14 @@ function truncate(bpc::BeliefPropagationCache; bp_update_kwargs = default_bp_upd
         for eg in edge_groups
             for e in eg
                 if truncatable_edge(bpc, e)
-                    g1, g2 = reduce(*, [op("I", sv) for sv in s[src(e)] ]), reduce(*, [op("I", sv) for sv in s[dst(e)] ])
-                    apply_gate!(adapt(dtype)(g1 * g2), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
+                    apply_gate!(_identity_gate(s, e, dtype), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
                 end
             end
             bpc = update(bpc; bp_update_kwargs...)
         end
     else
         for e in edges(bpc)
-            g1, g2 = reduce(*, [op("I", sv) for sv in s[src(e)]]), reduce(*, [op("I", sv) for sv in s[dst(e)]])
-            apply_gate!(adapt(dtype)(g1 * g2), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
+            apply_gate!(_identity_gate(s, e, dtype), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
             bpc = update(bpc; bp_update_kwargs...)
         end
     end
@@ -56,9 +62,8 @@ function truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff = nothin
         !isempty(seq) && update_partition!(bmps_cache, seq)
         for e in reverse.(reverse(seq))
             if truncatable_edge(bmps_cache, e)
-                g1, g2 = reduce(*, [op("I", sv) for sv in s[src(e)]]), reduce(*, [op("I", sv) for sv in s[dst(e)]])
                 envs = incoming_messages(bmps_cache, [src(e), dst(e)])
-                ρv1, ρv2 = full_update(adapt(dtype)(g1 * g2), network(bmps_cache), [src(e), dst(e)]; envs, apply_kwargs...)
+                ρv1, ρv2 = full_update(_identity_gate(s, e, dtype), network(bmps_cache), [src(e), dst(e)]; envs, apply_kwargs...)
                 if normalize_tensors
                     ρv1 = normalize(ρv1)
                     ρv2 = normalize(ρv2)

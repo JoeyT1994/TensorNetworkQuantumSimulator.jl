@@ -139,6 +139,9 @@ end
 
 _like(t::GradedTensor, inds, data) = GradedTensor(inds, data)
 
+TensorInterface.new_index(t::GradedTensor, d::Integer; tags = "") =
+    TensorInterface.new_index(first(t.inds), d; tags)
+
 Base.eltype(t::GradedTensor) = TK.scalartype(t.data)
 
 #Normalization functional (BP normalizes messages by sum). Two requirements meet here:
@@ -159,8 +162,9 @@ function Base.sum(t::GradedTensor)
     return iszero(lead) ? zero(eltype(t)) : (lead / abs(lead)) * tot
 end
 
-TensorInterface.datatype(t::GradedTensor) = typeof(t.data.data)
-TensorInterface.data(t::GradedTensor) = t
+TensorInterface.datatype(t::GradedTensor) = TK.storagetype(typeof(t.data))
+#raw storage vector (mutable view over every block), per the seam contract
+TensorInterface.data(t::GradedTensor) = t.data.data
 
 # ── Charge-ordered basis conversion (tree basis ≡ sector-ordered product basis) ─────────
 
@@ -184,8 +188,10 @@ end
 _onesided(t::GradedTensor) = TK.numin(t.data) == 0 ? t :
     GradedTensor(t.inds, TK.permute(t.data, (Tuple(1:ndims(t)), ())))
 
-#NOTE: only trustworthy for all-non-dual tensors (states); dual slots involve duality
-#bends whose basis convention is TensorKit-internal. Ops are built two-sided instead.
+#NOTE: element ORDER within a sector is only guaranteed for all-non-dual tensors; for
+#abelian sectors the (s, s′)-closure uses validated by tr/diag (density-matrix reads in
+#sampling) are also safe. Mixed non-abelian dual slots involve duality bends whose basis
+#convention is TensorKit-internal.. Ops are built two-sided instead.
 function TensorInterface.array(t::GradedTensor)
     t = _onesided(t)
     out = zeros(eltype(t), Int[dimof(i) for i in t.inds]...)
@@ -326,16 +332,7 @@ end
 
 function TensorInterface.contract(ts::Vector{<:GradedTensor}; sequence = nothing, kwargs...)
     isnothing(sequence) && return reduce(*, ts)
-    return _contract_seq_tk(ts, sequence)
-end
-_contract_seq_tk(ts, s::Integer) = ts[s]
-_contract_seq_tk(ts, s::Union{Vector, Tuple}) = mapreduce(x -> _contract_seq_tk(ts, x), *, s)
-
-#Abstractly-typed tensor lists (e.g. from Any-valued network dictionaries) route here
-function TensorInterface.contract(ts::Vector; kwargs...)
-    all(t -> t isa Tensor, ts) && return TensorInterface.contract(collect(Tensor, ts); kwargs...)
-    all(t -> t isa GradedTensor, ts) && return TensorInterface.contract(collect(GradedTensor, ts); kwargs...)
-    return error("contract: expected a homogeneous tensor list, got $(unique(typeof.(ts)))")
+    return _contract_seq(ts, sequence)
 end
 
 
@@ -391,7 +388,6 @@ function TensorInterface.combiner(is::AbstractVector{<:GradedIndex}; tags = "CMB
     return GradedTensor(vcat([c], [TensorInterface.dag(i) for i in is]), data)
 end
 TensorInterface.combiner(is::GradedIndex...; kwargs...) = TensorInterface.combiner(collect(Index, is); kwargs...)
-TensorInterface.combinedind(C::GradedTensor) = first(C.inds)
 
 const F_STATES = Dict{String, Vector{Float64}}(
     "0" => [1, 0], "Emp" => [1, 0], "Empty" => [1, 0],
@@ -648,14 +644,7 @@ end
 _diag_view(b::AbstractMatrix) = view(b, LinearAlgebra.diagind(b)[1:min(size(b, 1), size(b, 2))])
 _diag_sum(b::AbstractMatrix) = (n = min(size(b, 1), size(b, 2)); n == 0 ? zero(eltype(b)) : sum(_diag_view(b)))
 
-#Fermionic BP messages carry a per-message parity gauge: m and its parity twist (odd
-#sector negated) are equally valid fixed points, and update history determines which
-#one BP produces (both appear in practice, always in closure-consistent pairs). For
-#operations that need the message as a PSD operator (square roots for gauging), detect
-#the gauge from the twist-carrying block trace and twist into the PSD representative —
-#the twist cancels in any M^½ · M^{-½} sandwich, so this is exact. Bosonic sectors have
-#trivial twists, so psd_gauge is the identity there.
-#The gauge freedom is PER SECTOR: scaling sector c of a message by a unit-modulus α_c
+#The BP message gauge freedom is PER SECTOR: scaling sector c of a message by a unit-modulus α_c
 #(with 1/α_c on its reverse partner) gives an equally valid fixed point, and update
 #history determines which representative BP produces — the fermionic parity twist
 #(α_odd = −1) is one instance, complex phases from scalar rescales another. Select the
@@ -683,11 +672,6 @@ function TensorInterface.map_diag!(f::Function, out::GradedTensor, t::GradedTens
         dv = _diag_view(t.data[f1, f2])
         dv .= f.(dv)
     end
-    return out
-end
-function TensorInterface.map_diag(f::Function, t::GradedTensor)
-    out = copy(t)
-    TensorInterface.map_diag!(f, out, out)
     return out
 end
 
@@ -726,20 +710,11 @@ function _tksvd_core(t::GradedTensor, lv::Vector{<:Index}; maxdim = nothing, cut
         U, S, Vh = svd_compact(tp)
         err = zero(real(eltype(t)))
     else
-        strategies = Any[]
-        isnothing(maxdim) || push!(strategies, truncrank(Int(maxdim)))
-        isnothing(cutoff) || push!(strategies, truncerror(; rtol = sqrt(cutoff), p = 2))
-        trunc = length(strategies) == 1 ? only(strategies) : reduce(&, strategies)
-        U, S, Vh, err = svd_trunc(tp; trunc)
+        U, S, Vh, err = svd_trunc(tp; trunc = _mak_trunc(; maxdim, cutoff))
     end
-    kept_s = Float64[]
-    for (c, b) in TK.blocks(S)
-        append!(kept_s, real.(LinearAlgebra.diag(b)))
-    end
-    sort!(kept_s; rev = true)
-    kept_s2 = kept_s .^ 2
-    truncerr = err > 0 ? err^2 / (err^2 + sum(kept_s2)) : zero(Float64)
-    return lpos, rpos, li, ri, U, S, Vh, kept_s2, truncerr
+    kept2 = sum((sum(abs2, LinearAlgebra.diag(b)) for (c, b) in TK.blocks(S)); init = 0.0)
+    truncerr = err > 0 ? err^2 / (err^2 + kept2) : zero(Float64)
+    return lpos, rpos, li, ri, U, S, Vh, truncerr
 end
 
 #Rewrap map factors as GradedTensors: L carries (li..., bond dual), R carries (bond, ri...).
@@ -767,7 +742,7 @@ function TensorInterface.factorize_svd(
     )
     ortho == "none" || error("factorize_svd: graded backend implements ortho = \"none\"")
     lv = filter(i -> i ∈ t.inds, _indvec(linds))
-    _, _, li, ri, U, S, Vh, kept_s2, truncerr = _tksvd_core(t, lv; maxdim, cutoff)
+    _, _, li, ri, U, S, Vh, truncerr = _tksvd_core(t, lv; maxdim, cutoff)
     sq = sqrt(S)
     u = _tk_bond_index(S, "Link,u")
     v = Index(u.space, "Link,v")
@@ -778,7 +753,7 @@ function TensorInterface.factorize_svd(
         Sc = TK.permute(S, ((1, 2), ()))
         singular_values![] = GradedTensor([_with_flag(u, false), _with_flag(v, true)], Sc)
     end
-    return F1, F2, KSpectrum(kept_s2, truncerr)
+    return F1, F2, Spectrum(truncerr)
 end
 
 function LinearAlgebra.factorize(
@@ -787,7 +762,7 @@ function LinearAlgebra.factorize(
     )
     lv = length(linds) == 1 ? _indvec(only(linds)) : collect(Index, linds)
     lv = filter(i -> i ∈ t.inds, lv)
-    _, _, li, ri, U, S, Vh, _, _ = _tksvd_core(t, lv; maxdim, cutoff)
+    _, _, li, ri, U, S, Vh, _ = _tksvd_core(t, lv; maxdim, cutoff)
     b = _tk_bond_index(S, String(tags))
     if ortho == "left"
         return _tk_wrap_left(U, li, b), _tk_wrap_right(S * Vh, ri, b)
@@ -800,7 +775,7 @@ end
 
 function LinearAlgebra.svd(t::GradedTensor, linds; maxdim = nothing, cutoff = nothing, kwargs...)
     lv = filter(i -> i ∈ t.inds, _indvec(linds))
-    _, _, li, ri, U, S, Vh, _, _ = _tksvd_core(t, lv; maxdim, cutoff)
+    _, _, li, ri, U, S, Vh, _ = _tksvd_core(t, lv; maxdim, cutoff)
     u = _tk_bond_index(S, "Link,u")
     v = Index(u.space, "Link,v")
     Ut = _tk_wrap_left(U, li, u)
@@ -852,13 +827,6 @@ function LinearAlgebra.eigen(t::GradedTensor, linds, rinds; ishermitian::Bool = 
         _with_flag(lk, TK.isdual(TK.space(Dc, 2))),
     ]
     return GradedTensor(dinds, Dc), U
-end
-
-function LinearAlgebra.eigen(t::GradedTensor; ishermitian::Bool = false, kwargs...)
-    lv = filter(i -> i.plev == 0, t.inds)
-    rv = collect(Index, TensorInterface.prime.(lv))
-    D, U = LinearAlgebra.eigen(t, lv, rv; ishermitian, kwargs...)
-    return D, TensorInterface.replaceinds(U, rv, lv)
 end
 
 #Projector ⟨v| onto basis state v of site i, as a flux-zero tensor: the site copy is

@@ -1,4 +1,20 @@
-using StatsBase
+
+#One single-site sampling step, shared by the BP and boundary-MPS samplers: close the
+#site against its environment, gauge to the PSD representative (graded closures carry a
+#per-sector parity gauge; dense no-op), sample the diagonal, and return the sampled
+#configuration with its probability, trace and site projector.
+function _sample_site(env_ms, ψv, ψvdag)
+    ts = [env_ms; [ψv, ψvdag]]
+    seq = contraction_sequence(ts; alg = "optimal")
+    ρ = parity_message_gauge(contract(ts; sequence = seq))
+    ρ_tr = tr(ρ)
+    ρ *= inv(ρ_tr)
+    ρ_diag = collect(real.(diag(array(ρ))))
+    config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
+    s_ind = inds(ρ)[findfirst(i -> plev(i) == 0, inds(ρ))]
+    P = adapt_like(ρ, projector(scalartype(ρ), s_ind => config))
+    return config, ρ_diag[config], ρ_tr, P
+end
 
 function sample(
         alg::Algorithm"bp",
@@ -19,22 +35,12 @@ function sample(
         projected_bp_cache = copy(bp_cache)
         bit_string = Dictionary{keytype(vertices(ψ)), Int}()
         for v in vertices(ψ)
-            tensors = incoming_messages(projected_bp_cache, v)
-            ψv, ψv_dag = network(projected_bp_cache)[v], dag(prime(network(projected_bp_cache)[v]))
-            push!(tensors, ψv, ψv_dag)
-            seq = contraction_sequence(tensors; alg = "optimal")
-            #graded closures carry a per-sector parity gauge; fix to the PSD
-            #representative so the diagonal is the physical distribution (dense no-op)
-            ρ = parity_message_gauge(contract(tensors; sequence = seq))
-
-            ρ_tr = tr(ρ)
-            ρ *= inv(ρ_tr)
-            ρ_diag = collect(real.(diag(array(ρ))))
-            config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
+            ψv = network(projected_bp_cache)[v]
+            config, _, _, P = _sample_site(
+                incoming_messages(projected_bp_cache, v), ψv, dag(prime(ψv))
+            )
             # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
             set!(bit_string, v, config - 1)
-            s_ind = inds(ρ)[findfirst(i -> plev(i) == 0, inds(ρ))]
-            P = adapt_like(ρ, projector(scalartype(ρ), s_ind => config))
             setindex_preserve!(projected_bp_cache, ψv * P, v)
 
             if v != last(vertices(ψ))
@@ -231,24 +237,13 @@ function sample_partition!(
     vs = vcat(src.(reverse.(reverse(seq))), [last(leaves)])
     for v in vs
         !isnothing(prev_v) && update_partition!(norm_bmps_cache, [NamedEdge(prev_v => v)])
-        incoming_ms = incoming_messages(norm_bmps_cache, [v])
         ψv = network(norm_bmps_cache)[v]
-        ψvdag = unprime_charge_legs(dag(prime(ψv)), ψv)
-        ts = [incoming_ms; [ψv, ψvdag]]
-        seq = contraction_sequence(ts; alg = "optimal")
-        #graded closures carry a per-sector parity gauge; fix to the PSD representative
-        #so the diagonal is the physical distribution (dense no-op)
-        ρ = parity_message_gauge(contract(ts; sequence = seq))
-        ρ_tr = tr(ρ)
+        config, q, ρ_tr, P = _sample_site(
+            incoming_messages(norm_bmps_cache, [v]), ψv, unprime_charge_legs(dag(prime(ψv)), ψv)
+        )
         push!(traces, ρ_tr)
-        ρ *= inv(ρ_tr)
-        ρ_diag = collect(real.(diag(array(ρ))))
-        config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
         # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
         set!(bit_string, v, config - 1)
-        s_ind = inds(ρ)[findfirst(i -> plev(i) == 0, inds(ρ))]
-        P = adapt_like(ρ, projector(scalartype(ρ), s_ind => config))
-        q = ρ_diag[config]
         logq += log(q)
         Pψv = copy(network(norm_bmps_cache)[v]) * inv(sqrt(q)) * P
         setindex_preserve!(norm_bmps_cache, Pψv, v)

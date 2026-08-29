@@ -1,4 +1,3 @@
-using Dictionaries: Dictionary
 
 function default_siteinds(g::AbstractGraph; kwargs...)
     return siteinds("S=1/2", g; kwargs...)
@@ -27,19 +26,8 @@ function siteinds(sitetype::String, g::AbstractGraph, sitedimension::Integer = s
     fermionic && symmetry === nothing && (symmetry = "fZ2")
     sectors === nothing && symmetry !== nothing &&
         (sectors = default_sectors(sitetype, symmetry))
-    if sectors !== nothing
-        #graded (symmetric, TensorKit-backed) site indices: `sectors` is a list of
-        #charge => dimension pairs under the group named by `symmetry`
-        symmetry === nothing && error("siteinds: explicit `sectors` need a `symmetry` name")
-        sum(last.(sectors)) == sitedimension ||
-            error("siteinds: sector dimensions $(sectors) do not sum to the site dimension $(sitedimension)")
-        sp = Tensors.graded_space(symmetry, sectors)
-        #with an even number of inds per site (purifications), the second half are
-        #ancillas and carry the DUAL representation (dag'd copies) so the identity
-        #state is flux-zero per site
-        anc(i) = iseven(inds_per_site) && i > inds_per_site ÷ 2
-        return Dictionary(vs, [[(ind = Tensors.Index(sp, site_tag(sitetype)); anc(i) ? dag(ind) : ind) for i in 1:inds_per_site] for v in vs])
-    end
+    sectors !== nothing &&
+        return graded_siteinds(sitetype, vs, sitedimension, sectors, symmetry, inds_per_site)
     return Dictionary(vs, [[new_index(sitedimension; tags = site_tag(sitetype)) for i in 1:inds_per_site] for v in vs])
 end
 

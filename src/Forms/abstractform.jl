@@ -4,6 +4,11 @@
 # `bra` is optional: `QuadraticForm` derives its bra lazily and does not provide one.
 abstract type AbstractForm{V} <: AbstractTensorNetwork{V} end
 
+ket(form::AbstractForm) = not_implemented()
+operator(form::AbstractForm) = not_implemented()
+bra_tensor(form::AbstractForm, v) = not_implemented()
+bra_virtualinds(form::AbstractForm, edge) = not_implemented()
+
 #Forward onto the ket
 for f in [
         :(graph),

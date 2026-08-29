@@ -2,10 +2,11 @@
 TensorInterface: the seam between TensorNetworkQuantumSimulator and the tensor backend.
 
 Every tensor-level verb the package uses is a generic function owned by this module. The
-Tensors module (the sole backend: named-index tensors over dense arrays, TensorOperations
-contraction, MatrixAlgebraKit factorizations) implements them for its `Index`/`Tensor`
-types; a future graded/symmetric backend (TensorKit `TensorMap` data) adds its own methods
-here without touching call sites.
+Tensors module implements them twice: for the dense backend (`Tensor`: named-index tensors
+over arrays, TensorOperations contraction, MatrixAlgebraKit factorizations) and the graded
+backend (`GradedTensor`: the same `Index` labels over TensorKit `TensorMap`s — symmetries
+and fermions). Shared label bookkeeping lives once on their supertype `AbstractTensor`; a
+further backend adds its own methods here without touching call sites.
 
 The rules:
   1. Tensor verbs come only from here; no backend library is referenced outside its module.
@@ -24,17 +25,20 @@ The rules:
 
 What a backend must implement, by group:
 
-  Index construction : new_index(ref, dim; tags), sim, dag, prime, noprime
+  Index construction : new_index(dim; tags) and new_index(ref, dim; tags), sim, dag,
+                       prime, noprime
   Index queries      : inds, dim, plev, tags, commonind(s), uniqueinds, unioninds,
                        noncommonind(s), hascommoninds
   Index replacement  : replaceind(s) (relabeling, no data movement)
-  Construction       : from_array, random_tensor, onehot, delta, combiner (+
+  Construction       : from_array, random_tensor, onehot, projector, delta, combiner (+
                        combinedind), directsum, op(name::String, siteinds...),
                        state(name::String, siteind)
   Contraction        : contract(ts::Vector; sequence), Base.:*, scalar, apply
   Diagonal ops       : map_diag, map_diag!
   Factorizations     : the LinearAlgebra generics of rule 3, factorize_svd
   Storage/type       : datatype, scalartype, array, data (raw storage vector, mutable view)
+  Traits             : has_closure_gauge (default false; true when multi-vertex closures
+                       can carry a parity-gauge sign — see loopcorrection.jl)
 =#
 module TensorInterface
 

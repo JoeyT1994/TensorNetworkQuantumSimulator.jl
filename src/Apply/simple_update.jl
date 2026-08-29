@@ -22,6 +22,17 @@ Simple update of one or two local tensors in the presence of factorized environm
 - `s_values`: The singular values from the SVD (if applicable).
 - `err::Number`: The truncation error from the SVD (if applicable).
 """
+#Environment gauging shared by the generic path and the fused kernel (kernel_hooks.jl):
+#per-vertex √env and √env⁻¹ pairs, with the cutoff defaulted from the environments'
+#scalar type (or the local tensors' when envs is empty and the cutoff is unused).
+function gauged_env_pairs(ψ⃗::Vector, envs, sqrt_cutoff)
+    ref = isempty(envs) ? first(ψ⃗) : first(envs)
+    sqrt_cutoff = isnothing(sqrt_cutoff) ? 10 * eps(real(scalartype(ref))) : sqrt_cutoff
+    ssi1 = pseudo_sqrt_inv_sqrt.(filter(env -> hascommoninds(env, ψ⃗[1]), envs); cutoff = sqrt_cutoff)
+    ssi2 = pseudo_sqrt_inv_sqrt.(filter(env -> hascommoninds(env, ψ⃗[2]), envs); cutoff = sqrt_cutoff)
+    return first.(ssi1), last.(ssi1), first.(ssi2), last.(ssi2)
+end
+
 function simple_update(
         o, ψ⃗::Vector;
         envs, normalize_tensors = true, sqrt_cutoff = nothing, apply_kwargs...
@@ -33,18 +44,10 @@ function simple_update(
     else
         fast = fused_simple_update(o, ψ⃗; envs, normalize_tensors, sqrt_cutoff, apply_kwargs...)
         fast !== nothing && return fast
-        # When envs is empty no gauging happens and the cutoff is unused, so fall back to
-        # the scalartype of the local tensors to materialize a valid default without erroring.
-        sqrt_cutoff_ref = isempty(envs) ? first(ψ⃗) : first(envs)
-        sqrt_cutoff = isnothing(sqrt_cutoff) ? 10 * eps(real(scalartype(sqrt_cutoff_ref))) : sqrt_cutoff
-        envs_v1 = filter(env -> hascommoninds(env, ψ⃗[1]), envs)
-        envs_v2 = filter(env -> hascommoninds(env, ψ⃗[2]), envs)
-        @assert all(ndims(env) == 2 for env in vcat(envs_v1, envs_v2))
-
-        sqrt_inv_sqrt_envs_v1 = pseudo_sqrt_inv_sqrt.(envs_v1; cutoff = sqrt_cutoff)
-        sqrt_inv_sqrt_envs_v2 = pseudo_sqrt_inv_sqrt.(envs_v2; cutoff = sqrt_cutoff)
-        sqrt_envs_v1, inv_sqrt_envs_v1 = first.(sqrt_inv_sqrt_envs_v1), last.(sqrt_inv_sqrt_envs_v1)
-        sqrt_envs_v2, inv_sqrt_envs_v2 = first.(sqrt_inv_sqrt_envs_v2), last.(sqrt_inv_sqrt_envs_v2)
+        all(env -> ndims(env) == 2, envs) ||
+            error("simple_update: environments must be 2-index tensors")
+        sqrt_envs_v1, inv_sqrt_envs_v1, sqrt_envs_v2, inv_sqrt_envs_v2 =
+            gauged_env_pairs(ψ⃗, envs, sqrt_cutoff)
 
         ψᵥ₁ = contract([ψ⃗[1]; sqrt_envs_v1])
         ψᵥ₂ = contract([ψ⃗[2]; sqrt_envs_v2])

@@ -95,7 +95,7 @@ function rescale_vertices!(
 end
 
 const _default_bp_update_maxiter = 25
-function default_tolerance(type)
+function default_tolerance(type::Type)
     (type == Float32 || type == ComplexF32) && return 1.0e-5
     (type == Float64 || type == ComplexF64) && return 1.0e-8
     return nothing
@@ -141,18 +141,9 @@ function loop_correlation(bpc::BeliefPropagationCache, loop::Vector{<:NamedEdge}
     e_virtualinds = inds(message(bpc, target_e))
     e_virtualinds_sim = sim.(e_virtualinds)
 
-    local_tensors = tensortype(bpc)[]
-    ts = bp_factors(bpc, src_vertex)
-
-    for t in ts
-        t_inds = filter(i -> i ∈ e_virtualinds, inds(t))
-        if !isempty(t_inds)
-            t_ind = only(t_inds)
-            t_ind_pos = findfirst(x -> x == t_ind, e_virtualinds)
-            t = replaceind(t, t_ind, e_virtualinds_sim[t_ind_pos])
-        end
-        push!(local_tensors, t)
-    end
+    local_tensors = tensortype(bpc)[
+        replace_matching_ind(t, e_virtualinds, e_virtualinds_sim) for t in bp_factors(bpc, src_vertex)
+    ]
 
     tensors = vcat(local_tensors, reduce(vcat, [bp_factors(bpc, v) for v in setdiff(vs, [src_vertex])]), incoming_messages)
     seq = contraction_sequence(tensors; alg = "omeinsum", optimizer = GreedyMethod())
@@ -168,16 +159,16 @@ function loop_correlation(bpc::BeliefPropagationCache, loop::Vector{<:NamedEdge}
 end
 
 #Calculate the correlations flowing around each of the primitive loops of the BP cache
-function loop_correlations(bpc::BeliefPropagationCache, smallest_loop_size::Integer; kwargs...)
+function loop_correlations(bpc::BeliefPropagationCache, smallest_loop_size::Integer)
     g = graph(bpc)
     cycles = NamedGraphs.cycle_to_path.(NamedGraphs.unique_simplecycles_limited_length(g, smallest_loop_size))
     corrs = []
     for loop in cycles
-        corrs = append!(corrs, loop_correlation(bpc, loop[1:(length(loop) - 1)], reverse(last(loop)); kwargs...))
+        corrs = append!(corrs, loop_correlation(bpc, loop[1:(length(loop) - 1)], reverse(last(loop))))
     end
     return corrs
 end
 
-function loop_correlations(tn::AbstractTensorNetwork, smallest_loop_size::Integer; bp_update_kwargs = default_bp_update_kwargs(tn), kwargs...)
-    return loop_correlations(update(BeliefPropagationCache(tn); bp_update_kwargs...), smallest_loop_size; kwargs...)
+function loop_correlations(tn::AbstractTensorNetwork, smallest_loop_size::Integer; bp_update_kwargs = default_bp_update_kwargs(tn))
+    return loop_correlations(update(BeliefPropagationCache(tn); bp_update_kwargs...), smallest_loop_size)
 end

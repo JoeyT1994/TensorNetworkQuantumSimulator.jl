@@ -30,7 +30,6 @@ const GATES = Dict{String, GateSpec}(
     "Ry"  => GateSpec("Ry";  paramkeys = (:θ,)),
     "Rz"  => GateSpec("Rz";  paramkeys = (:θ,)),
     "P"   => GateSpec("P";   paramkeys = (:ϕ,)),
-    "Rz+" => GateSpec("Rz+"; paramkeys = (:θ,)),
 
     # Two-qubit fixed
     "CNOT"   => GateSpec("CNOT"),
@@ -54,8 +53,6 @@ const GATES = Dict{String, GateSpec}(
     "CRy"    => GateSpec("CRy";    paramkeys = (:θ,)),
     "CRz"    => GateSpec("CRz";    paramkeys = (:θ,)),
     "CPHASE" => GateSpec("CPHASE"; paramkeys = (:ϕ,)),
-
-    "Rz+z+" => GateSpec("Rz+z+"; paramkeys = (:θ,)),
 
     # In-house parametric gates (definitions below)
     "Rxxyy"      => GateSpec("Rxxyy";      paramkeys = (:θ,)),

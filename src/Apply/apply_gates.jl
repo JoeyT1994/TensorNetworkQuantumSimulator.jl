@@ -10,6 +10,8 @@ Apply a sequence of gates, via simple update, to a `TensorNetworkState` or a `Be
 # Keyword Arguments
 - `bp_update_kwargs`: Keyword arguments for updating the belief propagation cache between gates (reasonable defaults are set).
 - `apply_kwargs`: Keyword arguments for the gate application, such as `maxdim` and `cutoff` for bond dimension truncation.
+- `update_cache`: Whether to update the BP cache between gates (default `true`).
+- `verbose`: Print per-batch progress and timing (default `false`).
 
 # Returns
 - A tuple containing the updated `TensorNetworkState` or `BeliefPropagationCache` and a vector of truncation errors for each gate application.
@@ -34,8 +36,8 @@ function apply_gates(
     g = graph(ψ_bpc)
     circuit = totensor(circuit, g, siteinds(network(ψ_bpc)))
     gate_vertices = [gate[2] for gate in circuit]
-    itensors = [gate[1] for gate in circuit]
-    return _apply_gate_tensors(itensors, ψ_bpc; gate_vertices, kwargs...)
+    gate_tensors = [gate[1] for gate in circuit]
+    return _apply_gate_tensors(gate_tensors, ψ_bpc; gate_vertices, kwargs...)
 end
 
 function adapt_gate(gate, ψ_bpc::BeliefPropagationCache)
@@ -84,7 +86,7 @@ function _apply_gate_tensors(
 
         # actually apply the gate
         gate = adapt_gate(gate, ψ_bpc)
-        t = @timed ψ_bpc, truncation_errors[ii] = apply_gate!(gate, ψ_bpc; v⃗ = gate_vertices[ii], apply_kwargs)
+        ψ_bpc, truncation_errors[ii] = apply_gate!(gate, ψ_bpc; v⃗ = gate_vertices[ii], apply_kwargs)
         for v in gate_vertices[ii]
             push!(affected_vertices, v)
         end

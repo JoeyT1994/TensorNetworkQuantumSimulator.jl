@@ -28,7 +28,9 @@ end
 function bp_edge_sequence(bmps_cache::BoundaryMPSCache)
     return QuotientEdge.(forest_cover_edge_sequence(quotient_graph(supergraph(bmps_cache))))
 end
-default_bp_maxiter(bmps_cache::BoundaryMPSCache) = is_tree(quotient_graph(supergraph(bmps_cache))) ? 1 : 5
+const _default_boundarymps_bp_maxiter = 5
+default_bp_maxiter(bmps_cache::BoundaryMPSCache) =
+    is_tree(quotient_graph(supergraph(bmps_cache))) ? 1 : _default_boundarymps_bp_maxiter
 function default_bmps_message_update_alg(tn)
     if tn isa TensorNetworkState || tn isa BilinearForm || tn isa QuadraticForm
         return "fitting"
@@ -41,7 +43,7 @@ default_message_update_alg(bmps_cache::BoundaryMPSCache) = default_bmps_message_
 
 default_normalize(alg::Algorithm"fitting") = true
 default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(scalartype(bmps_cache))
-_default_boundarymps_update_niters = 50
+const _default_boundarymps_update_niters = 50
 function set_default_kwargs(alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache)
     normalize = get(alg.kwargs, :normalize, default_normalize(alg))
     tolerance = get(alg.kwargs, :tolerance, default_tolerance(bmps_cache))
@@ -53,7 +55,8 @@ default_normalize(alg::Algorithm"zipup") = true
 function set_default_kwargs(alg::Algorithm"zipup", bmps_cache::BoundaryMPSCache)
     cutoff = get(alg.kwargs, :cutoff, 1.0e-12)
     normalize = get(alg.kwargs, :normalize, default_normalize(alg))
-    return Algorithm("zipup"; cutoff, normalize)
+    maxdim = get(alg.kwargs, :maxdim, mps_bond_dimension(bmps_cache))
+    return Algorithm("zipup"; cutoff, normalize, maxdim)
 end
 
 #The outer sweep over partitions is deliberately not convergence-checked: it runs exactly `maxiter`
@@ -145,7 +148,6 @@ function BoundaryMPSCache(
         partition_by = "row",
         gauge_state = false,
         set_messages = true,
-        link_sectors = nothing,
     )
     grouping_function = partition_by == "row" ? v -> first(v) : v -> last(v)
     group_sorting_function = partition_by == "row" ? v -> last(v) : v -> first(v)
@@ -167,7 +169,7 @@ function BoundaryMPSCache(
     messages = default_messages()
     bmps_cache = BoundaryMPSCache(tn, messages, supergraph, sorted_es, mps_bond_dimension, Dictionary{Pair, Vector}())
     @assert is_correct_format(bmps_cache)
-    set_messages && set_interpartition_messages!(bmps_cache, pes; link_sectors)
+    set_messages && set_interpartition_messages!(bmps_cache, pes)
 
     return bmps_cache
 end
@@ -175,14 +177,12 @@ end
 all_quotientedges(graph) = QuotientEdges(all_edges(quotient_graph(graph)))
 
 #Initialise all the interpartition message tensors
-#`link_sectors`, when given, is a function `d -> Vector{charge => dim}` choosing the graded
-#space of the boundary-MPS virtual links (e.g. an even-biased parity split); by default the
-#space is derived from the message legs (see `new_index` for graded tensors). Flux-free
-#block bookkeeping means this only affects sparsity, never correctness.
+#Dense links are fresh trivial indices from the message legs; graded links get their
+#sectors from the convolved charge spectra (set_graded_interpartition_messages! in
+#kernel_hooks.jl). One-site fitting is optimal at fixed total dimension either way.
 function set_interpartition_messages!(
         bmps_cache::BoundaryMPSCache,
-        quotientedges = all_quotientedges(bmps_cache);
-        link_sectors = nothing,
+        quotientedges = all_quotientedges(bmps_cache),
     )
     m_keys = keys(messages(bmps_cache))
     for pe in quotientedges
@@ -193,13 +193,12 @@ function set_interpartition_messages!(
             end
         end
         if tensortype(bmps_cache) <: Tensors.GradedTensor
-            set_graded_interpartition_messages!(bmps_cache, es; link_sectors)
+            set_graded_interpartition_messages!(bmps_cache, es)
         else
             for i in 1:(length(es) - 1)
                 virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
                 m1, m2 = message(bmps_cache, es[i]), message(bmps_cache, es[i + 1])
-                ind = link_sectors === nothing ? new_index(m1, virt_dim; tags = "m$(i)$(i + 1)") :
-                    Index(link_sectors(virt_dim), "m$(i)$(i + 1)")
+                ind = new_index(m1, virt_dim; tags = "m$(i)$(i + 1)")
                 t = adapt_like(m1, delta(ind))
                 setmessage!(bmps_cache, es[i], m1 * t)
                 setmessage!(bmps_cache, es[i + 1], m2 * t)
@@ -232,8 +231,8 @@ function switch_message!(bmps_cache::BoundaryMPSCache, e::NamedEdge)
 end
 
 function switch_messages!(bmps_cache::BoundaryMPSCache, pe::QuotientEdge)
-    for pe in sorted_edges(bmps_cache, pe)
-        switch_message!(bmps_cache, pe)
+    for e in sorted_edges(bmps_cache, pe)
+        switch_message!(bmps_cache, e)
     end
     return bmps_cache
 end
@@ -287,7 +286,7 @@ function update_partitions(bmps_cache::BoundaryMPSCache, args...)
     return update_partitions!(bmps_cache, args...)
 end
 
-# #Move the orthogonality centre one step on an interpartition from the message tensor on pe1 to that on pe2
+#Move the orthogonality centre one step on an interpartition from the message tensor on pe1 to that on pe2
 function gauge_step!(
         alg::Algorithm"fitting",
         bmps_cache::BoundaryMPSCache,
@@ -339,11 +338,11 @@ function extracter(
     return m
 end
 
-function updater!(alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache, partition_graph::AbstractGraph, prev_e, update_e)
+function updater!(alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache, pg::AbstractGraph, prev_e, update_e)
     prev_e == nothing && return bmps_cache
 
     gauge_step!(alg, bmps_cache, reverse(prev_e), reverse(update_e))
-    update_seq = a_star(partition_graph, src(prev_e), src(update_e))
+    update_seq = a_star(pg, src(prev_e), src(update_e))
     update_partition!(bmps_cache, update_seq)
     return bmps_cache
 end
@@ -396,7 +395,8 @@ function prev_quotientedge(bmps_cache::BoundaryMPSCache, pe::QuotientEdge)
     @assert length(vns) == 2
     v1, v2 = first(vns), last(vns)
     parent(dst(pe)) == v1 && return QuotientEdge(v2 => parent(src(pe)))
-    return parent(dst(pe)) == v2 && return QuotientEdge(v1 => parent(src(pe)))
+    parent(dst(pe)) == v2 && return QuotientEdge(v1 => parent(src(pe)))
+    return nothing
 end
 
 function set_interpartition_message!(bmps_cache::BoundaryMPSCache, M::AbstractVector, pe::QuotientEdge)
@@ -512,13 +512,12 @@ end
 function update_message!(
         alg::Algorithm"zipup",
         bmps_cache::BoundaryMPSCache,
-        pe::QuotientEdge;
-        maxdim::Integer = mps_bond_dimension(bmps_cache),
+        pe::QuotientEdge,
     )
     mpo, mps, right_inds = _bmps_apply_inputs(bmps_cache, pe)
     out = generic_apply(
         mpo, mps, right_inds;
-        cutoff = alg.kwargs.cutoff, maxdim, normalize = alg.kwargs.normalize,
+        cutoff = alg.kwargs.cutoff, maxdim = alg.kwargs.maxdim, normalize = alg.kwargs.normalize,
     )
     return set_interpartition_message!(bmps_cache, out, pe)
 end
@@ -566,17 +565,9 @@ function delete_partition_messages!(bmps_cache::BoundaryMPSCache, vertices::Vect
 end
 
 
-function vertex_scalars(
-        bmps_cache::BoundaryMPSCache, vertices = quotientvertices(supergraph(bmps_cache)); kwargs...
-    )
-    return map(v -> vertex_scalar(bmps_cache, v; kwargs...), vertices)
-end
-
-function edge_scalars(
-        bmps_cache::BoundaryMPSCache, edges = quotientedges(bmps_cache); kwargs...
-    )
-    return map(e -> edge_scalar(bmps_cache, e; kwargs...), edges)
-end
+#the generic vertex_scalars/edge_scalars map over these
+default_scalar_vertices(bmps_cache::BoundaryMPSCache) = quotientvertices(supergraph(bmps_cache))
+default_scalar_edges(bmps_cache::BoundaryMPSCache) = quotientedges(bmps_cache)
 
 #PartitionedGraph Helpers
 #Add edges necessary to connect up all vertices in a partition in the planar graph created by the sort function
@@ -599,17 +590,14 @@ function pseudo_planar_edges(
 end
 
 #Functions to get the parellel edges sitting above and below a edge
-function edges_above(bmps_cache::BoundaryMPSCache, e::NamedEdge)
+function _edges_around(bmps_cache::BoundaryMPSCache, e::NamedEdge)
     es = sorted_edges(bmps_cache, quotientedge(supergraph(bmps_cache), e))
-    e_pos = findfirst(x -> x == e, es)
-    return NamedEdge[es[i] for i in (e_pos + 1):length(es)]
+    return es, findfirst(x -> x == e, es)
 end
-
-function edges_below(bmps_cache::BoundaryMPSCache, e::NamedEdge)
-    es = sorted_edges(bmps_cache, quotientedge(supergraph(bmps_cache), e))
-    e_pos = findfirst(x -> x == e, es)
-    return NamedEdge[es[i] for i in 1:(e_pos - 1)]
-end
+edges_above(bmps_cache::BoundaryMPSCache, e::NamedEdge) =
+    ((es, p) = _edges_around(bmps_cache, e); NamedEdge[es[i] for i in (p + 1):length(es)])
+edges_below(bmps_cache::BoundaryMPSCache, e::NamedEdge) =
+    ((es, p) = _edges_around(bmps_cache, e); NamedEdge[es[i] for i in 1:(p - 1)])
 
 #Sort (bottom to top) edges between pair of partitions in the planargraph
 function sorted_edges(pg::PartitionedGraph, pe::QuotientEdge)

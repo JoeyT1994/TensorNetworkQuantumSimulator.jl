@@ -5,7 +5,7 @@ A `Tensor` is a dense N-d array plus a vector of `Index` labels. Index identity
 (id, plev) — not position — drives contraction. Contraction is executed by
 TensorOperations with dynamically generated labels; factorizations run through
 MatrixAlgebraKit (which also supplies the in-place variants and the CUSOLVER/ROCSOLVER
-algorithm selection for a future GPU story). The hot paths — the double-layer BP message
+algorithm selection on GPU). The hot paths — the double-layer BP message
 update, the two-site simple-update gate, and BP expectation-value closures — run as fused
 kernels: conjugation is folded into the BLAS calls (no materialized `dag`), and all chain
 intermediates live in a task-local, reusable BufferAllocator so that only results touch
@@ -29,7 +29,7 @@ dense Tensor).
 =#
 module Tensors
 
-using LinearAlgebra: LinearAlgebra, Hermitian, Diagonal, norm, mul!, diag, rmul!, BlasFloat
+using LinearAlgebra: LinearAlgebra, Diagonal, norm, diag, rmul!, BlasFloat
 using MatrixAlgebraKit: MatrixAlgebraKit, qr_compact, qr_compact!, svd_compact, svd_trunc,
     eigh_full, truncrank, truncerror
 using TensorOperations: TensorOperations, ncon
@@ -124,13 +124,46 @@ TensorInterface.replaceind(t::AbstractTensor, old::Index, new::Index) = TensorIn
 TensorInterface.replaceinds(t::AbstractTensor, p::Pair) = TensorInterface.replaceinds(t, first(p), last(p))
 TensorInterface.apply(o::AbstractTensor, t::AbstractTensor) = TensorInterface.noprime(o * t)
 
+function TensorInterface.map_diag(f::Function, t::AbstractTensor)
+    out = copy(t)
+    TensorInterface.map_diag!(f, out, out)
+    return out
+end
+TensorInterface.combinedind(C::AbstractTensor) = first(C.inds)
+
+#Index-free hermitian eigen on a (l, l′)-paired tensor: linds = the plev-0 indices,
+#rinds = their primes, and U comes back labeled by the UNPRIMED side, so that
+#U · D · prime(dag(U)) reconstructs the tensor (the convention symmetric_gauge relies on).
+function LinearAlgebra.eigen(t::AbstractTensor; ishermitian::Bool = false, kwargs...)
+    lv = filter(i -> i.plev == 0, t.inds)
+    rv = collect(Index, TensorInterface.prime.(lv))
+    D, U = LinearAlgebra.eigen(t, lv, rv; ishermitian, kwargs...)
+    return D, TensorInterface.replaceinds(U, rv, lv)
+end
+
+#Cached-sequence tree walk shared by both backends' contract methods
+#Abstractly-typed tensor lists (e.g. from Any-valued network dictionaries) route to
+#the concrete backend method (bodies resolve at call time, so GradedTensor is fine here)
+function TensorInterface.contract(ts::Vector; kwargs...)
+    all(t -> t isa Tensor, ts) && return TensorInterface.contract(collect(Tensor, ts); kwargs...)
+    all(t -> t isa GradedTensor, ts) && return TensorInterface.contract(collect(GradedTensor, ts); kwargs...)
+    return error("contract: expected a homogeneous tensor list, got $(unique(typeof.(ts)))")
+end
+
+_contract_seq(ts::Vector, x::Integer) = ts[x]
+_contract_seq(ts::Vector, x::Union{Vector, Tuple}) = mapreduce(y -> _contract_seq(ts, y), *, x)
+
+#Indices of `linds` actually present on `t` (the seam convention: absent entries are
+#ignored), as a concrete vector
+_present_inds(t::AbstractTensor, linds) = filter(i -> i ∈ t.inds, _indvec(linds))
+
 # ── Tensor ──────────────────────────────────────────────────────────────────────────────
 
 struct Tensor{T, N, A <: AbstractArray{T, N}} <: AbstractTensor
-    inds::Vector{<:Index}
+    inds::Vector{Index{Int}}
     data::A
     function Tensor(inds::AbstractVector, data::A) where {T, N, A <: AbstractArray{T, N}}
-        inds = collect(Index, inds)
+        inds = collect(Index{Int}, inds)
         length(inds) == N || error("Tensor: $(length(inds)) indices for a rank-$N array")
         all(i -> dimof(i) == size(data, findfirst(==(i), inds)), unique(inds)) ||
             error("Tensor: index dimensions $(TensorInterface.dim.(inds)) don't match array size $(size(data))")
@@ -138,7 +171,7 @@ struct Tensor{T, N, A <: AbstractArray{T, N}} <: AbstractTensor
     end
 end
 
-Tensor(x::Number) = Tensor(Index[], fill(x))
+Tensor(x::Number) = Tensor(Index{Int}[], fill(x))
 
 _like(t::Tensor, inds, data) = Tensor(inds, data)
 
@@ -246,7 +279,6 @@ function TensorInterface.combiner(is::AbstractVector{<:Index}; tags = "CMB,Link"
     return Tensor(vcat([c], collect(Index, is)), data)
 end
 TensorInterface.combiner(is::Index...; kwargs...) = TensorInterface.combiner(collect(Index, is); kwargs...)
-TensorInterface.combinedind(C::Tensor) = first(C.inds)
 
 # Direct sum of two tensors along the paired index axes (`olds1[k]`/`olds2[k]` → `news[k]`,
 # with dim(news[k]) = dim(olds1[k]) + dim(olds2[k])); all other indices must coincide.
@@ -313,38 +345,32 @@ function VectorInterface.add(y::Tensor, x::Tensor, α::Number, β::Number)
 end
 VectorInterface.add!!(y::Tensor, x::Tensor, α::Number, β::Number) = VectorInterface.add(y, x, α, β)
 VectorInterface.inner(x::Tensor, y::Tensor) = LinearAlgebra.dot(x, y)
-LinearAlgebra.normalize(t::Tensor) = t * inv(norm(t))
 LinearAlgebra.dot(a::Tensor, b::Tensor) = LinearAlgebra.dot(vec(a.data), vec(_align(a, b)))
 LinearAlgebra.tr(t::Tensor) = _trace_all(t)
 
-# Pairwise contraction over all common (id, plev) indices; repeated indices on one tensor
-# (traces) are supported through the same ncon labeling.
+# Pairwise contraction over all common (id, plev) indices, through the same low-level
+# TensorOperations path as the graded backend: the output comes out directly in the
+# GEMM-natural (openA | openB) partition with no staging copy. Self-traces (a repeated
+# index on ONE operand) are not supported here — use `tr`.
 function Base.:*(a::Tensor, b::Tensor)
     # scalar fast paths
     ndims(a) == 0 && return Tensor(copy(b.inds), TensorInterface.scalar(a) * b.data)
     ndims(b) == 0 && return Tensor(copy(a.inds), TensorInterface.scalar(b) * a.data)
 
-    common = TensorInterface.commoninds(a, b)
-    aopen = TensorInterface.uniqueinds(a, b)
-    bopen = TensorInterface.uniqueinds(b, a)
-
-    nextlabel = Ref(0)
-    labels = Dict{Index, Int}()
-    for i in common
-        labels[i] = (nextlabel[] += 1)
+    oa, ca, cb = Int[], Int[], Int[]
+    for (k, i) in enumerate(a.inds)
+        j = findfirst(==(i), b.inds)
+        j === nothing ? push!(oa, k) : (push!(ca, k); push!(cb, j))
     end
-    openlabel = Ref(0)
-    outinds = vcat(aopen, bopen)
-    for i in outinds
-        labels[i] = -(openlabel[] += 1)
-    end
+    ob = Int[k for k in 1:length(b.inds) if k ∉ cb]
 
-    la = Int[labels[i] for i in a.inds]
-    lb = Int[labels[i] for i in b.inds]
-
-    out = ncon([a.data, b.data], [la, lb])
-    data = out isa Number ? fill(out) : out
-    return Tensor(outinds, data)
+    pA = (Tuple(oa), Tuple(ca))
+    pB = (Tuple(cb), Tuple(ob))
+    pAB = (Tuple(1:length(oa)), Tuple(length(oa) .+ (1:length(ob))))
+    TC = promote_type(eltype(a), eltype(b))
+    C = TensorOperations.tensoralloc_contract(TC, a.data, pA, false, b.data, pB, false, pAB, Val(false))
+    TensorOperations.tensorcontract!(C, a.data, pA, false, b.data, pB, false, pAB)
+    return Tensor(vcat(a.inds[oa], b.inds[ob]), C)
 end
 
 function _trace_all(t::Tensor)
@@ -376,8 +402,8 @@ const SEQ_BUFFER_MAXBYTES = Ref(2^30)
 function TensorInterface.contract(ts::Vector{<:Tensor}; sequence = nothing, kwargs...)
     isnothing(sequence) && return reduce(*, ts)
     sequence isa Integer && return ts[sequence]
-    if _uniform_kernel_storage((t.data for t in ts)...) !== nothing
-        elsize = sizeof(promote_type(map(eltype, ts)...))
+    if _uniform_kernel_storage([t.data for t in ts]) !== nothing
+        elsize = sizeof(mapreduce(eltype, promote_type, ts))
         _, total = _seq_temp_bytes(ts, sequence, elsize)
         if total <= SEQ_BUFFER_MAXBYTES[]
             buf = _kernel_buffer(first(ts).data)
@@ -390,10 +416,6 @@ function TensorInterface.contract(ts::Vector{<:Tensor}; sequence = nothing, kwar
     return _contract_seq(ts, sequence)
 end
 
-_contract_seq(ts::Vector{<:Tensor}, s::Integer) = ts[s]
-function _contract_seq(ts::Vector{<:Tensor}, s::Union{Vector, Tuple})
-    return mapreduce(x -> _contract_seq(ts, x), *, s)
-end
 
 #Symbolic walk of the sequence tree: per-node open indices and the summed byte size of all
 #intermediates (the buffer is only reset at the root, so the requirement is the total, not
@@ -439,11 +461,6 @@ end
 
 # ── Diagonal operations ─────────────────────────────────────────────────────────────────
 
-function TensorInterface.map_diag(f::Function, t::Tensor)
-    out = copy(t)
-    TensorInterface.map_diag!(f, out, out)
-    return out
-end
 
 function TensorInterface.map_diag!(f::Function, out::Tensor, t::Tensor)
     ndims(t) == 2 || error("map_diag: expected a 2-index Tensor")
@@ -466,8 +483,9 @@ Adapt.adapt_structure(to, t::Tensor) = Tensor(copy(t.inds), adapt(to, t.data))
 
 # ── Factorizations (MatrixAlgebraKit; in-place/preallocated variants are the v3 target) ─
 
-struct KSpectrum
-    eigs::Vector{Float64}
+#Truncation report for factorize_svd (the kept spectrum itself is available through
+#`singular_values!`)
+struct Spectrum
     truncerr::Float64
 end
 
@@ -526,8 +544,7 @@ function _svd_matrix(A::AbstractMatrix; maxdim = nothing, cutoff = nothing)
     return U, diag(S), Vt, truncerr
 end
 
-function _svd_split(t::Tensor, linds::Vector{<:Index}; maxdim = nothing, cutoff = nothing, mindim = 1)
-    mindim > 1 && error("_svd_split: mindim > 1 is not supported by the Tensors backend yet")
+function _svd_split(t::Tensor, linds::Vector{<:Index}; maxdim = nothing, cutoff = nothing)
     A, li, ri = _matricize(t, linds)
     U, S, Vt, truncerr = _svd_matrix(A; maxdim, cutoff)
     return U, S, Vt, li, ri, truncerr
@@ -536,14 +553,14 @@ end
 """
 factorize_svd matching the seam convention used by `simple_update`:
 `ortho = "none"` returns F1 = U√S and F2 = √S·V sharing the primed bond `u′`, with the
-singular values reported on unprimed `(u, v)`; `spec.eigs` are the kept s².
+singular values reported on unprimed `(u, v)`; `spec.truncerr` is the discarded Σs² fraction.
 """
 function TensorInterface.factorize_svd(
         t::Tensor, linds;
         ortho = "none", singular_values! = nothing,
-        maxdim = nothing, cutoff = nothing, mindim = 1, tags = nothing, kwargs...,
+        maxdim = nothing, cutoff = nothing, tags = nothing, kwargs...,
     )
-    U, S, Vt, li, ri, truncerr = _svd_split(t, _indvec(linds); maxdim, cutoff, mindim)
+    U, S, Vt, li, ri, truncerr = _svd_split(t, _present_inds(t, linds); maxdim, cutoff)
     k = length(S)
     T = eltype(U)
     u = Index(k, "Link,u")
@@ -569,19 +586,19 @@ function TensorInterface.factorize_svd(
     if singular_values! !== nothing
         singular_values![] = Tensor(Index[u, v], _diag_matrix(S))
     end
-    return F1, F2, KSpectrum(abs2.(S), truncerr)
+    return F1, F2, Spectrum(truncerr)
 end
 
 # factorize: L isometric for ortho="left" (L=U, R=SV), mirrored for "right".
 # The bond is unprimed and carries `tags`.
 function LinearAlgebra.factorize(
         t::Tensor, linds...;
-        ortho = "left", maxdim = nothing, cutoff = nothing, mindim = 1, tags = "Link,fact", kwargs...,
+        ortho = "left", maxdim = nothing, cutoff = nothing, tags = "Link,fact", kwargs...,
     )
     lv = length(linds) == 1 ? _indvec(only(linds)) : collect(Index, linds)
     # Convention: entries of linds not present on the tensor are ignored
     lv = filter(i -> i ∈ t.inds, lv)
-    U, S, Vt, li, ri, _ = _svd_split(t, lv; maxdim, cutoff, mindim)
+    U, S, Vt, li, ri, _ = _svd_split(t, lv; maxdim, cutoff)
     k = length(S)
     T = eltype(U)
     b = Index(k, String(tags))
@@ -598,8 +615,8 @@ function LinearAlgebra.factorize(
 end
 
 # svd: U(linds, u), S(u, v), V(rinds, v).
-function LinearAlgebra.svd(t::Tensor, linds; maxdim = nothing, cutoff = nothing, mindim = 1, kwargs...)
-    U, S, Vt, li, ri, _ = _svd_split(t, filter(i -> i ∈ t.inds, _indvec(linds)); maxdim, cutoff, mindim)
+function LinearAlgebra.svd(t::Tensor, linds; maxdim = nothing, cutoff = nothing, kwargs...)
+    U, S, Vt, li, ri, _ = _svd_split(t, _present_inds(t, linds); maxdim, cutoff)
     k = length(S)
     u = Index(k, "Link,u")
     v = Index(k, "Link,v")
@@ -609,15 +626,6 @@ function LinearAlgebra.svd(t::Tensor, linds; maxdim = nothing, cutoff = nothing,
     return Ut, St, Vt_
 end
 
-# Index-free hermitian eigen on a (l, l′)-paired tensor: linds = the plev-0 indices,
-# rinds = their primes, and U comes back labeled by the UNPRIMED side, so that
-# U · D · prime(dag(U)) reconstructs the tensor (the convention symmetric_gauge relies on).
-function LinearAlgebra.eigen(t::Tensor; ishermitian::Bool = false, kwargs...)
-    lv = filter(i -> i.plev == 0, t.inds)
-    rv = collect(Index, TensorInterface.prime.(lv))
-    D, U = LinearAlgebra.eigen(t, lv, rv; ishermitian, kwargs...)
-    return D, TensorInterface.replaceinds(U, rv, lv)
-end
 
 # eigen, hermitian convention:
 # D on (link′, link) with the eigenvalues, U on (rinds..., link); Ul·D·dag(U) reconstructs.
@@ -655,7 +663,7 @@ _buffer_storage(::Array) = TensorOperations.DefaultStorageType
 _buffer_storage(A::AbstractArray) = typeof(similar(A, UInt8, 0))
 function _kernel_buffer(A::AbstractArray)
     S = _buffer_storage(A)
-    d = get!(task_local_storage(), :ktensors_kernel_buffers) do
+    d = get!(task_local_storage(), :tensors_kernel_buffers) do
         Dict{DataType, TensorOperations.BufferAllocator}()
     end::Dict{DataType, TensorOperations.BufferAllocator}
     return get!(d, S) do
@@ -669,10 +677,10 @@ end
 _kernel_storage_ok(A::Array) = true
 _kernel_storage_ok(A::AbstractGPUArray) = true
 _kernel_storage_ok(A) = false
-function _uniform_kernel_storage(arrays...)
+function _uniform_kernel_storage(arrays)
     all(_kernel_storage_ok, arrays) || return nothing
-    S = typeof(first(arrays))
-    all(a -> typeof(a).name.wrapper === S.name.wrapper, arrays) || return nothing
+    W = typeof(first(arrays)).name.wrapper
+    all(a -> typeof(a).name.wrapper === W, arrays) || return nothing
     return first(arrays)
 end
 
@@ -725,7 +733,7 @@ function fused_norm_closure(
     arrays = Any[ψ.data]
     append!(arrays, (m.data for m in incoming))
     op === nothing || push!(arrays, op.data)
-    _uniform_kernel_storage(arrays...) === nothing && return nothing
+    _uniform_kernel_storage(arrays) === nothing && return nothing
     all(m -> _is_norm_message(m, ψ.inds), incoming) || return nothing
 
     buf = _kernel_buffer(ψ.data)
