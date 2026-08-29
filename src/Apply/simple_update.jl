@@ -35,14 +35,15 @@ end
 
 function simple_update(
         o, ψ⃗::Vector;
-        envs, normalize_tensors = true, sqrt_cutoff = nothing, apply_kwargs...
+        envs, normalize_tensors = true, sqrt_cutoff = nothing, consume_inputs = false,
+        apply_kwargs...
     )
 
     if length(ψ⃗) == 1
         updated_tensors = [apply(o, only(ψ⃗))]
         s_values, err = nothing, 0
     else
-        fast = fused_simple_update(o, ψ⃗; envs, normalize_tensors, sqrt_cutoff, apply_kwargs...)
+        fast = fused_simple_update(o, ψ⃗; envs, normalize_tensors, sqrt_cutoff, consume_inputs, apply_kwargs...)
         fast !== nothing && return fast
         all(env -> ndims(env) == 2, envs) ||
             error("simple_update: environments must be 2-index tensors")

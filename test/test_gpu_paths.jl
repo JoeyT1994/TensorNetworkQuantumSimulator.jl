@@ -32,18 +32,29 @@ if HAS_JLARRAYS
         LinearAlgebra.Transpose{<:Any, <:JLArray},
     }
     _tojl(out) = map(x -> adapt(JLArray, x), out)
-    MAK.qr_compact(A::AnyJL, args...; kwargs...) = _tojl(MAK.qr_compact(Array(A), args...; kwargs...))
-    MAK.svd_compact(A::AnyJL, args...; kwargs...) = _tojl(MAK.svd_compact(Array(A), args...; kwargs...))
-    MAK.eigh_full(A::AnyJL, args...; kwargs...) = _tojl(MAK.eigh_full(Array(A), args...; kwargs...))
-    MAK.svd_trunc(A::AnyJL, args...; kwargs...) = _tojl(MAK.svd_trunc(Array(A), args...; kwargs...))
+    #host copy with a finiteness check: a rare, seed-independent flake has fed LAPACK a
+    #non-finite input here (suspected uninitialized device-buffer read upstream); fail
+    #with a diagnosable message instead of LAPACK's "invalid argument"
+    function _host(A)
+        Ah = Array(A)
+        any(!isfinite, Ah) && error(
+            "GPU harness: non-finite values reached a factorization input " *
+                "(suspect an uninitialized device buffer read upstream)"
+        )
+        return Ah
+    end
+    MAK.qr_compact(A::AnyJL, args...; kwargs...) = _tojl(MAK.qr_compact(_host(A), args...; kwargs...))
+    MAK.svd_compact(A::AnyJL, args...; kwargs...) = _tojl(MAK.svd_compact(_host(A), args...; kwargs...))
+    MAK.eigh_full(A::AnyJL, args...; kwargs...) = _tojl(MAK.eigh_full(_host(A), args...; kwargs...))
+    MAK.svd_trunc(A::AnyJL, args...; kwargs...) = _tojl(MAK.svd_trunc(_host(A), args...; kwargs...))
     function MAK.qr_compact!(A::JLArray{<:Any, 2}, (Q, R)::Tuple, alg::MAK.Householder; kwargs...)
-        Qh, Rh = MAK.qr_compact(Array(A))
+        Qh, Rh = MAK.qr_compact(_host(A))
         copyto!(Q, Qh)
         copyto!(R, Rh)
         return Q, R
     end
     function MAK.svd_compact!(A::JLArray{<:Any, 2}, USVᴴ::Tuple, alg::MAK.SafeDivideAndConquer; kwargs...)
-        Uh, Sh, Vᴴh = MAK.svd_compact(Array(A); kwargs...)
+        Uh, Sh, Vᴴh = MAK.svd_compact(_host(A); kwargs...)
         U, Sd, Vᴴ = USVᴴ
         copyto!(U, Uh)
         copyto!(parent(Sd), parent(Sh))
@@ -51,14 +62,14 @@ if HAS_JLARRAYS
         return U, Sd, Vᴴ
     end
     function MAK.eigh_full!(A::JLArray{<:Any, 2}, DV::Tuple, alg::MAK.RobustRepresentations; kwargs...)
-        Dh, Vh = MAK.eigh_full(Array(A); kwargs...)
+        Dh, Vh = MAK.eigh_full(_host(A); kwargs...)
         D, V = DV
         copyto!(parent(D), parent(Dh))
         copyto!(V, Vh)
         return D, V
     end
-    MAK.ishermitian_approx(A::JLArray{<:Any, 2}; kwargs...) = MAK.ishermitian_approx(Array(A); kwargs...)
-    MAK.isantihermitian_approx(A::JLArray{<:Any, 2}; kwargs...) = MAK.isantihermitian_approx(Array(A); kwargs...)
+    MAK.ishermitian_approx(A::JLArray{<:Any, 2}; kwargs...) = MAK.ishermitian_approx(_host(A); kwargs...)
+    MAK.isantihermitian_approx(A::JLArray{<:Any, 2}; kwargs...) = MAK.isantihermitian_approx(_host(A); kwargs...)
 
     # ── Device-primitive shims: JLArrays lacks sort/scan/findall kernels that CUDA.jl
     # and AMDGPU.jl provide natively. ───────────────────────────────────────────────────
@@ -105,9 +116,9 @@ if HAS_JLARRAYS
 
     @testset "GPU paths, graded (fU1 fermions, odd filling)" begin
         allowscalar(false)
-        #the graded boundary-MPS fitting init draws random conserving messages; a rare
-        #draw has produced a LAPACK failure inside the per-block SVD (not yet chased) —
-        #pin the stream so the test is deterministic
+        #Deterministic stream for the random-conserving boundary-MPS init. NOTE: a rare
+        #LAPACK failure has been seen here even seeded (so not RNG-driven) — the _host
+        #finiteness check above exists to diagnose it on its next appearance.
         Random.seed!(1234)
         g = named_grid((2, 3))
         s = TNQS.siteinds("Fermion", g; symmetry = "fU1")

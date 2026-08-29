@@ -103,4 +103,27 @@ end
     @test ψ_check isa TensorNetworkState
 end
 
+
+@testset "Storage-consuming gate path" begin
+    g = named_grid((4, 4))
+    ψ = tensornetworkstate(ComplexF64, v -> iseven(sum(v)) ? "↑" : "↓", g, siteinds("S=1/2", g))
+    layer = Any[]
+    for ces in edge_color(g, 4)
+        append!(layer, ("Rxx", pair, 0.7) for pair in ces)
+        append!(layer, ("Rzz", pair, 0.2) for pair in ces)
+    end
+    circuit = reduce(vcat, [layer for _ in 1:4])
+    apply_kwargs = (; maxdim = 8, cutoff = 1.0e-12)
+
+    #default path: consumes only tensors it created itself (copy-on-first-touch)
+    ψa, ea = apply_gates(circuit, ψ; apply_kwargs)
+    za = real(only(expect(ψa, ("Z", [(2, 2)]); alg = "bp")))
+    #the caller's original state must be untouched
+    @test real(only(expect(ψ, ("Z", [(2, 2)]); alg = "bp"))) ≈ 1.0 atol = 1.0e-12
+
+    #bang path: identical results, input consumed
+    ψb, eb = apply_gates!(circuit, ψ; apply_kwargs)
+    @test real(only(expect(ψb, ("Z", [(2, 2)]); alg = "bp"))) ≈ za atol = 1.0e-12
+    @test ea ≈ eb
+end
 end

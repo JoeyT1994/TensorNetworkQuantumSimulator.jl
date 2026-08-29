@@ -87,7 +87,8 @@ end
 #unusual apply_kwargs, empty environments, or non-2-index environments.
 function fused_simple_update(
         o::Tensor, ψ⃗::Vector{<:Tensor};
-        envs, normalize_tensors = true, sqrt_cutoff = nothing, apply_kwargs...
+        envs, normalize_tensors = true, sqrt_cutoff = nothing, consume_inputs = false,
+        apply_kwargs...
     )
     length(ψ⃗) == 2 || return nothing
     isempty(envs) && return nothing
@@ -104,11 +105,16 @@ function fused_simple_update(
     s1 = collect(Index, commoninds(ψ⃗[1], o))
     s2 = collect(Index, commoninds(ψ⃗[2], o))
 
+    #storage-consuming path: the outputs are assembled inside the input tensors' own
+    #arrays (peak 2(F1+F2) + change instead of 3) — the caller relinquishes the inputs
     t1, t2, s_values, err = Tensors.fused_two_site_gate(
         o, ψ⃗[1], ψ⃗[2],
         collect(Tensor, sqrt1), collect(Tensor, inv1),
         collect(Tensor, sqrt2), collect(Tensor, inv2),
-        s1, s2; apply_kwargs...
+        s1, s2;
+        dest1 = consume_inputs ? Tensors._root_storage(ψ⃗[1].data) : nothing,
+        dest2 = consume_inputs ? Tensors._root_storage(ψ⃗[2].data) : nothing,
+        apply_kwargs...
     )
     updated_tensors = [t1, t2]
 

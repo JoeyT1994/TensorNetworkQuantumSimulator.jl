@@ -44,6 +44,7 @@ export
     add_edge,
     degree,
     apply_gates,
+    apply_gates!,
     apply_circuit,
     op,
     register_op!,

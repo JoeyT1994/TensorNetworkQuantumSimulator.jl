@@ -40,6 +40,22 @@ function apply_gates(
     return _apply_gate_tensors(gate_tensors, ψ_bpc; gate_vertices, kwargs...)
 end
 
+"""
+    apply_gates!(circuit, ψ; kwargs...)
+
+Like [`apply_gates`](@ref) but CONSUMES the input state or cache: its tensors (and, for
+a cache, its messages) are overwritten in place and must not be used afterwards.
+
+Peak-memory context: `simple_update` assembles each two-site gate's outputs inside the
+tensors handed to it (per-gate peak 2·(F₁+F₂) + small instead of 3·(F₁+F₂), with F₁, F₂
+the two site-tensor sizes). Plain `apply_gates` already gets this for every tensor it
+created itself, protecting the caller's originals with a one-time copy on first touch;
+`apply_gates!` skips those copies too. Results are identical either way. The storage
+reuse engages on the dense fused gate path; other paths (graded tensors, unusual gate
+structures) stay correct but allocate fresh outputs.
+"""
+apply_gates!(circuit::Vector, ψ; kwargs...) = apply_gates(circuit, ψ; consume_inputs = true, kwargs...)
+
 function adapt_gate(gate, ψ_bpc::BeliefPropagationCache)
     gate = scalartype(gate) <: Complex ? adapt(complex(scalartype(ψ_bpc)), gate) : adapt(scalartype(ψ_bpc), gate)
     return adapt(unspecify_type_parameters(datatype(ψ_bpc)), gate)
@@ -53,8 +69,15 @@ function _apply_gate_tensors(
         bp_update_kwargs = default_bp_update_kwargs(ψ_bpc),
         update_cache = true,
         verbose = false,
+        consume_inputs = false,
     )
-    ψ_bpc = copy(ψ_bpc)
+    #the consuming path mutates the caller's cache (and its tensor storage) in place
+    ψ_bpc = consume_inputs ? ψ_bpc : copy(ψ_bpc)
+    #Gate storage discipline: simple_update may overwrite the tensors handed to it
+    #(peak 2(F1+F2) + small instead of 3). Tensors this loop created itself are always
+    #safe to consume; the caller's original tensors are protected by a one-time
+    #copy-on-first-touch (skipped entirely on the consuming path).
+    owned = consume_inputs ? nothing : Set{eltype(vertices(network(ψ_bpc)))}()
 
     # we keep track of the vertices that have been acted on by 2-qubit gates
     # only they increase the counter
@@ -86,7 +109,14 @@ function _apply_gate_tensors(
 
         # actually apply the gate
         gate = adapt_gate(gate, ψ_bpc)
-        ψ_bpc, truncation_errors[ii] = apply_gate!(gate, ψ_bpc; v⃗ = gate_vertices[ii], apply_kwargs)
+        if owned !== nothing
+            for v in gate_vertices[ii]
+                v ∈ owned && continue
+                setindex_preserve!(ψ_bpc, copy(network(ψ_bpc)[v]), v)
+                push!(owned, v)
+            end
+        end
+        ψ_bpc, truncation_errors[ii] = apply_gate!(gate, ψ_bpc; v⃗ = gate_vertices[ii], consume_inputs = true, apply_kwargs)
         for v in gate_vertices[ii]
             push!(affected_vertices, v)
         end
@@ -104,6 +134,7 @@ function apply_gate!(
         gate,
         ψ_bpc::BeliefPropagationCache;
         v⃗ = vertices(gate, network(ψ_bpc)),
+        consume_inputs = false,
         apply_kwargs
     )
     nv = length(v⃗)
@@ -124,7 +155,7 @@ function apply_gate!(
     envs = nv == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
 
     ψ⃗ = [network(ψ_bpc)[v] for v in v⃗]
-    updated_tensors, s_values, err = simple_update(gate, ψ⃗; envs, apply_kwargs...)
+    updated_tensors, s_values, err = simple_update(gate, ψ⃗; envs, consume_inputs, apply_kwargs...)
     if nv == 2
         v1, v2 = v⃗
         e = NamedEdge(v1 => v2)

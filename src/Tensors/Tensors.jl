@@ -660,6 +660,8 @@ end
 #(TensorOperations ≥ 5.8 hands out device temporaries from device-backed buffers), so the
 #fused kernels keep their allocation discipline on device too.
 _buffer_storage(::Array) = TensorOperations.DefaultStorageType
+_buffer_storage(A::Base.ReshapedArray) = _buffer_storage(parent(A))
+_buffer_storage(A::SubArray) = _buffer_storage(parent(A))
 _buffer_storage(A::AbstractArray) = typeof(similar(A, UInt8, 0))
 function _kernel_buffer(A::AbstractArray)
     S = _buffer_storage(A)
@@ -676,7 +678,17 @@ end
 #tensors must share one family — mixed-device calls take the generic path.
 _kernel_storage_ok(A::Array) = true
 _kernel_storage_ok(A::AbstractGPUArray) = true
+#storage-consuming gate outputs are reshaped prefix views of the input allocations —
+#unwrap so consumed tensors stay on the fused fast paths
+_kernel_storage_ok(A::Base.ReshapedArray) = _kernel_storage_ok(parent(A))
+_kernel_storage_ok(A::SubArray) = _kernel_storage_ok(parent(A))
 _kernel_storage_ok(A) = false
+
+#underlying storage of (possibly view/reshape-wrapped) tensor data: the full reusable
+#capacity for the consuming path, stable across repeated gates on the same vertex
+_root_storage(A::Base.ReshapedArray) = _root_storage(parent(A))
+_root_storage(A::SubArray) = _root_storage(parent(A))
+_root_storage(A) = A
 function _uniform_kernel_storage(arrays)
     all(_kernel_storage_ok, arrays) || return nothing
     W = typeof(first(arrays)).name.wrapper
@@ -708,6 +720,36 @@ function _tc_pair(
     C = TensorOperations.tensoralloc_contract(TC, da, pA, false, db, pB, conjB, pAB, istemp, allocator)
     backend = TC <: BlasFloat ? TensorOperations.StridedBLAS() : TensorOperations.StridedNative()
     TensorOperations.tensorcontract!(C, da, pA, false, db, pB, conjB, pAB, one(TC), zero(TC), backend, allocator)
+    return C, ia[oa], ib[ob]
+end
+
+#Like _tc_pair with istemp = false, but assembles the result inside `dest`'s storage
+#(a reshaped prefix view) when it fits and the eltypes match — the storage-consuming
+#path of the two-site gate. Falls back to a fresh heap allocation otherwise (growth
+#phase: the truncated rank can exceed the incoming bond while bonds are still growing).
+function _tc_pair_into(dest, da, ia::Vector{<:Index}, db, ib::Vector{<:Index}, allocator)
+    ca, cb = Int[], Int[]
+    for (j, bj) in enumerate(ib)
+        i = findfirst(==(bj), ia)
+        i === nothing && continue
+        push!(ca, i)
+        push!(cb, j)
+    end
+    oa = setdiff(1:length(ia), ca)
+    ob = setdiff(1:length(ib), cb)
+    pA = (Tuple(oa), Tuple(ca))
+    pB = (Tuple(cb), Tuple(ob))
+    pAB = (Tuple(1:(length(oa) + length(ob))), ())
+    TC = promote_type(eltype(da), eltype(db))
+    dims = (size(da)[oa]..., size(db)[ob]...)
+    n = prod(dims; init = 1)
+    C = if dest !== nothing && eltype(dest) === TC && n <= length(dest)
+        reshape(view(vec(dest), 1:n), dims)
+    else
+        TensorOperations.tensoralloc_contract(TC, da, pA, false, db, pB, false, pAB, Val(false))
+    end
+    backend = TC <: BlasFloat ? TensorOperations.StridedBLAS() : TensorOperations.StridedNative()
+    TensorOperations.tensorcontract!(C, da, pA, false, db, pB, false, pAB, one(TC), zero(TC), backend, allocator)
     return C, ia[oa], ib[ob]
 end
 
@@ -826,7 +868,7 @@ function fused_two_site_gate(
         sqrt1::Vector{<:Tensor}, inv1::Vector{<:Tensor},
         sqrt2::Vector{<:Tensor}, inv2::Vector{<:Tensor},
         s1::Vector{<:Index}, s2::Vector{<:Index};
-        maxdim = nothing, cutoff = nothing,
+        maxdim = nothing, cutoff = nothing, dest1 = nothing, dest2 = nothing,
     )
     buf = _kernel_buffer(ψ1.data)
     cp = TensorOperations.allocator_checkpoint!(buf)
@@ -878,10 +920,12 @@ function fused_two_site_gate(
     Y1, iy1 = _absorb_chain(reshape(Q1m, (Int[dimof(i) for i in l1]..., dimof(b1))), iQ1, inv1, true, buf)
     Y2, iy2 = _absorb_chain(reshape(Q2m, (Int[dimof(i) for i in l2]..., dimof(b2))), iQ2, inv2, true, buf)
 
-    # Reassemble; these two escape to the heap
-    T1, oa, ob = _tc_pair(Y1, iy1, F1, iF1, false, identity, Val(false), buf)
+    # Reassemble. Without destinations these two escape to the heap; with them (the
+    # storage-consuming path) they are built inside the input tensors' own arrays —
+    # safe because ψ1/ψ2's data was last read when the gauged copies were formed above.
+    T1, oa, ob = _tc_pair_into(dest1, Y1, iy1, F1, iF1, buf)
     iT1 = vcat(oa, ob)
-    T2, oa, ob = _tc_pair(Y2, iy2, F2, iF2, false, identity, Val(false), buf)
+    T2, oa, ob = _tc_pair_into(dest2, Y2, iy2, F2, iF2, buf)
     iT2 = vcat(oa, ob)
 
     s_values = Tensor(Index[u, v], _diag_matrix(S))
