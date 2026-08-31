@@ -797,13 +797,48 @@ function fused_norm_closure(
     #the closing contraction pairs ψ-leg i with chain-leg `partner(i)`; emitting the chain
     #in exactly that order makes it permutation-free (no tensor-sized scratch copy)
     partner = i -> (i ∈ sinds && i ∉ covered) ? i : TensorInterface.prime(i)
-    X, ix = _absorb_chain_2slot(ψ.data, ψ.inds, chain, false, buf)
+    X, ix, free, xslot = _absorb_chain_2slot(ψ.data, ψ.inds, chain, false, buf)
     # Closing: ψ-leg i pairs with X-leg i (uncovered sites, ket↔bra direct) or prime(i)
     # (message-bridged virtuals and operator-covered sites); unpaired ψ-legs come out as an
     # (i, i′) pair. istemp = Val(false) puts the output on the heap while the internal
     # permute scratch of the contraction still lives in the buffer.
-    out, o_ket, o_bra = _tc_pair(X, ix, ψ.data, ψ.inds, true, partner, Val(false), buf)
-    oinds = vcat(o_ket, TensorInterface.prime.(o_bra))
+    #Pair ψ's legs with the chain's. ψ's contracted legs lead and its open legs trail
+    #(construction order), so putting X in (open | contracted-in-ψ-order) layout makes the
+    #closing gemm contractable with no copy of either operand — the permute goes into the
+    #chain's dead slot rather than fresh scratch.
+    cX, cP, oP = Int[], Int[], Int[]
+    for (b, i) in enumerate(ψ.inds)
+        a = findfirst(==(partner(i)), ix)
+        a === nothing ? push!(oP, b) : (push!(cX, a); push!(cP, b))
+    end
+    oX = Int[a for a in 1:length(ix) if a ∉ cX]
+    if isempty(oX) && isempty(oP)
+        out, o_ket, o_bra = _tc_pair(X, ix, ψ.data, ψ.inds, true, partner, Val(false), buf)
+        oinds = vcat(o_ket, TensorInterface.prime.(o_bra))
+    else
+        TCc = eltype(X)
+        #X → (open | contracted) in the free slot
+        permX = (oX..., cX...)
+        pdX = ntuple(a -> size(X, permX[a]), length(permX))
+        Xp = reshape(view(free, 1:length(X)), pdX)
+        TensorOperations.tensoradd!(Xp, X, (permX, ()), false, one(TCc), zero(TCc))
+        #ψ → (contracted | open) in the slot X just vacated
+        permP = (cP..., oP...)
+        pdP = ntuple(a -> size(ψ.data, permP[a]), length(permP))
+        Pp = reshape(view(xslot, 1:length(ψ.data)), pdP)
+        TensorOperations.tensoradd!(Pp, ψ.data, (permP, ()), false, one(eltype(ψ.data)), zero(eltype(ψ.data)))
+        nc = length(cX)
+        odims = (ntuple(a -> size(Xp, a), length(oX))..., ntuple(a -> size(Pp, nc + a), length(oP))...)
+        TO2 = promote_type(TCc, eltype(ψ.data))
+        out = TensorOperations.tensoralloc(_temp_arraytype(ψ.data, TO2, length(odims)), odims, Val(false))
+        bk = TO2 <: BlasFloat ? TensorOperations.StridedBLAS() : TensorOperations.StridedNative()
+        TensorOperations.tensorcontract!(
+            out, Xp, (Tuple(1:length(oX)), Tuple((length(oX) + 1):length(permX))), false,
+            Pp, (Tuple(1:nc), Tuple((nc + 1):length(permP))), true, (Tuple(1:length(odims)), ()),
+            one(TO2), zero(TO2), bk, buf
+        )
+        oinds = vcat(ix[oX], TensorInterface.prime.(ψ.inds[oP]))
+    end
     TensorOperations.allocator_reset!(buf, cp)
 
     return Tensor(oinds, out)
@@ -888,13 +923,13 @@ end
 # Peak: 2F of arena (+ the caller's resident tensor). Every intermediate is exactly X's
 # size because each factor is square in the bond it contracts.
 function _absorb_chain_2slot(X, ix::Vector{<:Index}, ms::Vector{<:Tensor}, conjB::Bool, buf)
-    isempty(ms) && return X, ix
-    TC = promote_type(eltype(X), mapreduce(eltype, promote_type, ms))
+    TC = isempty(ms) ? eltype(X) : promote_type(eltype(X), mapreduce(eltype, promote_type, ms))
     n = length(X)
     at = _temp_arraytype(X, TC, 1)
     slots = (TensorOperations.tensoralloc(at, (n,), Val(true), buf),
              TensorOperations.tensoralloc(at, (n,), Val(true), buf))
     backend = TC <: BlasFloat ? TensorOperations.StridedBLAS() : TensorOperations.StridedNative()
+    isempty(ms) && return X, ix, slots[1], slots[2]
     cur = 0     # which slot currently holds X (0 = the caller's tensor, not a slot)
     for m in ms
         #which leg of the 2-index factor is contracted, and where it sits on X
@@ -927,7 +962,10 @@ function _absorb_chain_2slot(X, ix::Vector{<:Index}, ms::Vector{<:Tensor}, conjB
         X, ix = C, vcat(pinds[1:(nk - 1)], [m.inds[3 - j]])
         cur = gtarget
     end
-    return X, ix
+    #hand back BOTH slots: the one X occupies dies the moment the caller permutes X out of
+    #it, so the closing contraction can lay out both of its operands here and never ask for
+    #fresh scratch
+    return X, ix, slots[cur == 1 ? 2 : 1], slots[cur == 0 ? 1 : cur]
 end
 
 function fused_two_site_gate(
