@@ -812,10 +812,7 @@ function fused_norm_closure(
         a === nothing ? push!(oP, b) : (push!(cX, a); push!(cP, b))
     end
     oX = Int[a for a in 1:length(ix) if a ∉ cX]
-    if isempty(oX) && isempty(oP)
-        out, o_ket, o_bra = _tc_pair(X, ix, ψ.data, ψ.inds, true, partner, Val(false), buf)
-        oinds = vcat(o_ket, TensorInterface.prime.(o_bra))
-    else
+    begin
         TCc = eltype(X)
         #X → (open | contracted) in the free slot
         permX = (oX..., cX...)
@@ -878,6 +875,30 @@ end
 _temp_arraytype(ref::AbstractArray, T::Type, N::Integer) =
     Base.typename(typeof(_root_storage(ref))).wrapper{T, N}
 
+#Index list after absorbing a chain of 2-index factors: each factor swaps the leg it
+#shares with the running list for its partner.
+function _chain_inds(ix::Vector{<:Index}, ms::Vector{<:Tensor})
+    out = collect(Index, ix)
+    for m in ms
+        j = findfirst(i -> i ∈ out, m.inds)
+        j === nothing && continue
+        out[findfirst(==(m.inds[j]), out)] = m.inds[3 - j]
+    end
+    return out
+end
+
+#Matricize without copying when the tensor is already laid out (linds..., rest...) —
+#the gauge chain arranges exactly that. Falls back to the copying version otherwise.
+function _matricize_view(da, ia::Vector{<:Index}, linds::Vector{<:Index}, buf)
+    nl = length(linds)
+    if nl <= length(ia) && all(a -> ia[a] == linds[a], 1:nl)
+        rinds = ia[(nl + 1):end]
+        dl = prod(Int[dimof(i) for i in linds]; init = 1)
+        return reshape(da, dl, :), linds, rinds
+    end
+    return _matricize_temp(da, ia, linds, buf)
+end
+
 function _matricize_temp(da, ia::Vector{<:Index}, linds::Vector{<:Index}, buf)
     rinds = filter(i -> i ∉ linds, ia)
     perm = map(i -> findfirst(==(i), ia), vcat(linds, rinds))
@@ -922,12 +943,14 @@ end
 #
 # Peak: 2F of arena (+ the caller's resident tensor). Every intermediate is exactly X's
 # size because each factor is square in the bond it contracts.
-function _absorb_chain_2slot(X, ix::Vector{<:Index}, ms::Vector{<:Tensor}, conjB::Bool, buf)
+function _absorb_chain_2slot(X, ix::Vector{<:Index}, ms::Vector{<:Tensor}, conjB::Bool, buf;
+        final_order::Union{Nothing, Vector{<:Index}} = nothing, slots = nothing)
     TC = isempty(ms) ? eltype(X) : promote_type(eltype(X), mapreduce(eltype, promote_type, ms))
     n = length(X)
     at = _temp_arraytype(X, TC, 1)
-    slots = (TensorOperations.tensoralloc(at, (n,), Val(true), buf),
-             TensorOperations.tensoralloc(at, (n,), Val(true), buf))
+    slots = slots === nothing ?
+        (TensorOperations.tensoralloc(at, (n,), Val(true), buf),
+         TensorOperations.tensoralloc(at, (n,), Val(true), buf)) : slots
     backend = TC <: BlasFloat ? TensorOperations.StridedBLAS() : TensorOperations.StridedNative()
     isempty(ms) && return X, ix, slots[1], slots[2]
     cur = 0     # which slot currently holds X (0 = the caller's tensor, not a slot)
@@ -951,15 +974,21 @@ function _absorb_chain_2slot(X, ix::Vector{<:Index}, ms::Vector{<:Tensor}, conjB
         end
         dst = slots[gtarget]
 
-        #2. gemm with the contracted index already trailing: no scratch, output in place
+        #2. gemm with the contracted index already trailing: no scratch, output in place.
+        #   The last step may emit a requested order (free: it is just pAB), letting the
+        #   caller reshape the result instead of copying it into shape.
         nk = length(pinds)
-        odims = (ntuple(a -> size(P, a), nk - 1)..., dimof(m.inds[3 - j]))
+        natural = vcat(pinds[1:(nk - 1)], [m.inds[3 - j]])
+        want = (final_order !== nothing && m === last(ms)) ? final_order : natural
+        pm = [something(findfirst(==(i), natural)) for i in want]
+        nat_dims = (ntuple(a -> size(P, a), nk - 1)..., dimof(m.inds[3 - j]))
+        odims = ntuple(a -> nat_dims[pm[a]], nk)
         C = reshape(view(dst, 1:prod(odims)), odims)
         TensorOperations.tensorcontract!(
             C, P, (Tuple(1:(nk - 1)), (nk,)), false, m.data, ((j,), (3 - j,)), conjB,
-            (Tuple(1:nk), ()), one(TC), zero(TC), backend, buf
+            (Tuple(pm), ()), one(TC), zero(TC), backend, buf
         )
-        X, ix = C, vcat(pinds[1:(nk - 1)], [m.inds[3 - j]])
+        X, ix = C, want
         cur = gtarget
     end
     #hand back BOTH slots: the one X occupies dies the moment the caller permutes X out of
@@ -978,16 +1007,28 @@ function fused_two_site_gate(
     buf = _kernel_buffer(ψ1.data)
     cp = TensorOperations.allocator_checkpoint!(buf)
 
-    # Gauge: X_k = ψ_k · ∏ √env (buffer temps)
-    X1, ix1 = _absorb_chain(ψ1.data, ψ1.inds, sqrt1, false, buf)
-    X2, ix2 = _absorb_chain(ψ2.data, ψ2.inds, sqrt2, false, buf)
+    # Gauge: X_k = ψ_k · ∏ √env, emitted directly in QR order (Q-side legs first) so the
+    # matricization below is a reshape rather than another tensor-sized copy.
+    #ONE slot pair, shared by all four absorption chains: each site is gauged, matricized
+    #(a reshape — the chain emits QR order) and QR'd before the next chain runs, so the
+    #slots are dead again by then. Only the Q factors and the small R/S live across phases.
+    post1 = _chain_inds(ψ1.inds, sqrt1)
+    post2 = _chain_inds(ψ2.inds, sqrt2)
+    ql1 = filter(i -> i ∉ ψ2.inds && i ∉ s1, post1)
+    ql2 = filter(i -> i ∉ ψ1.inds && i ∉ s2, post2)
+    ord1 = vcat(ql1, filter(i -> i ∉ ql1, post1))
+    ord2 = vcat(ql2, filter(i -> i ∉ ql2, post2))
+    TCg = promote_type(eltype(ψ1.data), eltype(ψ2.data), eltype(o.data))
+    nslot = max(length(ψ1.data), length(ψ2.data))
+    atg = _temp_arraytype(ψ1.data, TCg, 1)
+    shared = (TensorOperations.tensoralloc(atg, (nslot,), Val(true), buf),
+              TensorOperations.tensoralloc(atg, (nslot,), Val(true), buf))
 
-    # QR split: Q side = gauged environment legs (not shared with partner, not gate sites)
-    ql1 = filter(i -> i ∉ ψ2.inds && i ∉ s1, ix1)
-    ql2 = filter(i -> i ∉ ψ1.inds && i ∉ s2, ix2)
-    A1, l1, r1 = _matricize_temp(X1, ix1, ql1, buf)
-    A2, l2, r2 = _matricize_temp(X2, ix2, ql2, buf)
+    X1, ix1 = _absorb_chain_2slot(ψ1.data, ψ1.inds, sqrt1, false, buf; final_order = ord1, slots = shared)
+    A1, l1, r1 = _matricize_view(X1, ix1, ql1, buf)
     Q1m, R1m = _qr_temp(A1, buf)
+    X2, ix2 = _absorb_chain_2slot(ψ2.data, ψ2.inds, sqrt2, false, buf; final_order = ord2, slots = shared)
+    A2, l2, r2 = _matricize_view(X2, ix2, ql2, buf)
     Q2m, R2m = _qr_temp(A2, buf)
     b1 = Index(size(Q1m, 2), "Link,qr")
     b2 = Index(size(Q2m, 2), "Link,qr")
@@ -1022,13 +1063,14 @@ function fused_two_site_gate(
     # De-gauge: Y_k = Q_k · ∏ conj(inv-√env), the dag fused as a conj flag
     iQ1 = vcat(l1, [b1])
     iQ2 = vcat(l2, [b2])
-    Y1, iy1 = _absorb_chain(reshape(Q1m, (Int[dimof(i) for i in l1]..., dimof(b1))), iQ1, inv1, true, buf)
-    Y2, iy2 = _absorb_chain(reshape(Q2m, (Int[dimof(i) for i in l2]..., dimof(b2))), iQ2, inv2, true, buf)
+    Y1, iy1 = _absorb_chain_2slot(reshape(Q1m, (Int[dimof(i) for i in l1]..., dimof(b1))), iQ1, inv1, true, buf; slots = shared)
 
     # Reassemble. Without destinations these two escape to the heap; with them (the
     # storage-consuming path) they are built inside the input tensors' own arrays —
     # safe because ψ1/ψ2's data was last read when the gauged copies were formed above.
+    #assemble each output before the other site's de-gauge reuses the shared slots
     T1, iT1 = _tc_pair_into(dest1, Y1, iy1, F1, iF1, buf)
+    Y2, iy2 = _absorb_chain_2slot(reshape(Q2m, (Int[dimof(i) for i in l2]..., dimof(b2))), iQ2, inv2, true, buf; slots = shared)
     T2, iT2 = _tc_pair_into(dest2, Y2, iy2, F2, iF2, buf)
 
     s_values = Tensor(Index[u, v], _diag_matrix(S))
