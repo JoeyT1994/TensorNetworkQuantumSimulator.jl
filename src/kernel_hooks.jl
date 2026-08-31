@@ -5,11 +5,46 @@ identity/purification constructors, graded site indices, boundary-MPS message
 initialization over charged link spectra, and the tensor-gate passthrough. These are the
 sole implementations of their entry points.
 
-Everything else — message updates, region scalars, gate application — runs through the
-generic seam-verb path. Hand-fused kernels for those were removed: they matched the
-generic path on peak memory (3F for a BP closure) while being materially slower on real
-circuits, so the churn they saved did not pay for the complexity.
+One fused fast path lives here too: the double-layer BP closure (message updates and
+single-vertex region scalars), which measures 5.1F against the generic path's 6.1F at
+parity on walltime, and is the inner loop of every BP sweep. Gate application and
+everything else run through the generic seam-verb path — measured, the fused gate was
+worse than generic.
 =#
+
+#Fused double-layer BP kernel (Tensors.fused_norm_closure): the one specialised path in
+#the package, worth it because it is the inner loop of every BP sweep and measures 5.1F
+#against the generic path's 6.1F. Anything whose structure it does not recognise — boundary
+#MPS messages with MPS link legs, ρ insertions, multi-site-index vertices, >2-vertex
+#regions, graded tensors — returns `nothing` and takes the generic path with identical
+#results. Gate application is deliberately NOT here: measured, the generic gate is better.
+function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector{<:Tensor}; normalize)
+    ψ = tns[v]
+    ψ isa Tensor || return nothing
+    sinds = siteinds(tns, v)
+    all(i -> i isa Index, sinds) || return nothing
+    return Tensors.fused_norm_message(ψ, collect(Index, sinds), incoming_ms; normalize)
+end
+
+function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Vector{<:Tensor}; op_strings::Function)
+    length(vs) == 1 || return nothing
+    v = only(vs)
+    ψ = tns[v]
+    ψ isa Tensor || return nothing
+    sinds = siteinds(tns, v)
+    all(i -> i isa Index, sinds) || return nothing
+    str = op_strings(v)
+    o = if str == "I"
+        nothing
+    elseif str == "ρ" || length(sinds) != 1
+        return nothing
+    else
+        adapt_like(ψ, op(str, only(sinds)))
+    end
+    c = Tensors.fused_norm_closure(ψ, collect(Index, sinds), incoming_ms; op = o)
+    (c === nothing || !isempty(inds(c))) && return nothing
+    return scalar(c)
+end
 
 #Direct entry point for circuits already given as backend tensors
 function apply_gates(circuit::Vector{<:Tensor}, ψ_bpc::BeliefPropagationCache; kwargs...)
