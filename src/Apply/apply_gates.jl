@@ -43,16 +43,14 @@ end
 """
     apply_gates!(circuit, ψ; kwargs...)
 
-Like [`apply_gates`](@ref) but CONSUMES the input state or cache: its tensors (and, for
-a cache, its messages) are overwritten in place and must not be used afterwards.
+Like [`apply_gates`](@ref) but CONSUMES the input state or cache: its tensors are
+overwritten in place and must not be used afterwards.
 
-Peak-memory context: `simple_update` assembles each two-site gate's outputs inside the
-tensors handed to it (per-gate peak 2·(F₁+F₂) + small instead of 3·(F₁+F₂), with F₁, F₂
-the two site-tensor sizes). Plain `apply_gates` already gets this for every tensor it
-created itself, protecting the caller's originals with a one-time copy on first touch;
-`apply_gates!` skips those copies too. Results are identical either way. The storage
-reuse engages on the dense fused gate path; other paths (graded tensors, unusual gate
-structures) stay correct but allocate fresh outputs.
+`simple_update` writes each gate's gauged tensors into the storage of the inputs it was
+handed, since gauging is their last use — worth F₁ + F₂ of residency per gate. Plain
+`apply_gates` already gets this for tensors the gate loop created itself, protecting the
+caller's originals with a one-time copy on first touch; `apply_gates!` skips those copies
+too. Results are identical either way.
 """
 apply_gates!(circuit::Vector, ψ; kwargs...) = apply_gates(circuit, ψ; consume_inputs = true, kwargs...)
 
@@ -71,12 +69,10 @@ function _apply_gate_tensors(
         verbose = false,
         consume_inputs = false,
     )
-    #the consuming path mutates the caller's cache (and its tensor storage) in place
+    #`consume_inputs` hands the caller's own tensors to the gate; otherwise the loop
+    #protects them with a one-time copy on first touch and consumes freely thereafter,
+    #which costs one copy per vertex for the whole circuit.
     ψ_bpc = consume_inputs ? ψ_bpc : copy(ψ_bpc)
-    #Gate storage discipline: simple_update may overwrite the tensors handed to it
-    #(peak 2(F1+F2) + small instead of 3). Tensors this loop created itself are always
-    #safe to consume; the caller's original tensors are protected by a one-time
-    #copy-on-first-touch (skipped entirely on the consuming path).
     owned = consume_inputs ? nothing : Set{eltype(vertices(network(ψ_bpc)))}()
 
     # we keep track of the vertices that have been acted on by 2-qubit gates
@@ -116,7 +112,8 @@ function _apply_gate_tensors(
                 push!(owned, v)
             end
         end
-        ψ_bpc, truncation_errors[ii] = apply_gate!(gate, ψ_bpc; v⃗ = gate_vertices[ii], consume_inputs = true, apply_kwargs)
+        ψ_bpc, truncation_errors[ii] = apply_gate!(gate, ψ_bpc; v⃗ = gate_vertices[ii],
+            consume_inputs = true, apply_kwargs)
         for v in gate_vertices[ii]
             push!(affected_vertices, v)
         end

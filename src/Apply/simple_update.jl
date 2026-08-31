@@ -1,6 +1,5 @@
 #Backend-specialized fast path for the two-site gate. Returns `nothing` when no
 #specialization applies and the generic path below should run.
-fused_simple_update(o, ψ⃗; kwargs...) = nothing
 
 """
     simple_update(o, ψ⃗; envs, normalize_tensors = true, sqrt_cutoff, apply_kwargs...)
@@ -22,6 +21,10 @@ Simple update of one or two local tensors in the presence of factorized environm
 - `s_values`: The singular values from the SVD (if applicable).
 - `err::Number`: The truncation error from the SVD (if applicable).
 """
+#Left fold over a factor list: absorbing 2-index environments one at a time is already
+#the optimal order, and naming it lets the result be written into a consumed input.
+_left_seq(n::Integer) = n <= 1 ? 1 : foldl((a, b) -> [a, b], 2:n; init = 1)
+
 #Environment gauging shared by the generic path and the fused kernel (kernel_hooks.jl):
 #per-vertex √env and √env⁻¹ pairs, with the cutoff defaulted from the environments'
 #scalar type (or the local tensors' when envs is empty and the cutoff is unused).
@@ -43,15 +46,19 @@ function simple_update(
         updated_tensors = [apply(o, only(ψ⃗))]
         s_values, err = nothing, 0
     else
-        fast = fused_simple_update(o, ψ⃗; envs, normalize_tensors, sqrt_cutoff, consume_inputs, apply_kwargs...)
-        fast !== nothing && return fast
         all(env -> ndims(env) == 2, envs) ||
             error("simple_update: environments must be 2-index tensors")
         sqrt_envs_v1, inv_sqrt_envs_v1, sqrt_envs_v2, inv_sqrt_envs_v2 =
             gauged_env_pairs(ψ⃗, envs, sqrt_cutoff)
 
-        ψᵥ₁ = contract([ψ⃗[1]; sqrt_envs_v1])
-        ψᵥ₂ = contract([ψ⃗[2]; sqrt_envs_v2])
+        #Gauging is the last use of the input tensors' data: everything downstream reads
+        #the gauged copies. With `consume_inputs` the caller has relinquished them, so the
+        #gauged result is written into their storage instead of fresh memory (F1 + F2 less
+        #resident per gate). Ownership only — unrelated to which contraction path runs.
+        ψᵥ₁ = contract([ψ⃗[1]; sqrt_envs_v1]; sequence = _left_seq(1 + length(sqrt_envs_v1)),
+            dest = consume_inputs ? ψ⃗[1] : nothing)
+        ψᵥ₂ = contract([ψ⃗[2]; sqrt_envs_v2]; sequence = _left_seq(1 + length(sqrt_envs_v2)),
+            dest = consume_inputs ? ψ⃗[2] : nothing)
         sᵥ₁ = commoninds(ψ⃗[1], o)
         sᵥ₂ = commoninds(ψ⃗[2], o)
         Qᵥ₁, Rᵥ₁ = qr(ψᵥ₁, uniqueinds(uniqueinds(ψᵥ₁, ψᵥ₂), sᵥ₁))

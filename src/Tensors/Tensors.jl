@@ -30,8 +30,8 @@ dense Tensor).
 module Tensors
 
 using LinearAlgebra: LinearAlgebra, Diagonal, norm, diag, rmul!, BlasFloat
-using MatrixAlgebraKit: MatrixAlgebraKit, qr_compact, qr_compact!, svd_compact, svd_trunc,
-    eigh_full, truncrank, truncerror
+using MatrixAlgebraKit: MatrixAlgebraKit, qr_compact, qr_compact!, svd_compact, svd_compact!,
+    svd_trunc, svd_trunc!, eigh_full, truncrank, truncerror
 using TensorOperations: TensorOperations, ncon
 using VectorInterface: VectorInterface
 using Adapt: Adapt, adapt
@@ -399,16 +399,21 @@ end
 #trees — e.g. exact contraction of big networks — should not pin their peak memory forever).
 const SEQ_BUFFER_MAXBYTES = Ref(2^30)
 
-function TensorInterface.contract(ts::Vector{<:Tensor}; sequence = nothing, kwargs...)
+function TensorInterface.contract(ts::Vector{<:Tensor}; sequence = nothing, dest = nothing, kwargs...)
     isnothing(sequence) && return reduce(*, ts)
     sequence isa Integer && return ts[sequence]
+    #`dest` is a tensor the caller has finished with, offered as storage for the result.
+    #Only safe once it has been consumed by an earlier step of the tree, which needs at
+    #least three factors; with two, the root still reads it.
+    length(ts) >= 3 || (dest = nothing)
+    dest = dest isa Tensor ? dest.data : dest
     if _uniform_kernel_storage([t.data for t in ts]) !== nothing
         elsize = sizeof(mapreduce(eltype, promote_type, ts))
         _, total = _seq_temp_bytes(ts, sequence, elsize)
         if total <= SEQ_BUFFER_MAXBYTES[]
             buf = _kernel_buffer(first(ts).data)
             cp = TensorOperations.allocator_checkpoint!(buf)
-            data, is = _exec_seq(ts, sequence, buf, true)
+            data, is = _exec_seq(ts, sequence, buf, true; dest)
             TensorOperations.allocator_reset!(buf, cp)
             return Tensor(is, data)
         end
@@ -436,11 +441,11 @@ end
 
 #Execute the tree: leaves are the input arrays, intermediates are buffer temps, and the
 #root-level final pairwise contraction writes its result on the heap.
-function _exec_seq(ts, s::Integer, buf, isroot)
+function _exec_seq(ts, s::Integer, buf, isroot; dest = nothing)
     t = ts[s]
     return t.data, t.inds
 end
-function _exec_seq(ts, s::Union{Vector, Tuple}, buf, isroot)
+function _exec_seq(ts, s::Union{Vector, Tuple}, buf, isroot; dest = nothing)
     X, ix = _exec_seq(ts, s[1], buf, false)
     n = length(s)
     for k in 2:n
@@ -451,8 +456,11 @@ function _exec_seq(ts, s::Union{Vector, Tuple}, buf, isroot)
             X, ix = data, (ndims(X) == 0 ? iy : ix)
             continue
         end
-        istemp = (isroot && k == n) ? Val(false) : Val(true)
-        X, oa, ob = _tc_pair(X, ix, Y, iy, false, identity, istemp, buf)
+        if isroot && k == n
+            X, oa, ob = _tc_pair_into(dest, X, ix, Y, iy, buf)
+        else
+            X, oa, ob = _tc_pair(X, ix, Y, iy, false, identity, Val(true), buf)
+        end
         ix = vcat(oa, ob)
     end
     return X, ix
@@ -511,8 +519,14 @@ function _mak_trunc(; maxdim = nothing, cutoff = nothing)
 end
 
 function LinearAlgebra.qr(t::Tensor, linds; kwargs...)
+    #`_matricize` hands back a freshly permuted matrix nobody else references, so the
+    #in-place factorization (which destroys its input) is safe here and skips the copy
+    #`qr_compact` would otherwise make — measured 2.8|A| of allocation down to 0.13|A|.
     A, li, ri = _matricize(t, _indvec(linds))
-    Q, R = qr_compact(A)
+    m, n = size(A)
+    k = min(m, n)
+    Q, R = similar(A, m, k), similar(A, k, n)
+    qr_compact!(A, (Q, R))
     b = Index(size(Q, 2), "Link,qr")
     Qt = Tensor(vcat(li, [b]), reshape(Q, (Int[dimof(i) for i in li]..., size(Q, 2))))
     Rt = Tensor(vcat([b], ri), reshape(R, (size(R, 1), Int[dimof(i) for i in ri]...)))
@@ -529,13 +543,21 @@ function _diag_matrix(S::AbstractVector)
 end
 
 # Matrix-level truncated SVD with the seam truncerr convention (discarded Σs²/total).
+#`A` is always a freshly matricized copy (see `_svd_split`), so the in-place
+#factorizations — which destroy their input — are safe and skip the copy the
+#non-mutating forms make (measured 6.5|A| -> 2.8|A| compact, 6.7|A| -> 4.7|A| truncated).
 function _svd_matrix(A::AbstractMatrix; maxdim = nothing, cutoff = nothing)
     trunc = _mak_trunc(; maxdim, cutoff)
     if trunc === nothing
-        U, S, Vt = svd_compact(A)
+        m, n = size(A)
+        k = min(m, n)
+        U = similar(A, m, k)
+        S = Diagonal(similar(A, real(eltype(A)), k))
+        Vt = similar(A, k, n)
+        svd_compact!(A, (U, S, Vt))
         truncerr = 0.0
     else
-        U, S, Vt, err = svd_trunc(A; trunc)
+        U, S, Vt, err = svd_trunc!(A; trunc)
         # MAK reports ‖discarded‖₂; the seam convention is discarded Σs² / total Σs².
         kept2 = sum(abs2, diag(S))
         total = kept2 + err^2
@@ -643,22 +665,16 @@ function LinearAlgebra.eigen(t::Tensor, linds, rinds; ishermitian::Bool = false,
     return D, U
 end
 
-# ── Fused BP norm-message kernel ────────────────────────────────────────────────────────
-#
-# The double-layer message update m_out = (∏ m_in) · ψ · conj(ψ̃) computed with:
-#   * sequential absorption of each incoming message into the ket (F-sized GEMMs),
-#   * a closing GEMM against ψ itself with the conjugation fused into the BLAS call —
-#     `dag(prime(ψ))` is never materialized,
-#   * all chain intermediates (and TensorOperations' internal permute scratch) living in a
-#     task-local, reusable BufferAllocator; only the small outgoing message touches the heap.
-#
-# Steady-state heap cost per call: the output message + O(1) bookkeeping — the "2F + out"
-# target, with the 2F living in the reused buffer.
+# ── Contraction workspace ───────────────────────────────────────────────────────────────
+# Task-local reusable arenas backing `contract(ts; sequence)`: chain temporaries live
+# here instead of the heap, and a GPU tensor gets an arena carved from its own device
+# memory (TensorOperations >= 5.8 hands out device temporaries from device-backed
+# buffers), so the discipline holds on device too.
 
 #Task-local reusable buffers, one per storage family: host tensors get the default
 #(Memory-backed) buffer; GPU tensors get a buffer carved from their own device memory
 #(TensorOperations ≥ 5.8 hands out device temporaries from device-backed buffers), so the
-#fused kernels keep their allocation discipline on device too.
+#same discipline holds on device.
 _buffer_storage(::Array) = TensorOperations.DefaultStorageType
 _buffer_storage(A::Base.ReshapedArray) = _buffer_storage(parent(A))
 _buffer_storage(A::SubArray) = _buffer_storage(parent(A))
@@ -673,29 +689,54 @@ function _kernel_buffer(A::AbstractArray)
     end::TensorOperations.BufferAllocator{S}
 end
 
-#Storage families the fused kernels support: host arrays and GPU arrays (via
+#Storage families the buffered path supports: host arrays and GPU arrays (via
 #TensorOperations' GPUArrays-backed buffer and contraction extensions). All participating
-#tensors must share one family — mixed-device calls take the generic path.
+#tensors must share one family — mixed-device lists take the unbuffered path.
 _kernel_storage_ok(A::Array) = true
 _kernel_storage_ok(A::AbstractGPUArray) = true
-#storage-consuming gate outputs are reshaped prefix views of the input allocations —
-#unwrap so consumed tensors stay on the fused fast paths
 _kernel_storage_ok(A::Base.ReshapedArray) = _kernel_storage_ok(parent(A))
 _kernel_storage_ok(A::SubArray) = _kernel_storage_ok(parent(A))
 _kernel_storage_ok(A) = false
 
-#underlying storage of (possibly view/reshape-wrapped) tensor data: the full reusable
-#capacity for the consuming path, stable across repeated gates on the same vertex
+#underlying storage of (possibly view/reshape-wrapped) tensor data
 _root_storage(A::Base.ReshapedArray) = _root_storage(parent(A))
 _root_storage(A::SubArray) = _root_storage(parent(A))
 _root_storage(A) = A
 function _uniform_kernel_storage(arrays)
     all(_kernel_storage_ok, arrays) || return nothing
-    #compare ROOT storage families: consumed-gate outputs are reshaped views into their
-    #input's allocation, and must still count as the same family as a plain array
     W = typeof(_root_storage(first(arrays))).name.wrapper
     all(a -> typeof(_root_storage(a)).name.wrapper === W, arrays) || return nothing
     return first(arrays)
+end
+
+
+# Pairwise contraction writing into `dest`'s storage (a reshaped prefix view) when it fits
+# and the eltypes match; a fresh allocation otherwise. Used to let a caller hand ownership
+# of an input it no longer needs — the storage, not the contraction, is what is recycled.
+function _tc_pair_into(dest, da, ia::Vector{<:Index}, db, ib::Vector{<:Index}, allocator)
+    ca, cb = Int[], Int[]
+    for (j, bj) in enumerate(ib)
+        i = findfirst(==(bj), ia)
+        i === nothing && continue
+        push!(ca, i)
+        push!(cb, j)
+    end
+    oa = setdiff(1:length(ia), ca)
+    ob = setdiff(1:length(ib), cb)
+    pA, pB = (Tuple(oa), Tuple(ca)), (Tuple(cb), Tuple(ob))
+    pAB = (Tuple(1:(length(oa) + length(ob))), ())
+    TC = promote_type(eltype(da), eltype(db))
+    dims = (size(da)[oa]..., size(db)[ob]...)
+    n = prod(dims; init = 1)
+    root = dest === nothing ? nothing : _root_storage(dest)
+    C = if root !== nothing && eltype(root) === TC && n <= length(root)
+        reshape(view(vec(root), 1:n), dims)
+    else
+        TensorOperations.tensoralloc_contract(TC, da, pA, false, db, pB, false, pAB, Val(false))
+    end
+    backend = TC <: BlasFloat ? TensorOperations.StridedBLAS() : TensorOperations.StridedNative()
+    TensorOperations.tensorcontract!(C, da, pA, false, db, pB, false, pAB, one(TC), zero(TC), backend, allocator)
+    return C, ia[oa], ib[ob]
 end
 
 # One pairwise contraction at the data level. `pairfn` maps an index of `b` to the index of
@@ -725,359 +766,7 @@ function _tc_pair(
     return C, ia[oa], ib[ob]
 end
 
-#Like _tc_pair with istemp = false, but assembles the result inside `dest`'s storage
-#(a reshaped prefix view) when it fits and the eltypes match — the storage-consuming
-#path of the two-site gate. Falls back to a fresh heap allocation otherwise (growth
-#phase: the truncated rank can exceed the incoming bond while bonds are still growing).
-function _tc_pair_into(dest, da, ia::Vector{<:Index}, db, ib::Vector{<:Index}, allocator;
-        conjB::Bool = false, outorder::Union{Nothing, Vector{<:Index}} = nothing)
-    ca, cb = Int[], Int[]
-    for (j, bj) in enumerate(ib)
-        i = findfirst(==(bj), ia)
-        i === nothing && continue
-        push!(ca, i)
-        push!(cb, j)
-    end
-    oa = setdiff(1:length(ia), ca)
-    ob = setdiff(1:length(ib), cb)
-    pA = (Tuple(oa), Tuple(ca))
-    pB = (Tuple(cb), Tuple(ob))
-    outinds = vcat(ia[oa], ib[ob])
-    #`outorder` requests a specific output index order; it costs nothing (the contraction
-    #writes through pAB either way) and lets the NEXT contraction avoid a permute copy
-    perm = if outorder === nothing
-        collect(1:length(outinds))
-    else
-        [something(findfirst(==(i), outinds)) for i in outorder]
-    end
-    pAB = (Tuple(perm), ())
-    TC = promote_type(eltype(da), eltype(db))
-    alldims = (size(da)[oa]..., size(db)[ob]...)
-    dims = ntuple(k -> alldims[perm[k]], length(perm))
-    n = prod(dims; init = 1)
-    C = if dest !== nothing && eltype(dest) === TC && n <= length(dest)
-        reshape(view(vec(dest), 1:n), dims)
-    else
-        TensorOperations.tensoralloc_contract(TC, da, pA, false, db, pB, false, pAB, Val(false))
-    end
-    backend = TC <: BlasFloat ? TensorOperations.StridedBLAS() : TensorOperations.StridedNative()
-    TensorOperations.tensorcontract!(C, da, pA, false, db, pB, conjB, pAB, one(TC), zero(TC), backend, allocator)
-    return C, outinds[perm]
-end
 
-# Pattern check: `m` must be a standard doubled norm-network message for `ψ` — every index
-# either a plev-0 index of ψ (ket side) or the prime of one (bra side).
-function _is_norm_message(m::Tensor, ψinds::Vector{<:Index})
-    return all(m.inds) do i
-        (i.plev == 0 && i ∈ ψinds) || (i.plev == 1 && TensorInterface.noprime(i) ∈ ψinds)
-    end
-end
-
-"""
-Fused ket-side closure of vertex tensor `ψ` (site indices `sinds`) against its own
-conjugate, given standard doubled `incoming` messages and an optional single-site operator
-`op` inserted between the layers. ψ-legs without a partner (e.g. the target edge of a
-message update) come out as an unprimed/primed pair; a fully surrounded vertex closes to a
-scalar (0-index) tensor. Returns `nothing` when the structure doesn't match.
-"""
-function fused_norm_closure(
-        ψ::Tensor, sinds::Vector{<:Index}, incoming::Vector{<:Tensor};
-        op::Union{Nothing, Tensor} = nothing
-    )
-    arrays = Any[ψ.data]
-    append!(arrays, (m.data for m in incoming))
-    op === nothing || push!(arrays, op.data)
-    _uniform_kernel_storage(arrays) === nothing && return nothing
-    all(m -> _is_norm_message(m, ψ.inds), incoming) || return nothing
-
-    buf = _kernel_buffer(ψ.data)
-    cp = TensorOperations.allocator_checkpoint!(buf)
-    chain = op === nothing ? incoming : vcat(incoming, [op])
-    covered = op === nothing ? Index[] : Index[i for i in op.inds if i.plev == 0]
-    #the closing contraction pairs ψ-leg i with chain-leg `partner(i)`; emitting the chain
-    #in exactly that order makes it permutation-free (no tensor-sized scratch copy)
-    partner = i -> (i ∈ sinds && i ∉ covered) ? i : TensorInterface.prime(i)
-    X, ix, free, xslot = _absorb_chain_2slot(ψ.data, ψ.inds, chain, false, buf)
-    # Closing: ψ-leg i pairs with X-leg i (uncovered sites, ket↔bra direct) or prime(i)
-    # (message-bridged virtuals and operator-covered sites); unpaired ψ-legs come out as an
-    # (i, i′) pair. istemp = Val(false) puts the output on the heap while the internal
-    # permute scratch of the contraction still lives in the buffer.
-    #Pair ψ's legs with the chain's. ψ's contracted legs lead and its open legs trail
-    #(construction order), so putting X in (open | contracted-in-ψ-order) layout makes the
-    #closing gemm contractable with no copy of either operand — the permute goes into the
-    #chain's dead slot rather than fresh scratch.
-    cX, cP, oP = Int[], Int[], Int[]
-    for (b, i) in enumerate(ψ.inds)
-        a = findfirst(==(partner(i)), ix)
-        a === nothing ? push!(oP, b) : (push!(cX, a); push!(cP, b))
-    end
-    oX = Int[a for a in 1:length(ix) if a ∉ cX]
-    begin
-        TCc = eltype(X)
-        #X → (open | contracted) in the free slot
-        permX = (oX..., cX...)
-        pdX = ntuple(a -> size(X, permX[a]), length(permX))
-        Xp = reshape(view(free, 1:length(X)), pdX)
-        TensorOperations.tensoradd!(Xp, X, (permX, ()), false, one(TCc), zero(TCc))
-        #ψ → (contracted | open) in the slot X just vacated
-        permP = (cP..., oP...)
-        pdP = ntuple(a -> size(ψ.data, permP[a]), length(permP))
-        Pp = reshape(view(xslot, 1:length(ψ.data)), pdP)
-        TensorOperations.tensoradd!(Pp, ψ.data, (permP, ()), false, one(eltype(ψ.data)), zero(eltype(ψ.data)))
-        nc = length(cX)
-        odims = (ntuple(a -> size(Xp, a), length(oX))..., ntuple(a -> size(Pp, nc + a), length(oP))...)
-        TO2 = promote_type(TCc, eltype(ψ.data))
-        out = TensorOperations.tensoralloc(_temp_arraytype(ψ.data, TO2, length(odims)), odims, Val(false))
-        bk = TO2 <: BlasFloat ? TensorOperations.StridedBLAS() : TensorOperations.StridedNative()
-        TensorOperations.tensorcontract!(
-            out, Xp, (Tuple(1:length(oX)), Tuple((length(oX) + 1):length(permX))), false,
-            Pp, (Tuple(1:nc), Tuple((nc + 1):length(permP))), true, (Tuple(1:length(odims)), ()),
-            one(TO2), zero(TO2), bk, buf
-        )
-        oinds = vcat(ix[oX], TensorInterface.prime.(ψ.inds[oP]))
-    end
-    TensorOperations.allocator_reset!(buf, cp)
-
-    return Tensor(oinds, out)
-end
-
-"""
-Fused computation of the outgoing BP message from vertex tensor `ψ` (site indices `sinds`)
-given standard doubled `incoming` messages. Returns `nothing` when the structure doesn't
-match (caller falls back to the generic contraction path).
-"""
-function fused_norm_message(
-        ψ::Tensor, sinds::Vector{<:Index}, incoming::Vector{<:Tensor};
-        normalize::Bool = true
-    )
-    m = fused_norm_closure(ψ, sinds, incoming)
-    m === nothing && return nothing
-    if normalize
-        s = sum(m.data)
-        iszero(s) || rmul!(vec(m.data), inv(s))
-    end
-    return m
-end
-
-# ── Fused two-site simple-update gate kernel ────────────────────────────────────────────
-#
-# The BP-gauged simple update with the same buffer discipline as the message kernel:
-# √env absorption, the matricize copies, Q factors and the de-gauging chain all live in the
-# task-local buffer; `dag` of the inverse-√ environments is fused as a conj flag. Only the
-# two updated site tensors and the singular-value tensor escape to the heap.
-
-# Buffered permute+reshape to a (linds × rest) matrix. Returns (matrix, linds, rinds).
-#Buffer-temp array type in the same storage family as `ref` (host Array for host
-#tensors, the matching GPU array type on device).
-#Buffer-temp array type in the same storage family as `ref`. Views/reshapes are unwrapped
-#to their root storage: a `ReshapedArray` wrapper cannot be constructed directly, and
-#chain intermediates are exactly such views into buffer slots.
-_temp_arraytype(ref::AbstractArray, T::Type, N::Integer) =
-    Base.typename(typeof(_root_storage(ref))).wrapper{T, N}
-
-#Index list after absorbing a chain of 2-index factors: each factor swaps the leg it
-#shares with the running list for its partner.
-function _chain_inds(ix::Vector{<:Index}, ms::Vector{<:Tensor})
-    out = collect(Index, ix)
-    for m in ms
-        j = findfirst(i -> i ∈ out, m.inds)
-        j === nothing && continue
-        out[findfirst(==(m.inds[j]), out)] = m.inds[3 - j]
-    end
-    return out
-end
-
-#Matricize without copying when the tensor is already laid out (linds..., rest...) —
-#the gauge chain arranges exactly that. Falls back to the copying version otherwise.
-function _matricize_view(da, ia::Vector{<:Index}, linds::Vector{<:Index}, buf)
-    nl = length(linds)
-    if nl <= length(ia) && all(a -> ia[a] == linds[a], 1:nl)
-        rinds = ia[(nl + 1):end]
-        dl = prod(Int[dimof(i) for i in linds]; init = 1)
-        return reshape(da, dl, :), linds, rinds
-    end
-    return _matricize_temp(da, ia, linds, buf)
-end
-
-function _matricize_temp(da, ia::Vector{<:Index}, linds::Vector{<:Index}, buf)
-    rinds = filter(i -> i ∉ linds, ia)
-    perm = map(i -> findfirst(==(i), ia), vcat(linds, rinds))
-    T = eltype(da)
-    dims = ntuple(k -> size(da, perm[k]), ndims(da))
-    C = TensorOperations.tensoralloc(_temp_arraytype(da, T, ndims(da)), dims, Val(true), buf)
-    TensorOperations.tensoradd!(C, da, (Tuple(perm), ()), false, one(T), zero(T))
-    dl = prod(Int[dimof(i) for i in linds]; init = 1)
-    return reshape(C, dl, :), linds, rinds
-end
-
-# Buffered thin QR; destroys Amat (which is itself a buffer temp).
-function _qr_temp(Amat::AbstractMatrix, buf)
-    m, n = size(Amat)
-    k = min(m, n)
-    T = eltype(Amat)
-    Q = TensorOperations.tensoralloc(_temp_arraytype(Amat, T, 2), (m, k), Val(true), buf)
-    R = TensorOperations.tensoralloc(_temp_arraytype(Amat, T, 2), (k, n), Val(true), buf)
-    qr_compact!(Amat, (Q, R))
-    return Q, R
-end
-
-# Absorb a chain of 2-index gauge tensors into (X, ix) as buffer temps; conjB fuses dag.
-#Simple absorption chain (one buffer temp per step) — used by the two-site gate, whose
-#four chains would otherwise each reserve their own pair of slots.
-function _absorb_chain(X, ix::Vector{<:Index}, ms::Vector{<:Tensor}, conjB::Bool, buf)
-    for m in ms
-        X, oa, ob = _tc_pair(X, ix, m.data, m.inds, conjB, identity, Val(true), buf)
-        ix = vcat(oa, ob)
-    end
-    return X, ix
-end
-
-# Absorb a chain of 2-index factors (messages, √environments) into X using exactly TWO
-# tensor-sized slots, at full BLAS speed.
-#
-# The trick: a gemm needs the contracted index trailing, so TensorOperations copies X into
-# a contractable layout — into scratch it allocates itself, because it cannot know that X's
-# slot dies at that moment. Doing that permute ourselves, INTO the alternate slot, lets the
-# gemm write back over the slot X came from. Two slots, no third buffer, and no extra work:
-# it is the same single copy TensorOperations would have made.
-#
-# Peak: 2F of arena (+ the caller's resident tensor). Every intermediate is exactly X's
-# size because each factor is square in the bond it contracts.
-function _absorb_chain_2slot(X, ix::Vector{<:Index}, ms::Vector{<:Tensor}, conjB::Bool, buf;
-        final_order::Union{Nothing, Vector{<:Index}} = nothing, slots = nothing)
-    TC = isempty(ms) ? eltype(X) : promote_type(eltype(X), mapreduce(eltype, promote_type, ms))
-    n = length(X)
-    at = _temp_arraytype(X, TC, 1)
-    slots = slots === nothing ?
-        (TensorOperations.tensoralloc(at, (n,), Val(true), buf),
-         TensorOperations.tensoralloc(at, (n,), Val(true), buf)) : slots
-    backend = TC <: BlasFloat ? TensorOperations.StridedBLAS() : TensorOperations.StridedNative()
-    isempty(ms) && return X, ix, slots[1], slots[2]
-    cur = 0     # which slot currently holds X (0 = the caller's tensor, not a slot)
-    for m in ms
-        #which leg of the 2-index factor is contracted, and where it sits on X
-        j = findfirst(i -> i ∈ ix, m.inds)
-        j === nothing && error("_absorb_chain: factor shares no index with the chain")
-        c = findfirst(==(m.inds[j]), ix)
-        rest = Int[a for a in 1:length(ix) if a != c]
-
-        #1. permute the contracted leg to the end, into the slot X is NOT in (skipped when
-        #   it already trails). X's own slot then dies and becomes the gemm destination.
-        P, pinds, gtarget = if c == length(ix)
-            X, ix, (cur == 1 ? 2 : 1)
-        else
-            ptarget = (cur == 1 ? 2 : 1)
-            pd = ntuple(a -> size(X, (rest..., c)[a]), length(ix))
-            Pv = reshape(view(slots[ptarget], 1:n), pd)
-            TensorOperations.tensoradd!(Pv, X, ((rest..., c), ()), false, one(TC), zero(TC))
-            Pv, ix[[rest..., c]], (cur == 0 ? (ptarget == 1 ? 2 : 1) : cur)
-        end
-        dst = slots[gtarget]
-
-        #2. gemm with the contracted index already trailing: no scratch, output in place.
-        #   The last step may emit a requested order (free: it is just pAB), letting the
-        #   caller reshape the result instead of copying it into shape.
-        nk = length(pinds)
-        natural = vcat(pinds[1:(nk - 1)], [m.inds[3 - j]])
-        want = (final_order !== nothing && m === last(ms)) ? final_order : natural
-        pm = [something(findfirst(==(i), natural)) for i in want]
-        nat_dims = (ntuple(a -> size(P, a), nk - 1)..., dimof(m.inds[3 - j]))
-        odims = ntuple(a -> nat_dims[pm[a]], nk)
-        C = reshape(view(dst, 1:prod(odims)), odims)
-        TensorOperations.tensorcontract!(
-            C, P, (Tuple(1:(nk - 1)), (nk,)), false, m.data, ((j,), (3 - j,)), conjB,
-            (Tuple(pm), ()), one(TC), zero(TC), backend, buf
-        )
-        X, ix = C, want
-        cur = gtarget
-    end
-    #hand back BOTH slots: the one X occupies dies the moment the caller permutes X out of
-    #it, so the closing contraction can lay out both of its operands here and never ask for
-    #fresh scratch
-    return X, ix, slots[cur == 1 ? 2 : 1], slots[cur == 0 ? 1 : cur]
-end
-
-function fused_two_site_gate(
-        o::Tensor, ψ1::Tensor, ψ2::Tensor,
-        sqrt1::Vector{<:Tensor}, inv1::Vector{<:Tensor},
-        sqrt2::Vector{<:Tensor}, inv2::Vector{<:Tensor},
-        s1::Vector{<:Index}, s2::Vector{<:Index};
-        maxdim = nothing, cutoff = nothing, dest1 = nothing, dest2 = nothing,
-    )
-    buf = _kernel_buffer(ψ1.data)
-    cp = TensorOperations.allocator_checkpoint!(buf)
-
-    # Gauge: X_k = ψ_k · ∏ √env, emitted directly in QR order (Q-side legs first) so the
-    # matricization below is a reshape rather than another tensor-sized copy.
-    #ONE slot pair, shared by all four absorption chains: each site is gauged, matricized
-    #(a reshape — the chain emits QR order) and QR'd before the next chain runs, so the
-    #slots are dead again by then. Only the Q factors and the small R/S live across phases.
-    post1 = _chain_inds(ψ1.inds, sqrt1)
-    post2 = _chain_inds(ψ2.inds, sqrt2)
-    ql1 = filter(i -> i ∉ ψ2.inds && i ∉ s1, post1)
-    ql2 = filter(i -> i ∉ ψ1.inds && i ∉ s2, post2)
-    ord1 = vcat(ql1, filter(i -> i ∉ ql1, post1))
-    ord2 = vcat(ql2, filter(i -> i ∉ ql2, post2))
-    TCg = promote_type(eltype(ψ1.data), eltype(ψ2.data), eltype(o.data))
-    nslot = max(length(ψ1.data), length(ψ2.data))
-    atg = _temp_arraytype(ψ1.data, TCg, 1)
-    shared = (TensorOperations.tensoralloc(atg, (nslot,), Val(true), buf),
-              TensorOperations.tensoralloc(atg, (nslot,), Val(true), buf))
-
-    X1, ix1 = _absorb_chain_2slot(ψ1.data, ψ1.inds, sqrt1, false, buf; final_order = ord1, slots = shared)
-    A1, l1, r1 = _matricize_view(X1, ix1, ql1, buf)
-    Q1m, R1m = _qr_temp(A1, buf)
-    X2, ix2 = _absorb_chain_2slot(ψ2.data, ψ2.inds, sqrt2, false, buf; final_order = ord2, slots = shared)
-    A2, l2, r2 = _matricize_view(X2, ix2, ql2, buf)
-    Q2m, R2m = _qr_temp(A2, buf)
-    b1 = Index(size(Q1m, 2), "Link,qr")
-    b2 = Index(size(Q2m, 2), "Link,qr")
-    iR1 = vcat([b1], r1)
-    iR2 = vcat([b2], r2)
-    R1 = reshape(R1m, (dimof(b1), Int[dimof(i) for i in r1]...))
-    R2 = reshape(R2m, (dimof(b2), Int[dimof(i) for i in r2]...))
-
-    # oR = noprime(o · (R1 · R2)) — small, buffer temps
-    RR, oa, ob = _tc_pair(R1, iR1, R2, iR2, false, identity, Val(true), buf)
-    iRR = vcat(oa, ob)
-    oR, oa, ob = _tc_pair(RR, iRR, o.data, o.inds, false, identity, Val(true), buf)
-    ioR = map(vcat(oa, ob)) do i
-        i.plev == 1 && (TensorInterface.noprime(i) ∈ s1 || TensorInterface.noprime(i) ∈ s2) ?
-            TensorInterface.noprime(i) : i
-    end
-
-    # SVD across the (b1, s1) | (b2, s2) cut
-    AoR, lo, ro = _matricize_temp(oR, ioR, vcat([b1], s1), buf)
-    U, S, Vt, truncerr = _svd_matrix(AoR; maxdim, cutoff)
-    k = length(S)
-    u = Index(k, "Link,u")
-    v = Index(k, "Link,v")
-    up = TensorInterface.prime(u)
-    TS = promote_type(eltype(U), eltype(S))
-    sq = sqrt.(S)
-    F1 = reshape(U .* reshape(TS.(sq), 1, k), (Int[dimof(i) for i in lo]..., k))
-    F2 = reshape(reshape(TS.(sq), k, 1) .* Vt, (k, Int[dimof(i) for i in ro]...))
-    iF1 = vcat(lo, [up])
-    iF2 = vcat([up], ro)
-
-    # De-gauge: Y_k = Q_k · ∏ conj(inv-√env), the dag fused as a conj flag
-    iQ1 = vcat(l1, [b1])
-    iQ2 = vcat(l2, [b2])
-    Y1, iy1 = _absorb_chain_2slot(reshape(Q1m, (Int[dimof(i) for i in l1]..., dimof(b1))), iQ1, inv1, true, buf; slots = shared)
-
-    # Reassemble. Without destinations these two escape to the heap; with them (the
-    # storage-consuming path) they are built inside the input tensors' own arrays —
-    # safe because ψ1/ψ2's data was last read when the gauged copies were formed above.
-    #assemble each output before the other site's de-gauge reuses the shared slots
-    T1, iT1 = _tc_pair_into(dest1, Y1, iy1, F1, iF1, buf)
-    Y2, iy2 = _absorb_chain_2slot(reshape(Q2m, (Int[dimof(i) for i in l2]..., dimof(b2))), iQ2, inv2, true, buf; slots = shared)
-    T2, iT2 = _tc_pair_into(dest2, Y2, iy2, F2, iF2, buf)
-
-    s_values = Tensor(Index[u, v], _diag_matrix(S))
-    TensorOperations.allocator_reset!(buf, cp)
-
-    return Tensor(iT1, T1), Tensor(iT2, T2), s_values, truncerr
-end
 
 # ── S=1/2 operator & state library ──────────────────────────────────────────────────────
 

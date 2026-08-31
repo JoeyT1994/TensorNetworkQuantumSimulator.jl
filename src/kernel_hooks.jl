@@ -1,131 +1,15 @@
 #=
-Backend-specific methods, gathered in one file so the generic algorithms stay
-backend-agnostic. Two kinds of content:
+Backend-specific capability, gathered in one file so the generic algorithms stay
+backend-agnostic: charged product states (`graded_tensornetworkstate`), graded
+identity/purification constructors, graded site indices, boundary-MPS message
+initialization over charged link spectra, and the tensor-gate passthrough. These are the
+sole implementations of their entry points.
 
-  * OPTIONAL fast paths: each generic entry point (`updated_message`, `expect`'s region
-    contraction, `vertex_scalar`, `simple_update`) calls its hook first, and the generic
-    fallbacks return `nothing` — a network whose structure a pattern check rejects takes
-    the plain seam-verb path with identical results.
-  * REQUIRED graded capability: charged product states (`graded_tensornetworkstate`),
-    graded identity/purification constructors, boundary-MPS message initialization over
-    charged link spectra, and the tensor-gate passthrough — these are the sole
-    implementations of their entry points.
-
-The kernels themselves (buffered contraction chains, fused conjugation, in-place
-factorizations) live in the Tensors module; these methods only translate network-level
-structure (site indices, environment lists) into kernel inputs.
+Everything else — message updates, region scalars, gate application — runs through the
+generic seam-verb path. Hand-fused kernels for those were removed: they matched the
+generic path on peak memory (3F for a BP closure) while being materially slower on real
+circuits, so the churn they saved did not pay for the complexity.
 =#
-
-#Per-vertex operator triage shared by the dense and graded region-scalar kernels:
-#"I" → no operator, single-site names → adapted op tensors; ρ insertions and
-#multi-site-index vertices fall back to the generic path (returns nothing).
-function _region_site_ops(tns::TensorNetworkState, vs::Vector, op_strings::Function, ::Type{T}) where {T}
-    ψs, sindss, ops = T[], Vector{Index}[], Union{Nothing, T}[]
-    for v in vs
-        ψ = tns[v]
-        ψ isa T || return nothing
-        sinds = siteinds(tns, v)
-        str = op_strings(v)
-        if str == "I"
-            push!(ops, nothing)
-        elseif str == "ρ" || length(sinds) != 1
-            return nothing
-        else
-            push!(ops, adapt_like(ψ, op(str, only(sinds))))
-        end
-        push!(ψs, ψ)
-        push!(sindss, collect(Index, sinds))
-    end
-    return ψs, sindss, ops
-end
-
-#Fused fast path for the double-layer BP message update (see Tensors.fused_norm_message).
-#Falls through to the generic contraction path when the message structure doesn't match
-#(e.g. boundary-MPS messages with link indices).
-function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector{<:Tensor}; normalize)
-    ψ = tns[v]
-    ψ isa Tensor || return nothing
-    return Tensors.fused_norm_message(ψ, collect(Index, siteinds(tns, v)), incoming_ms; normalize)
-end
-
-#Fused fast path for BP region scalars (expectation-value numerators/denominators and
-#vertex scalars): one- and two-vertex regions close through the same fused kernel — a
-#two-vertex region is "message from v1 with its operator inserted" followed by a full
-#closure at v2. Larger Steiner regions and non-standard structures fall back.
-function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Vector{<:Tensor}; op_strings::Function)
-    1 <= length(vs) <= 2 || return nothing
-    triage = _region_site_ops(tns, vs, op_strings, Tensor)
-    triage === nothing && return nothing
-    ψs, sindss, ops = triage
-
-    if length(vs) == 1
-        c = Tensors.fused_norm_closure(ψs[1], sindss[1], incoming_ms; op = ops[1])
-        (c === nothing || !isempty(inds(c))) && return nothing
-        return scalar(c)
-    end
-
-    #Partition the region's incoming messages by which vertex tensor they attach to
-    ms1, ms2 = Tensor[], Tensor[]
-    for m in incoming_ms
-        ket_legs = filter(i -> plev(i) == 0, inds(m))
-        if all(i -> i ∈ inds(ψs[1]), ket_legs)
-            push!(ms1, m)
-        elseif all(i -> i ∈ inds(ψs[2]), ket_legs)
-            push!(ms2, m)
-        else
-            return nothing
-        end
-    end
-    T1 = Tensors.fused_norm_closure(ψs[1], sindss[1], ms1; op = ops[1])
-    T1 === nothing && return nothing
-    c = Tensors.fused_norm_closure(ψs[2], sindss[2], vcat(ms2, [T1]); op = ops[2])
-    (c === nothing || !isempty(inds(c))) && return nothing
-    return scalar(c)
-end
-
-#Fused fast path for the two-site gate (see Tensors.fused_two_site_gate). Falls back on
-#unusual apply_kwargs, empty environments, or non-2-index environments.
-function fused_simple_update(
-        o::Tensor, ψ⃗::Vector{<:Tensor};
-        envs, normalize_tensors = true, sqrt_cutoff = nothing, consume_inputs = false,
-        apply_kwargs...
-    )
-    length(ψ⃗) == 2 || return nothing
-    isempty(envs) && return nothing
-    all(env -> env isa Tensor && ndims(env) == 2, envs) || return nothing
-    isempty(setdiff(keys(apply_kwargs), (:maxdim, :cutoff))) || return nothing
-    #all participating tensors must share one supported storage family (host, or one GPU
-    #array family) — the kernel's workspace buffer is carved from that same memory
-    arrays = Any[o.data]
-    append!(arrays, (t.data for t in ψ⃗))
-    append!(arrays, (env.data for env in envs))
-    Tensors._uniform_kernel_storage(arrays) === nothing && return nothing
-
-    sqrt1, inv1, sqrt2, inv2 = gauged_env_pairs(ψ⃗, envs, sqrt_cutoff)
-    s1 = collect(Index, commoninds(ψ⃗[1], o))
-    s2 = collect(Index, commoninds(ψ⃗[2], o))
-
-    #storage-consuming path: the outputs are assembled inside the input tensors' own
-    #arrays (peak 2(F1+F2) + change instead of 3) — the caller relinquishes the inputs
-    t1, t2, s_values, err = Tensors.fused_two_site_gate(
-        o, ψ⃗[1], ψ⃗[2],
-        collect(Tensor, sqrt1), collect(Tensor, inv1),
-        collect(Tensor, sqrt2), collect(Tensor, inv2),
-        s1, s2;
-        dest1 = consume_inputs ? Tensors._root_storage(ψ⃗[1].data) : nothing,
-        dest2 = consume_inputs ? Tensors._root_storage(ψ⃗[2].data) : nothing,
-        apply_kwargs...
-    )
-    updated_tensors = [t1, t2]
-
-    if normalize_tensors
-        s_values = normalize(s_values)
-        for ψᵥ in updated_tensors
-            rmul!(data(ψᵥ), inv(norm(ψᵥ)))
-        end
-    end
-    return noprime.(updated_tensors), s_values, err
-end
 
 #Direct entry point for circuits already given as backend tensors
 function apply_gates(circuit::Vector{<:Tensor}, ψ_bpc::BeliefPropagationCache; kwargs...)
@@ -142,66 +26,6 @@ end
 # ── GradedTensor (graded / fermionic) capability methods ────────────────────────────────────
 # Backend-specific counterparts of generic entry points, gathered here with the fused
 # dense kernels so the generic files stay backend-agnostic.
-
-#Fused graded double-layer closure: absorb messages into the ket sequentially (the
-#intermediate stays one-tensor-sized), then close against the bra, materialized once per
-#call. `op_tensor === nothing` unprimes the bra sites (a norm closure); otherwise the
-#operator bridges the primed bra sites. TensorKit's contraction internals still allocate
-#their own permute copies (upstream allocator gap), so the win over the sequence-searched
-#generic path is structural only: ~15% fewer allocations, ~20% walltime.
-function _graded_closure(ψ::Tensors.GradedTensor, sinds, ms; op_tensor = nothing)
-    T = ψ
-    for m in ms
-        T = T * m
-    end
-    op_tensor === nothing || (T = T * op_tensor)
-    bra = unprime_charge_legs(dag(prime(ψ)), ψ)
-    if op_tensor === nothing && !isempty(sinds)
-        bra = replaceinds(bra, prime.(sinds), sinds)
-    end
-    return T * bra
-end
-
-#Norm-message structure: every message leg is a ket leg or its prime (boundary-MPS
-#messages carry MPS link legs — those fall back to the generic path).
-function _is_norm_message(m, ψinds)
-    return all(i -> (plev(i) == 0 ? i : noprime(i)) ∈ ψinds, inds(m))
-end
-
-function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector{<:Tensors.GradedTensor}; normalize)
-    ψ = tns[v]
-    ψ isa Tensors.GradedTensor || return nothing
-    all(m -> _is_norm_message(m, inds(ψ)), incoming_ms) || return nothing
-    out = _graded_closure(ψ, siteinds(tns, v), incoming_ms)
-    if normalize
-        n = sum(out)
-        iszero(n) || (out = out / n)
-    end
-    return out
-end
-
-function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Vector{<:Tensors.GradedTensor}; op_strings::Function)
-    1 <= length(vs) <= 2 || return nothing
-    triage = _region_site_ops(tns, vs, op_strings, Tensors.GradedTensor)
-    triage === nothing && return nothing
-    ψs, sindss, ops = triage
-    all(m -> any(ψ -> _is_norm_message(m, inds(ψ)), ψs), incoming_ms) || return nothing
-
-    if length(vs) == 1
-        c = _graded_closure(ψs[1], sindss[1], incoming_ms; op_tensor = ops[1])
-        return c isa Number ? c : nothing
-    end
-
-    #two-vertex region: close v1 with its operator, leaving the shared bond pair open,
-    #then feed the result to v2's closure as an extra incoming message
-    ms1 = filter(m -> _is_norm_message(m, inds(ψs[1])), incoming_ms)
-    ms2 = filter(m -> _is_norm_message(m, inds(ψs[2])), incoming_ms)
-    length(ms1) + length(ms2) == length(incoming_ms) || return nothing
-    T1 = _graded_closure(ψs[1], sindss[1], ms1; op_tensor = ops[1])
-    T1 isa Number && return nothing   #disconnected region: fall back
-    c = _graded_closure(ψs[2], sindss[2], vcat(ms2, [T1]); op_tensor = ops[2])
-    return c isa Number ? c : nothing
-end
 
 #Graded (symmetric, TensorKit-backed) site indices: `sectors` is a list of
 #charge => dimension pairs under the group named by `symmetry`. With an even number of
