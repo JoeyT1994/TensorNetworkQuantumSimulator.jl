@@ -727,7 +727,8 @@ end
 #(a reshaped prefix view) when it fits and the eltypes match — the storage-consuming
 #path of the two-site gate. Falls back to a fresh heap allocation otherwise (growth
 #phase: the truncated rank can exceed the incoming bond while bonds are still growing).
-function _tc_pair_into(dest, da, ia::Vector{<:Index}, db, ib::Vector{<:Index}, allocator)
+function _tc_pair_into(dest, da, ia::Vector{<:Index}, db, ib::Vector{<:Index}, allocator;
+        conjB::Bool = false, outorder::Union{Nothing, Vector{<:Index}} = nothing)
     ca, cb = Int[], Int[]
     for (j, bj) in enumerate(ib)
         i = findfirst(==(bj), ia)
@@ -739,9 +740,18 @@ function _tc_pair_into(dest, da, ia::Vector{<:Index}, db, ib::Vector{<:Index}, a
     ob = setdiff(1:length(ib), cb)
     pA = (Tuple(oa), Tuple(ca))
     pB = (Tuple(cb), Tuple(ob))
-    pAB = (Tuple(1:(length(oa) + length(ob))), ())
+    outinds = vcat(ia[oa], ib[ob])
+    #`outorder` requests a specific output index order; it costs nothing (the contraction
+    #writes through pAB either way) and lets the NEXT contraction avoid a permute copy
+    perm = if outorder === nothing
+        collect(1:length(outinds))
+    else
+        [something(findfirst(==(i), outinds)) for i in outorder]
+    end
+    pAB = (Tuple(perm), ())
     TC = promote_type(eltype(da), eltype(db))
-    dims = (size(da)[oa]..., size(db)[ob]...)
+    alldims = (size(da)[oa]..., size(db)[ob]...)
+    dims = ntuple(k -> alldims[perm[k]], length(perm))
     n = prod(dims; init = 1)
     C = if dest !== nothing && eltype(dest) === TC && n <= length(dest)
         reshape(view(vec(dest), 1:n), dims)
@@ -749,8 +759,8 @@ function _tc_pair_into(dest, da, ia::Vector{<:Index}, db, ib::Vector{<:Index}, a
         TensorOperations.tensoralloc_contract(TC, da, pA, false, db, pB, false, pAB, Val(false))
     end
     backend = TC <: BlasFloat ? TensorOperations.StridedBLAS() : TensorOperations.StridedNative()
-    TensorOperations.tensorcontract!(C, da, pA, false, db, pB, false, pAB, one(TC), zero(TC), backend, allocator)
-    return C, ia[oa], ib[ob]
+    TensorOperations.tensorcontract!(C, da, pA, false, db, pB, conjB, pAB, one(TC), zero(TC), backend, allocator)
+    return C, outinds[perm]
 end
 
 # Pattern check: `m` must be a standard doubled norm-network message for `ψ` — every index
@@ -780,21 +790,16 @@ function fused_norm_closure(
 
     buf = _kernel_buffer(ψ.data)
     cp = TensorOperations.allocator_checkpoint!(buf)
-    X, ix = ψ.data, ψ.inds
-    for m in incoming
-        X, oa, ob = _tc_pair(X, ix, m.data, m.inds, false, identity, Val(true), buf)
-        ix = vcat(oa, ob)
-    end
+    chain = op === nothing ? incoming : vcat(incoming, [op])
     covered = op === nothing ? Index[] : Index[i for i in op.inds if i.plev == 0]
-    if op !== nothing
-        X, oa, ob = _tc_pair(X, ix, op.data, op.inds, false, identity, Val(true), buf)
-        ix = vcat(oa, ob)
-    end
+    #the closing contraction pairs ψ-leg i with chain-leg `partner(i)`; emitting the chain
+    #in exactly that order makes it permutation-free (no tensor-sized scratch copy)
+    partner = i -> (i ∈ sinds && i ∉ covered) ? i : TensorInterface.prime(i)
+    X, ix = _absorb_chain_2slot(ψ.data, ψ.inds, chain, false, buf)
     # Closing: ψ-leg i pairs with X-leg i (uncovered sites, ket↔bra direct) or prime(i)
     # (message-bridged virtuals and operator-covered sites); unpaired ψ-legs come out as an
     # (i, i′) pair. istemp = Val(false) puts the output on the heap while the internal
     # permute scratch of the contraction still lives in the buffer.
-    partner = i -> (i ∈ sinds && i ∉ covered) ? i : TensorInterface.prime(i)
     out, o_ket, o_bra = _tc_pair(X, ix, ψ.data, ψ.inds, true, partner, Val(false), buf)
     oinds = vcat(o_ket, TensorInterface.prime.(o_bra))
     TensorOperations.allocator_reset!(buf, cp)
@@ -830,7 +835,11 @@ end
 # Buffered permute+reshape to a (linds × rest) matrix. Returns (matrix, linds, rinds).
 #Buffer-temp array type in the same storage family as `ref` (host Array for host
 #tensors, the matching GPU array type on device).
-_temp_arraytype(ref::AbstractArray, T::Type, N::Integer) = Base.typename(typeof(ref)).wrapper{T, N}
+#Buffer-temp array type in the same storage family as `ref`. Views/reshapes are unwrapped
+#to their root storage: a `ReshapedArray` wrapper cannot be constructed directly, and
+#chain intermediates are exactly such views into buffer slots.
+_temp_arraytype(ref::AbstractArray, T::Type, N::Integer) =
+    Base.typename(typeof(_root_storage(ref))).wrapper{T, N}
 
 function _matricize_temp(da, ia::Vector{<:Index}, linds::Vector{<:Index}, buf)
     rinds = filter(i -> i ∉ linds, ia)
@@ -855,10 +864,66 @@ function _qr_temp(Amat::AbstractMatrix, buf)
 end
 
 # Absorb a chain of 2-index gauge tensors into (X, ix) as buffer temps; conjB fuses dag.
+#Simple absorption chain (one buffer temp per step) — used by the two-site gate, whose
+#four chains would otherwise each reserve their own pair of slots.
 function _absorb_chain(X, ix::Vector{<:Index}, ms::Vector{<:Tensor}, conjB::Bool, buf)
     for m in ms
         X, oa, ob = _tc_pair(X, ix, m.data, m.inds, conjB, identity, Val(true), buf)
         ix = vcat(oa, ob)
+    end
+    return X, ix
+end
+
+# Absorb a chain of 2-index factors (messages, √environments) into X using exactly TWO
+# tensor-sized slots, at full BLAS speed.
+#
+# The trick: a gemm needs the contracted index trailing, so TensorOperations copies X into
+# a contractable layout — into scratch it allocates itself, because it cannot know that X's
+# slot dies at that moment. Doing that permute ourselves, INTO the alternate slot, lets the
+# gemm write back over the slot X came from. Two slots, no third buffer, and no extra work:
+# it is the same single copy TensorOperations would have made.
+#
+# Peak: 2F of arena (+ the caller's resident tensor). Every intermediate is exactly X's
+# size because each factor is square in the bond it contracts.
+function _absorb_chain_2slot(X, ix::Vector{<:Index}, ms::Vector{<:Tensor}, conjB::Bool, buf)
+    isempty(ms) && return X, ix
+    TC = promote_type(eltype(X), mapreduce(eltype, promote_type, ms))
+    n = length(X)
+    at = _temp_arraytype(X, TC, 1)
+    slots = (TensorOperations.tensoralloc(at, (n,), Val(true), buf),
+             TensorOperations.tensoralloc(at, (n,), Val(true), buf))
+    backend = TC <: BlasFloat ? TensorOperations.StridedBLAS() : TensorOperations.StridedNative()
+    cur = 0     # which slot currently holds X (0 = the caller's tensor, not a slot)
+    for m in ms
+        #which leg of the 2-index factor is contracted, and where it sits on X
+        j = findfirst(i -> i ∈ ix, m.inds)
+        j === nothing && error("_absorb_chain: factor shares no index with the chain")
+        c = findfirst(==(m.inds[j]), ix)
+        rest = Int[a for a in 1:length(ix) if a != c]
+
+        #1. permute the contracted leg to the end, into the slot X is NOT in (skipped when
+        #   it already trails). X's own slot then dies and becomes the gemm destination.
+        P, pinds, gtarget = if c == length(ix)
+            X, ix, (cur == 1 ? 2 : 1)
+        else
+            ptarget = (cur == 1 ? 2 : 1)
+            pd = ntuple(a -> size(X, (rest..., c)[a]), length(ix))
+            Pv = reshape(view(slots[ptarget], 1:n), pd)
+            TensorOperations.tensoradd!(Pv, X, ((rest..., c), ()), false, one(TC), zero(TC))
+            Pv, ix[[rest..., c]], (cur == 0 ? (ptarget == 1 ? 2 : 1) : cur)
+        end
+        dst = slots[gtarget]
+
+        #2. gemm with the contracted index already trailing: no scratch, output in place
+        nk = length(pinds)
+        odims = (ntuple(a -> size(P, a), nk - 1)..., dimof(m.inds[3 - j]))
+        C = reshape(view(dst, 1:prod(odims)), odims)
+        TensorOperations.tensorcontract!(
+            C, P, (Tuple(1:(nk - 1)), (nk,)), false, m.data, ((j,), (3 - j,)), conjB,
+            (Tuple(1:nk), ()), one(TC), zero(TC), backend, buf
+        )
+        X, ix = C, vcat(pinds[1:(nk - 1)], [m.inds[3 - j]])
+        cur = gtarget
     end
     return X, ix
 end
@@ -923,10 +988,8 @@ function fused_two_site_gate(
     # Reassemble. Without destinations these two escape to the heap; with them (the
     # storage-consuming path) they are built inside the input tensors' own arrays —
     # safe because ψ1/ψ2's data was last read when the gauged copies were formed above.
-    T1, oa, ob = _tc_pair_into(dest1, Y1, iy1, F1, iF1, buf)
-    iT1 = vcat(oa, ob)
-    T2, oa, ob = _tc_pair_into(dest2, Y2, iy2, F2, iF2, buf)
-    iT2 = vcat(oa, ob)
+    T1, iT1 = _tc_pair_into(dest1, Y1, iy1, F1, iF1, buf)
+    T2, iT2 = _tc_pair_into(dest2, Y2, iy2, F2, iF2, buf)
 
     s_values = Tensor(Index[u, v], _diag_matrix(S))
     TensorOperations.allocator_reset!(buf, cp)
