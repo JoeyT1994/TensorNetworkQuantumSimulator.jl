@@ -691,8 +691,10 @@ _root_storage(A::SubArray) = _root_storage(parent(A))
 _root_storage(A) = A
 function _uniform_kernel_storage(arrays)
     all(_kernel_storage_ok, arrays) || return nothing
-    W = typeof(first(arrays)).name.wrapper
-    all(a -> typeof(a).name.wrapper === W, arrays) || return nothing
+    #compare ROOT storage families: consumed-gate outputs are reshaped views into their
+    #input's allocation, and must still count as the same family as a plain array
+    W = typeof(_root_storage(first(arrays))).name.wrapper
+    all(a -> typeof(_root_storage(a)).name.wrapper === W, arrays) || return nothing
     return first(arrays)
 end
 
