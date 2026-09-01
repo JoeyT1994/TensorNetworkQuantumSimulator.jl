@@ -1,7 +1,7 @@
 @eval module $(gensym())
 using Dictionaries: Dictionary
-using ITensors: Array, commoninds, delta, dim, inds, prime, scalar
-using LinearAlgebra: Hermitian, eigvals, norm
+using ITensors: Array, Index, ITensor, commoninds, delta, dim, inds, prime, scalar
+using LinearAlgebra: Hermitian, I, eigvals, norm
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test, @test_throws, @test_logs
@@ -108,6 +108,46 @@ end
     @test_throws MethodError CTMEnvironmentCache(tn, 6; qr_cuttoff = 1.0e-9)
     # And a removed option is an error too, not silently accepted.
     @test_throws MethodError CTMEnvironmentCache(tn, 6; qr = false)
+
+    # The synchronous cycle path must retain complete real-Schur multiplets. In particular, an
+    # exact conjugate pair is backed off even at the default degtol=0; a nonzero tolerance extends
+    # the same rule to a numerically near-degenerate boundary. Either left or right spectrum may
+    # expose the split.
+    pairvals = ComplexF64[5, 2 + 3im, 2 - 3im, 1]
+    @test TNQS._ctm_cycle_multiplet_rank(2, pairvals, pairvals, 0.0) == 1
+    @test TNQS._ctm_cycle_multiplet_rank(3, pairvals, pairvals, 0.0) == 3
+    nearR = [5.0, 4.0, 3.0, 2.9998, 1.0]
+    nearL = [5.0, 4.0, 3.0, 2.0, 1.0]
+    @test TNQS._ctm_cycle_multiplet_rank(3, nearR, nearL, 1.0e-3) == 2
+    @test TNQS._ctm_cycle_multiplet_rank(3, nearL, nearR, 1.0e-3) == 2
+
+    # Once χ contains a rectangular cycle's complete narrowest bond, no eigensolve is needed: the
+    # full bottleneck is invariant and is propagated in both directions. This is the sparse-grid
+    # over-parametrization guard, and must preserve the complete rank rather than a Ritz prefix.
+    for scalar_type in (Float64, ComplexF64)
+        Random.seed!(117)
+        As = [randn(scalar_type, 5, 3), randn(scalar_type, 6, 5),
+              randn(scalar_type, 4, 6), randn(scalar_type, 3, 4)]
+        VR, VL = TNQS._ctm_cycle_full_bottleneck_bases(As, [3, 5, 6, 4], 1)
+        @test size.(VR) == [(3, 3), (5, 3), (6, 3), (4, 3)]
+        @test size.(VL) == [(3, 3), (3, 5), (3, 6), (3, 4)]
+        @test all(l -> VR[l]' * VR[l] ≈ I(3), 1:4)
+        @test all(l -> VL[l] * VL[l]' ≈ I(3), 1:4)
+        w, s, e, n = Index(3), Index(5), Index(6), Index(4)
+        cyc = TNQS._ctm_cycle_projectors(
+            ITensor(As[4], w, n), ITensor(As[3], n, e),
+            ITensor(As[2], e, s), ITensor(As[1], s, w), 3,
+            TNQS.CTMOptions(projector = :cycle), UInt(117))
+        @test !isnothing(cyc)
+        for (family, raw) in zip((cyc.W, cyc.S, cyc.E, cyc.N), (w, s, e, n))
+            kept = family[3]
+            A = Array(family[1], raw, kept)
+            B = Array(family[2], kept, raw)
+            @test size(A, 2) == 3
+            @test B * A ≈ I(3)
+        end
+    end
+
 
     # Beats greedy where greedy is still visibly wrong. The greedy pass is asked for EXPLICITLY,
     # via its environments — `cvm_freenergy(fresh8)` would return the same number but warn, since
@@ -268,6 +308,40 @@ end
         cache = update(CTMEnvironmentCache(ψ, χ); maxiter = 100, tolerance = 1.0e-14)
         @test abs(O_exact - expect(cache, obs)) < 1.0e-12
     end
+end
+
+@testset "cycle local-response convergence metric" begin
+    # The metric is projective: scale, sign and complex phase of a local environment cancel from
+    # every observable ratio and must not look like motion.
+    i = Index(3, "response")
+    a = ITensor(ComplexF64[1 + 2im, -0.4 + 0.1im, 0.7 - 0.3im], i)
+    response = Dict((1, 1) => a)
+    equivalent = Dict((1, 1) => (-3.2im) * a)
+    @test TNQS._ctm_local_response_dist(response, equivalent) < 1.0e-14
+
+    moved = copy(a)
+    moved[i => 2] += 1.0e-5
+    distance = TNQS._ctm_local_response_dist(response, Dict((1, 1) => moved))
+    @test 1.0e-7 < distance < 1.0e-4
+    @test isnothing(TNQS._ctm_local_response_dist(response, Dict{Tuple{Int, Int}, ITensor}()))
+
+    # End to end on a state: response tensors retain only physical density-matrix indices, so the
+    # retained CTM gauge has cancelled completely. A lossless cycle solve must certify and preserve
+    # an exact one-site observable.
+    Random.seed!(8102)
+    g = named_grid((3, 3))
+    s = siteinds("S=1/2", g)
+    ψ = random_tensornetworkstate(Float64, g, s; bond_dimension = 2)
+    cache = CTMEnvironmentCache(ψ, 16; projector = :cycle)
+    env1 = TNQS.sweep_vertex_environments(cache, TNQS.vertex_environments(cache))
+    env2 = TNQS.sweep_vertex_environments(cache, env1)
+    responses = TNQS._ctm_local_responses(env2, cache)
+    @test length(responses) == 9
+    @test all(r -> length(inds(r)) == 2, values(responses))
+    converged = update(cache; convergence = :environment, maxiter = 30,
+                       tolerance = 1.0e-10)
+    @test expect(converged, ("Z", [(2, 2)])) ≈
+          expect(ψ, ("Z", [(2, 2)]); alg = "exact") atol = 1.0e-10
 end
 
 @testset "CVM on sparse (x,y) grids: hexagonal and heavy-hexagonal" begin
@@ -533,11 +607,10 @@ end
     exhh = real(expect(ψhh, ("Z", [vhh]); alg = "exact"))
     # Each projector runs its OBSERVABLE-TIGHT criterion — the same split the `expect` path picks
     # automatically. `:cut` stays on its default `|ΔF|`+statedist pair: that is the criterion whose
-    # partial-coverage bug this test guards, and the worst-region signal over-warns on it here
-    # (floors ~8e-6 on this lossless case while `⟨Z⟩` is exact). `:cycle` needs
-    # `convergence = :worst_region`, since its `|ΔF|` default certifies before the boundary-lagged
-    # `⟨Z⟩` settles (F at sweep 2, `⟨Z⟩` at sweep ~5).
-    for (proj, kw) in ((:cut, (;)), (:cycle, (; convergence = :worst_region)))
+    # partial-coverage bug this test guards. `:cycle` uses its adaptive environment criterion: a
+    # well-conditioned retained projector plus propagation floor, or the gauge-invariant local
+    # response fallback when the retained null space wanders.
+    for (proj, kw) in ((:cut, (;)), (:cycle, (; convergence = :environment)))
         err = abs(real(expect(update(CTMEnvironmentCache(ψhh, 8; projector = proj); kw...),
                               ("Z", [vhh]))) - exhh)
         @test err < 1.0e-12

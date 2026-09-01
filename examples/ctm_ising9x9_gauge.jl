@@ -165,6 +165,23 @@ function emit_row(io; chi, method, preconditioner, attack, logk, max_kappa,
     flush(io)
 end
 
+function existing_gauge_rows()
+    paths = filter(!isempty, strip.(split(get(ENV, "ISING9_GAUGE_EXISTING", ""), ';')))
+    rows = Dict{Tuple{Int, Symbol, String}, NamedTuple}()
+    for path in paths
+        isfile(path) || error("existing gauge CSV does not exist: $path")
+        for line in Iterators.drop(eachline(path), 1)
+            fields = split(line, ',')
+            length(fields) == 18 || continue
+            key = (parse(Int, fields[1]), Symbol(fields[2]), fields[4])
+            rows[key] = (values = (parse(Float64, fields[8]), parse(Float64, fields[11]),
+                                   parse(Float64, fields[14])),
+                         seconds = parse(Float64, fields[17]), status = fields[18])
+        end
+    end
+    return rows
+end
+
 function main_gauge()
     log_condition = parse(Float64, get(ENV, "ISING9_GAUGE_LOG10_KAPPA", "1"))
     gauge_seeds = parse_ints(get(ENV, "ISING9_GAUGE_SEEDS", "1234,5678"))
@@ -181,6 +198,8 @@ function main_gauge()
     bp_tolerance = parse(Float64, get(ENV, "ISING9_GAUGE_BP_TOLERANCE", "1e-10"))
     vidal_regularization = parse(Float64,
         get(ENV, "ISING9_GAUGE_VIDAL_REGULARIZATION", string(10eps(Float64))))
+    precondition_all = parse_bool(get(ENV, "ISING9_GAUGE_PRECONDITION_ALL", "false"))
+    existing = existing_gauge_rows()
 
     # Prepare every representation once; method/chi scans must see identical tensors. `symmetric`
     # is the Vidal/BP gauge of the original tensors, matching the convention used in the paper.
@@ -201,6 +220,17 @@ function main_gauge()
     symmetric_state = vidal_identity_state
     symmetric_seconds = 0.0
     symmetric_status = "ok"
+    prepared_identity = identity.state
+    prepared_random_variants = random_variants
+    if precondition_all
+        prepared_identity, _, _ = safe_prepare_variant(
+            identity.state, :vidal; bp_maxiter, bp_tolerance, vidal_regularization)
+        prepared_random_variants = map(random_variants) do variant
+            prepared, _, _ = safe_prepare_variant(
+                variant.state, :vidal; bp_maxiter, bp_tolerance, vidal_regularization)
+            merge(variant, (; state = prepared))
+        end
+    end
 
     output = get(ENV, "ISING9_GAUGE_OUTPUT", "")
     io = isempty(output) ? stdout : open(output, "w")
@@ -210,19 +240,32 @@ function main_gauge()
                     "marginal_inconsistency,vidal_regularization,preparation_seconds," *
                     "contraction_seconds,status")
         for chi in chis, method in methods
-            baseline, baseline_seconds, baseline_status = safe_method_values(
-                identity.state, chi, method, sites)
-            emit_row(io; chi, method, preconditioner = :raw, attack = identity.attack,
-                     logk = identity.logk, max_kappa = identity.max_kappa,
-                     pair_residual = identity.pair_residual, values = baseline,
-                     baseline, references, preparation_seconds = 0.0,
-                     vidal_regularization, contraction_seconds = baseline_seconds,
-                     status = baseline_status)
+            identity_key = (chi, method, "identity")
+            if haskey(existing, identity_key)
+                prior = existing[identity_key]
+                baseline, baseline_seconds, baseline_status =
+                    prior.values, prior.seconds, prior.status
+            else
+                baseline, baseline_seconds, baseline_status = safe_method_values(
+                    prepared_identity, chi, method, sites)
+            end
+            active_preconditioner = precondition_all ? :vidal : :raw
+            if !haskey(existing, identity_key)
+                emit_row(io; chi, method, preconditioner = active_preconditioner,
+                         attack = identity.attack,
+                         logk = identity.logk, max_kappa = identity.max_kappa,
+                         pair_residual = identity.pair_residual, values = baseline,
+                         baseline, references, preparation_seconds = 0.0,
+                         vidal_regularization, contraction_seconds = baseline_seconds,
+                         status = baseline_status)
+            end
 
-            for variant in random_variants
+            for variant in prepared_random_variants
+                haskey(existing, (chi, method, variant.attack)) && continue
                 values, elapsed, method_status = safe_method_values(
                     variant.state, chi, method, sites)
-                emit_row(io; chi, method, preconditioner = :raw, attack = variant.attack,
+                emit_row(io; chi, method, preconditioner = active_preconditioner,
+                         attack = variant.attack,
                          logk = variant.logk, max_kappa = variant.max_kappa,
                          pair_residual = variant.pair_residual, values, baseline, references,
                          preparation_seconds = 0.0,
@@ -230,10 +273,23 @@ function main_gauge()
                          status = method_status)
             end
 
-            vidal_baseline, _, vidal_baseline_status = safe_method_values(
-                vidal_identity_state, chi, method, sites)
-            values, elapsed, symmetric_method_status = safe_method_values(
-                symmetric_state, chi, method, sites)
+            # `symmetric_state` is the Vidal/BP gauge of the identity network, so its
+            # baseline and measured value are the same contraction. Reuse that result
+            # instead of running an identical high-chi CTMRG solve twice.
+            symmetric_key = (chi, method, "symmetric")
+            haskey(existing, symmetric_key) && continue
+            if precondition_all
+                vidal_baseline = baseline
+                vidal_baseline_status = baseline_status
+                values = baseline
+                elapsed = baseline_seconds
+                symmetric_method_status = baseline_status
+            else
+                values, elapsed, symmetric_method_status = safe_method_values(
+                    symmetric_state, chi, method, sites)
+                vidal_baseline = values
+                vidal_baseline_status = symmetric_method_status
+            end
             status = symmetric_status != "ok" ? symmetric_status :
                      (vidal_baseline_status != "ok" ? vidal_baseline_status :
                       symmetric_method_status)

@@ -24,8 +24,11 @@ Caches can also be transferred to the GPU:
 
 Significant speedups are seen on NVIDIA GPUs for many operations (BP, BoundaryMPS, Gate Application) at moderate to large bond dimensions. Use `ComplexF32` element types for best GPU performance. We highly recommend CUDA.jl (NVidia GPUs) as speedups are well documented in this case [[Rudolph2025]](index.md#references). Experience using Metal.jl is very limited and so proceed with caution.
 
-Finite CTMRG is currently an exception: it is device-compatible, but its many small projector
-factorizations are not yet batched and are launch-bound at tested χ ≤ 16. See
+Finite CTMRG is currently an exception: it uses a hybrid CUDA path that batches the small projector
+factorizations through CUDA or LAPACK according to size, but the remaining sweep contractions are
+still launch-bound and CPU remains faster at the tested D=3, χ≤16 points. CUDA crosses over for larger
+workloads on the documented 6×6 double-layer D=10, χ=20 benchmark: 2.09× per `:cut` sweep and
+1.12× per production `:cycle` sweep. See
 [`ctmrg_status.md`](../ctmrg_status.md#gpu-status) and `examples/ctm_gpu_benchmark.jl` before choosing
 a device for CTMRG.
 
