@@ -6,18 +6,20 @@ initialization over charged link spectra, and the tensor-gate passthrough. These
 sole implementations of their entry points.
 
 One fused fast path lives here too: the double-layer BP closure (message updates and
-single-vertex region scalars), which measures 5.1F against the generic path's 6.1F at
-parity on walltime, and is the inner loop of every BP sweep. Gate application and
-everything else run through the generic seam-verb path — measured, the fused gate was
-worse than generic.
+single-vertex region scalars), which keeps the dominant CUDA resident baseline at 3F by
+folding conjugation into the closing contraction and using two arena slots; result and
+vendor workspace are transient change above that baseline. Gate application and everything
+else run through the generic seam-verb path;
+simple update gets its memory bound from consumed destinations and backend factorizations.
 =#
 
 #Fused double-layer BP kernel (Tensors.fused_norm_closure): the one specialised path in
-#the package, worth it because it is the inner loop of every BP sweep and measures 5.1F
-#against the generic path's 6.1F. Anything whose structure it does not recognise — boundary
+#the package, worth it because it is the inner loop of every BP sweep and reaches a 3F
+#resident baseline on the dominant CUDA workload. Anything whose structure it does not recognise — boundary
 #MPS messages with MPS link legs, ρ insertions, multi-site-index vertices, >2-vertex
 #regions, graded tensors — returns `nothing` and takes the generic path with identical
-#results. Gate application is deliberately NOT here: measured, the generic gate is better.
+#results. Gate application is deliberately not fused here: its generic contractions reuse
+#consumed tensors, while the dominant tall split uses a low-workspace polar decomposition.
 function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector{<:Tensor}; normalize)
     ψ = tns[v]
     ψ isa Tensor || return nothing
@@ -130,7 +132,11 @@ end
 #structure-compatible full-rank start converges properly. Conservation itself is free:
 #TensorMaps only populate flux-zero trees, so `random_tensor` over correctly-oriented
 #legs is the conserving initializer — this function only chooses the link sectors.
-function set_graded_interpartition_messages!(bmps_cache::BoundaryMPSCache, es::Vector{<:NamedEdge})
+function set_graded_interpartition_messages!(
+        bmps_cache::BoundaryMPSCache,
+        es::Vector{<:NamedEdge},
+        rng::Random.AbstractRNG,
+    )
     n = length(es)
     #Link i carries the CUMULATIVE charge imbalance of message sites 1..i, so its sector
     #support is the convolution of the per-site charge spectra from the left, intersected
@@ -144,7 +150,9 @@ function set_graded_interpartition_messages!(bmps_cache::BoundaryMPSCache, es::V
     for i in 1:(n - 1)
         virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
         sp = Tensors.allocate_link_space(prefix[i], suffix[i + 1], virt_dim)
-        push!(links, Index(sp, "m$(i)$(i + 1)"))
+        #The link identity belongs to the initializer too: draw it from the local RNG so
+        #graded cache construction neither depends on nor advances the global RNG.
+        push!(links, Index(Random.rand(rng, UInt64), sp, 0, "m$(i)$(i + 1)", false))
     end
     for i in 1:n
         m = message(bmps_cache, es[i])
@@ -152,7 +160,7 @@ function set_graded_interpartition_messages!(bmps_cache::BoundaryMPSCache, es::V
         #left link incoming (non-dual), right link outgoing (dual)
         i > 1 && push!(legs, links[i - 1])
         i < n && push!(legs, dag(links[i]))
-        t = adapt_like(m, random_tensor(scalartype(m), legs...))
+        t = adapt_like(m, random_tensor(rng, scalartype(m), legs...))
         iszero(norm(t)) && error(
             "set_graded_interpartition_messages!: no flux-zero blocks on the chosen " *
                 "link sectors — the message column carries net charge"

@@ -13,7 +13,7 @@ Simple update of one or two local tensors in the presence of factorized environm
 
 # Keyword Arguments
 - `normalize_tensors::Bool`: Whether to normalize the updated tensors. Default is `true`.
-- `sqrt_cutoff`: Cutoff below which environment eigenvalues are treated as zero when forming their (inverse) square roots. Defaults to `10 * eps(real(scalartype(first(envs))))`.
+- `sqrt_cutoff`: Cutoff below which environment eigenvalues are treated as zero when forming their (inverse) square roots. Defaults to MatrixAlgebraKit's numerical-rank tolerance, `eps(real(scalartype(first(envs))))^(2 / 3)`.
 - `apply_kwargs...`: Additional keyword arguments passed to the SVD factorization.
 
 # Returns
@@ -25,12 +25,23 @@ Simple update of one or two local tensors in the presence of factorized environm
 #the optimal order, and naming it lets the result be written into a consumed input.
 _left_seq(n::Integer) = n <= 1 ? 1 : foldl((a, b) -> [a, b], 2:n; init = 1)
 
+#The dense consumed path absorbs shape-preserving 2-index environments with the BP
+#kernel's two-slot arena primitive. Graded tensors and non-consuming calls retain the
+#generic seam contraction.
+function _environment_chain(t, envs; dest = nothing)
+    isempty(envs) && return t
+    if t isa Tensor && dest isa Tensor && all(e -> e isa Tensor, envs)
+        return Tensors.absorb_chain(t, collect(Tensor, envs), dest)
+    end
+    return contract([t; envs]; sequence = _left_seq(1 + length(envs)), dest)
+end
+
 #Environment gauging shared by the generic path and the fused kernel (kernel_hooks.jl):
 #per-vertex √env and √env⁻¹ pairs, with the cutoff defaulted from the environments'
 #scalar type (or the local tensors' when envs is empty and the cutoff is unused).
 function gauged_env_pairs(ψ⃗::Vector, envs, sqrt_cutoff)
     ref = isempty(envs) ? first(ψ⃗) : first(envs)
-    sqrt_cutoff = isnothing(sqrt_cutoff) ? 10 * eps(real(scalartype(ref))) : sqrt_cutoff
+    sqrt_cutoff = isnothing(sqrt_cutoff) ? defaulttol(ref) : sqrt_cutoff
     ssi1 = pseudo_sqrt_inv_sqrt.(filter(env -> hascommoninds(env, ψ⃗[1]), envs); cutoff = sqrt_cutoff)
     ssi2 = pseudo_sqrt_inv_sqrt.(filter(env -> hascommoninds(env, ψ⃗[2]), envs); cutoff = sqrt_cutoff)
     return first.(ssi1), last.(ssi1), first.(ssi2), last.(ssi2)
@@ -55,14 +66,18 @@ function simple_update(
         #the gauged copies. With `consume_inputs` the caller has relinquished them, so the
         #gauged result is written into their storage instead of fresh memory (F1 + F2 less
         #resident per gate). Ownership only — unrelated to which contraction path runs.
-        ψᵥ₁ = contract([ψ⃗[1]; sqrt_envs_v1]; sequence = _left_seq(1 + length(sqrt_envs_v1)),
+        ψᵥ₁ = _environment_chain(ψ⃗[1], sqrt_envs_v1;
             dest = consume_inputs ? ψ⃗[1] : nothing)
-        ψᵥ₂ = contract([ψ⃗[2]; sqrt_envs_v2]; sequence = _left_seq(1 + length(sqrt_envs_v2)),
+        ψᵥ₂ = _environment_chain(ψ⃗[2], sqrt_envs_v2;
             dest = consume_inputs ? ψ⃗[2] : nothing)
         sᵥ₁ = commoninds(ψ⃗[1], o)
         sᵥ₂ = commoninds(ψ⃗[2], o)
-        Qᵥ₁, Rᵥ₁ = qr(ψᵥ₁, uniqueinds(uniqueinds(ψᵥ₁, ψᵥ₂), sᵥ₁))
-        Qᵥ₂, Rᵥ₂ = qr(ψᵥ₂, uniqueinds(uniqueinds(ψᵥ₂, ψᵥ₁), sᵥ₂))
+        Qᵥ₁, Rᵥ₁ = Tensors.left_orthogonalize(
+            ψᵥ₁, uniqueinds(uniqueinds(ψᵥ₁, ψᵥ₂), sᵥ₁); consume_input = consume_inputs,
+        )
+        Qᵥ₂, Rᵥ₂ = Tensors.left_orthogonalize(
+            ψᵥ₂, uniqueinds(uniqueinds(ψᵥ₂, ψᵥ₁), sᵥ₂); consume_input = consume_inputs,
+        )
         rᵥ₁ = commoninds(Qᵥ₁, Rᵥ₁)
         rᵥ₂ = commoninds(Qᵥ₂, Rᵥ₂)
         oR = apply(o, Rᵥ₁ * Rᵥ₂)
@@ -76,9 +91,21 @@ function simple_update(
         )
         err = spec.truncerr
         s_values = singular_values![]
-        Qᵥ₁ = contract([Qᵥ₁; dag.(inv_sqrt_envs_v1)])
-        Qᵥ₂ = contract([Qᵥ₂; dag.(inv_sqrt_envs_v2)])
-        updated_tensors = [Qᵥ₁ * Rᵥ₁, Qᵥ₂ * Rᵥ₂]
+        invs1, invs2 = dag.(inv_sqrt_envs_v1), dag.(inv_sqrt_envs_v2)
+        Qᵥ₁ = _environment_chain(Qᵥ₁, invs1;
+            dest = consume_inputs ? ψ⃗[1] : nothing)
+        Qᵥ₂ = _environment_chain(Qᵥ₂, invs2;
+            dest = consume_inputs ? ψ⃗[2] : nothing)
+        updated_tensors = [
+            contract(
+                [Qᵥ₁, Rᵥ₁]; sequence = _left_seq(2),
+                dest = consume_inputs ? ψ⃗[1] : nothing,
+            ),
+            contract(
+                [Qᵥ₂, Rᵥ₂]; sequence = _left_seq(2),
+                dest = consume_inputs ? ψ⃗[2] : nothing,
+            ),
+        ]
         if normalize_tensors
             s_values = normalize(s_values)
         end

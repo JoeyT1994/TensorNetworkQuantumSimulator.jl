@@ -10,8 +10,8 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
 
         #Graded messages carry a per-sector parity gauge; fix to the PSD representative
         #before taking roots (dense no-op, cf. pseudo_sqrt_inv_sqrt)
-        X_D, X_U = safe_eigen(parity_message_gauge(message(bp_cache, e)); ishermitian = true, cutoff = nothing)
-        Y_D, Y_U = safe_eigen(parity_message_gauge(message(bp_cache, reverse(e))); ishermitian = true, cutoff = nothing)
+        X_D, X_U = eigen(parity_message_gauge(message(bp_cache, e)); ishermitian = true, cutoff = nothing)
+        Y_D, Y_U = eigen(parity_message_gauge(message(bp_cache, reverse(e))); ishermitian = true, cutoff = nothing)
         #Orientation bookkeeping for graded tensors (no-ops for dense data): eigen's D is
         #labelled (lk′, lk) with slot orientations matching U-from-the-left; the U·D·U†
         #sandwich below pairs U's bond with D's FIRST slot, so swap D's labels. And the

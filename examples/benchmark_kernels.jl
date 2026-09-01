@@ -1,9 +1,10 @@
 # Walltime and allocation volume for gate application and BP expectation values, on CPU
 # and (if CUDA is loaded) GPU.
 #
-# Everything runs the generic buffered contraction path (the hand-fused kernels were
-# removed: same peak memory, materially slower on real circuits). Use this to track
-# regressions and to compare machines.
+# BP closures use the fused two-slot path; gate application uses generic buffered
+# contractions with consumed destinations and backend-native factorizations. Use this to
+# track runtime/allocation-volume regressions and to compare machines. For exact CUDA
+# pool high-water measurements, use `benchmark_gpu_hotpaths.jl`.
 #
 #   julia --project=. examples/benchmark_kernels.jl              # CPU only
 #   julia --project=. -e 'using CUDA; include("examples/benchmark_kernels.jl")'   # + GPU

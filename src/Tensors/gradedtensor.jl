@@ -625,7 +625,17 @@ function TensorInterface.op(name::String, i1::GradedIndex, i2::GradedIndex; kwar
 end
 
 #Random tensors: a TensorMap only populates flux-zero trees, so plain randn is already
-#the symmetric random initializer.
+#the symmetric random initializer. The explicit-RNG overload lets graded boundary-MPS
+#cold starts be reproducible without reading or mutating Julia's global RNG.
+function TensorInterface.random_tensor(rng::Random.AbstractRNG, elt::Type{<:Number}, is::GradedIndex...)
+    iv = collect(Index, is)
+    codomain = TK.ProductSpace(map(slotspace, iv)...)
+    #TensorKit 0.17.1's RNG + single-TensorSpace convenience method has a typo
+    #(`one(domain)`); use its native two-space overload until that is fixed upstream.
+    data = TK.randn(rng, elt, codomain, one(codomain))
+    return GradedTensor(iv, data)
+end
+
 function TensorInterface.random_tensor(elt::Type{<:Number}, is::GradedIndex...)
     iv = collect(Index, is)
     data = randn(elt, TK.ProductSpace(map(slotspace, iv)...))

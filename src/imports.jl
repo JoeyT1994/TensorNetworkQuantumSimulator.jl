@@ -1,4 +1,5 @@
 using LinearAlgebra
+using Random: Random
 using StatsBase
 
 using Dictionaries: Dictionary, set!
@@ -56,5 +57,6 @@ import .TensorInterface: contract, truncate, inner, uniqueinds, datatype, scalar
 using .Tensors: Tensors, Index, Tensor, register_op!
 
 using Adapt: adapt
+using MatrixAlgebraKit: defaulttol
 
 using TypeParameterAccessors: unspecify_type_parameters

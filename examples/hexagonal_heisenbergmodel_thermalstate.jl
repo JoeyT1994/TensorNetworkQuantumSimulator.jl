@@ -1,5 +1,5 @@
 using TensorNetworkQuantumSimulator
-using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuantumSimulator, freenergy
+using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuantumSimulator, freenergy, update
 
 function main()
     χ = 32
