@@ -7,6 +7,7 @@ description = "A Julia package for quantum simulation with tensor networks of ne
 
 [deps]
 Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 Dictionaries = "85a47980-9c8c-11e8-2b9f-f7ca1fa99fb4"
 GPUArraysCore = "46192b85-c4d5-4398-a991-12ede77f4527"
 Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
@@ -27,6 +28,7 @@ VectorInterface = "409d34a3-91d5-4945-b6ec-7529ddf182d8"
 
 [compat]
 Adapt = "4.3.0"
+CUDA = "6.3.1"
 Dictionaries = "0.4"
 GPUArraysCore = "0.2"
 Graphs = "1.8.0"

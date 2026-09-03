@@ -20,6 +20,7 @@
 using TensorNetworkQuantumSimulator
 const TNQS = TensorNetworkQuantumSimulator
 using LinearAlgebra: Diagonal, diag
+using Random
 
 function correlation_matrix(g, tt, T, occupied)
     vs = sort(collect(vertices(g)))
@@ -51,6 +52,7 @@ function evolve(g, occupied; tt = 1.0, dt = 0.05, nsteps = 10, χ = 16)
 end
 
 function main(; tt = 1.0, dt = 0.01, nsteps = 50)
+    Random.seed!(123)
     println("== 1. Comb tree: BP is exact, deviation = Trotter only ==")
     g = named_comb_tree((3, 3))
     occupied = filter(v -> isodd(sum(v)), collect(vertices(g)))
