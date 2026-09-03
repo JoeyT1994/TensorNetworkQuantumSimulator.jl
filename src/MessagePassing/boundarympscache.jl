@@ -44,6 +44,7 @@ default_message_update_alg(bmps_cache::BoundaryMPSCache) = default_bmps_message_
 default_normalize(alg::Algorithm"fitting") = true
 default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(scalartype(bmps_cache))
 const _default_boundarymps_update_niters = 50
+const _graded_bmps_init_seed = UInt64(0x544e_5153_424d_5053)
 function set_default_kwargs(alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache)
     normalize = get(alg.kwargs, :normalize, default_normalize(alg))
     tolerance = get(alg.kwargs, :tolerance, default_tolerance(bmps_cache))
@@ -174,7 +175,11 @@ function BoundaryMPSCache(
     return bmps_cache
 end
 
-all_quotientedges(graph) = QuotientEdges(all_edges(quotient_graph(graph)))
+#`all_edges` enumerates directed edges; the quotient graph is undirected, so convert it
+#before wrapping. Calling `all_edges` directly on the undirected quotient silently yielded
+#an empty collection and skipped constructor-time boundary-MPS message initialization.
+all_quotientedges(graph) = QuotientEdges(all_edges(directed_graph(quotient_graph(graph))))
+all_quotientedges(bmps_cache::BoundaryMPSCache) = all_quotientedges(supergraph(bmps_cache))
 
 #Initialise all the interpartition message tensors
 #Dense links are fresh trivial indices from the message legs; graded links get their
@@ -185,6 +190,10 @@ function set_interpartition_messages!(
         quotientedges = all_quotientedges(bmps_cache),
     )
     m_keys = keys(messages(bmps_cache))
+    #Only graded fitting needs a generic full-support cold start. Keep its randomness
+    #local and repeatable; dense messages retain the deterministic delta initializer.
+    graded_rng = tensortype(bmps_cache) <: Tensors.GradedTensor ?
+        Random.Xoshiro(_graded_bmps_init_seed) : nothing
     for pe in quotientedges
         es = sorted_edges(bmps_cache, pe)
         for e in es
@@ -193,7 +202,7 @@ function set_interpartition_messages!(
             end
         end
         if tensortype(bmps_cache) <: Tensors.GradedTensor
-            set_graded_interpartition_messages!(bmps_cache, es)
+            set_graded_interpartition_messages!(bmps_cache, es, graded_rng)
         else
             for i in 1:(length(es) - 1)
                 virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
@@ -225,6 +234,15 @@ fit_adjoint_message(bmps_cache::BoundaryMPSCache, e::NamedEdge, m) = dag(m)
 function switch_message!(bmps_cache::BoundaryMPSCache, e::NamedEdge)
     ms = messages(bmps_cache)
     me, mer = message(bmps_cache, e), message(bmps_cache, reverse(e))
+    if me isa Tensor && mer isa Tensor && !Base.mightalias(me.data, mer.data)
+        #Both old messages are consumed by the swap. Conjugate their storage in place and
+        #only rebuild the lightweight index wrappers instead of allocating two adjoints.
+        me.data .= conj.(me.data)
+        mer.data .= conj.(mer.data)
+        set!(ms, e, Tensor(map(dag, mer.inds), mer.data))
+        set!(ms, reverse(e), Tensor(map(dag, me.inds), me.data))
+        return bmps_cache
+    end
     set!(ms, e, fit_adjoint_message(bmps_cache, e, mer))
     set!(ms, reverse(e), fit_adjoint_message(bmps_cache, e, me))
     return bmps_cache
@@ -297,8 +315,19 @@ function gauge_step!(
     m1, m2 = message(bmps_cache, e1), message(bmps_cache, e2)
     @assert !isempty(commoninds(m1, m2))
     left_inds = uniqueinds(m1, m2)
-    m1, Y = factorize(m1, left_inds; ortho = "left", kwargs...)
-    m2 = m2 * Y
+    if m1 isa Tensor && m2 isa Tensor
+        #A gauge move needs an isometry and a remainder, not an SVD. Consume m1 into Q,
+        #then consume m2 as the destination of m2*R. This keeps the centre shift inside
+        #the shared arena instead of leaving one SVD workspace/output set per ALS step for
+        #the Julia GC to discover after the sweep.
+        m1, Y = Tensors.left_orthogonalize(m1, left_inds; consume_input = true)
+        m2 = contract([m2, Y]; sequence = [1, 2], dest = m2)
+        Tensors._release_storage!(Y.data)
+    else
+        #TensorKit supplies the symmetry-aware QR used for graded boundary MPS tensors.
+        m1, Y = Tensors.left_orthogonalize(m1, left_inds)
+        m2 = m2 * Y
+    end
     setmessage!(bmps_cache, e1, m1)
     setmessage!(bmps_cache, e2, m2)
     return bmps_cache
@@ -324,6 +353,32 @@ function inserter!(
         m
     )
     setmessage!(bmps_cache, reverse(update_e), fit_adjoint_message(bmps_cache, update_e, m))
+    return bmps_cache
+end
+
+#Dense fitting extracts a fresh message only to adjoint it into the reverse cache slot.
+#That slot's previous value is dead and has exactly the required length, so reshape and
+#reuse its storage, then release the temporary eagerly. This matters on CUDA where a short
+#ALS sweep otherwise outruns the Julia GC and retains every dead CuArray until its end.
+function inserter!(
+        alg::Algorithm,
+        bmps_cache::BoundaryMPSCache,
+        update_e::NamedEdge,
+        m::Tensor,
+    )
+    rev = reverse(update_e)
+    old = message(bmps_cache, rev)
+    if old isa Tensor && length(old.data) == length(m.data) &&
+            eltype(old.data) === eltype(m.data)
+        #The reverse message can carry the same elements with a different axis order.
+        #Reuse the whole allocation and reshape its contiguous storage to the new wrapper.
+        dest = reshape(old.data, size(m.data))
+        dest .= conj.(m.data)
+        setmessage!(bmps_cache, rev, Tensor(map(dag, m.inds), dest))
+        Base.mightalias(old.data, m.data) || Tensors._release_storage!(m.data)
+        return bmps_cache
+    end
+    setmessage!(bmps_cache, rev, fit_adjoint_message(bmps_cache, update_e, m))
     return bmps_cache
 end
 
@@ -373,7 +428,8 @@ function update_message!(
             n = norm(m)
             cf += n
             if alg.kwargs.normalize && n != 0
-                m /= n
+                #`m` was freshly extracted and is consumed by `inserter!` below.
+                rmul!(data(m), inv(n))
             end
             inserter!(alg, bmps_cache, update_e, m)
             prev_e = update_e

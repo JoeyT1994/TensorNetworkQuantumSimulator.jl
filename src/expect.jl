@@ -68,6 +68,10 @@ function expect(
     steiner_vs, incoming_ms = bp_region(cache, obs_vs)
 
     function contract_region(op_string_f; joint_op = nothing)
+        if joint_op === nothing
+            fast = norm_scalar_kernel(network(cache), steiner_vs, incoming_ms; op_strings = op_string_f)
+            fast !== nothing && return fast
+        end
         return scalar(contract_bp_region(cache, steiner_vs, incoming_ms; op_strings = op_string_f, joint_op))
     end
 
