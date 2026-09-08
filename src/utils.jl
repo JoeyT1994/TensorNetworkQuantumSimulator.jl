@@ -77,8 +77,14 @@ function identity_tensor(eltype, row_inds::Vector, col_inds::Vector)
     return (t * c_row)*c_col
 end
 
+# Every network-or-cache type that the contraction algorithms dispatch on. One alias so a fifth
+# cache type is a single edit rather than three widely-separated Unions.
+const ContractableNetwork = Union{TensorNetworkState, BeliefPropagationCache,
+                                 BoundaryMPSCache, CTMEnvironmentCache}
+
+
 #Function for checking the correct algorithm is being used for the given cache type and functionality
-function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState}, f::String, alg)
+function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState, CTMEnvironmentCache}, f::String, alg)
     if alg == "bp"
         if !((tns isa BeliefPropagationCache) || (tns isa TensorNetworkState))
             return error("Expected BeliefPropagationCache or TensorNetworkState for 'bp' algorithm, got $(typeof(tns))")
@@ -101,12 +107,20 @@ function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetwor
         if f ∈ ["normalize"]
             return error("boundarymps contraction not supported for this functionality yet")
         end
+    elseif alg == "ctmrg"
+        if !((tns isa CTMEnvironmentCache) || (tns isa TensorNetworkState))
+            return error("Expected CTMEnvironmentCache or TensorNetworkState for 'ctmrg' algorithm, got $(typeof(tns))")
+        end
+        # The 4C+4T ring encloses one vertex, so only single-site quantities are available.
+        if f ∈ ["normalize", "sample", "truncate"]
+            return error("ctmrg contraction not supported for this functionality yet")
+        end
     elseif alg == "exact"
         if f ∈ ["normalize", "sample", "sample_certified", "truncate"]
             return error("exact contraction not supported for this functionality yet")
         end
     else
-        return error("Unrecognized algorithm specified. Must be one of 'exact', 'bp', 'loopcorrections', or 'boundarymps'")
+        return error("Unrecognized algorithm specified. Must be one of 'exact', 'bp', 'loopcorrections', 'boundarymps' or 'ctmrg'")
     end
     return nothing
 end
@@ -134,7 +148,8 @@ default_contraction_sequence_kwargs() = (; alg = "omeinsum", optimizer = GreedyM
 
 default_alg(bp_cache::BeliefPropagationCache) = "bp"
 default_alg(bmps_cache::BoundaryMPSCache) = "boundarymps"
-default_alg(any) = error("You must specify a contraction algorithm. Currently supported: exact, bp and boundarymps.")
+default_alg(ctm_cache::CTMEnvironmentCache) = "ctmrg"
+default_alg(any) = error("You must specify a contraction algorithm. Currently supported: exact, bp, boundarymps and ctmrg.")
 
 # Build the cache `alg` needs over `network` and run it to convergence. Shared by the state-level
 # entry points of `expect`, `reduced_density_matrix`, `norm_sqr`, `inner` and `normalize`, which all

@@ -13,18 +13,18 @@ end
 Compute the reduced density matrix on the vertices `verts` of the tensor network state `ψ`.
 
 # Arguments
-- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}`: The tensor network state or its associated cache.
+- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMEnvironmentCache}`: The tensor network state or its associated cache.
 - `verts`: The vertices over which to compute the reduced density matrix. Can be a single vertex or a collection of vertices.
 
 # Keyword Arguments
-- `alg::Union{String, Nothing}`: The contraction algorithm to use. If not provided, defaults based on the type of `ψ`. Supported algorithms are `"exact"`, `"bp"`, and `"boundarymps"`.
+- `alg::Union{String, Nothing}`: The contraction algorithm to use. If not provided, defaults based on the type of `ψ`. Supported algorithms are `"exact"`, `"bp"`, `"boundarymps"` and `"ctmrg"` (single vertex only, requires `maxdim`).
 - `normalize::Bool = true`: Whether to normalize the reduced density matrix so that its trace is 1.
 - `kwargs...`: Additional keyword arguments specific to the chosen algorithm.
 
 # Returns
 - A tensor representing the reduced density matrix on the specified vertices.
 """
-function reduced_density_matrix(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, verts; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
+function reduced_density_matrix(ψ::ContractableNetwork, verts; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "rdm", alg)
     verts = collect_vertices(verts, graph(ψ))
     return reduced_density_matrix(Algorithm(alg), ψ, verts; kwargs...)
@@ -61,6 +61,45 @@ function reduced_density_matrix(
         ρ = normalize_rdm(ρ)
     end
     return ρ
+end
+
+# CTMRG: single vertex only — its 4C+4T ring is its exact environment. See the `expect`
+# counterpart for why edge/plaquette regions do not give a two-site version.
+function reduced_density_matrix(
+        alg::Algorithm"ctmrg",
+        cache::CTMEnvironmentCache,
+        vs::Vector;
+        normalize = true,
+        window::Integer = 0,
+    )
+    length(vs) == 1 ||
+        error("alg=\"ctmrg\" supports a single-vertex rdm only; got $(length(vs)) vertices $vs.")
+    v = only(vs)
+    ρ_tensors = norm_factors(network(cache), [v]; op_strings = _ -> "ρ")
+    append!(ρ_tensors, vertex_window(cache, v, window))
+    # cached sequence + tensor-count gate, using the cache's own options
+    ρ = _ctm_contract(ρ_tensors, options(cache))
+    return normalize ? normalize_rdm(ρ) : ρ
+end
+
+function reduced_density_matrix(
+        alg::Algorithm"ctmrg",
+        ψ::TensorNetworkState,
+        verts::Vector;
+        maxdim::Integer,
+        cache_update_kwargs = (;),
+        ctm_options = (;),          # `CTMOptions` fields, e.g. `(degtol = 1e-9,)`
+        kwargs...,
+    )
+    # Like `expect`, an RDM read off the ring needs the messages stationary, not just F converged,
+    # so default a `:cycle` solve to `convergence = :worst_region` (`:cut`'s statedist pair is
+    # already observable-tight, and worst-region over-warns there; overridable through
+    # `cache_update_kwargs`). See `expect(::Algorithm"ctmrg", ::TensorNetworkState, ...)`.
+    if get(ctm_options, :projector, :cut) === :cycle
+        cache_update_kwargs = merge((; convergence = :worst_region), cache_update_kwargs)
+    end
+    cache = update(CTMEnvironmentCache(ψ, maxdim; ctm_options...); cache_update_kwargs...)
+    return reduced_density_matrix(alg, cache, verts; kwargs...)
 end
 
 function reduced_density_matrix(
