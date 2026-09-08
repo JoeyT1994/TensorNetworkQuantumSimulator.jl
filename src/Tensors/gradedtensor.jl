@@ -700,6 +700,23 @@ function MatrixAlgebraKit.findtruncated_svd(
     return _hostmask(MatrixAlgebraKit.findtruncated(values, strategy))
 end
 _hostmask(x) = adapt(Vector, x)
+
+# `RankGapTruncation` over a graded spectrum: the rule runs on the MERGED, magnitude-sorted values
+# of all sectors (the way TensorKit ranks `truncrank`), so the kept bond gets one count per sector.
+function MatrixAlgebraKit.findtruncated(values::TK.SectorVector, st::RankGapTruncation)
+    TK.FusionStyle(TK.sectortype(values)) isa TK.UniqueFusion ||
+        error("truncation_strategy: only abelian (unique-fusion) sectors are supported")
+    vals = Array(parent(values))
+    perm = sortperm(vals; by = abs, rev = true)
+    k = _rankgap_count(abs.(vals[perm]), st)
+    result = similar(values, Bool)
+    fill!(parent(result), false)
+    parent(result)[perm[1:k]] .= true
+    return result
+end
+function MatrixAlgebraKit.findtruncated_svd(values::TK.SectorVector, st::RankGapTruncation)
+    return MatrixAlgebraKit.findtruncated(values, st)
+end
 _hostmask(d::TK.SortedVectorDict) = TK.SortedVectorDict(k => Array(v) for (k, v) in d)
 
 function _tk_split_positions(t::GradedTensor, lv::Vector{<:Index})
@@ -713,14 +730,15 @@ _wrap_slot(sp) = TK.isdual(sp) ? (TK.dual(sp), true) : (sp, false)
 
 _with_flag(i::GradedIndex, dual::Bool) = Index(i.id, i.space, i.plev, i.tags, dual)
 
-function _tksvd_core(t::GradedTensor, lv::Vector{<:Index}; maxdim = nothing, cutoff = nothing)
+function _tksvd_core(t::GradedTensor, lv::Vector{<:Index}; maxdim = nothing, cutoff = nothing, trunc = nothing)
     lpos, rpos, li, ri = _tk_split_positions(t, lv)
     tp = TK.permute(t.data, (Tuple(lpos), Tuple(rpos)))
-    if maxdim === nothing && cutoff === nothing
+    trunc === nothing && (trunc = _mak_trunc(; maxdim, cutoff))
+    if trunc === nothing
         U, S, Vh = svd_compact(tp)
         err = zero(real(eltype(t)))
     else
-        U, S, Vh, err = svd_trunc(tp; trunc = _mak_trunc(; maxdim, cutoff))
+        U, S, Vh, err = svd_trunc(tp; trunc)
     end
     kept2 = sum((sum(abs2, LinearAlgebra.diag(b)) for (c, b) in TK.blocks(S)); init = 0.0)
     truncerr = err > 0 ? err^2 / (err^2 + kept2) : zero(Float64)
@@ -783,9 +801,9 @@ function LinearAlgebra.factorize(
     end
 end
 
-function LinearAlgebra.svd(t::GradedTensor, linds; maxdim = nothing, cutoff = nothing, kwargs...)
+function LinearAlgebra.svd(t::GradedTensor, linds; maxdim = nothing, cutoff = nothing, trunc = nothing, kwargs...)
     lv = filter(i -> i ∈ t.inds, _indvec(linds))
-    _, _, li, ri, U, S, Vh, _ = _tksvd_core(t, lv; maxdim, cutoff)
+    _, _, li, ri, U, S, Vh, _ = _tksvd_core(t, lv; maxdim, cutoff, trunc)
     u = _tk_bond_index(S, "Link,u")
     v = Index(u.space, "Link,v")
     Ut = _tk_wrap_left(U, li, u)

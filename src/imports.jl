@@ -51,7 +51,7 @@ using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, no
     onehot,
     projector, delta, combiner, combinedind, random_tensor, directsum,
     op, state,
-    scalar, apply, map_diag, map_diag!, factorize_svd,
+    scalar, apply, map_diag, map_diag!, factorize_svd, truncation_strategy,
     array, data, new_index, from_array, has_closure_gauge
 import .TensorInterface: contract, truncate, inner, uniqueinds, datatype, scalartype
 using .Tensors: Tensors, Index, Tensor, AbstractTensor, register_op!

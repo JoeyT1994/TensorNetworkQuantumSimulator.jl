@@ -33,9 +33,9 @@
 # See docs/ctmrg_status.md for the current numbers and the open problems;
 # docs/finite_ctmrg_design.md for the derivations and the full record of what was tried.
 
-using LinearAlgebra: eigen, Hermitian, norm, dot, I, Diagonal, qr, svd, diagind
+using LinearAlgebra: norm, dot, Diagonal, qr, svd, diagind
 using Random: Xoshiro
-using KrylovKit: eigsolve, svdsolve, schursolve, Arnoldi
+using KrylovKit: schursolve, Arnoldi
 
 """
     CTMOptions(; kwargs...)
@@ -51,10 +51,8 @@ governs, referenced below.
 | field | default | what it selects |
 |---|---|---|
 | `gauge` | `true` | fix the projector pair's gauge to the previous sweep by orthogonal Procrustes, making iterates comparable — see `_ctm_align`. Prerequisite for any accelerator. |
-| `arnoldi` | `true` | use Krylov (Arnoldi/Lanczos) for top-`k` eigen/singular triplets where it pays; `false` forces dense — see `_ctm_twosided_projector_qr`. ⚠️ **`:cut` (and the greedy seed pass) only** — `_ctm_cycle_projectors` calls `schursolve` unconditionally and has no dense path, so `false` does not force dense there. |
 | `degtol` | `0.0` | relative gap below which a truncation is judged to split a near-degenerate multiplet, and is backed off. `0` disables. Matters for double-layer corners (ket↔bra exchange gives `λ_ij = λ_ji`). Applies to the `:cut` singular-value truncations AND (2026-08-21) to the `:cycle` spectrum cut in `_ctm_cycle_projectors` — an invariant subspace forced to split a cluster is ill-defined and re-resolves differently each sweep (`cycle_subspace = true` has no spectrum, so it is not consulted there). |
 | `qr_cutoff` | `1e-13` | relative cutoff on the `S` values the projector inverts. It can sit this low because `S` comes off a triangular product rather than a squared object — see `_ctm_twosided_projector_qr`. Measured 2026-08-11 (4 seeds, both projectors, 5×5 D=2 at χ=4/8): **INERT** — `⟨Z⟩` is identical to every digit from 1e-15 to 1e-7, i.e. the guard never fires at these sizes. It is insurance against `S^(-1/2)` amplification, not a tuning lever. |
-| `krylov_min` | `128` | smallest interface at which the Krylov SVD beats a dense one; below it dense LAPACK wins — see `_ctm_svd_topk`. ⚠️ **`:cut` only** — never consulted on the `:cycle` path. **Re-verified end to end 2026-08-11: do not lower it.** In isolation top-k looks faster from n≈48 up (1.8–2.7× at n=72–144, k=8), but in the engine `krylov_min = 48` is 3.3× SLOWER at χ=8 and 2.2× at χ=32, because a Krylov attempt that fails `info.converged >= k` costs the attempt AND the dense fallback. Accuracy is identical either way. |
 | `optimal_max` | `12` | tensor count above which contraction-order search falls back from exhaustive netcon to greedy. A FEASIBILITY gate — see `_ctm_contract`. |
 | `projector` | `:cut` | which interface projector to derive: `:cut` (optimal rank-χ truncation of one bipartition) or `:cycle` (four-corner cycle, which makes `F` stationary). See "Choosing a projector" below. |
 | `cycle_subspace` | `false` | ⚠️ **`:cycle` only.** cycle solve via BLOCK SUBSPACE ITERATION (matmul + QR — GPU-friendly, no general Schur/eig, batchable) instead of the matrix-free Krylov `schursolve`. Accuracy-equivalent to `schursolve` on converged cases (single-layer, lossless → machine precision), comparable-but-noisier on truncated/limit-cycling ones. Meant for GPU. |
@@ -122,10 +120,8 @@ It is NOT the cheaper option — see the timing note above.
 """
 Base.@kwdef struct CTMOptions
     gauge::Bool = true
-    arnoldi::Bool = true
     degtol::Float64 = 0.0
     qr_cutoff::Float64 = 1.0e-13
-    krylov_min::Int = 128
     optimal_max::Int = 12
     projector::Symbol = :cut
     # `:cycle` cycle-solve: `false` (default) = matrix-free Krylov (`schursolve`); `true` = block
@@ -144,14 +140,14 @@ Base.@kwdef struct CTMOptions
     # deep-but-real modes — see the derivation note in `_ctm_cycle_projectors`.
     cycle_gapcut::Float64 = 1.0e-4
 
-    function CTMOptions(gauge, arnoldi, degtol, qr_cutoff, krylov_min, optimal_max,
+    function CTMOptions(gauge, degtol, qr_cutoff, optimal_max,
                         projector, cycle_subspace, cycle_iters, cycle_rankcut, cycle_gapcut)
         projector in (:cut, :cycle) || throw(ArgumentError(
             "projector must be :cut or :cycle, got $(repr(projector))"))
         cycle_iters >= 1 || throw(ArgumentError("cycle_iters must be ≥ 1, got $cycle_iters"))
         0 <= cycle_gapcut < 1 || throw(ArgumentError(
             "cycle_gapcut is a relative gap ratio and must lie in [0, 1), got $cycle_gapcut"))
-        return new(gauge, arnoldi, degtol, qr_cutoff, krylov_min, optimal_max, projector,
+        return new(gauge, degtol, qr_cutoff, optimal_max, projector,
                    cycle_subspace, cycle_iters, cycle_rankcut, cycle_gapcut)
     end
 end
@@ -235,10 +231,6 @@ _ctm_setenv(cache::CTMEnvironmentCache, env) =
 # DOUBLE-LAYER networks, whose corner spectra carry systematic 2-fold degeneracies from
 # ket↔bra exchange (λ_ij = λ_ji). 0 disables it.
 #
-# `opts.arnoldi` — only the top `maxdim` eigenpairs are needed, so for a corner much larger
-# than `maxdim` an Arnoldi/Lanczos solve (KrylovKit) costs O(maxdim·n²) instead of dense
-# eigen's O(n³). `false` forces dense. Falls back to dense if Krylov does not converge.
-#
 
 # THE interface projector, via a TRIANGULAR (QR) factorization of each block.
 #
@@ -275,10 +267,10 @@ _ctm_setenv(cache::CTMEnvironmentCache, env) =
 # geqrf/gesvd batch well on GPU where batched Hermitian eig support is thin, and a sweep is 200–384
 # INDEPENDENT tiny factorizations (n ≤ 128) — a batching problem, not a big-linear-algebra one.
 #
-# DEVICE NOTE (fixed 2026-08-19): `_ctm_block_matrix` uses `array`, which is
-# device-preserving, so the projector factorizations run on whatever device the network lives on
-# (QR/SVD via CUSOLVER on CUDA). Only O(χ) scalar decisions — rank counts, degeneracy back-off —
-# take a CPU copy. See docs/ctmrg_status.md "GPU / CUDA compatibility".
+# DEVICE NOTE. The `:cut` projector is written entirely in tensor verbs (QR, SVD, diagonal
+# whitening — MatrixAlgebraKit on the network's device, any backend), and its only scalar work is
+# the O(χ) truncation rule inside the SVD. The `:cycle` path below still works on raw matrices via
+# `array`, which is device-preserving. See docs/ctmrg_status.md "GPU / CUDA compatibility".
 
 # Deterministic start vector for every Krylov solve in this file.
 #
@@ -309,57 +301,13 @@ end
 _ctm_startvec(ref::AbstractArray, n::Integer, tag) =
     _ctm_to_device(ref, randn(Xoshiro(hash(tag, hash(n))), eltype(ref), n))
 
-# Top-`k` eigenpairs of a Hermitian matrix: Krylov when it pays off, else dense.
-function _ctm_eigsolve(ρs::Hermitian, k::Integer, opts::CTMOptions)
-    n = size(ρs, 1)
-    if opts.arnoldi && n > 4k
-        try
-            v0 = _ctm_startvec(parent(ρs), n, :eig)
-            # `verbosity = 0`: when the interface's effective rank is below `k` — routine at
-            # larger D — KrylovKit reports "invariant subspace of dimension r < howmany" and
-            # "stopped without convergence". Both are expected here, not errors: we fall through
-            # to dense below, and the dense result is bit-identical (verified) and deterministic.
-            # Warning on every such call buries real problems in noise.
-            vals, vecs, info = eigsolve(x -> ρs * x, v0, k, :LR;
-                                        ishermitian = true, verbosity = 0,
-                                        krylovdim = max(2k + 8, 20))
-            if info.converged >= k && length(vecs) >= k
-                V = reduce(hcat, @view(vecs[1:k]))
-                eltype(ρs) <: Real && (V = real.(V))
-                # The projector must be a genuine isometry: degenerate clusters (which
-                # double-layer corners have, from ket↔bra exchange) can otherwise come back
-                # non-orthonormal and silently corrupt the truncation.
-                if norm(V' * V - I) < 1.0e-8
-                    return real.(vals[1:k]), V
-                end
-            end
-        catch err
-            err isa InterruptException && rethrow()
-            # anything else: fall through to dense
-        end
-    end
-    F = eigen(ρs)
-    return F.values, F.vectors
-end
-
-function _ctm_eig_projector(ρ::AbstractTensor, bnd::Index, maxdim::Integer, opts::CTMOptions)
-    bp = prime(bnd)
-    ρm = array(ρ, bnd, bp)
-    ρs = Hermitian((ρm + ρm') / 2)
-    vals, vecs = _ctm_eigsolve(ρs, Int(maxdim), opts)
-    # Rank + degeneracy logic is inherently scalar; run it on a CPU copy of the O(n) eigenvalues,
-    # then gather the kept columns of the (device-resident) eigenvector matrix by index.
-    sv0 = Array(real.(vals))
-    order = sortperm(sv0; rev = true)
-    sv = sv0[order]
-    k = min(Int(maxdim), length(sv), size(vecs, 2))
-    while k > 1 && k < length(sv) && abs(sv[k] - sv[k + 1]) ≤ opts.degtol * abs(sv[k])
-        k -= 1                              # don't split a degenerate multiplet
-    end
-    keep = order[1:k]
-    w = Index(k)
-    return from_array(vecs[:, keep], bnd, w), w
-end
+# Truncation rule shared by every `:cut` factorization — rank ≤ χ, drop singular values at or
+# below `qr_cutoff · s₁`, never split a multiplet degenerate to `degtol`. It is a backend truncation
+# STRATEGY, so the decision runs inside the truncated SVD: on dense tensors over the sorted
+# spectrum, on graded tensors over the merged spectrum of all sectors (the retained bond then gets
+# one count per sector for free).
+_ctm_trunc(maxdim::Integer, opts::CTMOptions; rtol::Real = opts.qr_cutoff) =
+    truncation_strategy(; maxdim = Int(maxdim), rtol, degtol = opts.degtol)
 
 # Contract a small flat list in a good order (netcon). This is what keeps the double layer
 # lazy: the list is [environment; ket; (operator;) bra] and the optimizer interleaves them,
@@ -405,83 +353,50 @@ end
 
 
 
-# A block as a plain (rest × interface) matrix. NO conjugation.
-#
-# It used to conjugate, so that `R†R` reproduced this file's Hermitian `ρ` convention. That was
-# wrong for complex networks and invisible for real ones: the sweep contracts the two enlarged
-# corners PLAINLY (`Bw * Be` conjugates nothing), so the projector must preserve the BILINEAR
-# product `A Bᵀ`, not the sesquilinear `A B†`. Conjugating here optimised the wrong pairing and
-# broke the pair's exactness at full rank by ~11% on a complex 4×4. See `_ctm_twosided_projector_qr`.
-function _ctm_block_matrix(B::AbstractTensor, io::Index)
-    rest = collect(uniqueinds(B, io))
-    isempty(rest) && return reshape(array(B, io), 1, dim(io))
-    return reshape(array(B, rest..., io), :, dim(io))
+# Triangular factor of a block over its interface `ins`: `B = Q·R` with `R` on (b, ins…). Never
+# forms `ρ`. A block that IS its interface (no other legs) is its own factor, on a width-1 bond.
+function _ctm_tri_factor(B, ins::Vector{<:Index})
+    rest = uniqueinds(B, ins)
+    if isempty(rest)
+        b = new_index(B, 1; tags = "Link,qr")
+        return B * adapt_like(B, delta(scalartype(B), b))
+    end
+    return last(qr(B, rest))
 end
-
-# Triangular factor of a block: `R` with `A = Q R`, never forming `ρ`. See the projector note above.
-_ctm_tri_factor(B::AbstractTensor, io::Index) = qr(_ctm_block_matrix(B, io)).R
 
 # Biorthogonal pair from the TRIANGULAR factors of the two bounding blocks — no squaring
-# anywhere. See the projector note above for the derivation.
-# Top-`k` singular triplets of `W`, by Golub–Kahan–Lanczos when it pays. `W` is `n×n` with
-# `n = χ·D_layer` and only `k = maxdim` triplets are ever used, so a full dense SVD discards
-# everything past column `k` — measured 45% of wall at 5×5 D=4 χ=12.
+# anywhere, and NO conjugation in the pairing: the sweep contracts the two enlarged corners
+# PLAINLY (`Bw * Be`), so the projector must preserve the BILINEAR product `A Bᵀ`, not the
+# sesquilinear `A B†`. (An earlier version conjugated; that optimised the wrong pairing and broke
+# the pair's exactness at full rank by ~11% on a complex 4×4.)
 #
-# GATE: `n ≥ opts.krylov_min` **and** `n > 4k`. The ratio test alone is not enough — measured
-# crossover (dense vs `svdsolve`, ms per solve): n=72 0.62/0.50, n=96 1.06/3.31, n=128 2.13/1.11,
-# n=192 5.70/2.49, n=256 12.22/3.95. So Krylov wins 1.9–3.1× from n≈128 and *loses* below it;
-# gating on the ratio alone made 4×4 D=3 χ=8 (n≤72) 1.2× SLOWER. Falls back to dense on
-# non-convergence; agreement with dense measured to 1.4e-15 on matrices captured from a real run.
-function _ctm_svd_topk(W::AbstractMatrix, k::Integer)
-    try
-        x0 = _ctm_startvec(W, size(W, 2), :svd)
-        # `krylovdim` MUST exceed `k`: KrylovKit's default is 30, and `svdsolve` THROWS for k ≥ 30
-        # rather than returning unconverged. Before this was set, every interface with kw ≥ 30 paid
-        # a doomed Krylov attempt and then the dense SVD anyway — worst on the largest blocks, which
-        # are exactly the ones the top-k path exists to accelerate.
-        vals, lvecs, rvecs, info = svdsolve(W, x0, k, :LR; krylovdim = max(2k + 10, 30))
-        (info.converged >= k && length(lvecs) >= k && length(rvecs) >= k) || return nothing
-        U = reduce(hcat, @view(lvecs[1:k])); V = reduce(hcat, @view(rvecs[1:k]))
-        eltype(W) <: Real && (U = real.(U); V = real.(V))
-        return (; S = real.(vals[1:k]), U, V)
-    catch err
-        err isa InterruptException && rethrow()
-        return nothing                                # anything else: fall through to dense
-    end
-end
-
-function _ctm_twosided_projector_qr(Bw::AbstractTensor, Be::AbstractTensor, io::Index, maxdim::Integer,
-                                   opts::CTMOptions)
-    RA = _ctm_tri_factor(Bw, io)
-    RB = _ctm_tri_factor(Be, io)
-    RBt = transpose(RB)                     # TRANSPOSE: the pairing is `A Bᵀ`, not `A B†`
-    W = RA * RBt
-    kw = min(Int(maxdim), min(size(W)...))
-    nW = min(size(W)...)
-    # Gate measured 2026-08-11, not guessed. Top-k beats a dense SVD only when the block is large
-    # AND we keep a small fraction of it; the old `nW > 4kw` was too permissive — at n=144, k=32 the
-    # Krylov path is 7× SLOWER than dense, while at n=288, k=32 it is 6.3× faster. The win appears
-    # around nW/kw ≳ 8. Measured speedups retained under this gate: 12.6× (n=288,k=8), 6.9×
-    # (288,16), 6.3× (288,32), 2.4× (144,8), 1.8× (144,16). Cases it now correctly declines:
-    # (144,32) 0.14×, (288,48) 0.28×.
-    F = (opts.arnoldi && nW >= opts.krylov_min && nW > 8kw) ? _ctm_svd_topk(W, kw) : nothing
-    isnothing(F) && (F = svd(W))            # ONE decomposition → consistent U, S, V
-    # Cutoff + degeneracy truncation is scalar; decide `k` on a CPU copy of the singular values.
-    s0 = Array(real.(F.S))
-    k = min(Int(maxdim), length(s0))
-    while k > 1 && s0[k] ≤ opts.qr_cutoff * s0[1]
-        k -= 1
-    end
-    while k > 1 && k < length(s0) && abs(s0[k] - s0[k + 1]) ≤ opts.degtol * abs(s0[k])
-        k -= 1                                      # don't split a degenerate multiplet
-    end
-    # Whitening scale on the SVD factors' device (the top-k Krylov path returns host `S` but device
-    # `U`/`V`, so anchor to `F.U`), keeping both products fully on-device.
-    isk = Diagonal(_ctm_to_device(F.U, 1 ./ sqrt.(s0[1:k])))
-    PAm = RBt * F.V[:, 1:k] * isk           # (bond × kept)
-    PBm = isk * F.U[:, 1:k]' * RA           # (kept × bond)
-    w = Index(k)
-    return from_array(PAm, io, w), from_array(PBm, w, io), w
+#   Bw = Q_A R_A,  Be = Q_B R_B                    R on (b, ins…)
+#   W  = R_A R_Bᵀ = U S Vᵀ                         bilinear contraction over `ins`
+#   P_A = R_Bᵀ V S^{-1/2}  (ins… → w)              P_B = S^{-1/2} Uᴴ R_A  (w → ins…)
+#   P_B P_A = S^{-1/2} Uᴴ R_A R_Bᵀ V S^{-1/2} = 𝟙_w
+#
+# Everything stays in tensor form: QR, SVD and the diagonal whitening are backend verbs, so this
+# runs unchanged on dense and graded (symmetric) tensors and on whatever device the network lives
+# on. Truncation (rank, relative cutoff, degeneracy back-off) is `_ctm_trunc`, applied INSIDE the
+# SVD. The dense top-k Krylov SVD that once lived here (`_ctm_svd_topk`, measured 6–12× on
+# n ≥ 288 blocks) was retired with the matrix code; it can return as a dense-backend hook if the
+# large-χ benchmark asks for it.
+function _ctm_twosided_projector_qr(Bw, Be, ins::Vector{<:Index}, maxdim::Integer, opts::CTMOptions)
+    RA = _ctm_tri_factor(Bw, ins)
+    RB = _ctm_tri_factor(Be, ins)
+    bA = only(uniqueinds(RA, ins))
+    W = RA * RB                                          # (bA, bB): contracts `ins`, no conjugation
+    U, S, V = svd(W, [bA]; trunc = _ctm_trunc(maxdim, opts))
+    # Seam convention: `U * S * V` (bilinear) reconstructs `W`, so the returned `V` is the
+    # CONJUGATE of the right singular vectors — hence `dag(V)` (inert for real data). `dag(isk)` is
+    # the copy of S^{-1/2} (real, so only the arrows change) whose legs pair with `dag(U)`/`dag(V)`
+    # on a graded backend; on dense tensors arrows are inert and this is just the algebra above.
+    isk = map_diag(x -> inv(sqrt(x)), S)                 # S^{-1/2} on S's (u, v)
+    PA = (RB * dag(V)) * dag(isk)                        # (ins…, u): R_Bᵀ V S^{-1/2}
+    PB = (dag(U) * RA) * dag(isk)                        # (v, ins…): S^{-1/2} Uᴴ R_A
+    uA = only(uniqueinds(PA, ins))
+    PB = replaceind(PB, only(uniqueinds(PB, ins)), dag(uA))   # the opposite copy of P_A's bond
+    return PA, PB, uA
 end
 
 
@@ -533,21 +448,27 @@ _ctm_widx(d, k) = (t = get(d, k, nothing); isnothing(t) ? nothing : t[end])
 _ctm_rescale(t) = isnothing(t) ? t :
     (n = norm(t); (iszero(n) || !isfinite(n)) ? t : t / n)
 
-# Isometry truncating index set `ins` of block `B` to `maxdim`, from the eigendecomposition
-# of B's reduced density matrix on those indices. Returns (P, w) with P legs (ins…, w).
+# Isometry truncating index set `ins` of block `B` to `maxdim`: `B ≈ B P P†` with `P` the leading
+# RIGHT singular vectors of `B` on those legs (⇔ the eigenvectors of its reduced density matrix,
+# without squaring). Returns (P, w) with P legs (ins…, w).
+#
+# Pairing convention for the greedy pass: the block that DERIVED `P` absorbs `P`; every block at
+# the OTHER end of the interface absorbs `dag(P)` (`_ctm_pAdag`). That is `B P P† B′ᵀ`, the
+# optimal truncation for complex data too, and it is what makes the arrows pair up on a graded
+# backend: `dag(U)` carries the legs of `ins` with the orientation opposite to `B`'s. The lossless
+# branch returns the combiner, which has the same orientation convention.
+# No relative cutoff here — a null direction is a harmless zero column of an isometry, whereas the
+# two-sided pair INVERTS its spectrum.
 function _ctm_interface_proj(B, ins::Vector{<:Index}, maxdim::Integer, opts::CTMOptions)
     (isnothing(B) || isempty(ins)) && return nothing
-    co = combiner(ins...); io = combinedind(co)
-    d = dim(io); k = min(Int(maxdim), d)
-    if k == d                              # nothing to truncate: keep the basis intact
-        w = Index(d)
-        # identity isometry on B's device/eltype (never a hardcoded CPU Float64 matrix)
-        return adapt_like(B, delta(io, w)) * co, w
+    if Int(maxdim) >= dim(ins)                 # nothing to truncate: keep the basis intact
+        co = adapt_like(B, combiner(ins))      # the reshape isometry, on B's device/eltype (vector, not
+                                               # splat: keeps the graded dispatch)
+        return co, combinedind(co)
     end
-    Bc = B * co
-    ρ = Bc * prime(dag(Bc), io)
-    P, w = _ctm_eig_projector(ρ, io, k, opts)
-    return P * co, w
+    U, _, _ = svd(B, ins; trunc = _ctm_trunc(maxdim, opts; rtol = 0.0))
+    P = dag(U)                                 # conj: the seam's U is conj(V) for B viewed as (rest × ins)
+    return P, only(uniqueinds(P, ins))
 end
 
 # Grid geometry / lazy factors ----------------------------------------------------
@@ -597,8 +518,10 @@ end
 # its only isometry; the sweep stores `(P_A, P_B, w)`.
 _ctm_pA(d, k) = (p = _ctm_nn(d, k); isnothing(p) ? nothing : p[1])
 _ctm_pB(d, k) = (p = _ctm_nn(d, k); isnothing(p) ? nothing : p[2])
-# `dag(P_A)`, which is how the east/south blocks of the GREEDY pass consume a projector derived on
-# their west/north partner. (The sweep uses a genuine biorthogonal `P_B` instead.)
+# `dag(P_A)`, which is how a block at the OTHER end of an interface consumes a projector derived by
+# the block at the near end in the GREEDY pass — east/south corners and strips for a west/north
+# projector, and the next-row strip for a row strip's top projector. (The sweep uses a genuine
+# biorthogonal `P_B` instead.)
 _ctm_pAdag(d, k) = (p = _ctm_pA(d, k); isnothing(p) ? nothing : dag(p))
 
 function _ctm_factor_table(cache::CTMEnvironmentCache)
@@ -649,7 +572,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
     # absorption itself no longer pre-contracts `ket * bra`.
     for y in 1:Ly, x in 1:(Lx - 1)
         raw = _ctm_absorb(opts, _ctm_list(_ctm_nn(T, (:W, x, y)), _ctm_facs(tbl, x, y)),
-                          y > 1 ? _ctm_pA(PV, (:W, x + 1, y - 1)) : nothing)
+                          y > 1 ? _ctm_pAdag(PV, (:W, x + 1, y - 1)) : nothing)
         if y < Ly
             ins = Index[]
             w = _ctm_widx(PV, (:W, x, y)); !isnothing(w) && push!(ins, w)
@@ -665,7 +588,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
     # ---- E strips (x decreasing): derives PV[:E] ----
     for y in 1:Ly, x in Lx:-1:2
         raw = _ctm_absorb(opts, _ctm_list(_ctm_facs(tbl, x, y), _ctm_nn(T, (:E, x + 1, y))),
-                          y > 1 ? _ctm_pA(PV, (:E, x, y - 1)) : nothing)
+                          y > 1 ? _ctm_pAdag(PV, (:E, x, y - 1)) : nothing)
         if y < Ly
             ins = Index[]
             append!(ins, vl(x, y))
@@ -740,9 +663,7 @@ end
 # east/south one, so every contraction across the interface pairs one with the other.
 function _ctm_interface_proj2(Bw, Be, ins::Vector{<:Index}, maxdim::Integer, opts::CTMOptions)
     (isnothing(Bw) || isnothing(Be) || isempty(ins)) && return nothing
-    co = combiner(ins...); io = combinedind(co)
-    PA, PB, w = _ctm_twosided_projector_qr(Bw * co, Be * co, io, maxdim, opts)
-    return PA * co, PB * co, w
+    return _ctm_twosided_projector_qr(Bw, Be, ins, maxdim, opts)
 end
 
 
@@ -886,7 +807,7 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
         kres < 1 && return nothing
         VR[1] = BR; VL[1] = permutedims(BL)
     else
-        # `verbosity = 0` for the same reason as `_ctm_eigsolve`: `schursolve` stopping on a closed
+        # `verbosity = 0`: `schursolve` stopping on a closed
         # invariant subspace smaller than `kcyc` is ROUTINE here (the four-fold spectrum runs out
         # before the bond does), handled by `kres`/padding below — KrylovKit's per-call warning for
         # it buries real problems in noise.
@@ -1048,22 +969,21 @@ function _ctm_align(pr, ins, prev)
     (isnothing(prev) || length(prev) < 3) && return pr
     PA, PB, w = pr
     PAo, _, wo = prev
-    k = dim(w)
-    dim(wo) == k || return pr
+    dim(wo) == dim(w) || return pr
     issetequal(collect(inds(PAo)), vcat(collect(ins), [wo])) || return pr   # same raw space?
-    co = combiner(ins...); io = combinedind(co)
-    Am, Ao, Bm, R = try
-        a  = array(PA * co, io, w)
-        ao = array(PAo * co, io, wo)
-        b  = array(PB * co, w, io)
-        F  = svd(a' * ao)
-        a, ao, b, F.U * F.Vt                          # nearest unitary
+    R = try
+        M = dag(PA) * PAo                                # (w, wo) = P_A† P_A⁰ over the raw legs
+        U, S, V = svd(M, [w])
+        # nearest unitary U Vᴴ: the seam's `V` is already conj(V_true), so the product is bilinear;
+        # relabel V's bond to the copy opposite U's so the two contract on any backend.
+        uU = only(uniqueinds(U, [w]))
+        U * replaceind(V, only(uniqueinds(V, [wo])), dag(uU))
     catch err
         err isa InterruptException && rethrow()
-        return pr                                     # any other trouble: keep the unaligned pair
+        return pr                                        # any other trouble: keep the unaligned pair
     end
-    (all(isfinite, Am) && all(isfinite, Ao) && all(isfinite, Bm) && all(isfinite, R)) || return pr
-    return (from_array(Am * R, io, wo) * co, from_array(R' * Bm, wo, io) * co, wo)
+    all(isfinite, (norm(PA), norm(PAo), norm(PB), norm(R))) || return pr
+    return (PA * R, dag(R) * PB, wo)
 end
 
 # Largest relative change of any block between two states. `nothing` means NO DISTANCE EXISTS, not

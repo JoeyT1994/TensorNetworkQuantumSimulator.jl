@@ -693,8 +693,37 @@ and `⟨Z⟩`, heavy-hex and square, all agree to ~1e-15. Deterministic Ising ca
 Random-state numbers in the examples and tests DIFFER from the ones recorded in this file
 because the two backends draw random tensors from different streams — same statistics,
 different states. Two seed-specific assertions were rewritten to be state-independent
-(`window = 1` gain, cut-vs-cycle 2× win → median over seeds). Not yet ported: symmetric
-(`GradedTensor`) support — both projectors pull raw matrices and would densify.
+(`window = 1` gain, cut-vs-cycle 2× win → median over seeds).
+
+**`:cut` is now written in tensor verbs — no unwrapping (same day).** The two-sided projector is
+`qr` of each enlarged corner over its non-interface legs, a bilinear contraction of the two
+triangular factors, one `svd`, and a `map_diag` whitening; the greedy one-sided isometry is the
+left singular vectors of the block (no `ρ = B B†` squaring); the Procrustes gauge alignment is
+`svd(P_A† P_A⁰)`. The truncation rule (rank ≤ χ, `qr_cutoff` relative cutoff, `degtol`
+back-off) is a MatrixAlgebraKit truncation strategy (`truncation_strategy` on the seam,
+`RankGapTruncation` in the backend) applied INSIDE the truncated SVD, with a sector-merged
+implementation for graded spectra — so the identical code path is what will run on symmetric
+tensors; only the `:cycle` path still touches raw matrices. Verified on the identical-state dump:
+agreement with the ITensors reference to ~1e-12 (the one 1e-5-relative case is a truncated,
+tolerance-limited sweep). RETIRED with the matrix code: the `arnoldi`/`krylov_min` options and
+the dense top-k Krylov SVD (`_ctm_svd_topk`, 6–12× on n ≥ 288 blocks); the "Performance" notes
+on `krylov_min` below are historical. Bring it back as a dense-backend hook if the large-χ
+benchmark shows the loss.
+
+**`:cut` RUNS ON SYMMETRIC TENSORS (same day).** A Z2-conserving 4×4 state (product state + conserving
+circuit) and its dense twin give the SAME truncated CTMRG numbers: |ΔF| 4e-15 / 2e-14 and |Δ⟨Z⟩|
+1e-14 at D = 4, χ = 4 / 8; at D = 2 both are exact at lossless χ = 16 (F to 4e-15, ⟨Z⟩ to 2e-15).
+U(1): identical to dense at D = 2 (χ = 4 truncated, χ = 16 exact); at D = 4 the two runs follow
+DIFFERENT truncation paths (|ΔF| 8e-4 at χ = 4) because the double-layer corners carry exact
+cross-sector degeneracies (measured relative gaps 1e-15..1e-16, the ket↔bra pairs) that dense and
+sector-merged sorting break differently — both are valid CTMRG fixed points, and `degtol` is the
+knob that makes the two agree. Three things had to change in the seed pass for graded arrows: the
+one-sided isometry is `dag(U)` of `svd(B, ins)` (the RIGHT singular basis, which is also the
+arrow-compatible copy — the old `P = conj(V)` convention was only correct for real data), the
+block that derives `P` absorbs `P` and every block at the OTHER end of the interface absorbs
+`dag(P)` (the row strips absorbed `P` at both ends), and `combiner` now dispatches on index
+content like `delta`. Test: "CVM on graded (Z2-symmetric) tensors". `:cycle` on graded tensors
+remains TO DO (per-sector Krylov via charged start vectors; it still goes through `array`).
 
 ## What made `:cycle` work
 
