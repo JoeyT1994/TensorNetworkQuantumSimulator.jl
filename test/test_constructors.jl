@@ -1,5 +1,4 @@
 @eval module $(gensym())
-using DataGraphs: vertex_data
 using Dictionaries: Dictionary
 using ITensorBase: Index, inds
 using Random
@@ -58,7 +57,7 @@ using Test: @testset, @test, @test_throws
         ψ = random_tensornetworkstate(eltype, g, s; bond_dimension = χ)
         @test ψ isa TensorNetworkState
         @test scalartype(ψ) == eltype
-        @test vertex_data(siteinds(ψ)) == s
+        @test siteinds(ψ) == s
         @test graph(ψ) == g
         @test maxvirtualdim(ψ) == 3
         @test all([length(inds(ψ[v])) == degree(g, v) + 1 for v in vertices(ψ)])
