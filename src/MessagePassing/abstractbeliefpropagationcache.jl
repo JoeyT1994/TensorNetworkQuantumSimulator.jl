@@ -60,8 +60,8 @@ function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCa
     return bp_cache
 end
 
-function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex)
-    setindex_preserve!(network(bp_cache), value, vertex)
+function DataGraphs.set_vertex_data!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex)
+    set_vertex_data!(network(bp_cache), value, vertex)
     return bp_cache
 end
 
@@ -277,7 +277,7 @@ end
 function map_factors(f, bp_cache::AbstractBeliefPropagationCache, vs = vertices(bp_cache))
     bp_cache = copy(bp_cache)
     for v in vs
-        setindex_preserve!(bp_cache, f(network(bp_cache)[v]), v)
+        set_vertex_data!(bp_cache, f(network(bp_cache)[v]), v)
     end
     return bp_cache
 end

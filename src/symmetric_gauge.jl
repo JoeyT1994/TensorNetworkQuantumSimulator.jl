@@ -51,8 +51,8 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         new_edge_ind = Index[settags(only(v), tags(first(edge_ind)))]
         ψvsrc = replaceinds(ψvsrc, (v .=> new_edge_ind)...)
         ψvdst = replaceinds(ψvdst, (u .=> new_edge_ind)...)
-        setindex_preserve!(bp_cache, ψvsrc, vsrc)
-        setindex_preserve!(bp_cache, ψvdst, vdst)
+        set_vertex_data!(bp_cache, ψvsrc, vsrc)
+        set_vertex_data!(bp_cache, ψvdst, vdst)
 
         # The gauged network's messages are the singular values, with the unprimed leg
         # carrying the producing side's bond copy (the message convention).

@@ -33,7 +33,7 @@ function sample(
             set!(bit_string, v, config - 1)
             s_ind = inds(ρ)[findfirst(i -> plev(i) == 0, inds(ρ))]
             P = adapt_like(ρ, conj(onehot(s_ind => config)))
-            setindex_preserve!(projected_bp_cache, ψv * P, v)
+            set_vertex_data!(projected_bp_cache, ψv * P, v)
 
             if v != last(vertices(ψ))
                 projected_bp_cache = update(projected_bp_cache; bp_update_kwargs...)
@@ -252,7 +252,7 @@ function sample_partition!(
         q = ρ_diag[config]
         logq += log(q)
         Pψv = copy(network(norm_bmps_cache)[v]) * inv(sqrt(q)) * P
-        setindex_preserve!(norm_bmps_cache, Pψv, v)
+        set_vertex_data!(norm_bmps_cache, Pψv, v)
         prev_v = v
     end
 
@@ -277,7 +277,7 @@ function certify_sample(
     qv = sqrt(exp(inv(oftype(logq, length(vertices(ψ)))) * logq))
     for v in vertices(ψ)
         P = adapt_like(ψproj[v], conj(onehot(only(s[v]) => bitstring[v] + 1)))
-        setindex_preserve!(ψproj, ψproj[v] * P * inv(qv), v)
+        set_vertex_data!(ψproj, ψproj[v] * P * inv(qv), v)
     end
 
     certification_mps_cache = BoundaryMPSCache(ψproj, certification_mps_bond_dimension)

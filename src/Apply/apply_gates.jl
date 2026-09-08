@@ -136,7 +136,7 @@ function apply_gate!(
     end
 
     for (i, v) in enumerate(v⃗)
-        setindex_preserve!(ψ_bpc, updated_tensors[i], v)
+        set_vertex_data!(ψ_bpc, updated_tensors[i], v)
     end
 
     return ψ_bpc, err
