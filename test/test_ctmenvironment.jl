@@ -553,4 +553,45 @@ end
         @test err < bound
     end
 end
+
+@testset "CVM on graded (Z2-symmetric) tensors" begin
+    # The `:cut` engine is written in backend verbs, so a Z2-conserving state and its dense twin
+    # (same product state, same conserving circuit) must give the SAME truncated CTMRG numbers:
+    # the truncation rule runs over the merged spectrum of all sectors. Lossless χ is exact on both.
+    using TensorNetworkQuantumSimulator.Tensors: GradedTensor
+    function z2_state(symmetry; D)
+        Random.seed!(11)
+        g = named_grid((4, 4))
+        s = symmetry === nothing ? siteinds("S=1/2", g) : siteinds("S=1/2", g; symmetry)
+        ψ = tensornetworkstate(ComplexF64, v -> iseven(sum(v)) ? "↑" : "↓", g, s)
+        layer = Any[("Rz", [v], 0.4) for v in vertices(g)]
+        for ces in edge_color(g, 4)
+            append!(layer, ("Rxx", pair, 0.7) for pair in ces)
+            append!(layer, ("Rzz", pair, 0.2) for pair in ces)
+        end
+        ψ, _ = apply_gates(reduce(vcat, [layer for _ in 1:2]), ψ;
+                           apply_kwargs = (; maxdim = D, cutoff = 1.0e-14))
+        return ψ
+    end
+    ctm(ψ, χ) = (c = update(CTMEnvironmentCache(ψ, χ); maxiter = 40, tolerance = 1.0e-12);
+                 (cvm_freenergy(c), real(expect(c, ("Z", [(2, 2)])))))
+
+    ψd, ψg = z2_state(nothing; D = 2), z2_state("Z2"; D = 2)
+    @test ψg[(1, 1)] isa GradedTensor
+    lnN = log(abs(norm_sqr(ψd; alg = "exact")))
+    zx = real(expect(ψd, ("Z", [(2, 2)]); alg = "exact"))
+    @test log(abs(norm_sqr(ψg; alg = "exact"))) ≈ lnN atol = 1.0e-12          # same state
+    Fd, zd = ctm(ψd, 4); Fg, zg = ctm(ψg, 4)                                  # truncated: identical
+    @test Fg ≈ Fd atol = 1.0e-12
+    @test zg ≈ zd atol = 1.0e-12
+    Fg, zg = ctm(ψg, 16)                                                       # lossless: exact
+    @test Fg ≈ lnN atol = 1.0e-12
+    @test zg ≈ zx atol = 1.0e-12
+    # (A D = 4 double layer agrees the same way — 1e-14 at χ = 4 and 8 — but costs minutes on
+    # graded tensors, so it is not in the suite. U(1) states agree at D = 2 and are exact at
+    # lossless χ; at D = 4 their double-layer corners carry EXACT cross-sector degeneracies
+    # (relative gaps ~1e-15), so dense and sector-merged sorting break the ties differently and
+    # the two truncation paths legitimately diverge.)
+end
+
 end

@@ -83,7 +83,7 @@ for f in [
         # diagonal ops
         :map_diag, :map_diag!,
         # factorizations (beyond the LinearAlgebra generics)
-        :factorize_svd,
+        :factorize_svd, :truncation_strategy,
         # storage / type queries
         :datatype, :array, :data,
     ]

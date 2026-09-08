@@ -188,7 +188,18 @@ Base.sum(t::Tensor) = sum(t.data)
 TensorInterface.datatype(t::Tensor) = typeof(vec(t.data))
 TensorInterface.array(t::Tensor) = t.data
 #Permuted dense view: `array(t, is...)` lays the data out in the order of `is` (a copy only
-#when a permutation is needed).
+#when a permutation is needed). Generic fallback densifies via `array(t)`; `Tensor` permutes
+#its storage directly.
+function TensorInterface.array(t::AbstractTensor, is::Index...)
+    length(is) == length(t.inds) || error("array: expected $(length(t.inds)) indices, got $(length(is))")
+    perm = map(is) do i
+        k = findfirst(==(i), t.inds)
+        k === nothing && error("array: index $(i) not in tensor")
+        k
+    end
+    A = TensorInterface.array(t)
+    return perm == ntuple(identity, length(is)) ? A : permutedims(A, perm)
+end
 function TensorInterface.array(t::Tensor, is::Index...)
     length(is) == length(t.inds) || error("array: expected $(length(t.inds)) indices, got $(length(is))")
     perm = map(is) do i
@@ -291,6 +302,10 @@ TensorInterface.delta(is::Index...) = TensorInterface.delta(Float64, collect(is)
 # again splits back.
 function TensorInterface.combiner(is::AbstractVector{<:Index}; tags = "CMB,Link")
     isempty(is) && error("combiner: no indices to combine")
+    #Index vectors are often abstractly typed (`Index[]`), so the dense/graded split is decided
+    #by content, as for `delta`
+    all(i -> space(i) isa TK.GradedSpace, is) &&
+        return TensorInterface.combiner(collect(GradedIndex, is); tags)
     D = prod(TensorInterface.dim.(is))
     c = Index(D, String(tags))
     data = reshape(Matrix{Float64}(LinearAlgebra.I, D, D), (D, TensorInterface.dim.(is)...))
@@ -673,8 +688,43 @@ end
 #`A` is always a freshly matricized copy (see `_svd_split`), so the in-place
 #factorizations — which destroy their input — are safe and skip the copy the
 #non-mutating forms make (measured 6.5|A| -> 2.8|A| compact, 6.7|A| -> 4.7|A| truncated).
-function _svd_matrix(A::AbstractMatrix; maxdim = nothing, cutoff = nothing)
-    trunc = _mak_trunc(; maxdim, cutoff)
+# Rank / relative-cutoff / degeneracy truncation as a MatrixAlgebraKit strategy: keep at most
+# `maxdim` values, drop those at or below `rtol·s₁`, and back off rather than split a multiplet
+# whose gap is ≤ degtol·|s_k|. Living inside the truncated SVD means the same rule serves the
+# dense backend (sorted spectrum) and the graded one (spectrum of all sectors merged, so the
+# retained bond gets one count per sector). Used by the CTMRG projectors.
+struct RankGapTruncation <: MatrixAlgebraKit.TruncationStrategy
+    maxdim::Int
+    rtol::Float64
+    degtol::Float64
+end
+function TensorInterface.truncation_strategy(; maxdim::Integer, rtol::Real = 0.0, degtol::Real = 0.0)
+    return RankGapTruncation(Int(maxdim), Float64(rtol), Float64(degtol))
+end
+
+# How many leading entries of the DESCENDING magnitude list `s` the rule keeps.
+function _rankgap_count(s::AbstractVector{<:Real}, st::RankGapTruncation)
+    n = length(s)
+    k = min(st.maxdim, n)
+    while k > 1 && s[k] ≤ st.rtol * s[1]
+        k -= 1
+    end
+    while k > 1 && k < n && abs(s[k] - s[k + 1]) ≤ st.degtol * abs(s[k])
+        k -= 1
+    end
+    return k
+end
+function MatrixAlgebraKit.findtruncated(values::AbstractVector, st::RankGapTruncation)
+    vals = Array(values)                     # O(k) scalar decision on the host
+    perm = sortperm(vals; by = abs, rev = true)
+    return perm[1:_rankgap_count(abs.(vals[perm]), st)]
+end
+function MatrixAlgebraKit.findtruncated_svd(values::AbstractVector, st::RankGapTruncation)
+    return MatrixAlgebraKit.findtruncated(values, st)
+end
+
+function _svd_matrix(A::AbstractMatrix; maxdim = nothing, cutoff = nothing, trunc = nothing)
+    trunc === nothing && (trunc = _mak_trunc(; maxdim, cutoff))
     if trunc === nothing
         m, n = size(A)
         k = min(m, n)
@@ -693,9 +743,9 @@ function _svd_matrix(A::AbstractMatrix; maxdim = nothing, cutoff = nothing)
     return U, diag(S), Vt, truncerr
 end
 
-function _svd_split(t::Tensor, linds::Vector{<:Index}; maxdim = nothing, cutoff = nothing)
+function _svd_split(t::Tensor, linds::Vector{<:Index}; maxdim = nothing, cutoff = nothing, trunc = nothing)
     A, li, ri = _matricize(t, linds)
-    U, S, Vt, truncerr = _svd_matrix(A; maxdim, cutoff)
+    U, S, Vt, truncerr = _svd_matrix(A; maxdim, cutoff, trunc)
     return U, S, Vt, li, ri, truncerr
 end
 
@@ -766,9 +816,10 @@ function LinearAlgebra.factorize(
     return L, R
 end
 
-# svd: U(linds, u), S(u, v), V(rinds, v).
-function LinearAlgebra.svd(t::Tensor, linds; maxdim = nothing, cutoff = nothing, kwargs...)
-    U, S, Vt, li, ri, _ = _svd_split(t, _present_inds(t, linds); maxdim, cutoff)
+# svd: U(linds, u), S(u, v), V(rinds, v). `trunc` (a truncation strategy, see
+# `truncation_strategy`) overrides `maxdim`/`cutoff`.
+function LinearAlgebra.svd(t::Tensor, linds; maxdim = nothing, cutoff = nothing, trunc = nothing, kwargs...)
+    U, S, Vt, li, ri, _ = _svd_split(t, _present_inds(t, linds); maxdim, cutoff, trunc)
     k = length(S)
     u = Index(k, "Link,u")
     v = Index(k, "Link,v")
