@@ -80,6 +80,14 @@ if HAS_JLARRAYS
 
     @testset "GPU paths (JLArray, allowscalar(false))" begin
         allowscalar(false)
+        #Diagonal transforms must not rely on scalar indexing. In particular, preserve
+        #off-diagonal zeros even for functions where f(0) != 0.
+        i = TNQS.new_index(4)
+        d_cpu = TNQS.from_array(Matrix{Float32}(LinearAlgebra.I, 4, 4), TNQS.prime(i), i)
+        d_gpu = adapt(JLArray, d_cpu)
+        d_shifted = TNQS.map_diag(x -> x + 2, d_gpu)
+        @test Array(TNQS.data(d_shifted)) == 3 .* Matrix{Float32}(LinearAlgebra.I, 4, 4)
+
         g = named_grid((4, 4))
         ψ = tensornetworkstate(ComplexF32, v -> iseven(sum(v)) ? "↑" : "↓", g, siteinds("S=1/2", g))
         layer = Any[("Rz", [v], 0.4) for v in vertices(g)]
