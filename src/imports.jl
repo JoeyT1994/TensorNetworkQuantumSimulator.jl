@@ -52,7 +52,7 @@ import Base: truncate
 using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe, sqrth_safe
 using MatrixAlgebraKit: project_hermitian
 
-using DataGraphs: DataGraphs, EdgeDataDiGraph, underlying_graph_type
+using DataGraphs: DataGraphs, AbstractEdgeDataGraph, underlying_graph_type
 using ITensorNetworksNext: ITensorNetworksNext, AbstractITensorNetwork, ITensorNetwork, linkinds
 
 using Adapt: adapt

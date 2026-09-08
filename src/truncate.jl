@@ -34,7 +34,7 @@ function truncate(bpc::BeliefPropagationCache; bp_update_kwargs = default_bp_upd
             bpc = update(bpc; bp_update_kwargs...)
         end
     else
-        for e in edges(bpc)
+        for e in edges(graph(bpc))
             g1, g2 = reduce(*, [Ops.op("I", sv) for sv in s[src(e)]]), reduce(*, [Ops.op("I", sv) for sv in s[dst(e)]])
             apply_gate!(adapt(dtype)(g1 * g2), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
             bpc = update(bpc; bp_update_kwargs...)
