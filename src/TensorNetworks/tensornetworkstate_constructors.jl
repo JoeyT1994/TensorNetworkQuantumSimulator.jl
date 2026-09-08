@@ -3,11 +3,11 @@
 
 Tensor network for vacuum state on given graph, i.e all spins up
 """
-function zerostate(eltype, g::NamedGraph, s::Dictionary = siteinds("S=1/2", g))
+function zerostate(eltype, g::NamedGraph, s = siteinds("S=1/2", g))
     return tensornetworkstate(eltype, v -> "↑", g, s)
 end
 
-zerostate(g::NamedGraph, s::Dictionary = siteinds("S=1/2", g)) = zerostate(Float64, g, s)
+zerostate(g::NamedGraph, s = siteinds("S=1/2", g)) = zerostate(Float64, g, s)
 
 """
     identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2))
@@ -18,7 +18,7 @@ It expects an even number `n` of physical indices on each vertex, with the
 first half being the "ket" indices and the second half the "bra" indices; index `i` is paired with
 index `n/2 + i`.
 """
-function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2))
+function identity_tensornetworkstate(eltype, g::NamedGraph, s = siteinds("S=1/2", g; inds_per_site = 2))
     links = Dictionary(edges(g), [Index(1; tags = "e" => "$(src(e))_$(dst(e))") for e in edges(g)])
     links = merge(links, Dictionary(reverse.(edges(g)), [links[e] for e in edges(g)]))
 
@@ -38,7 +38,7 @@ function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = site
     return TensorNetworkState(TensorNetwork(ts), s)
 end
 
-identity_tensornetworkstate(g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2)) = identity_tensornetworkstate(Float64, g, s)
+identity_tensornetworkstate(g::NamedGraph, s = siteinds("S=1/2", g; inds_per_site = 2)) = identity_tensornetworkstate(Float64, g, s)
 
 """
     toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n, n); periodic = true)))
@@ -57,7 +57,7 @@ of a periodic `n × n` named grid.
 
 Returns a [`TensorNetworkState`](@ref) of bond dimension 2.
 """
-function toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n,n); periodic = true)))
+function toriccode_groundstate(n::Int, s = siteinds("S=1/2", named_grid((n,n); periodic = true)))
     g = named_grid((n,n); periodic = true)
     vs = collect(vertices(g))
     tensors = Dictionary{vertextype(g), ITensor}()

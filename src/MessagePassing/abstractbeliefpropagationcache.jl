@@ -6,7 +6,11 @@ abstract type AbstractBeliefPropagationCache{V} <: AbstractNamedGraph{V} end
 #Interface
 messages(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 contraction_sequences(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
-default_messages() = Dictionary{NamedEdge, Union{ITensor, Vector{ITensor}}}()
+function default_messages(tn)
+    return EdgeDataDiGraph{Union{ITensor, Vector{ITensor}}, vertextype(tn)}(
+        undef, collect(vertices(tn))
+    )
+end
 
 function rescale_messages!(
         bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge}; kwargs...

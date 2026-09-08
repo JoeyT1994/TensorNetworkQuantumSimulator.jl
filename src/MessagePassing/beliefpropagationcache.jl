@@ -7,7 +7,7 @@ using LinearAlgebra: normalize
 struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{<:Any, V}, M <: Union{ITensor, Vector{ITensor}}} <:
     AbstractBeliefPropagationCache{V}
     network::N
-    messages::Dictionary{NamedEdge, M}
+    messages::EdgeDataDiGraph{M, V}
     contraction_sequences::Dictionary{Pair, Vector}
     edge_sequence::Vector
 end
@@ -26,7 +26,7 @@ function BeliefPropagationCache(network, messages, contraction_sequences)
     return BeliefPropagationCache(network, messages, contraction_sequences, forest_cover_edge_sequence(graph(network)))
 end
 BeliefPropagationCache(network, messages) = BeliefPropagationCache(network, messages, Dictionary{Pair, Vector}())
-BeliefPropagationCache(network) = BeliefPropagationCache(network, default_messages())
+BeliefPropagationCache(network) = BeliefPropagationCache(network, default_messages(network))
 
 contraction_sequences(bp_cache::BeliefPropagationCache) = bp_cache.contraction_sequences
 
