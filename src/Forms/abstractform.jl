@@ -19,6 +19,15 @@ for f in [
     end
 end
 
+function DataGraphs.get_vertex_data(form::AbstractForm, v)
+    return lazy(ket(form)[v]) * lazy(operator(form)[v]) * lazy(bra_tensor(form, v))
+end
+DataGraphs.is_vertex_assigned(form::AbstractForm, v) = has_vertex(graph(form), v)
+Base.eltype(::Type{<:AbstractForm}) = LazyNamedTensor{dimnametype(ITensor), ITensor}
+
+Dictionaries.issettable(::AbstractForm) = false
+Dictionaries.isinsertable(::AbstractForm) = false
+
 function virtualinds(form::AbstractForm, edge::NamedEdge)
     return Index[virtualinds(ket(form), edge); virtualinds(operator(form), edge); bra_virtualinds(form, edge)]
 end
