@@ -18,6 +18,7 @@ include("Forms/quadraticform.jl")
 include("MessagePassing/abstractbeliefpropagationcache.jl")
 include("MessagePassing/beliefpropagationcache.jl")
 include("MessagePassing/boundarympscache.jl")
+include("MessagePassing/ctmenvironmentcache.jl")
 include("MessagePassing/loopcorrection.jl")
 include("graph_ops.jl")
 include("utils.jl")
@@ -87,6 +88,15 @@ export
     datatype,
     scalartype,
     BoundaryMPSCache,
+    CTMEnvironmentCache,
+    CTMOptions,
+    cvm_freenergy,
+    marginal_inconsistency,
+    region_lnZ,
+    environments,
+    vertex_environments,
+    vertex_ring,
+    vertex_window,
     TensorNetwork,
     AbstractTensorNetwork,
     partitionfunction,

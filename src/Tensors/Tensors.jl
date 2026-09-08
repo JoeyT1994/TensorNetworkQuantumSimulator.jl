@@ -118,6 +118,11 @@ function TensorInterface.inds(t::AbstractTensor; plev = nothing)
 end
 TensorInterface.scalartype(t::AbstractTensor) = eltype(t)
 TensorInterface.prime(t::AbstractTensor, n::Integer = 1) = _mapinds(i -> TensorInterface.prime(i, n), t)
+#Prime only the listed indices (the ITensors `prime(t, inds...)` convention).
+TensorInterface.prime(t::AbstractTensor, is::Index...) = TensorInterface.prime(t, 1, is...)
+function TensorInterface.prime(t::AbstractTensor, n::Integer, is::Index...)
+    return _mapinds(i -> i ∈ is ? TensorInterface.prime(i, n) : i, t)
+end
 TensorInterface.noprime(t::AbstractTensor) = _mapinds(TensorInterface.noprime, t)
 TensorInterface.sim(t::AbstractTensor) = _mapinds(TensorInterface.sim, t)
 TensorInterface.replaceind(t::AbstractTensor, old::Index, new::Index) = TensorInterface.replaceinds(t, [old], [new])
@@ -180,6 +185,17 @@ Base.sum(t::Tensor) = sum(t.data)
 
 TensorInterface.datatype(t::Tensor) = typeof(vec(t.data))
 TensorInterface.array(t::Tensor) = t.data
+#Permuted dense view: `array(t, is...)` lays the data out in the order of `is` (a copy only
+#when a permutation is needed).
+function TensorInterface.array(t::Tensor, is::Index...)
+    length(is) == length(t.inds) || error("array: expected $(length(t.inds)) indices, got $(length(is))")
+    perm = map(is) do i
+        k = findfirst(==(i), t.inds)
+        k === nothing && error("array: index $(i) not in tensor")
+        k
+    end
+    return perm == ntuple(identity, length(is)) ? t.data : permutedims(t.data, perm)
+end
 TensorInterface.data(t::Tensor) = vec(t.data)
 TensorInterface.new_index(t::Tensor, d::Integer; tags = "") = Index(d, tags)
 

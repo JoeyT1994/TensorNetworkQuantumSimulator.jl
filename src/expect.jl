@@ -39,7 +39,7 @@ end
 Compute the expectation value of one or more observables on a tensor network state.
 
 # Arguments
-- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}`: The tensor network state or cache wrapping the state to measure the observable(s) on.
+- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMEnvironmentCache}`: The tensor network state or cache wrapping the state to measure the observable(s) on.
 - `observable::Union{Tuple, Vector{<:Tuple}}`: The observable(s) to measure. Should be a tuple or vector of tuples of the form `(ops, vertices, coeff=1)`.
 
 # Keyword Arguments
@@ -47,12 +47,18 @@ Compute the expectation value of one or more observables on a tensor network sta
     - `"exact"`: Exact contraction of the tensor network.
     - `"bp"`: Belief propagation approximation.
     - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
+    - `"ctmrg"`: Finite CTMRG / CVM environments (requires `maxdim`; single-site observables only).
+      When given a `TensorNetworkState` with `ctm_options = (; projector = :cycle)`, the internal
+      `update` defaults to `convergence = :worst_region` so the observable is read off stationary
+      messages (the free energy alone converges a few sweeps sooner); override with
+      `cache_update_kwargs = (; convergence = :free_energy)`. `:cut` keeps its own
+      observable-tight criterion.
 - `cache_update_kwargs...`: Keyword arguments passed to the `update` function when using `"bp"` or `"boundarymps"` algorithms.
 
 # Returns
 - A single number if measuring one observable, or a vector of numbers if measuring multiple observables.
 """
-function expect(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, observable; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
+function expect(ψ::ContractableNetwork, observable; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "expect", alg)
     return expect(Algorithm(alg), ψ, observable; kwargs...)
 end
@@ -138,6 +144,76 @@ function expect(
     ψ_bpc = converged_cache(alg, ψ; cache_update_kwargs)
 
     return expect(alg, ψ_bpc, observable; kwargs...)
+end
+
+# CTMRG: the observable's vertex is enclosed by its own 4C+4T ring, which IS its environment
+# (`vertex_ring`), so this is the same shape as the BP branch with the ring in place of the
+# incoming messages. Single-site only for now: the ring surrounds exactly one vertex, and the
+# CVM edge/plaquette regions are the region-graph OVERLAPS, which contain no vertex at all —
+# a two-site observable needs a genuine two-vertex region that does not exist yet.
+function _ctm_expect(cache::CTMEnvironmentCache, obs::Tuple, window::Integer, denoms)
+    op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
+    iszero(coeff) && return zero(coeff)
+    length(obs_vs) == 1 ||
+        error("alg=\"ctmrg\" supports single-site observables only; got $(length(obs_vs)) " *
+              "vertices $(obs_vs). The 4C+4T ring encloses one vertex.")
+    v = only(obs_vs)
+    env_ts = vertex_window(cache, v, window)   # `window > 0` keeps more of the lattice exact
+
+    function contract_region(op_string_f)
+        tensors = norm_factors(network(cache), [v]; op_strings = op_string_f)
+        append!(tensors, env_ts)
+        # cached sequence + tensor-count gate, using the cache's own options
+        return scalar(_ctm_contract(tensors, options(cache)))
+    end
+
+    # The denominator is the identity ring — a property of the VERTEX, not the observable — so a
+    # vector of observables shares it via `denoms` (`window` is fixed across one vector call).
+    denom = isnothing(denoms) ? contract_region(v -> "I") :
+            get!(() -> contract_region(v -> "I"), denoms, v)
+    numer = contract_region(op_string_function(op_strings, obs_vs))
+    return coeff * numer / denom
+end
+
+function expect(
+        alg::Algorithm"ctmrg",
+        cache::CTMEnvironmentCache,
+        obs::Tuple;
+        window::Integer = 0,
+    )
+    return _ctm_expect(cache, obs, window, nothing)
+end
+
+function expect(
+        alg::Algorithm"ctmrg",
+        cache::CTMEnvironmentCache,
+        observables::Vector{<:Tuple};
+        window::Integer = 0,
+    )
+    denoms = Dict{Any, Any}()   # per-vertex identity-ring contractions, shared across the vector
+    return map(obs -> _ctm_expect(cache, obs, window, denoms), observables)
+end
+
+function expect(
+        alg::Algorithm"ctmrg",
+        ψ::TensorNetworkState,
+        observable::Union{Tuple, Vector{<:Tuple}};
+        maxdim::Integer,
+        cache_update_kwargs = (;),
+        ctm_options = (;),          # `CTMOptions` fields, e.g. `(degtol = 1e-9,)`
+        kwargs...,
+    )
+    # Observables need the messages actually stationary. For `:cycle` that is
+    # `convergence = :worst_region`: `update`'s `:free_energy` default stops once F settles, and F
+    # settles a few sweeps BEFORE a boundary-lagged single-site observable does (see `update`). For
+    # `:cut` the default statedist pair is already observable-tight, and the worst-region signal
+    # over-warns there (measured: lossless heavy-hex `:cut` floors at ~8e-6 while `⟨Z⟩` is exact to
+    # 1e-17) — so inject only for `:cycle`. Overridable either way through `cache_update_kwargs`.
+    if get(ctm_options, :projector, :cut) === :cycle
+        cache_update_kwargs = merge((; convergence = :worst_region), cache_update_kwargs)
+    end
+    cache = update(CTMEnvironmentCache(ψ, maxdim; ctm_options...); cache_update_kwargs...)
+    return expect(alg, cache, observable; kwargs...)
 end
 
 function expect(
