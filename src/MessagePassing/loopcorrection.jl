@@ -93,9 +93,9 @@ end
 function weight(bpc::BeliefPropagationCache, eg)
     vs = collect(vertices(eg))
     es = collect(edges(eg))
+    bes = boundary_edges(bpc, es)
     bpc, antiprojectors, aux = sim_edgeinduced_subgraph(bpc, eg)
-    incoming_ms =
-        ITensor[message(bpc, e) for e in boundary_edges(bpc, es)]
+    incoming_ms = ITensor[message(bpc, e) for e in bes]
     local_tensors = if isnothing(aux)
         collect(Iterators.flatten(bp_factors(bpc, v) for v in vs))
     else

@@ -4,7 +4,7 @@ using NamedGraphs: default_root_vertex, forest_cover, post_order_dfs_edges, fore
 using LinearAlgebra: normalize
 
 #TODO: Make this show() nicely.
-struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Vector{ITensor}}} <:
+struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{<:Any, V}, M <: Union{ITensor, Vector{ITensor}}} <:
     AbstractBeliefPropagationCache{V}
     network::N
     messages::Dictionary{NamedEdge, M}

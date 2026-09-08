@@ -4,7 +4,7 @@ using NamedGraphs: add_edges!, forest_cover_edge_sequence, all_edges
 using SplitApplyCombine: group
 
 #TODO: Make this show() nicely.
-struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Vector{<:ITensor}}} <: AbstractBeliefPropagationCache{V}
+struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{<:Any, V}, M <: Union{ITensor, Vector{<:ITensor}}} <: AbstractBeliefPropagationCache{V}
     network::N
     messages::Dictionary{NamedEdge, M}
     supergraph::PartitionedGraph

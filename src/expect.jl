@@ -63,7 +63,7 @@ function expect(
     op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
     iszero(coeff) && return zero(coeff)
 
-    steiner_vs = length(obs_vs) == 1 ? obs_vs : collect(vertices(steiner_tree(network(cache), obs_vs)))
+    steiner_vs = length(obs_vs) == 1 ? obs_vs : collect(vertices(steiner_tree(graph(cache), obs_vs)))
     incoming_ms = incoming_messages(cache, steiner_vs)
 
     #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow

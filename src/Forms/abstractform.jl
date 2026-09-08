@@ -2,11 +2,12 @@
 # or derived from the ket). Concrete subtypes must define `ket`, `operator`, and the
 # per-vertex / per-edge dual accessors `bra_tensor` and `bra_virtualinds`. A whole-network
 # `bra` is optional: `QuadraticForm` derives its bra lazily and does not provide one.
-abstract type AbstractForm{V} <: AbstractTensorNetwork{V} end
+abstract type AbstractForm{V} <: AbstractTensorNetwork{ITensor, V} end
 
 #Forward onto the ket
 for f in [
         :(graph),
+        :(DataGraphs.underlying_graph),
         :(datatype),
         :(VectorInterface.scalartype),
         :(NamedGraphs.leafless_edge_induced_subgraphs),

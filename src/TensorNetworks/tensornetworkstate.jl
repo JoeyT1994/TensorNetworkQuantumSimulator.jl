@@ -1,15 +1,15 @@
-
 """
-    TensorNetworkState{V} <: AbstractTensorNetwork{V}
+    TensorNetworkState{T, V, I} <: AbstractTensorNetwork{T, V}
 
-A tensor network state defined on a graph with vertices of type `V`. Wraps a `TensorNetwork` together with a dictionary of site indices (physical degrees of freedom) at each vertex.
+A tensor network state defined on a graph with vertices of type `V`. Wraps a `TensorNetwork`
+together with a dictionary of site indices (physical degrees of freedom) at each vertex.
 
 # Fields
-- `tensornetwork::TensorNetwork{V}`: The underlying tensor network.
+- `tensornetwork::TensorNetwork{T, V, I}`: The underlying tensor network.
 - `siteinds::Dictionary{V, Vector{<:Index}}`: A dictionary mapping each vertex to its physical (site) indices.
 """
-struct TensorNetworkState{V} <: AbstractTensorNetwork{V}
-    tensornetwork::TensorNetwork{V}
+struct TensorNetworkState{T, V, I} <: AbstractTensorNetwork{T, V}
+    tensornetwork::TensorNetwork{T, V, I}
     siteinds::Dictionary{V, Vector{<:Index}}
 end
 
@@ -18,30 +18,30 @@ siteinds(tns::TensorNetworkState) = tns.siteinds
 graph(tns::TensorNetworkState) = graph(tensornetwork(tns))
 tensors(tns::TensorNetworkState) = tensors(tensornetwork(tns))
 
+DataGraphs.underlying_graph(tns::TensorNetworkState) = graph(tns)
+function DataGraphs.underlying_graph_type(type::Type{<:TensorNetworkState})
+    return underlying_graph_type(fieldtype(type, :tensornetwork))
+end
+DataGraphs.get_vertex_data(tns::TensorNetworkState, v) = tensornetwork(tns)[v]
+DataGraphs.is_vertex_assigned(tns::TensorNetworkState, v) = isassigned(tensornetwork(tns), v)
+DataGraphs.is_edge_assigned(::TensorNetworkState, _edge) = false
+function DataGraphs.set_vertex_data!(tns::TensorNetworkState, value, v)
+    set_vertex_data!(tensornetwork(tns), value, v)
+    return tns
+end
+
 Base.copy(tns::TensorNetworkState) = TensorNetworkState(copy(tensornetwork(tns)), copy(siteinds(tns)))
 
 TensorNetworkState(tn::TensorNetwork) = TensorNetworkState(tn, siteinds(tn))
 # Widen a concretely-typed site-index dictionary to the field type.
-function TensorNetworkState(tn::TensorNetwork{V}, sinds::Dictionary) where {V}
+function TensorNetworkState(tn::TensorNetwork{T, V, I}, sinds::Dictionary) where {T, V, I}
     s = Dictionary{V, Vector{<:Index}}()
     for v in keys(sinds)
         set!(s, v, sinds[v])
     end
-    return TensorNetworkState(tn, s)
+    return TensorNetworkState{T, V, I}(tn, s)
 end
-TensorNetworkState(tensors::Dictionary, g::NamedGraph) = TensorNetworkState(TensorNetwork(tensors, g))
 TensorNetworkState(tensors::Union{Dictionary, Vector{<:ITensor}}) = TensorNetworkState(TensorNetwork(tensors))
-
-#Forward onto the tn
-for f in [
-        :(Base.getindex),
-    ]
-    @eval begin
-        function $f(tns::TensorNetworkState, args...; kwargs...)
-            return $f(tensornetwork(tns), args...; kwargs...)
-        end
-    end
-end
 
 siteinds(tns::TensorNetworkState, v) = siteinds(tns)[v]
 
@@ -117,15 +117,14 @@ Generate a random `TensorNetworkState` on graph `g` with local state indices giv
 - A `TensorNetworkState` representing the random tensor network state.
 """
 function random_tensornetworkstate(eltype, g::AbstractGraph, siteinds::Dictionary = default_siteinds(g); bond_dimension::Integer = 1)
-    vs = collect(vertices(g))
     l = Dict(e => Index(bond_dimension) for e in edges(g))
     l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
     tensors = Dictionary{vertextype(g), ITensor}()
-    for v in vs
+    for v in vertices(g)
         is = vcat(siteinds[v], [l[NamedEdge(v => vn)] for vn in neighbors(g, v)])
         set!(tensors, v, randn(eltype, is...))
     end
-    return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
+    return TensorNetworkState(TensorNetwork(tensors), siteinds)
 end
 
 """
@@ -165,14 +164,11 @@ The local states can be given as strings (e.g. `"↑"`, `"↓"`, `"0"`, `"1"`) o
 - A `TensorNetworkState` representing the constructed tensor network state.
 """
 function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dictionary = default_siteinds(g))
-    vs = collect(vertices(g))
     tensors = Dictionary{vertextype(g), ITensor}()
-    for v in vs
+    for v in vertices(g)
         tnv = f(v)
-        if tnv isa String
-            set!(tensors, v, adapt_scalartype(eltype)(Ops.state(f(v), only(siteinds[v]))))
-        elseif tnv isa Vector{<:Number}
-            set!(tensors, v, adapt_scalartype(eltype)(Ops.state(f(v), only(siteinds[v]))))
+        if tnv isa String || tnv isa Vector{<:Number}
+            set!(tensors, v, adapt_scalartype(eltype)(Ops.state(tnv, only(siteinds[v]))))
         else
             error("Unrecognized local state constructor. Currently supported: Strings and Vectors.")
         end
@@ -187,7 +183,7 @@ function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dic
         tensors[src(e)] *= x
         tensors[dst(e)] *= conj(x)
     end
-    return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
+    return TensorNetworkState(TensorNetwork(tensors), siteinds)
 end
 
 """

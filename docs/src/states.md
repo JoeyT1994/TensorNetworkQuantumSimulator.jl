@@ -145,7 +145,7 @@ virtualinds(tn, e)    # Indices connecting the tensors at tn[src(e)], tn[dst(e)]
 is_tree(tn)           # Is the effective graph a tree? If yes, stick to BP exclusively as the contraction backend.
 
 # Internal, not exported — import explicitly as TensorNetworkQuantumSimulator.setindex_preserve!
-setindex_preserve!(tn, t, v) # Set the tensor at vertex v to t. Assumes graph structure unchanged
+setindex_preserve!(tn, t, v) # Set the tensor at vertex v to t, without refreshing a state's site indices
 ```
 
 Additionally, `TensorNetworkState` provides:

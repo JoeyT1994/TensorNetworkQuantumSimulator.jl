@@ -49,7 +49,7 @@ function reduced_density_matrix(
         vs::Vector;
         normalize = true
     )
-    steiner_vs = length(vs) == 1 ? vs : collect(vertices(steiner_tree(network(cache), vs)))
+    steiner_vs = length(vs) == 1 ? vs : collect(vertices(steiner_tree(graph(cache), vs)))
     incoming_ms = incoming_messages(cache, steiner_vs)
 
     op_string_f = v -> v ∈ vs ? "ρ" : "I"
