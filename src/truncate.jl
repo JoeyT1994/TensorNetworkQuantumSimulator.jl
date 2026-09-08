@@ -63,8 +63,8 @@ function truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff = nothin
                     ρv1 = normalize(ρv1)
                     ρv2 = normalize(ρv2)
                 end
-                set_vertex_data!(bmps_cache, ρv1, src(e))
-                set_vertex_data!(bmps_cache, ρv2, dst(e))
+                network(bmps_cache)[src(e)] = ρv1
+                network(bmps_cache)[dst(e)] = ρv2
             end
             update_partition!(bmps_cache, [e])
         end

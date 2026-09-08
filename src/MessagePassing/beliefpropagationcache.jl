@@ -83,9 +83,9 @@ function rescale_vertices!(
         vn = vertex_scalar(bpc, v)
         s = isreal(vn) ? sign(vn) : one(vn)
         if tn isa TensorNetworkState
-            set_vertex_data!(tn, tn[v] * s * inv(sqrt(vn)), v)
+            tn[v] = tn[v] * s * inv(sqrt(vn))
         elseif tn isa TensorNetwork
-            set_vertex_data!(tn, tn[v] * s * inv(vn), v)
+            tn[v] = tn[v] * s * inv(vn)
         else
             error("Don't know how to rescale the vertices of this type")
         end

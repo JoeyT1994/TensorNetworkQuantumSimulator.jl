@@ -48,7 +48,7 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
                 t_ind = only(t_inds)
                 t_ind_pos = findfirst(==(t_ind), linds)
                 t = replaceinds(t, t_ind => linds_sim[t_ind_pos])
-                set_vertex_data!(bpc, t, src(e))
+                network(bpc)[src(e)] = t
             end
             push!(updated_es, e)
 

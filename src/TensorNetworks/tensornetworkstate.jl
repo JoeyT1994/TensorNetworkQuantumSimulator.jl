@@ -26,7 +26,7 @@ DataGraphs.get_vertex_data(tns::TensorNetworkState, v) = tensornetwork(tns)[v]
 DataGraphs.is_vertex_assigned(tns::TensorNetworkState, v) = isassigned(tensornetwork(tns), v)
 DataGraphs.is_edge_assigned(::TensorNetworkState, _edge) = false
 function DataGraphs.set_vertex_data!(tns::TensorNetworkState, value, v)
-    set_vertex_data!(tensornetwork(tns), value, v)
+    tensornetwork(tns)[v] = value
     return tns
 end
 
@@ -44,15 +44,6 @@ end
 TensorNetworkState(tensors::Union{Dictionary, Vector{<:ITensor}}) = TensorNetworkState(TensorNetwork(tensors))
 
 siteinds(tns::TensorNetworkState, v) = siteinds(tns)[v]
-
-function Base.setindex!(tns::TensorNetworkState, value::ITensor, v)
-    setindex!(tensornetwork(tns), value, v)
-    sinds = siteinds(tns)
-    for vn in vcat(neighbors(tns, v), [v])
-        set!(sinds, vn, uniqueinds(tns, vn))
-    end
-    return tns
-end
 
 # Bra copy of a tensor: `conj` and prime all legs except `auxinds` — dangling
 # non-physical legs (e.g. a charged state's charge leg), which always pair directly

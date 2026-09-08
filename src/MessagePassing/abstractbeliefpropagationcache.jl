@@ -60,11 +60,6 @@ function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCa
     return bp_cache
 end
 
-function DataGraphs.set_vertex_data!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex)
-    set_vertex_data!(network(bp_cache), value, vertex)
-    return bp_cache
-end
-
 #Forward onto the graph
 for f in [
         :(NamedGraphs.edgetype),
@@ -277,7 +272,7 @@ end
 function map_factors(f, bp_cache::AbstractBeliefPropagationCache, vs = vertices(bp_cache))
     bp_cache = copy(bp_cache)
     for v in vs
-        set_vertex_data!(bp_cache, f(network(bp_cache)[v]), v)
+        network(bp_cache)[v] = f(network(bp_cache)[v])
     end
     return bp_cache
 end

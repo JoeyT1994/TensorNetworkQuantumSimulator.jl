@@ -39,7 +39,7 @@ end
 
 function map_tensors!(f::Function, tn::AbstractTensorNetwork)
     for v in vertices(tn)
-        set_vertex_data!(tn, f(tn[v]), v)
+        tn[v] = f(tn[v])
     end
     return tn
 end
@@ -57,8 +57,8 @@ function map_virtualinds!(f::Function, tn::AbstractTensorNetwork)
     for e in edges(tn)
         vinds = virtualinds(tn, e)
         vinds_sim = f.(vinds)
-        set_vertex_data!(tn, replaceinds(tn[src(e)], (vinds .=> vinds_sim)...), src(e))
-        set_vertex_data!(tn, replaceinds(tn[dst(e)], (vinds .=> vinds_sim)...), dst(e))
+        tn[src(e)] = replaceinds(tn[src(e)], (vinds .=> vinds_sim)...)
+        tn[dst(e)] = replaceinds(tn[dst(e)], (vinds .=> vinds_sim)...)
     end
     return tn
 end
@@ -99,12 +99,10 @@ function add(tn1::AbstractTensorNetwork, tn2::AbstractTensorNetwork)
         tn2v_linkinds = Index[only(virtualinds(tn2, e)) for e in es_v]
         tn12v_linkinds = Index[new_edge_indices[e] for e in es_v]
 
-        set_vertex_data!(
-            tn12, directsum(
-                tn12v_linkinds,
-                tn1[v] => Tuple(tn1v_linkinds),
-                tn2[v] => Tuple(tn2v_linkinds)
-            ), v
+        tn12[v] = directsum(
+            tn12v_linkinds,
+            tn1[v] => Tuple(tn1v_linkinds),
+            tn2[v] => Tuple(tn2v_linkinds)
         )
     end
 

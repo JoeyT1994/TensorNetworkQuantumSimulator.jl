@@ -138,14 +138,12 @@ vertices(tn)          # all vertices
 neighbors(tn, v)      # neighboring vertices of v
 edges(tn)             # all edges
 tn[v]                 # directly access the ITensor at vertex v
+tn[v] = t             # set the ITensor at vertex v (a state's site indices are left as they are)
 maxvirtualdim(tn)     # maximum bond dimension across all edges
 scalartype(tn)        # element type of the tensors (e.g. ComplexF64)
 datatype(tn)          # storage type (e.g. Array, CuArray)
 virtualinds(tn, e)    # Indices connecting the tensors at tn[src(e)], tn[dst(e)]
 is_tree(tn)           # Is the effective graph a tree? If yes, stick to BP exclusively as the contraction backend.
-
-# From DataGraphs, not exported by this package — import explicitly
-set_vertex_data!(tn, t, v) # Set the tensor at vertex v to t, without refreshing a state's site indices
 ```
 
 Additionally, `TensorNetworkState` provides:

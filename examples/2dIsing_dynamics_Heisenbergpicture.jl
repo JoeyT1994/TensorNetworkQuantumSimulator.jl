@@ -1,6 +1,6 @@
 using TensorNetworkQuantumSimulator
 using Graphs: center
-using TensorNetworkQuantumSimulator: set_vertex_data!, noprime
+using TensorNetworkQuantumSimulator: noprime
 using TensorNetworkQuantumSimulator: Ops, ITensor
 
 function main()
@@ -14,7 +14,7 @@ function main()
     #Start from the identity operator, then place a single Z on vertex vz
     ψI = identity_tensornetworkstate(ComplexF64, g, s)
     ψ0 = copy(ψI)
-    set_vertex_data!(ψ0, noprime(ψ0[vz] * Ops.op("Z", s[vz][1])), vz)
+    ψ0[vz] = noprime(ψ0[vz] * Ops.op("Z", s[vz][1]))
 
     maxdim, cutoff = 4, 1.0e-14
     apply_kwargs = (; maxdim, cutoff, normalize_tensors = false)
