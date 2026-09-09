@@ -1,7 +1,8 @@
 @eval module $(gensym())
 using Dictionaries: Dictionary
-using TensorNetworkQuantumSimulator.TensorInterface: array, commoninds, delta, dim, inds, prime, scalar
+using TensorNetworkQuantumSimulator.TensorInterface: array, commoninds, delta, dim, inds, prime, scalar, replaceind, sim
 using LinearAlgebra: Hermitian, eigvals, norm
+using Logging: NullLogger, with_logger
 using Statistics: median
 using Random
 using TensorNetworkQuantumSimulator
@@ -518,15 +519,22 @@ end
     # was left ~3 orders wrong, χ-INDEPENDENTLY, which read as a projector defect for two sessions.
     # `:cut` escaped only by chance -- its 28-block subset still read 2.6e-1.
     #
-    # (a) The contract, directly: while the interface widths are still growing there is NO state
-    # distance to be had, and the function must say so rather than return a number measured on
-    # whatever happened to match.
+    # (a) The contract, directly: a block whose index set changed aborts the comparison — the
+    # function must say "no distance" rather than return a number measured on whatever happened
+    # to match. (Since 2026-09-08 every interface keeps its index from the second sweep on — the
+    # seed stores full triples and re-minted levels record transition maps — so a distance DOES
+    # exist at sweep 2; the contract is exercised by re-indexing one block by hand.)
     Random.seed!(1)
     tn4 = random_tensornetwork(Float64, named_grid((6, 6)); bond_dimension = 2)
     c4 = CTMEnvironmentCache(tn4, 16; projector = :cycle)
     e1 = TNQS.sweep_vertex_environments(c4, TNQS.vertex_environments(c4))
     e2 = TNQS.sweep_vertex_environments(c4, e1)
-    @test isnothing(TNQS._ctm_statedist(e2, e1))        # structurally unstable => cannot certify
+    @test !isnothing(TNQS._ctm_statedist(e2, e1))       # index-stable from sweep 2: a distance exists
+    kC = first(k for (k, v) in e2.C if !isnothing(v))
+    e2b = TNQS.CTMVertexEnvironments(copy(e2.C), e2.T, e2.PH, e2.PV, e2.Lx, e2.Ly)
+    iC = first(inds(e2.C[kC]))
+    e2b.C[kC] = replaceind(e2.C[kC], iC, sim(iC))
+    @test isnothing(TNQS._ctm_statedist(e2b, e1))       # one re-indexed block => no distance
 
     # (b) End to end, on the case that showed the largest error: heavy-hex at χ=8 was 3.7e-06 with
     # `:cycle` against a `:cut` that is exact, and is now exact too. Ten orders of headroom, so this
@@ -587,11 +595,109 @@ end
     Fg, zg = ctm(ψg, 16)                                                       # lossless: exact
     @test Fg ≈ lnN atol = 1.0e-12
     @test zg ≈ zx atol = 1.0e-12
+    # The subspace route on graded data (the sector-stacked start block), forced on and compared
+    # with the dense route after the same number of sweeps: on a 3×3 lattice only χ = 2 leaves an
+    # interface wider than the block, and six sweeps do not converge at that χ (hence the null
+    # logger) — the point is that both routes take the same steps.
+    czd = with_logger(NullLogger()) do
+        update(CTMEnvironmentCache(ψg, 2; svd = :dense); maxiter = 6, tolerance = 1.0e-12)
+    end
+    empty!(TNQS.CTM_SVD_STATS)
+    czs = with_logger(NullLogger()) do
+        update(CTMEnvironmentCache(ψg, 2; svd = :subspace, svd_min = 1, svd_oversample = 0);
+               maxiter = 6, tolerance = 1.0e-12)
+    end
+    @test get(TNQS.CTM_SVD_STATS, :subspace, 0) > 0                  # the route actually ran
+    @test cvm_freenergy(czs) ≈ cvm_freenergy(czd) atol = 1.0e-10
     # (A D = 4 double layer agrees the same way — 1e-14 at χ = 4 and 8 — but costs minutes on
     # graded tensors, so it is not in the suite. U(1) states agree at D = 2 and are exact at
     # lossless χ; at D = 4 their double-layer corners carry EXACT cross-sector degeneracies
     # (relative gaps ~1e-15), so dense and sector-merged sorting break the ties differently and
     # the two truncation paths legitimately diverge.)
+end
+
+@testset "Cut projector: subspace route, certification, marginal signal" begin
+    # A cheap state with a DECAYING corner spectrum — the regime of every physical PEPS and the one
+    # the subspace route is for: a product state plus a small random admixture on the bonds.
+    # (Random states have flat spectra; on those every subspace attempt bails out to the dense
+    # route by design, and gate-built states cost minutes to make.)
+    function decaying_state(g, D, ε; seed = 7)
+        Random.seed!(seed)
+        ψ = random_tensornetworkstate(Float64, g, siteinds("S=1/2", g); bond_dimension = D)
+        for v in vertices(g)
+            t = ψ[v]
+            A = zeros(Float64, size(t.data)); A[1] = 1.0            # site ↑, every bond in state 1
+            ψ[v] = TNQS.Tensors.Tensor(copy(inds(t)), A .+ ε .* t.data)
+        end
+        return ψ
+    end
+    g6 = named_grid((6, 6))
+    ψ6 = decaying_state(g6, 2, 0.3)
+    obs6 = ("Z", (3, 3))
+    @test_throws ArgumentError CTMEnvironmentCache(ψ6, 4; svd = :fast)
+
+    # 1. The subspace route (`svd = :subspace`) is the dense route's fixed point to roundoff. It
+    #    needs interfaces whose three sides exceed the block width χ + oversample, which on a D=2
+    #    double layer means the 6×6 lattice (deep chains are 8·4 = 32 wide) with a small oversample.
+    cd = update(CTMEnvironmentCache(ψ6, 8; svd = :dense); maxiter = 40, tolerance = 1.0e-12)
+    empty!(TNQS.CTM_SVD_STATS)
+    cs = update(CTMEnvironmentCache(ψ6, 8; svd = :subspace, svd_min = 1, svd_oversample = 2);
+                maxiter = 40, tolerance = 1.0e-12)
+    @test get(TNQS.CTM_SVD_STATS, :subspace, 0) > 0                  # the route actually ran
+    @test cvm_freenergy(cs) ≈ cvm_freenergy(cd) atol = 1.0e-11
+    @test expect(cs, obs6) ≈ expect(cd, obs6) atol = 1.0e-10
+
+    # 2. Certification at an OVER-PARAMETRISED χ, kept singular values down at the cutoff.
+    #    REGRESSION: the gauge alignment used to test its rotation through `P_B P_A` before and
+    #    after, which on such an interface is biorthogonal only to eps/qr_cutoff ~ 1e-3, so every
+    #    deep interface was rejected, the levels above re-indexed, no state distance ever existed,
+    #    and `update` ran to `maxiter` (measured 90 s for a 5 s solve, 508 s on 9×9). It must
+    #    converge silently now — 11 sweeps here.
+    c32 = @test_logs update(CTMEnvironmentCache(ψ6, 32); maxiter = 15, tolerance = 1.0e-10)
+    @test maximum(dim(p[3]) for p in values(TNQS.environments(c32).PH)) == 32   # χ genuinely reached
+    @test expect(c32, obs6) ≈ expect(ψ6, obs6; alg = "exact") atol = 1.0e-8       # lossless: exact
+
+    # 3. Index bootstrapping. The greedy seed stores full `(P, dag(P), w)` triples and a level that
+    #    re-mints its index records transition maps, so every interface keeps its index from the
+    #    second sweep on and a state distance exists then — it used to take one sweep per lattice
+    #    level (9 sweeps on 9×9, with `|ΔF|` at 1e-14 from sweep 2).
+    Random.seed!(456)
+    ψ6r = random_tensornetworkstate(Float64, g6, siteinds("S=1/2", g6); bond_dimension = 2)
+    c6 = CTMEnvironmentCache(ψ6r, 8)
+    e0 = TNQS.vertex_environments(c6)
+    e1 = TNQS.sweep_vertex_environments(c6, e0)
+    e2 = TNQS.sweep_vertex_environments(c6, e1)
+    @test !isnothing(TNQS._ctm_statedist(e2, e1))
+    @test all(p -> length(p) >= 3, values(e0.PH))                  # seed triples
+
+    # 4. A random (flat-spectrum) state: the forced route bails out everywhere and the default
+    #    `:auto` keeps it dense (the memo backs off) — both give the dense answer, and a lossless χ
+    #    is exact either way.
+    Random.seed!(1234)
+    g5 = named_grid((5, 5)); s5 = siteinds("S=1/2", g5)
+    ψ5 = gauge_and_scale(random_tensornetworkstate(Float64, g5, s5; bond_dimension = 2))
+    lnZ5 = log(norm_sqr(ψ5; alg = "exact"))
+    for χ in (8, 16)
+        cd5 = update(CTMEnvironmentCache(ψ5, χ; svd = :dense); maxiter = 40, tolerance = 1.0e-12)
+        for kw in ((; svd = :subspace, svd_min = 1), (;))
+            c5 = update(CTMEnvironmentCache(ψ5, χ; kw...); maxiter = 40, tolerance = 1.0e-12)
+            @test cvm_freenergy(c5) ≈ cvm_freenergy(cd5) atol = 1.0e-11
+            @test expect(c5, ("Z", (3, 3))) ≈ expect(cd5, ("Z", (3, 3))) atol = 1.0e-10
+            χ == 16 && @test cvm_freenergy(c5) ≈ lnZ5 atol = 1.0e-10   # lossless: exact
+        end
+    end
+
+    # 5. `convergence = :marginal`, the signal `expect`/`rdm` use for `:cycle`: certifies on an
+    #    over-parametrised χ where `:worst_region` floors (surplus-mode wander), and the answer is
+    #    exact.
+    Random.seed!(31)
+    g4 = named_grid((4, 4)); s4 = siteinds("S=1/2", g4)
+    ψc = random_tensornetworkstate(ComplexF64, g4, s4; bond_dimension = 2)
+    zx = expect(ψc, ("Z", [(2, 2)]); alg = "exact")
+    cm = @test_logs update(CTMEnvironmentCache(ψc, 32; projector = :cycle);
+                           maxiter = 20, tolerance = 1.0e-10, convergence = :marginal)
+    @test expect(cm, ("Z", [(2, 2)])) ≈ zx atol = 1.0e-9
+    @test_throws ArgumentError update(CTMEnvironmentCache(ψc, 8); convergence = :nonsense)
 end
 
 end

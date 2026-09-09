@@ -247,6 +247,13 @@ TensorInterface.hascommoninds(a::IndsLike, b::IndsLike) = !isempty(TensorInterfa
 
 TensorInterface.dag(t::Tensor) = Tensor(map(TensorInterface.dag, t.inds), conj(t.data))
 
+# `gram(a, b, legs)`: the Hilbert inner product of `a` and `b` taken over `legs` only — a† b with
+# the remaining legs of each left open, so a (rest_a, rest_b) "Gram matrix". On dense data that
+# is `dag(a) * b`; the graded backend composes TensorKit adjoints instead, because on fermionic
+# tensors a plain dag-then-contract is the BILINEAR pairing (right for inserting projector pairs
+# into a network, wrong for an inner product — parity twists on the contracted legs).
+TensorInterface.gram(a::Tensor, b::Tensor, legs) = TensorInterface.dag(a) * b
+
 function TensorInterface.replaceinds(t::Tensor, old, new)
     oldv, newv = _indvec(old), _indvec(new)
     length(oldv) == length(newv) || error("replaceinds: length mismatch")
@@ -268,10 +275,25 @@ end
 TensorInterface.from_array(A::AbstractArray, is::Index{<:Integer}...) = Tensor(collect(Index, is), reshape(copy(A), TensorInterface.dim.(is)...))
 TensorInterface.from_array(A::AbstractVector, i::Index{<:Integer}) = Tensor(Index[i], copy(A))
 
-function TensorInterface.random_tensor(elt::Type, is::AbstractVector{<:Index})
-    return Tensor(collect(is), randn(elt, TensorInterface.dim.(is)...))
+function TensorInterface.random_tensor(rng::Random.AbstractRNG, elt::Type, is::AbstractVector{<:Index})
+    #Index vectors are often abstractly typed: the dense/graded split is decided by content
+    all(i -> space(i) isa TK.GradedSpace, is) &&
+        return TensorInterface.random_tensor(rng, elt, collect(GradedIndex, is)...)
+    return Tensor(collect(is), randn(rng, elt, TensorInterface.dim.(is)...))
 end
+TensorInterface.random_tensor(rng::Random.AbstractRNG, elt::Type, is::Index...) =
+    TensorInterface.random_tensor(rng, elt, collect(Index, is))
+TensorInterface.random_tensor(elt::Type, is::AbstractVector{<:Index}) =
+    TensorInterface.random_tensor(Random.default_rng(), elt, is)
 TensorInterface.random_tensor(elt::Type, is::Index...) = TensorInterface.random_tensor(elt, collect(is))
+
+# The dim-1 legs that complete a tensor on `is` to a flux-zero one. Dense data has no flux:
+# one trivial leg. (Graded: one charged leg per reachable sector — see gradedtensor.jl.)
+function TensorInterface.charge_sectors(is::AbstractVector{<:Index})
+    all(i -> space(i) isa TK.GradedSpace, is) &&
+        return TensorInterface.charge_sectors(collect(GradedIndex, is))
+    return Index[Index(1, "Charge")]
+end
 TensorInterface.random_tensor(is::AbstractVector{<:Index}) = TensorInterface.random_tensor(Float64, is)
 TensorInterface.random_tensor(is::Index...) = TensorInterface.random_tensor(Float64, collect(is))
 
@@ -345,6 +367,13 @@ function TensorInterface.directsum(
     end
     out[r2...] .= d2
     return Tensor(oinds, out)
+end
+
+# Two-pair form: mint the summed bond (dim = sum of the two) and return it on the tensor.
+function TensorInterface.directsum(p1::Pair{<:Tensor}, p2::Pair{<:Tensor}; tags = "Link,sum")
+    o1, o2 = only(_indvec(last(p1))), only(_indvec(last(p2)))
+    w = Index(TensorInterface.dim(o1) + TensorInterface.dim(o2), String(tags))
+    return TensorInterface.directsum(Index[w], first(p1) => Index[o1], first(p2) => Index[o2])
 end
 
 #Default-backend index constructor (no reference index/tensor in scope, e.g. fresh networks)

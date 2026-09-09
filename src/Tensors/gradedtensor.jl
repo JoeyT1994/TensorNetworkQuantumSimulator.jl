@@ -166,6 +166,52 @@ TensorInterface.datatype(t::GradedTensor) = TK.storagetype(typeof(t.data))
 #raw storage vector (mutable view over every block), per the seam contract
 TensorInterface.data(t::GradedTensor) = t.data.data
 
+# VectorInterface (KrylovKit's vector contract): forwarded to the TensorMap, labels kept.
+VectorInterface.scalartype(::Type{<:GradedTensor{S, TM}}) where {S, TM} = VectorInterface.scalartype(TM)
+VectorInterface.zerovector(t::GradedTensor, S::Type{<:Number}) =
+    GradedTensor(copy(t.inds), VectorInterface.zerovector(t.data, S))
+VectorInterface.scale(t::GradedTensor, α::Number) = t * α
+VectorInterface.scale!!(t::GradedTensor, α::Number) = t * α
+VectorInterface.scale!!(y::GradedTensor, x::GradedTensor, α::Number) = x * α
+function VectorInterface.add(y::GradedTensor, x::GradedTensor, α::Number, β::Number)
+    return GradedTensor(copy(y.inds), VectorInterface.add(y.data, _aligned_data(y, x), α, β))
+end
+VectorInterface.add!!(y::GradedTensor, x::GradedTensor, α::Number, β::Number) =
+    VectorInterface.add(y, x, α, β)
+VectorInterface.inner(x::GradedTensor, y::GradedTensor) = LinearAlgebra.dot(x, y)
+
+# The dim-1 charge legs completing a tensor on `is` to a flux-zero one: one per sector of the
+# fused leg space (dualised, since the leg must cancel the legs' total charge).
+function TensorInterface.charge_sectors(is::AbstractVector{<:GradedIndex})
+    P = TK.ProductSpace(map(slotspace, is)...)
+    return Index[charged_link_index(TK.dual(c); tags = "Charge") for c in TK.sectors(TK.fuse(P))]
+end
+
+# Direct sum along ONE leg (`t1` on `o1`, `t2` on `o2`; every other leg shared): the summed
+# leg becomes the domain, TensorKit concatenates the domains (sector counts add), and the fresh
+# bond comes back on the tensor with the orientation TensorKit gave it.
+function TensorInterface.directsum(p1::Pair{<:GradedTensor}, p2::Pair{<:GradedTensor}; tags = "Link,sum")
+    t1, o1 = first(p1), only(_indvec(last(p1)))
+    t2, o2 = first(p2), only(_indvec(last(p2)))
+    j1 = findfirst(==(o1), t1.inds); j2 = findfirst(==(o2), t2.inds)
+    (j1 === nothing || j2 === nothing) && error("directsum: the summed index is not on its tensor")
+    r1 = [k for k in 1:length(t1.inds) if k != j1]
+    rest = t1.inds[r1]
+    r2 = map(rest) do i
+        k = findfirst(==(i), t2.inds)
+        k === nothing && error("directsum: tensors do not share the unsummed index $(i)")
+        k
+    end
+    a = TK.permute(t1.data, (Tuple(r1), (j1,)))
+    b = TK.permute(t2.data, (Tuple(r2), (j2,)))
+    c = TK.catdomain(a, b)
+    N = length(t1.inds)
+    full = TK.permute(c, (Tuple(1:N), ()))
+    sp, isdual = _wrap_slot(TK.space(full, N))
+    w = _with_flag(Index(sp, String(tags)), isdual)
+    return GradedTensor(vcat(rest, [w]), full)
+end
+
 # ── Charge-ordered basis conversion (tree basis ≡ sector-ordered product basis) ─────────
 
 #Position range of sector `c` within an index, in the base space's own sector order.
@@ -268,6 +314,30 @@ Base.:+(a::GradedTensor, b::GradedTensor) = GradedTensor(copy(a.inds), a.data + 
 Base.:-(a::GradedTensor, b::GradedTensor) = GradedTensor(copy(a.inds), a.data - _aligned_data(a, b))
 
 LinearAlgebra.dot(a::GradedTensor, b::GradedTensor) = LinearAlgebra.dot(a.data, _aligned_data(a, b))
+
+# Hilbert inner product over `legs` (see Tensors.jl): view `a` and `b` as maps rest ← legs… no,
+# legs ← rest (codomain = legs, domain = the open legs), then compose `a' ∘ b`: rest_a ← rest_b.
+# The result is wrapped with the orientation TensorKit gives each slot, so `a`'s open legs come
+# back dagged (as they do for `dag(a) * b`) and `b`'s unchanged.
+function TensorInterface.gram(a::GradedTensor, b::GradedTensor, legs)
+    lv = _indvec(legs)
+    la = Int[findfirst(==(i), a.inds) for i in lv]
+    lb = Int[findfirst(==(i), b.inds) for i in lv]
+    (any(isnothing, la) || any(isnothing, lb)) && error("gram: a leg is missing on one tensor")
+    ra = [k for k in 1:length(a.inds) if k ∉ la]
+    rb = [k for k in 1:length(b.inds) if k ∉ lb]
+    ta = TK.permute(a.data, (Tuple(la), Tuple(ra)))          # legs ← rest_a
+    tb = TK.permute(b.data, (Tuple(lb), Tuple(rb)))          # legs ← rest_b
+    m = ta' * tb                                              # rest_a ← rest_b
+    n = length(ra) + length(rb)
+    full = TK.permute(m, (Tuple(1:n), ()))
+    inds = Index[]
+    for (k, i) in enumerate(vcat(a.inds[ra], b.inds[rb]))
+        sp, isdual = _wrap_slot(TK.space(full, k))
+        push!(inds, _with_flag(Index(i.id, sp, i.plev, i.tags, false), isdual))
+    end
+    return GradedTensor(inds, full)
+end
 
 function LinearAlgebra.rmul!(t::GradedTensor, x::Number)
     LinearAlgebra.rmul!(t.data, x)

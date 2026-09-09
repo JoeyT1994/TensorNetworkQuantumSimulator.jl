@@ -392,6 +392,91 @@ on something else (approximate Hermiticity of the environment, not this symmetry
 
 ---
 
+## 2026-09-08 (night): `:cut` at boundary-MPS cost, and two certification fixes
+
+Starting point, measured on a 9×9 D=3 TFIM PEPS (imaginary-time simple update at g = 3.04438,
+`BLAS` single-threaded), `update` at the default tolerance 1e-10:
+
+| χ | `:cut` before | bMPS | `:cut` after (`svd = :auto`) | `:cut` after (`svd = :dense`) |
+|---|---|---|---|---|
+| 32 | 21.7 s | 14.7 s | **16 s** | — |
+| 48 | **508 s** (ran to `maxiter`) | 5.6 s | **31 s** (7 sweeps) | 39 s |
+
+Four changes, in order of impact.
+
+### 1. `_ctm_align` rejected every lossless interface — `update` never certified
+
+The Procrustes guard compared `P_B P_A` before and after the rotation. That product is `𝟙 + E`
+with `E` the pair's own biorthogonality defect, `‖E‖ ~ eps·σ₁/σ_k`, which reaches ~1e-3 at the
+default `qr_cutoff = 1e-13` whenever σ_k sits at the cutoff — i.e. on every lossless interface —
+and `‖R†(𝟙+E)R − (𝟙+E)‖ ~ ‖E‖` for a perfectly unitary `R`. So the deepest interfaces were never
+aligned, everything above them re-indexed, `_ctm_statedist` had no distance, and `update` ran to
+`maxiter` (90 s for a 5 s solve on 6×6 χ=48; 508 s on 9×9 χ=48). A unitary preserves the norm of
+each factor, so that is what the guard tests now; the `replaceinds` sector-structure check stays.
+
+### 2. Index bootstrapping: one level per sweep → all levels from sweep 2
+
+The greedy seed stored `(P, w)` pairs, so the first sweep could not align to it and minted fresh
+indices everywhere; a level can only align once the level below it kept its index in the previous
+sweep, so the bases stabilised one lattice level per sweep — 9 sweeps on 9×9 while `|ΔF|` was at
+1e-14 from sweep 2. Now the seed stores `(P, dag(P), w)` triples (also the first sweep's warm
+start), and a level that cannot keep its index records the transition maps `P_B·P_A⁰`, `P_B⁰·P_A`
+in its triple so the level above transports its previous projector onto the new basis
+(`_ctm_transport`, `_ctm_remint`; both passes walk each chain edge-inward, `_ctm_each_interface`).
+Measured 9×9: 33 rank mismatches after the seed, **256/256 aligned from sweep 2**, certification
+at sweep 7 with a genuine ~17× per-sweep contraction of the criterion.
+
+### 3. The `:cut` projector without the `O(χ³D⁶)` SVD
+
+Per interface the dense route did two `n×n` QRs and a full `n×n` SVD, `n = χ·D²`, to keep `χ`
+triplets — 91% of a 9×9 χ=48 sweep. Two things:
+
+* The QR of a block only pays when it shrinks it (`rest > ins`); every bulk interface has
+  `rest = ins`, so it is skipped and the overlap formed directly. Exact, 1.3× on the sweep.
+* `svd = :auto` (default): a matrix-free block subspace iteration on the enlarged corners
+  themselves, warm-started from the previous sweep's projector (`_ctm_subspace_svd`), cost
+  `O(K·n²·χ) = O(χ³D⁴)` — the boundary-MPS scaling — with a convergence residual restricted to the
+  retained directions, a Ritz/observed-rate extrapolation that **bails out to the dense route** on
+  flat spectra (random D=3 states: every attempt bails, the memo `cache.route` backs off, overhead
+  5%), and a per-interface memo. Reproduces the dense fixed point to 1e-14 in every check (5×5 D=2
+  χ=4/8/16, complex 4×4 χ=16/64, Z2 3×3). On the physical 9×9 all 80 eligible interfaces take it
+  at ~1 iteration each once warm (`CTM_SVD_STATS`); the other 176 are too small for it to pay
+  (`_ctm_use_subspace`) and stay dense. Sweep 4.9 s → 3.3 s. Note `n/χ = D²` is fixed on a double
+  layer, so the gain is the warm start, not an asymptotic one: ~3× per projector, no more.
+
+### 4. `:cycle` certification: `convergence = :marginal`
+
+On a near-lossless state `:worst_region` floors (6×6 D=3 TFIM χ=32: worst region stuck at 1.5e-7
+while `|ΔF| ~ 1e-15` and `⟨X⟩` agreed with `:cut` to 4e-14), so `expect(...; projector = :cycle)`
+ran to `maxiter` at 12× the converged cost. `:marginal` watches each vertex's normalised reduced
+density matrix from its own ring (`_ctm_vertex_marginals`) — what an observable actually reads,
+gauge invariant, full coverage — and certifies once the observable is stationary. `expect`/`rdm`
+now inject it for `:cycle`. Measured, `:cycle`:
+
+| state | χ | `:free_energy` | `:worst_region` | **`:marginal`** | `⟨X⟩` vs `:cut` |
+|---|---|---|---|---|---|
+| 6×6 D=3 | 16 | 1.1 s | 3.6 s | 3.4 s | 1.6e-10 |
+| 6×6 D=3 | 32 | 3.2 s | >17 s, not converged | 6.1 s | 3.6e-14 |
+| 9×9 D=3 | 32 | 14 s, `⟨X⟩` 3e-9 off | — | 52 s | 1.7e-12 |
+
+`:free_energy` alone stops before the observable settles (the documented lag): 3e-9 on 9×9.
+
+Where the remaining `:cut` time goes (9×9 χ=48, warm sweep 3.1 s): projectors 1.65 s (80
+subspace + 176 small dense), enlarged corners 0.73 s, corner/edge rebuilds 0.68 s, region terms
+0.18 s; ~35% of the sweep is `permutedims` inside TensorOperations. Seven sweeps to 1e-10 is the
+outer fixed-point rate, not bootstrapping any more. bMPS at χ=48 is 5.6 s because its fitting
+converges in a couple of iterations on this near-lossless state; at χ=32 the two are equal.
+
+Also fixed: `_ctm_marginal_distance` and `_ctm_statedist`-style direction distances computed as
+`√(2 − 2|⟨a,b⟩|)` cannot resolve below ~1e-8 (cancellation at machine precision); the marginal
+signal uses the phase-corrected difference `‖a − e^{iφ}b‖` instead.
+
+Not addressed: the untracked `examples/ctm_ising9x9_energy.jl` and
+`examples/collect_mike_tfim_sampled_single_site_svd.jl` include files that are not in the repo
+and pass `gauge_state`/`convergence = :environment`, which the current constructors reject.
+
+---
+
 ## Open problems
 
 Ranked by how much they should worry you.
@@ -724,6 +809,60 @@ block that derives `P` absorbs `P` and every block at the OTHER end of the inter
 `dag(P)` (the row strips absorbed `P` at both ends), and `combiner` now dispatches on index
 content like `delta`. Test: "CVM on graded (Z2-symmetric) tensors". `:cycle` on graded tensors
 remains TO DO (per-sector Krylov via charged start vectors; it still goes through `array`).
+
+## Backend port, part 2 — *2026-09-08 (afternoon)*
+
+**`:cycle` is in tensor form too.** The Krylov vectors are tensors on the west legs with a dim-1
+"charge" leg (trivial on dense data, one per sector on graded data — a symmetric tensor on the bond
+legs alone lives in the charge-zero sector, and the cycle map conserves charge, so the graded cycle
+problem is a direct sum of per-sector problems). One `schursolve` per sector and side, sector spectra
+merged before every rank decision, Ritz vectors stacked into a basis by direct sum along the charge
+legs (`directsum(p1, p2)` two-pair form, new on the seam; the retained bond gets one count per sector
+for free), propagation by `qr`, the biorthogonal whitening shared with `:cut` (`_ctm_biorth`). Nothing
+is unwrapped. New seam verbs: `charge_sectors`, two-pair `directsum`, seeded `random_tensor`, `gram`;
+VectorInterface on `GradedTensor`. Retired: `cycle_subspace`/`cycle_iters` (block subspace iteration
+needs a non-Hermitian eigen the seam does not have). Validated: identical dense states agree with the
+matrix version to ≤1e-11 (`sq`/`hh` battery), two-projector testset 18/18, Z2-graded D=2 4×4 matches
+dense to all printed digits at χ=4 and χ=16 (the χ=16 D=2 `:cycle` floor of 4.3e-9 is pre-existing:
+same number from the matrix version).
+
+**OPEN: graded `:cycle` at D=4 disagrees with dense** (Z2 4×4 D=4, χ=4: |F−lnN| 3.0e-2 graded vs
+5.9e-4 dense; χ=8: 1.4e-3 vs 4.7e-4; neither certifies). The per-plaquette spectra are identical to six
+digits on both backends, so the sector solves are right; the difference is downstream. Diagnosed so
+far: (a) with `degtol = 1e-8` graded χ=8 read F off by 3.8 until the alignment guard below — the
+zero-padding lands its columns in whatever sectors `new_index` allots, so the padded bond's sector
+structure differs from the previous sweep's and a Procrustes rotation between them is not unitary;
+now caught (alignment declined) but not cured; (b) forcing the left side to the right side's
+per-sector counts changed nothing; (c) the cross-sector exact ties (ket↔bra pairs) at the cut back
+off differently on the two backends (kres 3 vs 4 on one plaquette). Candidates left: pad per sector
+of the RETAINED bond (so padding never changes sector structure), or drop padding for graded bonds
+and let `_ctm_align` compare spaces. Not a port-blocker for `:cut`.
+
+**Fermionic (fZ2) `:cut` — one genuine bug found and fixed, one non-bug.** (1) `_ctm_align` built its
+Gram matrix as `dag(P_A) * P_A⁰`. On fermionic tensors that is the BILINEAR pairing (correct for
+inserting projector pairs into the network — ground-truthed: the full-rank pair changes ⟨ψ|ψ⟩ by
+1e-9), not the Hilbert inner product: the Gram came out Hermitian but indefinite (trace −1.0 against
+‖P_A‖² = 5.9), Procrustes rotated onto a sign-twisted target, and every sweep's blocks came back as
+±themselves — `|ΔF|` at 1e-15, state distance 2.0, never certified, 30 sweeps every solve. Fixed with
+the `gram(a, b, legs)` seam verb (TensorKit adjoint composition; `dag(a) * b` on dense) and a
+phase-immune state distance (`2 − 2|⟨ta,tb⟩|` on norm-1 blocks; equals the old one where no phase
+flips occur). Fermionic 3×3 D=3 χ=16 now certifies in 0.56 s; χ=4 still stops at maxiter with F
+stationary to 3e-9 and a 1.4% residual — the 9→4 heavy-truncation limit-cycle regime, not a
+convention error. (2) `P_B P_A` viewed as a dense matrix through `array` looks like diag(±1) on
+fermions; that view is convention-laden, the network insertion is the test that counts.
+
+**Geometry guard.** `CTMEnvironmentCache` now rejects any bond between non-adjacent grid positions
+(periodic lattices, e.g. `named_hexagonal_lattice_graph(...; periodic = true)`): a wraparound bond
+rides uncontracted inside every block and the sweep's contractions grow exponentially at any χ.
+That was the "insanely slow at χ=1" on the hexagonal thermal-state example.
+
+**Performance notes.** JIT dominates fresh sessions: first dense CTM solve ~18 s, first graded ~65 s,
+first fermionic ~88 s, graded `apply_gates` compile ~116–130 s; the solves themselves are 0.05–1 s.
+Steady-state dense `:cut` is unchanged against the committed matrix version (0.38/0.27/0.86 s vs
+0.38/0.37/0.67 s per sweep at χ=8/16/32, 5×5 D=3). A PrecompileTools workload covering a dense and
+a graded update would remove most of the fresh-session latency. On a 3×3, boundary MPS at χ=48
+(0.03 s) is ~20× cheaper than CTM at χ=16 (0.5 s) — per-vertex 4C+4T rings are more work than one
+boundary MPS on a lattice that small.
 
 ## What made `:cycle` work
 

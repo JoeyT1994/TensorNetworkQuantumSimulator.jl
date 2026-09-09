@@ -92,11 +92,10 @@ function reduced_density_matrix(
         kwargs...,
     )
     # Like `expect`, an RDM read off the ring needs the messages stationary, not just F converged,
-    # so default a `:cycle` solve to `convergence = :worst_region` (`:cut`'s statedist pair is
-    # already observable-tight, and worst-region over-warns there; overridable through
-    # `cache_update_kwargs`). See `expect(::Algorithm"ctmrg", ::TensorNetworkState, ...)`.
+    # so default a `:cycle` solve to `convergence = :marginal` (`:cut`'s statedist pair is
+    # already observable-tight; overridable through `cache_update_kwargs`). See `expect(::Algorithm"ctmrg", ::TensorNetworkState, ...)`.
     if get(ctm_options, :projector, :cut) === :cycle
-        cache_update_kwargs = merge((; convergence = :worst_region), cache_update_kwargs)
+        cache_update_kwargs = merge((; convergence = :marginal), cache_update_kwargs)
     end
     cache = update(CTMEnvironmentCache(ψ, maxdim; ctm_options...); cache_update_kwargs...)
     return reduced_density_matrix(alg, cache, verts; kwargs...)

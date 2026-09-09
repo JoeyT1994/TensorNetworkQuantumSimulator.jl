@@ -30,8 +30,12 @@ What a backend must implement, by group:
   Index queries      : inds, dim, plev, tags, commonind(s), uniqueinds, unioninds,
                        noncommonind(s), hascommoninds
   Index replacement  : replaceind(s) (relabeling, no data movement)
-  Construction       : from_array, random_tensor, onehot, projector, delta, combiner (+
-                       combinedind), directsum, op(name::String, siteinds...),
+  Construction       : from_array, random_tensor (optionally seeded by an AbstractRNG),
+                       onehot, projector, delta, combiner (+ combinedind), directsum (the
+                       2-pair form mints the summed bond and returns it on the tensor),
+                       charge_sectors (the dim-1 "charge" legs that complete a tensor on the
+                       given legs to a flux-zero one: a single trivial leg for dense data, one
+                       per reachable sector for graded), op(name::String, siteinds...),
                        state(name::String, siteind)
   Contraction        : contract(ts::Vector; sequence), Base.:*, scalar, apply
   Diagonal ops       : map_diag, map_diag!
@@ -77,11 +81,13 @@ for f in [
         :dag, :prime, :noprime, :sim, :replaceind, :replaceinds,
         # construction
         :onehot, :projector, :delta, :combiner, :combinedind, :random_tensor,
-        :directsum, :op, :state, :new_index, :from_array,
+        :directsum, :charge_sectors, :op, :state, :new_index, :from_array,
         # contraction / evaluation
         :contract, :scalar, :apply, :inner,
         # diagonal ops
         :map_diag, :map_diag!,
+        # sesquilinear partial inner product: gram(a, b, legs) = a† b contracted over `legs`
+        :gram,
         # factorizations (beyond the LinearAlgebra generics)
         :factorize_svd, :truncation_strategy,
         # storage / type queries
