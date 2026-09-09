@@ -70,9 +70,6 @@ for f in [
         :(NamedGraphs.edgetype),
         :(NamedGraphs.vertices),
         :(NamedGraphs.edges),
-        :(NamedGraphs.position_graph),
-        :(NamedGraphs.ordered_vertices),
-        :(NamedGraphs.vertex_positions),
         :(NamedGraphs.steiner_tree),
         :(NamedGraphs.is_tree),
     ]
@@ -82,6 +79,10 @@ for f in [
         end
     end
 end
+
+NamedGraphs.encoded_vertex(bp_cache::AbstractBeliefPropagationCache, vertex) = NamedGraphs.encoded_vertex(graph(bp_cache), vertex)
+NamedGraphs.decoded_vertex(bp_cache::AbstractBeliefPropagationCache, code::Integer) = NamedGraphs.decoded_vertex(graph(bp_cache), code)
+NamedGraphs.encoded_graph(bp_cache::AbstractBeliefPropagationCache) = NamedGraphs.encoded_graph(graph(bp_cache))
 
 #Functions derived from the interface
 function deletemessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdge)
@@ -123,7 +124,7 @@ function setmessages!(bp_cache::AbstractBeliefPropagationCache, edges, messages)
 end
 
 function deletemessages!(
-        bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge} = edges(bp_cache)
+        bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge} = collect(edges(bp_cache))
     )
     for e in edges
         deletemessage!(bp_cache, e)
@@ -150,7 +151,7 @@ end
 function incoming_messages(
         bp_cache::AbstractBeliefPropagationCache, vertices::Vector{<:Any}; ignore_edges = []
     )
-    b_edges = NamedGraphs.GraphsExtensions.boundary_edges(bp_cache, vertices; dir = :in)
+    b_edges = NamedGraphs.boundary_edges(bp_cache, vertices; dir = :in)
     b_edges = !isempty(ignore_edges) ? setdiff(b_edges, ignore_edges) : b_edges
     return messages(bp_cache, b_edges)
 end
@@ -308,7 +309,7 @@ function rescale_messages!(bp_cache::AbstractBeliefPropagationCache, edge::Abstr
 end
 
 function rescale_messages!(bp_cache::AbstractBeliefPropagationCache)
-    return rescale_messages!(bp_cache, edges(bp_cache))
+    return rescale_messages!(bp_cache, collect(edges(bp_cache)))
 end
 
 function rescale_vertices!(bpc::AbstractBeliefPropagationCache; kwargs...)

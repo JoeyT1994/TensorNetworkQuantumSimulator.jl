@@ -1,4 +1,4 @@
-using NamedGraphs.GraphsExtensions: boundary_edges
+using NamedGraphs: boundary_edges
 
 function loopcorrected_partitionfunction(
         bp_cache::BeliefPropagationCache,
@@ -61,14 +61,14 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
 end
 
 #Get the all edges incident to the region specified by the vector of edges passed
-function NamedGraphs.GraphsExtensions.boundary_edges(
+function NamedGraphs.boundary_edges(
         bpc::BeliefPropagationCache,
         es::Vector{<:NamedEdge},
     )
     vs = unique(vcat(src.(es), dst.(es)))
     bpes = NamedEdge[]
     for v in vs
-        incoming_es = NamedGraphs.GraphsExtensions.boundary_edges(bpc, [v]; dir = :in)
+        incoming_es = NamedGraphs.boundary_edges(bpc, [v]; dir = :in)
         incoming_es = filter(e -> e ∉ es && reverse(e) ∉ es, incoming_es)
         append!(bpes, incoming_es)
     end

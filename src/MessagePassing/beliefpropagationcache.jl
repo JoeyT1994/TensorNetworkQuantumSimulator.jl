@@ -1,6 +1,6 @@
 using Dictionaries: Dictionary, set!, delete!
 using Graphs: AbstractGraph, is_tree, connected_components
-using NamedGraphs.GraphsExtensions: default_root_vertex, forest_cover, post_order_dfs_edges, forest_cover_edge_sequence, boundary_edges, leaf_vertices, a_star
+using NamedGraphs: post_order_dfs_edges, forest_cover_edge_sequence, boundary_edges, leaf_vertices, a_star
 using ITensors: dim, ITensor, delta, Algorithm
 using ITensors.NDTensors: scalartype
 using LinearAlgebra: normalize
