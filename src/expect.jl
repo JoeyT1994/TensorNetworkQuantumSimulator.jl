@@ -49,7 +49,7 @@ Compute the expectation value of one or more observables on a tensor network sta
     - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
     - `"ctmrg"`: Finite CTMRG / CVM environments (requires `maxdim`; single-site observables only).
       When given a `TensorNetworkState` with `ctm_options = (; projector = :cycle)`, the internal
-      `update` defaults to `convergence = :worst_region` so the observable is read off stationary
+      `update` defaults to `convergence = :marginal` so the observable is read off stationary
       messages (the free energy alone converges a few sweeps sooner); override with
       `cache_update_kwargs = (; convergence = :free_energy)`. `:cut` keeps its own
       observable-tight criterion.
@@ -204,13 +204,13 @@ function expect(
         kwargs...,
     )
     # Observables need the messages actually stationary. For `:cycle` that is
-    # `convergence = :worst_region`: `update`'s `:free_energy` default stops once F settles, and F
-    # settles a few sweeps BEFORE a boundary-lagged single-site observable does (see `update`). For
-    # `:cut` the default statedist pair is already observable-tight, and the worst-region signal
-    # over-warns there (measured: lossless heavy-hex `:cut` floors at ~8e-6 while `⟨Z⟩` is exact to
-    # 1e-17) — so inject only for `:cycle`. Overridable either way through `cache_update_kwargs`.
+    # `convergence = :marginal`: `update`'s `:free_energy` default stops once F settles, and F
+    # settles a few sweeps BEFORE a boundary-lagged single-site observable does (see `update`);
+    # the marginal signal watches the vertex reduced density matrices themselves. For `:cut` the
+    # default statedist pair is already observable-tight — so inject only for `:cycle`.
+    # Overridable either way through `cache_update_kwargs`.
     if get(ctm_options, :projector, :cut) === :cycle
-        cache_update_kwargs = merge((; convergence = :worst_region), cache_update_kwargs)
+        cache_update_kwargs = merge((; convergence = :marginal), cache_update_kwargs)
     end
     cache = update(CTMEnvironmentCache(ψ, maxdim; ctm_options...); cache_update_kwargs...)
     return expect(alg, cache, observable; kwargs...)
