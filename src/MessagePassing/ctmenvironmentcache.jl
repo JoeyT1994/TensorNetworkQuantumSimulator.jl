@@ -395,8 +395,14 @@ end
 # projector, the SVD 12.6 ms. So factor only the blocks the QR actually reduces; the overlap of the
 # rest is formed directly.
 function _ctm_twosided_projector_qr(Bw, Be, ins::Vector{<:Index}, maxdim::Integer, opts::CTMOptions)
-    RA = dim(uniqueinds(Bw, ins)) > dim(ins) ? _ctm_tri_factor(Bw, ins) : Bw
-    RB = dim(uniqueinds(Be, ins)) > dim(ins) ? _ctm_tri_factor(Be, ins) : Be
+    # The QR is skipped where it does not shrink the block (`rest ≤ ins`) — exact on dense data. NOT
+    # on graded data: the whitening then contracts `dag(V)`/`dag(U)` over the block's OWN legs, which
+    # carry mixed orientations, and on fermionic tensors that dag-then-contract picks up parity
+    # twists (measured: fermionic 3×3 D=3 at the lossless χ=16 read ⟨N⟩ 4.2e-8 off against 1.6e-19
+    # through the triangular factors, whose single fresh bond has one orientation).
+    skip(B) = !_ctm_isgraded(B) && dim(uniqueinds(B, ins)) <= dim(ins)
+    RA = skip(Bw) ? Bw : _ctm_tri_factor(Bw, ins)
+    RB = skip(Be) ? Be : _ctm_tri_factor(Be, ins)
     # `_ctm_biorth` forms `R_A R_Bᵀ` (bilinear, over `ins`), takes its truncated SVD, and whitens.
     return _ctm_biorth(RB, RA, ins, _ctm_trunc(maxdim, opts))
 end

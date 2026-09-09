@@ -392,6 +392,19 @@ on something else (approximate Hermiticity of the environment, not this symmetry
 
 ---
 
+## 2026-09-09: the QR skip is dense-only
+
+Change 3 below ("the QR of a block only pays when it shrinks it") was exact on dense data but broke
+graded `:cut`: on the fermionic 3×3 D=3 state, lossless χ=16 read `⟨N⟩` 4.2e-8 off (1.6e-19 the day
+before), independent of `gauge`, `svd` route, sweep count and `qr_cutoff`, while the bosonic Z2 twin
+stayed exact. Cause: without the triangular factors the whitening contracts `dag(V)`/`dag(U)` over the
+block's OWN legs, which carry mixed orientations, and on fermionic tensors that dag-then-contract picks
+up parity twists (the same mechanism as the indefinite Gram matrix of 2026-09-08). Through the QR the
+contraction runs over one fresh bond of a single orientation. Fix: skip the QR only on dense blocks
+(`_ctm_twosided_projector_qr`). Fermionic χ=16 is exact again (5e-20); χ=4 back to 1.87e-9.
+Rule of thumb for graded/fermionic code paths: a dag'd factor may be contracted over a fresh
+factorization bond, never over a block's own mixed-orientation legs; use `gram` for inner products.
+
 ## 2026-09-08 (night): `:cut` at boundary-MPS cost, and two certification fixes
 
 Starting point, measured on a 9×9 D=3 TFIM PEPS (imaginary-time simple update at g = 3.04438,

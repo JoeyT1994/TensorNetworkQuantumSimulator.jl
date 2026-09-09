@@ -614,6 +614,19 @@ end
     # lossless χ; at D = 4 their double-layer corners carry EXACT cross-sector degeneracies
     # (relative gaps ~1e-15), so dense and sector-merged sorting break the ties differently and
     # the two truncation paths legitimately diverge.)
+    # FERMIONIC (fZ2) regression: the `:cut` whitening must contract its dag'd factors over a fresh
+    # factorization bond, never over a block's own mixed-orientation legs — the latter picks up
+    # parity twists on fermionic tensors. Measured 2026-09-09: skipping the QR on graded blocks read
+    # ⟨N⟩ 4.2e-8 off at a LOSSLESS χ on a 3×3 D=3 fermionic state (5e-20 with the QR). Smallest
+    # state that exercises it: a 2×2 CDW quench, one hopping layer, χ lossless.
+    gf = named_grid((2, 2)); sf = siteinds("Fermion", gf; symmetry = "fZ2")
+    ψf = tensornetworkstate(ComplexF64, v -> isodd(sum(v)) ? "Occ" : "Emp", gf, sf)
+    hop = Any[("F_hop", pair, -0.3) for ces in edge_color(gf, 4) for pair in ces]
+    ψf, _ = apply_gates(vcat(hop, reverse(hop)), ψf; apply_kwargs = (; maxdim = 4, cutoff = 1.0e-16))
+    nex = real(only(expect(ψf, ("N", [(2, 2)]); alg = "exact")))
+    cf = update(CTMEnvironmentCache(ψf, 16); maxiter = 30, tolerance = 1.0e-12)
+    @test real(expect(cf, ("N", [(2, 2)]))) ≈ nex atol = 1.0e-12
+
 end
 
 @testset "Cut projector: subspace route, certification, marginal signal" begin
