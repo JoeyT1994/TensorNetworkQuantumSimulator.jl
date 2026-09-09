@@ -1,5 +1,5 @@
 using Graphs: Graphs
-using NamedGraphs.GraphsExtensions: all_edges
+using NamedGraphs: all_edges
 using Adapt
 
 abstract type AbstractBeliefPropagationCache{M, V} <: AbstractEdgeDataGraph{M, V} end

@@ -1,24 +1,7 @@
 using Adapt
-using Graphs: Graphs
-using NamedGraphs: NamedGraphs
 using VectorInterface: VectorInterface, scalartype
 
 const AbstractTensorNetwork = AbstractITensorNetwork
-
-graph(tn::AbstractTensorNetwork) = not_implemented()
-tensors(tn::AbstractTensorNetwork) = not_implemented()
-NamedGraphs.rem_vertex!(tn::AbstractTensorNetwork, v) = not_implemented()
-add_tensor!(tn::AbstractTensorNetwork, tensor::ITensor, v) = not_implemented()
-
-Graphs.is_directed(::Type{<:AbstractTensorNetwork}) = false
-
-NamedGraphs.encoded_vertex(tn::AbstractTensorNetwork, vertex) = NamedGraphs.encoded_vertex(graph(tn), vertex)
-NamedGraphs.decoded_vertex(tn::AbstractTensorNetwork, code::Integer) = NamedGraphs.decoded_vertex(graph(tn), code)
-NamedGraphs.encoded_graph(tn::AbstractTensorNetwork) = NamedGraphs.encoded_graph(graph(tn))
-NamedGraphs.vertices(tn::AbstractTensorNetwork) = NamedGraphs.vertices(graph(tn))
-NamedGraphs.edges(tn::AbstractTensorNetwork) = NamedGraphs.edges(graph(tn))
-NamedGraphs.edgetype(tn::AbstractTensorNetwork) = NamedGraphs.edgetype(graph(tn))
-NamedGraphs.vertextype(tn::AbstractTensorNetwork) = NamedGraphs.vertextype(graph(tn))
 
 virtualinds(tn::AbstractTensorNetwork, e::NamedEdge) = linkinds(tn, e)
 virtualind(tn::AbstractTensorNetwork, e::NamedEdge) = only(virtualinds(tn, e))
@@ -44,10 +27,7 @@ function map_tensors!(f::Function, tn::AbstractTensorNetwork)
     return tn
 end
 
-function map_tensors(f::Function, tn::AbstractTensorNetwork)
-    tn = copy(tn)
-    return map_tensors!(f, tn)
-end
+map_tensors(f::Function, tn::AbstractTensorNetwork) = map_vertex_data(f, tn)
 
 function Adapt.adapt_structure(to, tn::AbstractTensorNetwork)
     return map_tensors(x -> adapt(to)(x), tn)

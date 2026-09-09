@@ -1,6 +1,6 @@
 using Dictionaries: Dictionary
 using Graphs: Graphs
-using NamedGraphs: NamedGraphs, add_edge!, incident_edges, rem_edges!
+using NamedGraphs: NamedGraphs, add_edge!, incident_edges
 using Adapt
 
 const TensorNetwork = ITensorNetwork

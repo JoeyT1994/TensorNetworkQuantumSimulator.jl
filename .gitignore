@@ -8,3 +8,4 @@
 Manifest.toml
 .vscode/
 .DS_Store
+/dev/design/

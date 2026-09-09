@@ -27,11 +27,11 @@ VectorInterface = "409d34a3-91d5-4945-b6ec-7529ddf182d8"
 
 [compat]
 Adapt = "4.3.0"
-DataGraphs = "0.5"
+DataGraphs = "0.6"
 Dictionaries = "0.4"
 Graphs = "1.8.0"
 ITensorBase = "0.13.7"
-ITensorNetworksNext = "0.9.13"
+ITensorNetworksNext = "0.10.0"
 KrylovKit = "0.10.2"
 LinearAlgebra = "1.10"
 MatrixAlgebraKit = "0.6.8"
