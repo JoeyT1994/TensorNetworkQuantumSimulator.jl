@@ -33,7 +33,7 @@
 # See docs/ctmrg_status.md for the current numbers and the open problems;
 # docs/finite_ctmrg_design.md for the derivations and the full record of what was tried.
 
-using LinearAlgebra: norm, dot, Diagonal, qr, svd, diagind
+using LinearAlgebra: norm, dot, qr, svd
 using Random: Xoshiro
 using KrylovKit: schursolve, Arnoldi
 
@@ -51,14 +51,12 @@ governs, referenced below.
 | field | default | what it selects |
 |---|---|---|
 | `gauge` | `true` | fix the projector pair's gauge to the previous sweep by orthogonal Procrustes, making iterates comparable — see `_ctm_align`. Prerequisite for any accelerator. |
-| `degtol` | `0.0` | relative gap below which a truncation is judged to split a near-degenerate multiplet, and is backed off. `0` disables. Matters for double-layer corners (ket↔bra exchange gives `λ_ij = λ_ji`). Applies to the `:cut` singular-value truncations AND (2026-08-21) to the `:cycle` spectrum cut in `_ctm_cycle_projectors` — an invariant subspace forced to split a cluster is ill-defined and re-resolves differently each sweep (`cycle_subspace = true` has no spectrum, so it is not consulted there). |
+| `degtol` | `0.0` | relative gap below which a truncation is judged to split a near-degenerate multiplet, and is backed off. `0` disables. Matters for double-layer corners (ket↔bra exchange gives `λ_ij = λ_ji`). Applies to the `:cut` singular-value truncations AND (2026-08-21) to the `:cycle` spectrum cut in `_ctm_cycle_projectors` — an invariant subspace forced to split a cluster is ill-defined and re-resolves differently each sweep. |
 | `qr_cutoff` | `1e-13` | relative cutoff on the `S` values the projector inverts. It can sit this low because `S` comes off a triangular product rather than a squared object — see `_ctm_twosided_projector_qr`. Measured 2026-08-11 (4 seeds, both projectors, 5×5 D=2 at χ=4/8): **INERT** — `⟨Z⟩` is identical to every digit from 1e-15 to 1e-7, i.e. the guard never fires at these sizes. It is insurance against `S^(-1/2)` amplification, not a tuning lever. |
 | `optimal_max` | `12` | tensor count above which contraction-order search falls back from exhaustive netcon to greedy. A FEASIBILITY gate — see `_ctm_contract`. |
 | `projector` | `:cut` | which interface projector to derive: `:cut` (optimal rank-χ truncation of one bipartition) or `:cycle` (four-corner cycle, which makes `F` stationary). See "Choosing a projector" below. |
-| `cycle_subspace` | `false` | ⚠️ **`:cycle` only.** cycle solve via BLOCK SUBSPACE ITERATION (matmul + QR — GPU-friendly, no general Schur/eig, batchable) instead of the matrix-free Krylov `schursolve`. Accuracy-equivalent to `schursolve` on converged cases (single-layer, lossless → machine precision), comparable-but-noisier on truncated/limit-cycling ones. Meant for GPU. |
-| `cycle_iters` | `20` | block power steps when `cycle_subspace = true` (ignored otherwise). ~6 suffices for single-layer/lossless; double-layer needs ~15-20 (fewer under-resolves the subspace). |
-| `cycle_rankcut` | `0.0` | ⚠️ **`:cycle`, `schursolve` path only** (ignored under `cycle_subspace = true`, which has no spectrum to cut on). Relative cutoff on the four-corner cycle spectrum: retained modes with `abs(λ) ≤ cycle_rankcut · abs(λ_max)` are dropped. Guards the OVER-parametrised regime (χ above the state's rank), where the surplus near-null modes are arbitrary and wander sweep to sweep. `0` disables — deliberately the default: a fixed MAGNITUDE cutoff that fixes over-parametrised cases breaks higher-entanglement ones (measured 2026-08-19: 1e-10 repairs 5×5 nl=3 but degrades 4×4 nl=4 from 1e-15 to 7.6e-11, and no smaller value threads the needle — junk and real weight OVERLAP in magnitude across cases). `cycle_gapcut` below is the gap-based rule that does thread it. Distinct from `qr_cutoff`, which cuts the biorthogonal OVERLAP. |
-| `cycle_gapcut` | `1e-4` | ⚠️ **`:cycle`, `schursolve` path only.** Noise-cliff rank cut: truncate the trailing spectral block below the first cliff that is BOTH steep (`abs(λ_{j+1}) ≤ cycle_gapcut · abs(λ_j)`) and genuinely tiny (`abs(λ_{j+1}) ≤ √eps · abs(λ_1)`). Gap-based where `cycle_rankcut` is magnitude-based: measured cliffs are 1.8e5 into a noise block against ≤ 4.5e2 anywhere inside a physical decay, so the rule kills the over-parametrised wander while leaving deep-but-real modes (down to 3.4e-14 relative, measured to carry observable weight) untouched. `0` disables. The left/right spectral-consistency guard (see `_ctm_cycle_projectors`) is always on and independent of this knob. |
+| `cycle_rankcut` | `0.0` | ⚠️ **`:cycle` only.** Relative cutoff on the four-corner cycle spectrum: retained modes with `abs(λ) ≤ cycle_rankcut · abs(λ_max)` are dropped. Guards the OVER-parametrised regime (χ above the state's rank), where the surplus near-null modes are arbitrary and wander sweep to sweep. `0` disables — deliberately the default: a fixed MAGNITUDE cutoff that fixes over-parametrised cases breaks higher-entanglement ones (measured 2026-08-19: 1e-10 repairs 5×5 nl=3 but degrades 4×4 nl=4 from 1e-15 to 7.6e-11, and no smaller value threads the needle — junk and real weight OVERLAP in magnitude across cases). `cycle_gapcut` below is the gap-based rule that does thread it. Distinct from `qr_cutoff`, which cuts the biorthogonal OVERLAP. |
+| `cycle_gapcut` | `1e-4` | ⚠️ **`:cycle` only.** Noise-cliff rank cut: truncate the trailing spectral block below the first cliff that is BOTH steep (`abs(λ_{j+1}) ≤ cycle_gapcut · abs(λ_j)`) and genuinely tiny (`abs(λ_{j+1}) ≤ √eps · abs(λ_1)`). Gap-based where `cycle_rankcut` is magnitude-based: measured cliffs are 1.8e5 into a noise block against ≤ 4.5e2 anywhere inside a physical decay, so the rule kills the over-parametrised wander while leaving deep-but-real modes (down to 3.4e-14 relative, measured to carry observable weight) untouched. `0` disables. The left/right spectral-consistency guard (see `_ctm_cycle_projectors`) is always on and independent of this knob. |
 
 ## Choosing a projector
 
@@ -124,11 +122,6 @@ Base.@kwdef struct CTMOptions
     qr_cutoff::Float64 = 1.0e-13
     optimal_max::Int = 12
     projector::Symbol = :cut
-    # `:cycle` cycle-solve: `false` (default) = matrix-free Krylov (`schursolve`); `true` = block
-    # subspace iteration (matmul + QR only, GPU-friendly, batchable). `cycle_iters` block power steps
-    # are used only when `cycle_subspace = true`.
-    cycle_subspace::Bool = false
-    cycle_iters::Int = 20
     # Relative cutoff on the four-corner cycle SPECTRUM: drop retained modes with |λ| below
     # `cycle_rankcut · |λ_max|`. `0` disables. Guards the OVER-parametrised regime (χ larger than the
     # state's actual rank), where the surplus near-null modes are arbitrary and wander sweep-to-sweep,
@@ -141,14 +134,12 @@ Base.@kwdef struct CTMOptions
     cycle_gapcut::Float64 = 1.0e-4
 
     function CTMOptions(gauge, degtol, qr_cutoff, optimal_max,
-                        projector, cycle_subspace, cycle_iters, cycle_rankcut, cycle_gapcut)
+                        projector, cycle_rankcut, cycle_gapcut)
         projector in (:cut, :cycle) || throw(ArgumentError(
             "projector must be :cut or :cycle, got $(repr(projector))"))
-        cycle_iters >= 1 || throw(ArgumentError("cycle_iters must be ≥ 1, got $cycle_iters"))
         0 <= cycle_gapcut < 1 || throw(ArgumentError(
             "cycle_gapcut is a relative gap ratio and must lie in [0, 1), got $cycle_gapcut"))
-        return new(gauge, degtol, qr_cutoff, optimal_max, projector,
-                   cycle_subspace, cycle_iters, cycle_rankcut, cycle_gapcut)
+        return new(gauge, degtol, qr_cutoff, optimal_max, projector, cycle_rankcut, cycle_gapcut)
     end
 end
 
@@ -215,7 +206,21 @@ function CTMEnvironmentCache(net, maxdim::Integer; kwargs...)
     # hexagonal and heavy-hexagonal lattices (laid out on (x,y) with vertices/edges missing) use
     # the same engine.
     grid = Dict{Tuple{Int, Int}, eltype(vs)}((Int(v[1]), Int(v[2])) => v for v in vs)
+    length(grid) == length(vs) || error("CTMEnvironmentCache: two vertices share a grid position.")
     coords = Dict{eltype(vs), Tuple{Int, Int}}(v => pos for (pos, v) in grid)
+    # Every bond must join grid NEIGHBOURS. The corner moves project the links between adjacent
+    # columns/rows and nothing else: a bond between non-adjacent positions (a periodic wraparound,
+    # a long-range coupling) would ride along uncontracted inside every block, so each sweep adds
+    # legs and the region contractions grow exponentially — at any χ, including χ = 1. Reject it
+    # here with a reason rather than let the caller discover it as an endless run.
+    for e in edges(graph(net))
+        (x1, y1) = coords[src(e)]; (x2, y2) = coords[dst(e)]
+        abs(x1 - x2) + abs(y1 - y2) == 1 || error(
+            "CTMEnvironmentCache: bond $(src(e)) – $(dst(e)) joins non-adjacent grid positions " *
+            "$((x1, y1)) and $((x2, y2)). CTMRG needs an OPEN lattice whose bonds connect grid " *
+            "neighbours (periodic lattices, e.g. `named_hexagonal_lattice_graph(...; periodic = true)`, " *
+            "are not supported).")
+    end
     Lx = maximum(first.(keys(grid))); Ly = maximum(last.(keys(grid)))
     return CTMEnvironmentCache(net, grid, coords, (Lx, Ly), Int(maxdim), nothing, opts)
 end
@@ -267,39 +272,12 @@ _ctm_setenv(cache::CTMEnvironmentCache, env) =
 # geqrf/gesvd batch well on GPU where batched Hermitian eig support is thin, and a sweep is 200–384
 # INDEPENDENT tiny factorizations (n ≤ 128) — a batching problem, not a big-linear-algebra one.
 #
-# DEVICE NOTE. The `:cut` projector is written entirely in tensor verbs (QR, SVD, diagonal
-# whitening — MatrixAlgebraKit on the network's device, any backend), and its only scalar work is
-# the O(χ) truncation rule inside the SVD. The `:cycle` path below still works on raw matrices via
-# `array`, which is device-preserving. See docs/ctmrg_status.md "GPU / CUDA compatibility".
+# DEVICE / BACKEND NOTE. Both projectors are written entirely in tensor verbs — QR, SVD, diagonal
+# whitening, direct sums, and Krylov iteration on tensor vectors — so they run on whatever backend
+# and device the network lives on (MatrixAlgebraKit factorizations, TensorKit for graded data). The
+# only scalar work is O(χ): the truncation rule inside the SVD and the cycle's spectral guards. See
+# docs/ctmrg_status.md "GPU / CUDA compatibility".
 
-# Deterministic start vector for every Krylov solve in this file.
-#
-# KrylovKit draws its own start from the GLOBAL RNG when none is supplied, which makes the whole
-# engine irreproducible run to run — measured on the 5×5, `⟨X⟩` at χ=16 wandered over
-# 8.1e-10 – 9.3e-10 and `|F − ln Z|` at χ=32 over 8.9e-16 – 6.2e-15. That is fatal for regression
-# testing and for comparing two projectors, where the difference under test can be smaller than the
-# run-to-run spread. Seeding locally from the problem's shape makes each solve reproducible AND
-# leaves the caller's global stream untouched (a CTM sweep must not perturb a user's `Random.seed!`).
-#
-# The seeded draw happens on the CPU (deterministic RNG) and is then moved onto `ref`'s device, so
-# every Krylov solve starts from a device-resident vector when the network is on a GPU. On CPU this
-# is a plain copy, so the drawn values — hence all numerics — are bit-identical to a direct `randn`.
-
-# A CPU array placed onto `ref`'s device/array-type by a bulk copy (never scalar, never CPU-forcing).
-_ctm_to_device(ref::AbstractArray, v::AbstractArray) =
-    copyto!(similar(ref, eltype(v), size(v)), v)
-# (m × n) zeros on `ref`'s device/eltype.
-_ctm_zeros_like(ref::AbstractArray, m::Integer, n::Integer) =
-    fill!(similar(ref, m, n), zero(eltype(ref)))
-# First `n` columns of the (m × m) identity, on `ref`'s device/eltype (broadcast scatter, GPU-safe).
-function _ctm_eye_like(ref::AbstractArray, m::Integer, n::Integer)
-    E = _ctm_zeros_like(ref, m, n)
-    E[diagind(E)] .= one(eltype(ref))
-    return E
-end
-
-_ctm_startvec(ref::AbstractArray, n::Integer, tag) =
-    _ctm_to_device(ref, randn(Xoshiro(hash(tag, hash(n))), eltype(ref), n))
 
 # Truncation rule shared by every `:cut` factorization — rank ≤ χ, drop singular values at or
 # below `qr_cutoff · s₁`, never split a multiplet degenerate to `degtol`. It is a backend truncation
@@ -384,19 +362,8 @@ end
 function _ctm_twosided_projector_qr(Bw, Be, ins::Vector{<:Index}, maxdim::Integer, opts::CTMOptions)
     RA = _ctm_tri_factor(Bw, ins)
     RB = _ctm_tri_factor(Be, ins)
-    bA = only(uniqueinds(RA, ins))
-    W = RA * RB                                          # (bA, bB): contracts `ins`, no conjugation
-    U, S, V = svd(W, [bA]; trunc = _ctm_trunc(maxdim, opts))
-    # Seam convention: `U * S * V` (bilinear) reconstructs `W`, so the returned `V` is the
-    # CONJUGATE of the right singular vectors — hence `dag(V)` (inert for real data). `dag(isk)` is
-    # the copy of S^{-1/2} (real, so only the arrows change) whose legs pair with `dag(U)`/`dag(V)`
-    # on a graded backend; on dense tensors arrows are inert and this is just the algebra above.
-    isk = map_diag(x -> inv(sqrt(x)), S)                 # S^{-1/2} on S's (u, v)
-    PA = (RB * dag(V)) * dag(isk)                        # (ins…, u): R_Bᵀ V S^{-1/2}
-    PB = (dag(U) * RA) * dag(isk)                        # (v, ins…): S^{-1/2} Uᴴ R_A
-    uA = only(uniqueinds(PA, ins))
-    PB = replaceind(PB, only(uniqueinds(PB, ins)), dag(uA))   # the opposite copy of P_A's bond
-    return PA, PB, uA
+    # `_ctm_biorth` forms `R_A R_Bᵀ` (bilinear, over `ins`), takes its truncated SVD, and whitens.
+    return _ctm_biorth(RB, RA, ins, _ctm_trunc(maxdim, opts))
 end
 
 
@@ -683,11 +650,19 @@ end
 # CONSUMING tensor is the right basis and the one on the producer is the left, so against our
 # west/north = `P_A` convention W and S take `P_A = V_L` while E and N take `P_A = V_R`.
 #
-# MATRIX-FREE, so bonds may be rectangular. Bonds are `k_prev · D_layer` in general, and `k_prev = 1`
-# at the boundary. Their engine pads every corner to a fixed χ with a separate `rank` field because a
-# DENSE periodic Schur needs square equal-size factors; we only need the cycle's ACTION on a vector —
-# four matvecs, product never formed — so `schursolve` handles adaptive bonds natively and, on real
-# inputs, returns a real orthonormal basis (no conjugate-pair handling to get wrong).
+# MATRIX-FREE AND IN TENSOR FORM, so bonds may be rectangular and the corners may be graded. Bonds
+# are `k_prev · D_layer` in general, and `k_prev = 1` at the boundary. Their engine pads every corner
+# to a fixed χ with a separate `rank` field because a DENSE periodic Schur needs square equal-size
+# factors; we only need the cycle's ACTION on a vector — four contractions, product never formed —
+# so `schursolve` handles adaptive bonds natively and, on real inputs, returns a real orthonormal
+# basis (no conjugate-pair handling to get wrong). The Krylov vectors ARE tensors on the west legs
+# (KrylovKit needs only the VectorInterface, which both backends provide), each carrying a dim-1
+# "charge" leg: trivial on dense data, one per sector on graded data — a symmetric tensor on the
+# bond legs alone would live in the charge-zero sector only, and the cycle map conserves charge, so
+# the graded cycle problem IS a direct sum of per-sector problems. The solve therefore runs once per
+# sector (once, for dense) and the sector spectra are MERGED before every rank decision below; the
+# retained bond gets one count per sector for free when the Ritz vectors are stacked by direct sum
+# along their charge legs. Nothing is ever unwrapped to a matrix.
 #
 # RANK. `schursolve` stops when its Krylov space closes, so the resolved rank `kres` can fall short of
 # what a bond could hold — the four-fold spectrum is ~the 4th power of one corner's. A shortfall is
@@ -708,55 +683,85 @@ end
 # irreproducible run to run (⟨X⟩ at χ=16 wandered 8.1e-10 – 9.3e-10, wider than the gap between the
 # two projectors). The local RNG leaves the caller's global stream untouched.
 
-# Orthonormal columns for the propagated cycle basis.
+# The legs of `is` as tensor `t` carries them (same identities, `t`'s orientations).
+_ctm_legs_of(t, is) = filter(i -> i ∈ is, collect(inds(t)))
+
+# Stack vectors that agree on every leg but a dim-1 slot leg into one basis tensor — the direct
+# sum along the slot legs, one column per vector. Returns the basis; its bond is the leg not in
+# `vs[1]`'s other legs. (On graded data the slot legs carry the vectors' sectors, so the bond
+# comes out with one count per sector.)
+function _ctm_stack(vs::AbstractVector, slots::AbstractVector)
+    acc, w = vs[1], slots[1]
+    for j in 2:length(vs)
+        acc = directsum(acc => w, vs[j] => slots[j]; tags = "Link,cyc")
+        w = only(uniqueinds(acc, vs[1]))
+    end
+    return acc
+end
+
+# Orthonormal basis of the range of `X` over the legs `keep`: the Q of `X = Q R`.
 #
 # ⚠️ `qr` is UNPIVOTED with no rank check: for rank-deficient `X` the surplus columns are arbitrary
 # completions outside `range(X)`, and the width-based guard below cannot detect it. Deliberate —
 # pivoting it was measured (8 seeds) to be bit-identical where the deficiency never fires and slightly
 # WORSE where it does, and it does not fix the 8×8 plateau. See docs/ctmrg_status.md.
-# Thin orthonormal basis: the first `k` columns of `qr(X).Q`, materialized device-generically.
-# `Matrix(qr(X).Q)` would force CPU; instead apply the (implicit) Q to a device-resident thin
-# identity — identical columns, on X's device. `min(k, size(X,2))` because Q has no more than
-# `size(X,2)` columns spanning the range.
-_ctm_orthcols(X, k) = qr(X).Q * _ctm_eye_like(X, size(X, 1), min(k, size(X, 2)))
+_ctm_orthbasis(X, keep::Vector{<:Index}) = first(qr(X, keep))
 
-# Whiten a pair so that `B A = I`, via the SVD of their overlap.
+# Whiten a pair into a biorthogonal projector pair over the interface `ins`.
 #
-# The overlap MUST be truncated, not merely floored at `eps`: near-null overlap directions get
-# multiplied by `S^(-1/2)`, amplifying pure noise — the same failure `qr_cutoff` guards against in
-# the cut projector. Dropping below `cutoff · S[1]` shrinks `k` instead.
-function _ctm_biorth(A::AbstractMatrix, B::AbstractMatrix, cutoff::Real)
-    F = svd(B * A)
-    s0 = Array(real.(F.S))                  # CPU copy: the rank count below is scalar
-    isempty(s0) && return nothing
-    k = count(>(cutoff * s0[1]), s0)
-    k < 1 && return nothing
-    isq = Diagonal(_ctm_to_device(F.U, 1 ./ sqrt.(s0[1:k])))   # whitening scale on the factors' device
-    return A * F.V[:, 1:k] * isq, isq * F.U[:, 1:k]' * B
+#   O = Brow · Acol = U S Vᴴ          (bilinear contraction over `ins`)
+#   P_A = Acol V S^{-1/2}  (ins… → w),   P_B = S^{-1/2} Uᴴ Brow  (w → ins…),   P_B P_A = 𝟙_w
+#
+# The truncation strategy owns the rank: near-null overlap directions get multiplied by `S^{-1/2}`,
+# amplifying pure noise, so they must be DROPPED (the strategy's relative cutoff), never floored.
+# Seam convention: `U * S * V` (bilinear) reconstructs `O`, so the returned `V` is the CONJUGATE
+# of the right singular vectors — hence `dag(V)` (inert for real data). `dag(isk)` is the copy of
+# S^{-1/2} (real, so only the arrows change) whose legs pair with `dag(U)`/`dag(V)` on a graded
+# backend; on dense tensors arrows are inert and this is just the algebra above.
+function _ctm_biorth(Acol, Brow, ins::Vector{<:Index}, trunc)
+    bB = only(uniqueinds(Brow, ins))
+    O = Brow * Acol                                      # (bB, bA)
+    U, S, V = svd(O, [bB]; trunc)
+    isk = map_diag(x -> inv(sqrt(x)), S)                 # S^{-1/2} on S's (u, v)
+    PA = (Acol * dag(V)) * dag(isk)                      # (ins…, u)
+    PB = (dag(U) * Brow) * dag(isk)                      # (v, ins…)
+    uA = only(uniqueinds(PA, ins))
+    PB = replaceind(PB, only(uniqueinds(PB, ins)), dag(uA))   # the opposite copy of P_A's bond
+    return PA, PB, uA
 end
 
 function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOptions,
                                seed::UInt)
     any(isnothing, (ENW, ENE, ESE, ESW)) && return nothing
+    As = (ESW, ESE, ENE, ENW)                    # A_l : bond l -> bond l+1  (W->S, S->E, E->N, N->W)
     ins = (collect(commoninds(ENW, ESW)), collect(commoninds(ESW, ESE)),
            collect(commoninds(ENE, ESE)), collect(commoninds(ENW, ENE)))     # W, S, E, N
     any(isempty, ins) && return nothing
-    cs = ntuple(l -> combiner(ins[l]...), 4)
-    io = ntuple(l -> combinedind(cs[l]), 4)
-    As = try
-        [array((ESW * cs[1]) * cs[2], io[2], io[1]), array((ESE * cs[2]) * cs[3], io[3], io[2]),
-         array((ENE * cs[3]) * cs[4], io[4], io[3]), array((ENW * cs[4]) * cs[1], io[1], io[4])]
-    catch err
-        err isa InterruptException && rethrow()
-        return nothing                          # a corner carrying more than its two interfaces
+    for l in 1:4                                 # a corner carrying more than its two interfaces
+        isempty(uniqueinds(As[l], vcat(ins[l], ins[mod1(l + 1, 4)]))) || return nothing
     end
-    nsp = [dim(io[l]) for l in 1:4]
+    nsp = [dim(ins[l]) for l in 1:4]
     kcyc = min(Int(maxdim), minimum(nsp))
     kcyc < 1 && return nothing
-    # Seeded on plaquette POSITION only, so the start vector is bit-identical every sweep. Seeding
-    # on the bond dimensions too let it move whenever a rank shifted, which showed up as sweep-to-
-    # sweep basis wander (state distance floor 1e-10 rather than 3e-11).
-    v0 = _ctm_to_device(As[1], randn(Xoshiro(seed), eltype(As[1]), nsp[1]))
+    elt = scalartype(ESW)
+    # Right vectors live on the west legs as ENW carries them (so `x * A₁` contracts), left vectors
+    # as ESW carries them (so `u * A₄` contracts): `u · M · x` is a BILINEAR pairing, no conjugation.
+    wR = _ctm_legs_of(ENW, ins[1]); wL = _ctm_legs_of(ESW, ins[1])
+    act(x) = (((x * As[1]) * As[2]) * As[3]) * As[4]
+    tca(u) = (((u * As[4]) * As[3]) * As[2]) * As[1]
+    # Seeded on plaquette POSITION only, so the start vectors are bit-identical every sweep. Seeding
+    # on the bond dimensions too let them move whenever a rank shifted, which showed up as sweep-to-
+    # sweep basis wander (state distance floor 1e-10 rather than 3e-11). One charge leg per sector;
+    # a sector the west legs cannot reach gives a zero start vector and is skipped.
+    rng = Xoshiro(seed)
+    starts = Tuple{Any, Any, Any}[]              # (charge leg, right start, left start)
+    for c in charge_sectors(wR)
+        xR = random_tensor(rng, elt, vcat(wR, [c]))
+        xL = random_tensor(rng, elt, vcat(wL, [dag(c)]))
+        (norm(xR) > 0 && norm(xL) > 0) || continue
+        push!(starts, (c, xR, xL))
+    end
+    isempty(starts) && return nothing
     # SCALE-FREE TOLERANCE — this was the algorithm's accuracy floor, worth ~1000× at χ=32.
     #
     # KrylovKit's `tol` is ABSOLUTE on the residual, and the cycle spectrum is the PRODUCT of the four
@@ -767,136 +772,141 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
     # still orders above machine epsilon, and the projector silently lost them.
     #
     # Normalising the action by its dominant EIGENVALUE MAGNITUDE — the spectral radius, which is
-    # what power iteration converges to, NOT σ_max (five power iterations — the invariant
-    # subspace is scale-invariant, so it is free) makes the tolerance relative. Measured `⟨X⟩` at
-    # χ=32: tol 1e-13 → 5.2e-11, 1e-15 → 7.6e-13, 1e-16 → 4.9e-14.
+    # what power iteration converges to, NOT σ_max (five power iterations per sector — the invariant
+    # subspace is scale-invariant, so it is free; the largest over sectors is the radius) makes the
+    # tolerance relative. Measured `⟨X⟩` at χ=32: tol 1e-13 → 5.2e-11, 1e-15 → 7.6e-13,
+    # 1e-16 → 4.9e-14.
     #
     # Do not try to make `tol` χ-adaptive. Varying it alone changes NOTHING at χ=4 (identical at
     # 1e-13/1e-14/1e-15/1e-16), and tying it to `s_kcyc/s_1` via a loose first pass collapses χ=32 to
     # 9.0e-09, because a loose pass cannot resolve 32 eigenvalues and so reads the tail off the wrong
     # one. The χ=4 cost that remains is the criterion, not the solver — see the docstring.
-    scale = let v = v0 / max(norm(v0), eps(real(eltype(As[1])))), sc = one(real(eltype(As[1])))
+    scale = zero(real(elt))
+    for (_, xR, _) in starts
+        v = xR / norm(xR); sc = zero(real(elt))
         for _ in 1:5
-            w = As[4] * (As[3] * (As[2] * (As[1] * v)))
-            nw = norm(w)
+            w = act(v); nw = norm(w)
             (isfinite(nw) && nw > 0) || break
             v, sc = w / nw, nw
         end
-        sc > 0 && isfinite(sc) ? sc : one(sc)
+        scale = max(scale, sc)
     end
-    fwd(v) = (As[4] * (As[3] * (As[2] * (As[1] * v)))) / scale
-    bwd(u) = (transpose(As[1]) * (transpose(As[2]) *
-              (transpose(As[3]) * (transpose(As[4]) * u)))) / scale
-    VR = Vector{Any}(undef, 4); VL = Vector{Any}(undef, 4)
-    local kres
-    if opts.cycle_subspace
-        # GPU-friendly cycle solve (`cycle_subspace = true`). Replace the sequential matrix-free Krylov
-        # with BLOCK SUBSPACE ITERATION for the dominant invariant subspace: only matmul + QR, which
-        # CUSOLVER HAS (it has no general non-Hermitian Schur/eig, so `schursolve` can't be done as a
-        # single dense GPU call). A few big block ops instead of many tiny sequential matvecs, and
-        # batchable across plaquettes. `cycle_iters` needs ~15-20 for double-layer (fewer under-resolves).
-        k = kcyc
-        BR = _ctm_to_device(As[1], randn(Xoshiro(seed), eltype(As[1]), nsp[1], k))
-        BL = _ctm_to_device(As[1], randn(Xoshiro(seed + 0x9e3779b9), eltype(As[1]), nsp[1], k))
-        for _ in 1:opts.cycle_iters
-            BR = _ctm_orthcols(fwd(BR), k)
-            BL = _ctm_orthcols(bwd(BL), k)
+    (scale > 0 && isfinite(scale)) || (scale = one(real(elt)))
+    fwd(x) = act(x) / scale
+    bwd(u) = tca(u) / scale
+    # `verbosity = 0`: `schursolve` stopping on a closed invariant subspace smaller than `kcyc` is
+    # ROUTINE here (the four-fold spectrum runs out before the bond does), handled by `kres` below —
+    # KrylovKit's per-call warning for it buries real problems in noise.
+    alg = Arnoldi(; krylovdim = max(4kcyc + 8, 24), tol = 1.0e-16, verbosity = 0)
+    # One solve per sector and side. Every entry: (|λ|, sector, position in that sector's Schur
+    # list, converged?) — the sector lists are then MERGED by magnitude for all the rank decisions.
+    vecsR = Vector{Any}(undef, length(starts)); vecsL = Vector{Any}(undef, length(starts))
+    entR = NamedTuple{(:mag, :s, :j, :ok), Tuple{Float64, Int, Int, Bool}}[]
+    entL = similar(entR)
+    try
+        for (si, (c, xR, xL)) in enumerate(starts)
+            k = min(kcyc, length(data(xR)))     # a sector holds at most its own dimension
+            _, VRv, valsR, iR = schursolve(fwd, xR, k, :LM, alg)
+            _, VLv, valsL, iL = schursolve(bwd, xL, k, :LM, alg)
+            vecsR[si] = VRv; vecsL[si] = VLv
+            append!(entR, ((mag = Float64(abs(valsR[j])), s = si, j = j, ok = j <= iR.converged) for j in eachindex(valsR)))
+            append!(entL, ((mag = Float64(abs(valsL[j])), s = si, j = j, ok = j <= iL.converged) for j in eachindex(valsL)))
         end
-        (all(isfinite, BR) && all(isfinite, BL)) || return nothing
-        kres = min(k, size(BR, 2), size(BL, 2))
-        kres < 1 && return nothing
-        VR[1] = BR; VL[1] = permutedims(BL)
-    else
-        # `verbosity = 0`: `schursolve` stopping on a closed
-        # invariant subspace smaller than `kcyc` is ROUTINE here (the four-fold spectrum runs out
-        # before the bond does), handled by `kres`/padding below — KrylovKit's per-call warning for
-        # it buries real problems in noise.
-        alg = Arnoldi(; krylovdim = max(4kcyc + 8, 24), tol = 1.0e-16, verbosity = 0)
-        local VRv, VLv, valsR, valsL, iR, iL
-        try
-            _, VRv, valsR, iR = schursolve(fwd, v0, kcyc, :LM, alg)
-            _, VLv, valsL, iL = schursolve(bwd, v0, kcyc, :LM, alg)
-        catch err
-            err isa InterruptException && rethrow()
-            return nothing                          # fall through to the pairwise cut
+    catch err
+        err isa InterruptException && rethrow()
+        return nothing                          # fall through to the pairwise cut
+    end
+    sort!(entR; by = e -> -e.mag); sort!(entL; by = e -> -e.mag)
+    # Solve the cycle at the rank it can actually RESOLVE. `schursolve` terminates when the Krylov
+    # space closes, which at an interior plaquette is ~19 of a requested 32: the four-fold product's
+    # spectrum is ~the 4th power of one corner's, so directions past that carry no cycle weight.
+    # Values beyond `info.converged` are unconverged Ritz estimates — fine for a gap test below,
+    # never used as retained modes.
+    nv = min(length(entR), length(entL))
+    nv < 1 && return nothing
+    aR = [entR[j].mag for j in 1:nv]; aL = [entL[j].mag for j in 1:nv]
+    kres = min(kcyc, nv, something(findfirst(e -> !e.ok, entR), nv + 1) - 1,
+               something(findfirst(e -> !e.ok, entL), nv + 1) - 1)
+    kres < 1 && return nothing
+    # LEFT/RIGHT SPECTRAL CONSISTENCY (always on). `λ(Mᵀ) = λ(M)`, so the two solves must retain
+    # the SAME spectrum; where their magnitudes disagree, the "pair" spans two DIFFERENT spectral
+    # sets and `Π = P_A·P_B` is not a spectral projector of anything — it is an arbitrary oblique
+    # projector redrawn every sweep. Measured (over-parametrised 5×5 TFIM χ=16): kres = 14 with a
+    # 44% magnitude mismatch — ten noise modes, drawn differently on each side, which IS the
+    # residual-grows-with-χ wander. Keep the longest agreeing prefix. The 1e-3 tolerance is ~20×
+    # looser than the worst healthy case measured (4.3e-5) and ~400× tighter than the failure.
+    # Magnitudes over the FULL merged lists, not just the retained prefix: the degtol back-off
+    # below must compare the retained boundary `aR[kres]` against the first DROPPED value
+    # `aR[kres+1]`, which only exists if the list extends past the cut.
+    for j in 1:kres
+        if abs(aR[j] - aL[j]) > 1.0e-3 * max(aR[j], aL[j])
+            kres = j - 1
+            break
         end
-        # Solve the cycle at the rank it can actually RESOLVE. `schursolve` terminates when the Krylov
-        # space closes, which at an interior plaquette is ~19 of a requested 32: the four-fold product's
-        # spectrum is ~the 4th power of one corner's, so directions past that carry no cycle weight.
-        kres = min(kcyc, iR.converged, iL.converged, length(VRv), length(VLv))
-        kres < 1 && return nothing
-        # LEFT/RIGHT SPECTRAL CONSISTENCY (always on). `λ(Mᵀ) = λ(M)`, so the two solves must retain
-        # the SAME spectrum; where their magnitudes disagree, the "pair" spans two DIFFERENT spectral
-        # sets and `Π = P_A·P_B` is not a spectral projector of anything — it is an arbitrary oblique
-        # projector redrawn every sweep. Measured (over-parametrised 5×5 TFIM χ=16): kres = 14 with a
-        # 44% magnitude mismatch — ten noise modes, drawn differently on each side, which IS the
-        # residual-grows-with-χ wander. Keep the longest agreeing prefix. The 1e-3 tolerance is ~20×
-        # looser than the worst healthy case measured (4.3e-5) and ~400× tighter than the failure.
-        # Magnitudes over the FULL returned lists, not just the retained prefix: the degtol
-        # back-off below must compare the retained boundary `aR[kres]` against the first DROPPED
-        # value `aR[kres+1]`, which only exists if the list extends past the cut. (First version
-        # truncated `aR` at `kres`, which made that guard dead code — measured "degtol inert" and
-        # it was vacuous.) Values beyond `info.converged` are unconverged Ritz estimates — fine
-        # for a gap test, never used as retained modes.
-        nv = min(length(valsR), length(valsL))
-        kres = min(kres, nv)
-        kres < 1 && return nothing
-        aR = abs.(@view valsR[1:nv]); aL = abs.(@view valsL[1:nv])
-        for j in 1:kres
-            if abs(aR[j] - aL[j]) > 1.0e-3 * max(aR[j], aL[j])
-                kres = j - 1
+    end
+    kres < 1 && return nothing
+    # NOISE-CLIFF RANK CUT (`opts.cycle_gapcut`, 0 disables). Truncate the trailing block below
+    # the first cliff that is BOTH steep (`aR[j+1] ≤ gapcut·aR[j]`) and genuinely tiny
+    # (`aR[j+1] ≤ √eps·aR[1]`). Magnitude alone cannot separate noise from deep-but-real modes —
+    # the falsified fixed `cycle_rankcut` default: junk sits at 1.6e-11·|λ_1| on one measured
+    # case while REAL weight sits at 6.4e-13·|λ_1| on another — but the CLIFF can: measured
+    # 1.8e5 into the noise block against ≤ 4.5e2 anywhere inside a physical decay. The two
+    # conditions guard each other: a genuine spectral gap of ~1e4 with real modes below it fails
+    # the tininess floor (the cycle spectrum is ~ the 4th power of a corner's, so modest corner
+    # gaps make large cycle cliffs), and a smooth decay into tininess fails the cliff.
+    if opts.cycle_gapcut > 0
+        fl = sqrt(eps(real(elt))) * aR[1]
+        for j in 1:(kres - 1)
+            if aR[j + 1] <= opts.cycle_gapcut * aR[j] && aR[j + 1] <= fl
+                kres = j
                 break
             end
         end
-        kres < 1 && return nothing
-        # NOISE-CLIFF RANK CUT (`opts.cycle_gapcut`, 0 disables). Truncate the trailing block below
-        # the first cliff that is BOTH steep (`aR[j+1] ≤ gapcut·aR[j]`) and genuinely tiny
-        # (`aR[j+1] ≤ √eps·aR[1]`). Magnitude alone cannot separate noise from deep-but-real modes —
-        # the falsified fixed `cycle_rankcut` default: junk sits at 1.6e-11·|λ_1| on one measured
-        # case while REAL weight sits at 6.4e-13·|λ_1| on another — but the CLIFF can: measured
-        # 1.8e5 into the noise block against ≤ 4.5e2 anywhere inside a physical decay. The two
-        # conditions guard each other: a genuine spectral gap of ~1e4 with real modes below it fails
-        # the tininess floor (the cycle spectrum is ~ the 4th power of a corner's, so modest corner
-        # gaps make large cycle cliffs), and a smooth decay into tininess fails the cliff.
-        if opts.cycle_gapcut > 0
-            fl = sqrt(eps(real(eltype(As[1])))) * aR[1]
-            for j in 1:(kres - 1)
-                if aR[j + 1] <= opts.cycle_gapcut * aR[j] && aR[j + 1] <= fl
-                    kres = j
-                    break
-                end
-            end
-        end
-        # `degtol` back-off — the SAME semantics as the cut path, so it is no longer a `:cycle`
-        # no-op: never split a near-degenerate cluster at the cut. An invariant subspace that must
-        # split a cluster is ill-defined, and the sweep re-resolves it differently each time — the
-        # under-truncation limit cycle lands EXACTLY on one (measured `|λ_8| = |λ_9|` to displayed
-        # digits on random 5×5 at χ=8). At the default `degtol = 0` the `≤` still fires on EXACT
-        # magnitude ties — which on ⟨ψ|ψ⟩ networks are the (λ, conj λ) pairs the swap identity
-        # `conj(M) = S·M·S` forces on the spectrum (see docs/ctmrg_status.md, the falsified
-        # swap-symmetry entry) — so a conjugate pair straddling the cut is never split even with
-        # the knob off.
-        while kres > 1 && kres < length(aR) && abs(aR[kres] - aR[kres + 1]) <= opts.degtol * abs(aR[kres])
-            kres -= 1
-        end
-        # RANK-CAP (opts.cycle_rankcut > 0): drop the near-null tail of the cycle spectrum so that a χ
-        # larger than the state's rank does not carry arbitrary null modes. The spectrum is `:LM`-sorted
-        # so the survivors are a leading prefix. Off by default (cutoff 0) → committed behaviour.
-        if opts.cycle_rankcut > 0
-            n = min(kres, length(valsR), length(valsL))
-            n >= 1 || return nothing
-            capR = count(v -> abs(v) > opts.cycle_rankcut * abs(valsR[1]), @view valsR[1:n])
-            capL = count(v -> abs(v) > opts.cycle_rankcut * abs(valsL[1]), @view valsL[1:n])
-            kres = min(kres, capR, capL)
-            kres < 1 && return nothing
-        end
-        VR[1] = reduce(hcat, VRv[1:kres]); VL[1] = permutedims(reduce(hcat, VLv[1:kres]))
     end
+    # `degtol` back-off — the SAME semantics as the cut path: never split a near-degenerate cluster
+    # at the cut. An invariant subspace that must split a cluster is ill-defined, and the sweep
+    # re-resolves it differently each time — the under-truncation limit cycle lands EXACTLY on one
+    # (measured `|λ_8| = |λ_9|` to displayed digits on random 5×5 at χ=8). At the default
+    # `degtol = 0` the `≤` still fires on EXACT magnitude ties — which on ⟨ψ|ψ⟩ networks are the
+    # (λ, conj λ) pairs the swap identity `conj(M) = S·M·S` forces on the spectrum (see
+    # docs/ctmrg_status.md, the falsified swap-symmetry entry) — so a conjugate pair straddling the
+    # cut is never split even with the knob off. On graded data a tie across two sectors is
+    # harmless in itself (the sector label separates the modes), but it is backed off all the same.
+    while kres > 1 && kres < length(aR) && abs(aR[kres] - aR[kres + 1]) <= opts.degtol * abs(aR[kres])
+        kres -= 1
+    end
+    # RANK-CAP (opts.cycle_rankcut > 0): drop the near-null tail of the cycle spectrum so that a χ
+    # larger than the state's rank does not carry arbitrary null modes. Off by default → committed.
+    if opts.cycle_rankcut > 0
+        capR = count(>(opts.cycle_rankcut * aR[1]), @view aR[1:kres])
+        capL = count(>(opts.cycle_rankcut * aL[1]), @view aL[1:kres])
+        kres = min(kres, capR, capL)
+        kres < 1 && return nothing
+    end
+    # Retained bases: the leading `kres` of the merged RIGHT list, stacked along their charge legs;
+    # the left side takes the SAME number of modes per sector (its own leading ones in each sector).
+    # Per sector the two solves see one block and its transpose, so their spectra coincide and the
+    # counts must agree — letting the left side pick its own leading `kres` would let a cross-sector
+    # near-tie at the cut hand the two sides different sector contents, leaving `P_B P_A` rank-
+    # deficient in one sector and over-complete in another.
+    keepR = entR[1:kres]
+    keepL = eltype(entL)[]
+    for si in eachindex(starts)
+        nR = count(e -> e.s == si, keepR)
+        candL = filter(e -> e.s == si && e.ok, entL)
+        length(candL) >= nR || return nothing        # the left solve resolved fewer modes here
+        append!(keepL, candL[1:nR])
+    end
+    VR = Vector{Any}(undef, 4); VL = Vector{Any}(undef, 4)
+    VR[1] = _ctm_stack([vecsR[e.s][e.j] for e in keepR], [starts[e.s][1] for e in keepR])
+    VL[1] = _ctm_stack([vecsL[e.s][e.j] for e in keepL], [dag(starts[e.s][1]) for e in keepL])
+    # Propagate the invariant subspace around the plaquette: right bases forward, `V_R[l+1] ∝ A_l V_R[l]`;
+    # left bases backward, `V_L[l] ∝ V_L[l+1] A_l` — each re-orthonormalised.
     for l in 1:3
-        VR[l + 1] = _ctm_orthcols(As[l] * VR[l], kres)
+        VR[l + 1] = _ctm_orthbasis(As[l] * VR[l], ins[l + 1])
     end
     for l in (4, 3, 2)
-        VL[l] = permutedims(_ctm_orthcols(transpose(As[l]) * permutedims(VL[mod1(l + 1, 4)]), kres))
+        VL[l] = _ctm_orthbasis(VL[mod1(l + 1, 4)] * As[l], ins[l])
     end
     # Each bond keeps what it can support. Forcing all four to the plaquette's narrowest instead —
     # which is what their engine's `rank` field reports — measured immaterial (3.883e-12 against
@@ -912,27 +922,40 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
     # which breaks `_ctm_align`'s dimension guard, discards the gauge, and hands the next sweep a
     # basis it cannot compare with the last. That is the instability underneath the whole cycle route.
     # Their engine gets uniform widths for free from fixed-χ storage plus an explicit `rank` field;
-    # this is the same trick, and it is bookkeeping rather than physics.
+    # this is the same trick, and it is bookkeeping rather than physics. (On graded data the padding
+    # lands in whatever sectors `new_index` allots — zero columns carry no weight, so which sector
+    # they sit in is immaterial to every region value.)
     #
     # The padding must be applied AFTER `_ctm_biorth`, never before: whitening a pair with null
     # columns inverts a singular overlap, which is the `S^(-1/2)` amplification `qr_cutoff` guards
     # against. Build the pair at `kres`, then embed.
     out = Vector{Any}(undef, 4)
     for l in 1:4
-        (size(VR[l], 2) == kres && size(VL[l], 1) == kres) || return nothing
-        Acol = (l <= 2) ? permutedims(VL[l]) : VR[l]         # (dim x kres), the P_A side
-        Brow = (l <= 2) ? permutedims(VR[l]) : VL[l]         # (kres x dim), the P_B side
-        ab = _ctm_biorth(Acol, Brow, opts.qr_cutoff)
-        isnothing(ab) && return nothing
-        a, b = ab                                            # b * a = I exactly
-        (all(isfinite, a) && all(isfinite, b)) || return nothing
-        kt = target(l)
-        if size(a, 2) < kt                              # embed at rank, pad the rest with zeros
-            a = hcat(a, _ctm_zeros_like(a, size(a, 1), kt - size(a, 2)))
-            b = vcat(b, _ctm_zeros_like(b, kt - size(b, 1), size(b, 2)))
+        (dim(only(uniqueinds(VR[l], ins[l]))) == kres && dim(only(uniqueinds(VL[l], ins[l]))) == kres) ||
+            return nothing
+        Acol = (l <= 2) ? VL[l] : VR[l]                      # the P_A side
+        Brow = (l <= 2) ? VR[l] : VL[l]                      # the P_B side
+        ab = try
+            _ctm_biorth(Acol, Brow, ins[l], truncation_strategy(; maxdim = kres, rtol = opts.qr_cutoff))
+        catch err
+            err isa InterruptException && rethrow()
+            nothing
         end
-        w = Index(size(a, 2))
-        out[l] = (from_array(a, io[l], w) * cs[l], from_array(b, w, io[l]) * cs[l], w, ins[l])
+        isnothing(ab) && return nothing
+        a, b, w = ab                                         # b * a = 𝟙 exactly
+        (isfinite(norm(a)) && isfinite(norm(b))) || return nothing
+        kt = target(l); k = dim(w)
+        if k < kt                                            # embed at rank, pad the rest with zeros
+            z = new_index(a, kt - k; tags = "Link,pad")
+            z = z.dual == w.dual ? z : dag(z)                # pad leg oriented like P_A's bond
+            za = random_tensor(elt, vcat(_ctm_legs_of(a, ins[l]), [z])) * zero(elt)
+            zb = random_tensor(elt, vcat(_ctm_legs_of(b, ins[l]), [dag(z)])) * zero(elt)
+            a = directsum(a => w, za => z; tags = "Link,cyc")
+            b = directsum(b => w, zb => dag(z); tags = "Link,cyc")
+            w = only(uniqueinds(a, ins[l]))
+            b = replaceind(b, only(uniqueinds(b, ins[l])), dag(w))
+        end
+        out[l] = (a, b, w, ins[l])
     end
     return (W = out[1], S = out[2], E = out[3], N = out[4])
 end
@@ -972,7 +995,7 @@ function _ctm_align(pr, ins, prev)
     dim(wo) == dim(w) || return pr
     issetequal(collect(inds(PAo)), vcat(collect(ins), [wo])) || return pr   # same raw space?
     R = try
-        M = dag(PA) * PAo                                # (w, wo) = P_A† P_A⁰ over the raw legs
+        M = gram(PA, PAo, ins)                           # (w, wo) = P_A† P_A⁰ over the raw legs (Hilbert, any backend)
         U, S, V = svd(M, [w])
         # nearest unitary U Vᴴ: the seam's `V` is already conj(V_true), so the product is bilinear;
         # relabel V's bond to the copy opposite U's so the two contract on any backend.
@@ -983,7 +1006,26 @@ function _ctm_align(pr, ins, prev)
         return pr                                        # any other trouble: keep the unaligned pair
     end
     all(isfinite, (norm(PA), norm(PAo), norm(PB), norm(R))) || return pr
-    return (PA * R, dag(R) * PB, wo)
+    # The alignment must preserve `Π = P_A P_B`, i.e. R must be unitary. Equal total dimension does
+    # not guarantee that on a graded bond: the old and new bonds can distribute the same width over
+    # the sectors differently (zero-padding lands wherever `new_index` puts it), and a Procrustes map
+    # between two sector structures is rectangular blockwise. Measured without this guard: graded
+    # `:cycle` at χ=8 with `degtol = 1e-8` read `F` off by 3.8 (Z2 4×4 D=4). Checked on the pair's
+    # own product rather than against a bare identity, so fermionic parity conventions cannot
+    # trip it: `P_B P_A` before and after, relabelled onto the same bond, must agree.
+    PAn, PBn = PA * R, dag(R) * PB
+    ok = try
+        before = replaceind(PB, w, prime(w)) * PA                         # (w', w)
+        after = replaceind(PBn, wo, prime(wo)) * PAn                      # (wo', wo)
+        after = replaceinds(after, [prime(wo), wo], [prime(w), w])        # errors if the sector structures differ
+        dev = norm(after - before)
+        dev <= 1.0e-8 * sqrt(dim(w))
+    catch err
+        err isa InterruptException && rethrow()
+        false
+    end
+    ok || return pr
+    return (PAn, PBn, wo)
 end
 
 # Largest relative change of any block between two states. `nothing` means NO DISTANCE EXISTS, not
@@ -1007,8 +1049,19 @@ function _ctm_statedist(a::CTMVertexEnvironments, b::CTMVertexEnvironments)
         isnothing(ta) && isnothing(tb) && continue
         (isnothing(ta) || isnothing(tb)) && return nothing
         Set(inds(ta)) == Set(inds(tb)) || return nothing
-        na = norm(ta)
-        na > 0 && (worst = max(worst, norm(ta - tb) / na))
+        na = norm(ta); nb = norm(tb)
+        (na > 0 && nb > 0) || continue
+        # Direction distance, immune to a block's overall phase: blocks are norm-1 (`_ctm_rescale`),
+        # so `|ta − tb|² = 2 − 2 Re⟨ta,tb⟩`, and we use `2 − 2|⟨ta,tb⟩|` instead. A block's phase is
+        # gauge — `F` and every observable are ratios/products of blocks that appear an even number
+        # of times, so a sign flip of a block changes nothing physical — but `|ta − tb|` read it as a
+        # change of 2. Measured on the fermionic 3×3 D=3 (fZ2) at χ=4/16: half the interior blocks
+        # came back as minus themselves every sweep (Re⟨ta,tb⟩ = −0.9999 with |⟨ta,tb⟩| = 0.9999)
+        # while |ΔF| sat at 1e-15, so the sweep never certified and ran to `maxiter` every time.
+        # Where no phase flips occur (dense data) this equals the old distance.
+        ov = min(abs(dot(ta, tb)) / (na * nb), 1.0)
+        d = sqrt(max(0.0, 2 - 2ov))
+        worst = max(worst, d)
         n += 1
     end
     return n == 0 ? nothing : worst

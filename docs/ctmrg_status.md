@@ -725,6 +725,60 @@ block that derives `P` absorbs `P` and every block at the OTHER end of the inter
 content like `delta`. Test: "CVM on graded (Z2-symmetric) tensors". `:cycle` on graded tensors
 remains TO DO (per-sector Krylov via charged start vectors; it still goes through `array`).
 
+## Backend port, part 2 — *2026-09-08 (afternoon)*
+
+**`:cycle` is in tensor form too.** The Krylov vectors are tensors on the west legs with a dim-1
+"charge" leg (trivial on dense data, one per sector on graded data — a symmetric tensor on the bond
+legs alone lives in the charge-zero sector, and the cycle map conserves charge, so the graded cycle
+problem is a direct sum of per-sector problems). One `schursolve` per sector and side, sector spectra
+merged before every rank decision, Ritz vectors stacked into a basis by direct sum along the charge
+legs (`directsum(p1, p2)` two-pair form, new on the seam; the retained bond gets one count per sector
+for free), propagation by `qr`, the biorthogonal whitening shared with `:cut` (`_ctm_biorth`). Nothing
+is unwrapped. New seam verbs: `charge_sectors`, two-pair `directsum`, seeded `random_tensor`, `gram`;
+VectorInterface on `GradedTensor`. Retired: `cycle_subspace`/`cycle_iters` (block subspace iteration
+needs a non-Hermitian eigen the seam does not have). Validated: identical dense states agree with the
+matrix version to ≤1e-11 (`sq`/`hh` battery), two-projector testset 18/18, Z2-graded D=2 4×4 matches
+dense to all printed digits at χ=4 and χ=16 (the χ=16 D=2 `:cycle` floor of 4.3e-9 is pre-existing:
+same number from the matrix version).
+
+**OPEN: graded `:cycle` at D=4 disagrees with dense** (Z2 4×4 D=4, χ=4: |F−lnN| 3.0e-2 graded vs
+5.9e-4 dense; χ=8: 1.4e-3 vs 4.7e-4; neither certifies). The per-plaquette spectra are identical to six
+digits on both backends, so the sector solves are right; the difference is downstream. Diagnosed so
+far: (a) with `degtol = 1e-8` graded χ=8 read F off by 3.8 until the alignment guard below — the
+zero-padding lands its columns in whatever sectors `new_index` allots, so the padded bond's sector
+structure differs from the previous sweep's and a Procrustes rotation between them is not unitary;
+now caught (alignment declined) but not cured; (b) forcing the left side to the right side's
+per-sector counts changed nothing; (c) the cross-sector exact ties (ket↔bra pairs) at the cut back
+off differently on the two backends (kres 3 vs 4 on one plaquette). Candidates left: pad per sector
+of the RETAINED bond (so padding never changes sector structure), or drop padding for graded bonds
+and let `_ctm_align` compare spaces. Not a port-blocker for `:cut`.
+
+**Fermionic (fZ2) `:cut` — one genuine bug found and fixed, one non-bug.** (1) `_ctm_align` built its
+Gram matrix as `dag(P_A) * P_A⁰`. On fermionic tensors that is the BILINEAR pairing (correct for
+inserting projector pairs into the network — ground-truthed: the full-rank pair changes ⟨ψ|ψ⟩ by
+1e-9), not the Hilbert inner product: the Gram came out Hermitian but indefinite (trace −1.0 against
+‖P_A‖² = 5.9), Procrustes rotated onto a sign-twisted target, and every sweep's blocks came back as
+±themselves — `|ΔF|` at 1e-15, state distance 2.0, never certified, 30 sweeps every solve. Fixed with
+the `gram(a, b, legs)` seam verb (TensorKit adjoint composition; `dag(a) * b` on dense) and a
+phase-immune state distance (`2 − 2|⟨ta,tb⟩|` on norm-1 blocks; equals the old one where no phase
+flips occur). Fermionic 3×3 D=3 χ=16 now certifies in 0.56 s; χ=4 still stops at maxiter with F
+stationary to 3e-9 and a 1.4% residual — the 9→4 heavy-truncation limit-cycle regime, not a
+convention error. (2) `P_B P_A` viewed as a dense matrix through `array` looks like diag(±1) on
+fermions; that view is convention-laden, the network insertion is the test that counts.
+
+**Geometry guard.** `CTMEnvironmentCache` now rejects any bond between non-adjacent grid positions
+(periodic lattices, e.g. `named_hexagonal_lattice_graph(...; periodic = true)`): a wraparound bond
+rides uncontracted inside every block and the sweep's contractions grow exponentially at any χ.
+That was the "insanely slow at χ=1" on the hexagonal thermal-state example.
+
+**Performance notes.** JIT dominates fresh sessions: first dense CTM solve ~18 s, first graded ~65 s,
+first fermionic ~88 s, graded `apply_gates` compile ~116–130 s; the solves themselves are 0.05–1 s.
+Steady-state dense `:cut` is unchanged against the committed matrix version (0.38/0.27/0.86 s vs
+0.38/0.37/0.67 s per sweep at χ=8/16/32, 5×5 D=3). A PrecompileTools workload covering a dense and
+a graded update would remove most of the fresh-session latency. On a 3×3, boundary MPS at χ=48
+(0.03 s) is ~20× cheaper than CTM at χ=16 (0.5 s) — per-vertex 4C+4T rings are more work than one
+boundary MPS on a lattice that small.
+
 ## What made `:cycle` work
 
 Two things. Everything else in the design doc is failed attempts.
