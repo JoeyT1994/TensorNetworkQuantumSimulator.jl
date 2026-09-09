@@ -61,7 +61,7 @@ function toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_g
     g = named_grid((n,n); periodic = true)
     vs = collect(vertices(g))
     tensors = Dictionary{vertextype(g), ITensor}()
-    es=  edges(g)
+    es=  collect(edges(g))
     e_dict = Dictionary(es, [Index(2) for e in edges(g)])
     e_dict = merge(e_dict, Dictionary(reverse.(es), collect(values(e_dict))))
 

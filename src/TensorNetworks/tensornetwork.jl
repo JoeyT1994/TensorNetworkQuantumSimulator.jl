@@ -1,7 +1,6 @@
 using Dictionaries: Dictionary
 using Graphs: Graphs
-using NamedGraphs: NamedGraphs, add_edge!, incident_edges
-using NamedGraphs.GraphsExtensions: rem_edges!
+using NamedGraphs: NamedGraphs, add_edge!, incident_edges, rem_edges!
 using Adapt
 
 #TODO: Make this show() nicely.

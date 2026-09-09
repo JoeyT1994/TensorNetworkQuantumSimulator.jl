@@ -13,14 +13,12 @@ using NamedGraphs:
     AbstractNamedGraph,
     AbstractGraph,
     AbstractEdge,
-    position_graph,
     rename_vertices,
     edges,
     vertextype,
     add_vertex!,
     neighbors,
-    leafless_edge_induced_subgraphs
-using NamedGraphs.GraphsExtensions:
+    leafless_edge_induced_subgraphs,
     src,
     dst,
     subgraph,
@@ -29,7 +27,6 @@ using NamedGraphs.GraphsExtensions:
     add_edge,
     a_star,
     add_edge!,
-    edgetype,
     leaf_vertices,
     post_order_dfs_edges,
     add_vertex,
@@ -38,7 +35,7 @@ using NamedGraphs.GraphsExtensions:
     add_edges,
     rem_vertex!
 
-using NamedGraphs.NamedGraphGenerators: named_grid, named_hexagonal_lattice_graph, named_comb_tree, named_path_graph
+using NamedGraphs: named_grid, named_hexagonal_lattice_graph, named_comb_tree, named_path_graph
 
 # TNQS-owned operator / named-state system. `op`/`state` are called qualified (`Ops.op`,
 # `Ops.state`) so `state` does not clash with the unrelated `ITensorBase.state`, and gates
