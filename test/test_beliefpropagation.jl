@@ -1,7 +1,8 @@
 @eval module $(gensym())
-using ITensors: datatype, norm
+using LinearAlgebra: norm
 using Random
 using TensorNetworkQuantumSimulator
+using TensorNetworkQuantumSimulator: datatype
 using Test: @testset, @test
 const TNQS = TensorNetworkQuantumSimulator
 
@@ -25,8 +26,8 @@ const TNQS = TensorNetworkQuantumSimulator
         @test !isempty(messages(ψ_BPC))
         @test length(keys(messages(ψ_BPC))) == 2 * length(edges(g))
         z_bp = partitionfunction(ψ_BPC)
-        @test z_bp ≈ contract(ψ; alg = "exact")
-        @test z_bp ≈ contract(ψ; alg = "bp")
+        @test z_bp ≈ contract_network(ψ; alg = "exact")
+        @test z_bp ≈ contract_network(ψ; alg = "bp")
     end
 
     #BP Cache

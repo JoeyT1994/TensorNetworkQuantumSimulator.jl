@@ -66,7 +66,7 @@ function norm_sqr(
     )
     ψIψ_tensors = norm_factors(ψ, collect(vertices(ψ)))
     denom_seq = contraction_sequence(ψIψ_tensors; contraction_sequence_kwargs...)
-    return scalar(contract(ψIψ_tensors; sequence = denom_seq))
+    return scalar(contract_network(ψIψ_tensors; sequence = denom_seq))
 end
 
 function norm_sqr(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)

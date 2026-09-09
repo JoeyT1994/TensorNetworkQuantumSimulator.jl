@@ -6,7 +6,7 @@ end
 
 function siteinds(sitetype::String, g::AbstractGraph, sitedimension::Integer = site_dimension(sitetype); inds_per_site::Integer = 1)
     vs = collect(vertices(g))
-    return Dictionary{vertextype(g), Vector{<:Index}}(vs, [Index[Index(sitedimension, site_tag(sitetype)) for i in 1:inds_per_site] for v in vs])
+    return Dictionary{vertextype(g), Vector{<:Index}}(vs, [Index[Index(sitedimension; tags = site_tag(sitetype)) for i in 1:inds_per_site] for v in vs])
 end
 
 function site_dimension(sitetype::String)
@@ -18,7 +18,7 @@ end
 
 function site_tag(sitetype::String)
     sitetype = replace(lowercase(sitetype), " " => "")
-    sitetype ∈ ["s=1/2", "qubit", "spin1/2", "spinhalf"] && return "S=1/2"
-    sitetype ∈ ["qutrit", "s=1", "spin1"] && return "S=1"
+    sitetype ∈ ["s=1/2", "qubit", "spin1/2", "spinhalf"] && return "SiteType" => "S=1/2"
+    sitetype ∈ ["qutrit", "s=1", "spin1"] && return "SiteType" => "S=1"
     error("Don't know how to interpret that site type. Supported: S=1/2, S=1.")
 end

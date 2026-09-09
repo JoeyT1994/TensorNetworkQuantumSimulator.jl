@@ -1,8 +1,12 @@
 @eval module $(gensym())
 using Dictionaries: Dictionary
-using ITensors: ITensors, Index, dag, inds, prime
+using ITensorBase: Index, inds
 using Random
 using TensorNetworkQuantumSimulator
+# `contract` is TNQS-owned; reach it via the `TNQS` alias. `prime`, `inds`, and `randn`
+# (over `Index`es) are ITensorBase's; `conj` is `Base`.
+const TNQS = TensorNetworkQuantumSimulator
+using TensorNetworkQuantumSimulator: prime
 using Test: @testset, @test, @test_throws
 
 
@@ -11,7 +15,7 @@ using Test: @testset, @test, @test_throws
 
     #TensorNetwork construction from tensors
     i, j, k, l = Index(2), Index(2), Index(2), Index(2)
-    A, B, C, D = ITensors.random_itensor(i, j), ITensors.random_itensor(j, k), ITensors.random_itensor(k, l), ITensors.random_itensor(l, i)
+    A, B, C, D = randn(i, j), randn(j, k), randn(k, l), randn(l, i)
     t = TensorNetwork([A, B, C, D])
     @test t isa TensorNetwork
     @test scalartype(t) == eltype(A)
@@ -30,9 +34,9 @@ using Test: @testset, @test, @test_throws
         @test maxvirtualdim(ψ) == 3
         @test all([length(inds(ψ[v])) == degree(g, v) for v in vertices(ψ)])
 
-        ψdag = map_virtualinds(prime, map_tensors(dag, ψ))
+        ψdag = map_virtualinds(prime, map_tensors(conj, ψ))
         @test ψdag isa TensorNetwork
-        @test ITensors.contract(ψdag; alg = "exact") ≈ conj(ITensors.contract(ψ; alg = "exact"))
+        @test TNQS.contract_network(ψdag; alg = "exact") ≈ conj(TNQS.contract_network(ψ; alg = "exact"))
 
         v = first(vertices(g))
         rem_vertex!(ψ, v)
