@@ -12,6 +12,13 @@ end
 
 uniqueinds(tn::AbstractTensorNetwork, v) = ITensorNetworksNext.siteinds(tn, v)
 
+siteinds(tn::AbstractTensorNetwork, v) = Index[i for i in uniqueinds(tn, v)]
+function siteinds(tn::AbstractTensorNetwork)
+    return Dictionary{vertextype(tn), Vector{<:Index}}(
+        collect(vertices(tn)), [siteinds(tn, v) for v in vertices(tn)]
+    )
+end
+
 function VectorInterface.scalartype(tn::AbstractTensorNetwork)
     return mapreduce(v -> scalartype(tn[v]), promote_type, vertices(tn))
 end

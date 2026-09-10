@@ -36,9 +36,3 @@ function random_tensornetwork(eltype, g::AbstractGraph; bond_dimension::Integer 
 end
 
 random_tensornetwork(g::AbstractGraph; kwargs...) = random_tensornetwork(Float64, g; kwargs...)
-
-function siteinds(tn::TensorNetwork)
-    return Dictionary{vertextype(tn), Vector{<:Index}}(
-        collect(vertices(tn)), [Index[i for i in uniqueinds(tn, v)] for v in vertices(tn)]
-    )
-end
