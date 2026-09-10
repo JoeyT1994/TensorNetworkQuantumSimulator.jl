@@ -17,11 +17,12 @@ end
 function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
     bpc = copy(bpc)
     vs = collect(vertices(eg))
-    # Aux (dangling non-physical) legs recorded before the bond relabeling below: the
-    # relabeled bond dangles in the modified network, and the live classification in
-    # `norm_factors` would misread it as a charge leg and unprime it on the bra.
-    aux = if network(bpc) isa TensorNetworkState
-        Dictionary(vs, [auxinds(network(bpc), v) for v in vs])
+    # Site indices recorded before the bond relabeling below: the relabeled bond dangles in
+    # the modified network, so `norm_factors` would otherwise take it for a site index,
+    # unprime it on the bra and contract ket against bra instead of through the
+    # antiprojector.
+    sites = if network(bpc) isa TensorNetworkState
+        Dictionary(vs, [siteinds(network(bpc), v) for v in vs])
     else
         nothing
     end
@@ -48,7 +49,7 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
                 t_ind = only(t_inds)
                 t_ind_pos = findfirst(==(t_ind), linds)
                 t = replaceinds(t, t_ind => linds_sim[t_ind_pos])
-                setindex_preserve!(bpc, t, src(e))
+                network(bpc)[src(e)] = t
             end
             push!(updated_es, e)
 
@@ -71,7 +72,7 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
             end
         end
     end
-    return bpc, antiprojectors, aux
+    return bpc, antiprojectors, sites
 end
 
 #Get the all edges incident to the region specified by the vector of edges passed
@@ -93,13 +94,13 @@ end
 function weight(bpc::BeliefPropagationCache, eg)
     vs = collect(vertices(eg))
     es = collect(edges(eg))
-    bpc, antiprojectors, aux = sim_edgeinduced_subgraph(bpc, eg)
-    incoming_ms =
-        ITensor[message(bpc, e) for e in boundary_edges(bpc, es)]
-    local_tensors = if isnothing(aux)
+    bes = boundary_edges(bpc, es)
+    bpc, antiprojectors, sites = sim_edgeinduced_subgraph(bpc, eg)
+    incoming_ms = ITensor[message(bpc, e) for e in bes]
+    local_tensors = if isnothing(sites)
         collect(Iterators.flatten(bp_factors(bpc, v) for v in vs))
     else
-        collect(Iterators.flatten(norm_factors(network(bpc), [v]; auxinds_f = u -> aux[u]) for v in vs))
+        collect(Iterators.flatten(norm_factors(network(bpc), [v]; siteinds_f = u -> sites[u]) for v in vs))
     end
     ts = [incoming_ms; local_tensors; antiprojectors]
     seq = contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())

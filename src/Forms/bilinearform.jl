@@ -1,7 +1,7 @@
 struct BilinearForm{V} <: AbstractForm{V}
-    ket::TensorNetworkState{V}
-    operator::TensorNetworkState{V}
-    bra::TensorNetworkState{V}
+    ket::TensorNetworkState{<:Any, V}
+    operator::TensorNetworkState{<:Any, V}
+    bra::TensorNetworkState{<:Any, V}
 end
 
 ket(blf::BilinearForm) = blf.ket

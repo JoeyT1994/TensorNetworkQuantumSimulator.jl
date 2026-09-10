@@ -1,6 +1,6 @@
 struct QuadraticForm{V} <: AbstractForm{V}
-    ket::TensorNetworkState{V}
-    operator::TensorNetworkState{V}
+    ket::TensorNetworkState{<:Any, V}
+    operator::TensorNetworkState{<:Any, V}
 end
 
 ket(qf::QuadraticForm) = qf.ket

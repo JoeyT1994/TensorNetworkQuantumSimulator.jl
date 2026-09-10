@@ -1,51 +1,22 @@
-using Graphs: Graphs, has_vertex
-using NamedGraphs: NamedGraphs
 using Adapt
 using VectorInterface: VectorInterface, scalartype
 
-abstract type AbstractTensorNetwork{V} <: AbstractNamedGraph{V} end
+const AbstractTensorNetwork = AbstractITensorNetwork
 
-graph(tn::AbstractTensorNetwork) = not_implemented()
-tensors(tn::AbstractTensorNetwork) = not_implemented()
-NamedGraphs.rem_vertex!(tn::AbstractTensorNetwork, v) = not_implemented()
-add_tensor!(tn::AbstractTensorNetwork, tensor::ITensor, v) = not_implemented()
-
-Graphs.is_directed(::Type{<:AbstractTensorNetwork}) = false
-
-NamedGraphs.encoded_vertex(tn::AbstractTensorNetwork, vertex) = NamedGraphs.encoded_vertex(graph(tn), vertex)
-NamedGraphs.decoded_vertex(tn::AbstractTensorNetwork, code::Integer) = NamedGraphs.decoded_vertex(graph(tn), code)
-NamedGraphs.encoded_graph(tn::AbstractTensorNetwork) = NamedGraphs.encoded_graph(graph(tn))
-NamedGraphs.vertices(tn::AbstractTensorNetwork) = NamedGraphs.vertices(graph(tn))
-NamedGraphs.edges(tn::AbstractTensorNetwork) = NamedGraphs.edges(graph(tn))
-NamedGraphs.edgetype(tn::AbstractTensorNetwork) = NamedGraphs.edgetype(graph(tn))
-NamedGraphs.vertextype(tn::AbstractTensorNetwork) = NamedGraphs.vertextype(graph(tn))
-
-virtualinds(tn::AbstractTensorNetwork, e::NamedEdge) = commoninds(tn[src(e)], tn[dst(e)])
+virtualinds(tn::AbstractTensorNetwork, e::NamedEdge) = linkinds(tn, e)
 virtualind(tn::AbstractTensorNetwork, e::NamedEdge) = only(virtualinds(tn, e))
 
 function maxvirtualdim(tn::AbstractTensorNetwork)
     return maximum(maximum.([length.(virtualinds(tn, e)) for e in edges(tn)]))
 end
 
-# `setdiff` is by-name (dual-insensitive), so a shared graded link, stored nondual on one
-# endpoint and dual on the other, is still excluded here.
-function uniqueinds(tn::AbstractTensorNetwork, v)
-    tv_inds = inds(tn[v])
-    vns = neighbors(tn, v)
-    isempty(vns) && return tv_inds
-    neighbor_inds = reduce(vcat, [inds(tn[vn]) for vn in vns])
-    return setdiff(tv_inds, neighbor_inds)
-end
+uniqueinds(tn::AbstractTensorNetwork, v) = ITensorNetworksNext.siteinds(tn, v)
 
-function setindex_preserve!(tn::AbstractTensorNetwork, value::ITensor, vertex)
-    tensors(tn)[vertex] = value
-    return tn
-end
-
-function Base.setindex!(tn::AbstractTensorNetwork, value::ITensor, vertex)
-    !has_vertex(graph(tn), vertex) && error("Vertex not in tensor network")
-    add_tensor!(tn, value, vertex)
-    return tn
+siteinds(tn::AbstractTensorNetwork, v) = Index[i for i in uniqueinds(tn, v)]
+function siteinds(tn::AbstractTensorNetwork)
+    return Dictionary{vertextype(tn), Vector{<:Index}}(
+        collect(vertices(tn)), [siteinds(tn, v) for v in vertices(tn)]
+    )
 end
 
 function VectorInterface.scalartype(tn::AbstractTensorNetwork)
@@ -58,44 +29,23 @@ end
 
 function map_tensors!(f::Function, tn::AbstractTensorNetwork)
     for v in vertices(tn)
-        setindex_preserve!(tn, f(tn[v]), v)
+        tn[v] = f(tn[v])
     end
     return tn
 end
 
-function map_tensors(f::Function, tn::AbstractTensorNetwork)
-    tn = copy(tn)
-    return map_tensors!(f, tn)
-end
+map_tensors(f::Function, tn::AbstractTensorNetwork) = map_vertex_data(f, tn)
 
 function Adapt.adapt_structure(to, tn::AbstractTensorNetwork)
     return map_tensors(x -> adapt(to)(x), tn)
 end
 
-function insert_virtualinds!(tn::AbstractTensorNetwork; bond_dimension::Integer = 1)
-    dtype = datatype(tn)
-    for e in edges(tn)
-        if isempty(commoninds(tn[src(e)], tn[dst(e)]))
-            l = Index(bond_dimension)
-            p = adapt(dtype)(onehot(l => 1))
-            setindex_preserve!(tn, tn[src(e)] * p, src(e))
-            setindex_preserve!(tn, tn[dst(e)] * p, dst(e))
-        end
-    end
-    return tn
-end
-
-function insert_virtualinds(tn::AbstractTensorNetwork; kwargs...)
-    tn = copy(tn)
-    return insert_virtualinds!(tn; kwargs...)
-end
-
 function map_virtualinds!(f::Function, tn::AbstractTensorNetwork)
     for e in edges(tn)
-        vinds = commoninds(tn[src(e)], tn[dst(e)])
+        vinds = virtualinds(tn, e)
         vinds_sim = f.(vinds)
-        setindex_preserve!(tn, replaceinds(tn[src(e)], (vinds .=> vinds_sim)...), src(e))
-        setindex_preserve!(tn, replaceinds(tn[dst(e)], (vinds .=> vinds_sim)...), dst(e))
+        tn[src(e)] = replaceinds(tn[src(e)], (vinds .=> vinds_sim)...)
+        tn[dst(e)] = replaceinds(tn[dst(e)], (vinds .=> vinds_sim)...)
     end
     return tn
 end
@@ -136,12 +86,10 @@ function add(tn1::AbstractTensorNetwork, tn2::AbstractTensorNetwork)
         tn2v_linkinds = Index[only(virtualinds(tn2, e)) for e in es_v]
         tn12v_linkinds = Index[new_edge_indices[e] for e in es_v]
 
-        setindex_preserve!(
-            tn12, directsum(
-                tn12v_linkinds,
-                tn1[v] => Tuple(tn1v_linkinds),
-                tn2[v] => Tuple(tn2v_linkinds)
-            ), v
+        tn12[v] = directsum(
+            tn12v_linkinds,
+            tn1[v] => Tuple(tn1v_linkinds),
+            tn2[v] => Tuple(tn2v_linkinds)
         )
     end
 

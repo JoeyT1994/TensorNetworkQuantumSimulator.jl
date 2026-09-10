@@ -136,7 +136,7 @@ function apply_gate!(
     end
 
     for (i, v) in enumerate(v⃗)
-        setindex_preserve!(ψ_bpc, updated_tensors[i], v)
+        network(ψ_bpc)[v] = updated_tensors[i]
     end
 
     return ψ_bpc, err

@@ -1,12 +1,32 @@
 using Graphs: Graphs
+using NamedGraphs: all_edges
 using Adapt
 
-abstract type AbstractBeliefPropagationCache{V} <: AbstractNamedGraph{V} end
+abstract type AbstractBeliefPropagationCache{M, V} <: AbstractEdgeDataGraph{M, V} end
 
 #Interface
 messages(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 contraction_sequences(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 default_messages() = Dictionary{NamedEdge, Union{ITensor, Vector{ITensor}}}()
+
+Graphs.is_directed(::Type{<:AbstractBeliefPropagationCache}) = true
+Graphs.is_directed(::AbstractBeliefPropagationCache) = true
+Graphs.edges(bp_cache::AbstractBeliefPropagationCache) = collect(all_edges(graph(bp_cache)))
+
+DataGraphs.underlying_graph(bp_cache::AbstractBeliefPropagationCache) = graph(bp_cache)
+DataGraphs.edge_data(bp_cache::AbstractBeliefPropagationCache) = messages(bp_cache)
+DataGraphs.get_edge_data(bp_cache::AbstractBeliefPropagationCache, e) = messages(bp_cache)[e]
+function DataGraphs.is_edge_assigned(bp_cache::AbstractBeliefPropagationCache, e)
+    return isassigned(messages(bp_cache), e)
+end
+function DataGraphs.set_edge_data!(bp_cache::AbstractBeliefPropagationCache, m, e)
+    set!(messages(bp_cache), e, m)
+    return bp_cache
+end
+function Graphs.rem_edge!(bp_cache::AbstractBeliefPropagationCache, e)
+    delete!(messages(bp_cache), e)
+    return bp_cache
+end
 
 function rescale_messages!(
         bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge}; kwargs...
@@ -60,11 +80,6 @@ function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCa
     return bp_cache
 end
 
-function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex)
-    setindex_preserve!(network(bp_cache), value, vertex)
-    return bp_cache
-end
-
 #Forward onto the graph
 for f in [
         :(NamedGraphs.edgetype),
@@ -86,20 +101,17 @@ NamedGraphs.encoded_graph(bp_cache::AbstractBeliefPropagationCache) = NamedGraph
 
 #Functions derived from the interface
 function deletemessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdge)
-    ms = messages(bp_cache)
-    delete!(ms, e)
+    delete!(bp_cache, e)
     return bp_cache
 end
 
 function setmessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdge, message::Union{ITensor, Vector{<:ITensor}})
-    ms = messages(bp_cache)
-    set!(ms, e, message)
+    set!(bp_cache, e, message)
     return bp_cache
 end
 
 function message(bp_cache::AbstractBeliefPropagationCache, edge::AbstractEdge; kwargs...)
-    ms = messages(bp_cache)
-    return get(() -> default_message(bp_cache, edge; kwargs...), ms, edge)
+    return get(() -> default_message(bp_cache, edge; kwargs...), bp_cache, edge)
 end
 
 function messages(bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge})
@@ -139,7 +151,7 @@ function vertex_scalars(
 end
 
 function edge_scalars(
-        bp_cache::AbstractBeliefPropagationCache, edges = Graphs.edges(bp_cache); kwargs...
+        bp_cache::AbstractBeliefPropagationCache, edges = Graphs.edges(graph(bp_cache)); kwargs...
     )
     return map(e -> edge_scalar(bp_cache, e; kwargs...), edges)
 end
@@ -277,7 +289,7 @@ end
 function map_factors(f, bp_cache::AbstractBeliefPropagationCache, vs = vertices(bp_cache))
     bp_cache = copy(bp_cache)
     for v in vs
-        setindex_preserve!(bp_cache, f(network(bp_cache)[v]), v)
+        network(bp_cache)[v] = f(network(bp_cache)[v])
     end
     return bp_cache
 end

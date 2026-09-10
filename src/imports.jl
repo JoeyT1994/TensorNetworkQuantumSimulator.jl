@@ -1,9 +1,9 @@
 using LinearAlgebra
 using StatsBase
 
-using Dictionaries: Dictionary, set!
+using Dictionaries: Dictionaries, Dictionary, set!
 
-using Graphs: simplecycles_limited_length, has_edge, SimpleGraph, center, steiner_tree, is_tree, vertices, nv
+using Graphs: simplecycles_limited_length, has_edge, has_vertex, SimpleGraph, center, steiner_tree, is_tree, vertices, nv
 
 using SimpleGraphConverter
 using SimpleGraphAlgorithms: edge_color
@@ -33,7 +33,8 @@ using NamedGraphs:
     rem_edge,
     rem_vertex,
     add_edges,
-    rem_vertex!
+    rem_vertex!,
+    incident_edges
 
 using NamedGraphs: named_grid, named_hexagonal_lattice_graph, named_comb_tree, named_path_graph
 
@@ -42,14 +43,18 @@ using NamedGraphs: named_grid, named_hexagonal_lattice_graph, named_comb_tree, n
 # are registered by extending `Ops.op`. The types and string macros are imported for
 # unqualified use (gate definitions dispatch on bare `OpName"…"` / `SiteType"…"`).
 using .Ops: OpName, SiteType, @OpName_str, @SiteType_str
-using ITensorBase: ITensorBase, Index, ITensor, commonind, commoninds, hascommoninds, name,
-    noprime, plev, prime, replaceinds, settags, sim, tags, uniqueind, unnamed
+using ITensorBase: ITensorBase, AbstractNamedTensor, Index, ITensor, LazyNamedTensor,
+    commonind, commoninds, dimnametype, hascommoninds, lazy, name, noprime, plev, prime,
+    replaceinds, settags, sim, tags, uniqueind, unnamed
 import ITensorBase: uniqueinds
 using TensorAlgebra: trivialrange, matricize, scalar, directsum
 import TensorAlgebra: datatype
 import Base: truncate
 using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe, sqrth_safe
 using MatrixAlgebraKit: project_hermitian
+
+using DataGraphs: DataGraphs, AbstractEdgeDataGraph, map_vertex_data, underlying_graph_type
+using ITensorNetworksNext: ITensorNetworksNext, AbstractITensorNetwork, ITensorNetwork, linkinds
 
 using Adapt: adapt
 

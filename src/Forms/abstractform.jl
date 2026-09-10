@@ -2,11 +2,12 @@
 # or derived from the ket). Concrete subtypes must define `ket`, `operator`, and the
 # per-vertex / per-edge dual accessors `bra_tensor` and `bra_virtualinds`. A whole-network
 # `bra` is optional: `QuadraticForm` derives its bra lazily and does not provide one.
-abstract type AbstractForm{V} <: AbstractTensorNetwork{V} end
+abstract type AbstractForm{V} <: AbstractTensorNetwork{ITensor, V} end
 
 #Forward onto the ket
 for f in [
         :(graph),
+        :(DataGraphs.underlying_graph),
         :(datatype),
         :(VectorInterface.scalartype),
         :(NamedGraphs.leafless_edge_induced_subgraphs),
@@ -17,6 +18,15 @@ for f in [
         end
     end
 end
+
+function DataGraphs.get_vertex_data(form::AbstractForm, v)
+    return lazy(ket(form)[v]) * lazy(operator(form)[v]) * lazy(bra_tensor(form, v))
+end
+DataGraphs.is_vertex_assigned(form::AbstractForm, v) = has_vertex(graph(form), v)
+Base.eltype(::Type{<:AbstractForm}) = LazyNamedTensor{dimnametype(ITensor), ITensor}
+
+Dictionaries.issettable(::AbstractForm) = false
+Dictionaries.isinsertable(::AbstractForm) = false
 
 function virtualinds(form::AbstractForm, edge::NamedEdge)
     return Index[virtualinds(ket(form), edge); virtualinds(operator(form), edge); bra_virtualinds(form, edge)]

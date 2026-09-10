@@ -24,6 +24,8 @@ using Test: @testset, @test
         mps_bond_dimension = 16
         ψψ_bmps = update(BoundaryMPSCache(ψψ, mps_bond_dimension))
         @test partitionfunction(ψψ_bmps) ≈ norm_sqr(ψ; alg = "exact")
+
+        @test contract_network(ψψ; alg = "exact") ≈ norm_sqr(ψ; alg = "exact")
     end
 
     #BiLinear Form
