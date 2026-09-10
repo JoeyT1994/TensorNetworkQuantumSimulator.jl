@@ -514,6 +514,14 @@ function absorb_chain(t::AbstractTensor, envs::Vector, dest)
     for e in envs
         k += 1
         out_inds = _product_inds(cur, e)
+        # Lay the result out with the leg the NEXT factor contracts last, so that step matricises
+        # by a free reshape instead of a permuted copy of the whole intermediate (measured: a two-
+        # factor chain drops from 3 F to 1 F of transient allocation).
+        if k < length(envs)
+            nxt = envs[k + 1]
+            j = findfirst(i -> i in inds(nxt), out_inds)
+            j === nothing || (out_inds = vcat(out_inds[1:(j - 1)], out_inds[(j + 1):end], out_inds[j:j]))
+        end
         target = slots[mod1(k, 2)]
         if target === Dst && k == 1 && _aliases(Dst, A)
             target = buf2                                    # first step may not overwrite the input
