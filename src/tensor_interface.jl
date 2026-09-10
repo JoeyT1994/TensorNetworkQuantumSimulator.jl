@@ -22,6 +22,15 @@ The rules:
      (`prime`/`noprime`/`plev`), tags (`tags`, cosmetic), and a dual transform (`dag`;
      trivial for dense data, arrow/dual-space reversal once spaces are graded). Index
      identity — not position — drives contraction: `A * B` contracts all `commoninds(A, B)`.
+  5. Two adjoints. `dag(t)` is the BRA of a tensor: the conjugate that, applied site by site,
+     builds the bra layer of a network (a homomorphism over contraction). `dag(t, cod)` is the
+     adjoint of `t` viewed as a MAP with codomain legs `cod` (the rest is the domain): the one
+     for which `dag(U, cod) * U` is the identity on the bond of an isometry `U` and `U * dag(U,
+     cod)` the projector onto its range, e.g. `U = first(svd(B, ins))` → `dag(U, ins)`. On dense
+     and bosonic data the two coincide; with fermionic sectors they differ by parity twists on
+     the legs of mixed orientation, and using the bra where the map adjoint is meant (or vice
+     versa) silently breaks projector identities. Passing either side of the split gives the
+     same tensor. `gram(a, b, legs) = dag(a, legs) * b`.
 
 What a backend must implement, by group:
 
@@ -86,12 +95,16 @@ for f in [
         :contract, :scalar, :apply, :inner,
         # diagonal ops
         :map_diag, :map_diag!,
-        # sesquilinear partial inner product: gram(a, b, legs) = a† b contracted over `legs`
+        # sesquilinear partial inner product: gram(a, b, legs) = a† b contracted over `legs`,
+        # a and b viewed as maps into `legs` (so it is `dag(a, legs) * b`, see below)
         :gram,
         # factorizations (beyond the LinearAlgebra generics)
         :factorize_svd, :truncation_strategy,
         # storage / type queries
         :datatype, :array, :data,
+        # in-place scaling of a tensor's storage by a number (block-sparse storage has no flat
+        # `data` vector to `rmul!`)
+        :scale!,
     ]
     @eval function $f end
 end

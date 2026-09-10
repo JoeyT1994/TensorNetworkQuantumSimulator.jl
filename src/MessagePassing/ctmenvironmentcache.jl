@@ -337,7 +337,7 @@ _ctm_trunc(maxdim::Integer, opts::CTMOptions; rtol::Real = opts.qr_cutoff) =
 # NOT thread-safe (plain `Dict`); this engine is single-threaded.
 const CTM_SEQ_CACHE = Dict{Any, Any}()
 
-function _ctm_seq_key(ts::Vector{<:AbstractTensor})
+function _ctm_seq_key(ts::Vector)
     seen = Dict{Any, Int}()
     label(i) = (get!(seen, i, length(seen) + 1), dim(i))
     return Tuple(Tuple(label(i) for i in inds(t)) for t in ts)
@@ -350,7 +350,7 @@ end
 #
 # The gate's verdict joins the cache key: `optimal_max` is per-cache, so two caches sharing a
 # lattice shape would otherwise trade sequences and each get whichever optimiser ran first.
-function _ctm_contract(ts::Vector{<:AbstractTensor}, opts::CTMOptions)
+function _ctm_contract(ts::Vector, opts::CTMOptions)
     length(ts) == 1 && return only(ts)
     length(ts) == 2 && return ts[1] * ts[2]          # no sequence to choose
     use_optimal = length(ts) <= opts.optimal_max
@@ -454,7 +454,7 @@ end
 # in every sector the top-χ subspace needs, and the round-robin allocation in `_ctm_random_block`
 # is a guess. `:auto` therefore keeps graded tensors on the dense route; `:subspace` opts in.
 
-_ctm_isgraded(t) = t isa Tensors.GradedTensor
+_ctm_isgraded(t) = Tensors.isgraded(t)
 
 # Running counts for the subspace route — projectors by outcome (`:subspace`, `:dense` = bailed,
 # `:declined` = gate, `:skipped` = memo) and block iterations spent — so a run can be checked for
@@ -493,7 +493,7 @@ end
 function _ctm_random_block(rng, elt::Type, legs::Vector{<:Index}, kp::Integer)
     # Dense legs: one draw on a plain block leg. (The sector-stacked path below is the same thing one
     # column at a time, and its `kp` direct sums measured 0.9 ms against 0.05 ms for the draw.)
-    all(i -> Tensors.space(i) isa Integer, legs) &&
+    all(i -> !Tensors.isgraded(i), legs) &&
         return random_tensor(rng, elt, vcat(legs, [new_index(legs, kp; tags = "Link,blk")]))
     secs = charge_sectors(legs)
     vs = Any[]; slots = Any[]
@@ -586,8 +586,9 @@ function _ctm_subspace_svd(apply, applyadj, rows::Vector{<:Index}, colsd::Vector
     # O[a,b] = Σ_u (Q·conj(V_Z))[a,u] S_u conj(U_Z)[b,u], so U = Q·dag(V_Z) and V = dag(U_Z).
     Uz, Sz, Vz = svd(Z, colsd; trunc)
     a = only(commoninds(Uz, Sz)); b = only(commoninds(Vz, Sz))
-    U = replaceind(Q * dag(Vz), b, a)            # (rows…, a): the seam's U leg
-    V = replaceind(dag(Uz), a, b)                # (cols…, b): the seam's V leg, cols in O's orientation
+    # Map adjoints (`dag(t, cod)`), not bras: V_Z is a map b → k′ legs, U_Z a map a → cols.
+    U = replaceind(Q * dag(Vz, [b]), b, a)       # (rows…, a): the seam's U leg
+    V = replaceind(dag(Uz, [a]), a, b)           # (cols…, b): the seam's V leg, cols in O's orientation
     return U, Sz, V
 end
 
@@ -604,7 +605,9 @@ function _ctm_twosided_projector_subspace(Bw, Be, ins::Vector{<:Index}, maxdim::
     # `missing`: the gate declined (too small, graded under `:auto`, or `svd = :dense`) — not a
     # bail-out, so the sweep's memo must not count it as one.
     _ctm_use_subspace(opts, (Bw, Be), dim(rows), dim(cols), dim(ins), kp) || return missing
-    dBrow = dag(Brow); dAcol = dag(Acol)             # conjugated ONCE per projector, not per iteration
+    # O† = Acol† Brow† with Brow: ins → rows and Acol: cols → ins — the MAP adjoints (`dag(t, cod)`),
+    # conjugated ONCE per projector, not per iteration.
+    dBrow = dag(Brow, rows); dAcol = dag(Acol, ins)
     apply(X) = Brow * (Acol * X)
     applyadj(Q) = dAcol * (dBrow * Q)
     elt = scalartype(Brow)
@@ -612,7 +615,7 @@ function _ctm_twosided_projector_subspace(Bw, Be, ins::Vector{<:Index}, maxdim::
     if !isnothing(prev) && length(prev) >= 3
         PBo, wo = prev[2], prev[3]
         # Be† P_B† spans the previous sweep's right invariant subspace (see the section comment).
-        issetequal(collect(inds(PBo)), vcat(collect(ins), [wo])) && (X0 = dAcol * dag(PBo))
+        issetequal(collect(inds(PBo)), vcat(collect(ins), [wo])) && (X0 = dAcol * dag(PBo, [wo]))
     end
     nrand = isnothing(X0) ? kp : max(0, kp - dim(only(uniqueinds(X0, colsd))))
     if nrand > 0
@@ -658,7 +661,7 @@ function _ctm_onesided_subspace(B, ins::Vector{<:Index}, maxdim::Integer, opts::
     k = min(Int(maxdim), dim(rows), dim(cols))
     kp = min(k + opts.svd_oversample, dim(rows), dim(cols))
     _ctm_use_subspace(opts, (B,), dim(rows), dim(cols), dim(rows), kp) || return nothing
-    dB = dag(B)
+    dB = dag(B, rows)                                # B: cols → rows; its map adjoint
     apply(X) = B * X
     applyadj(Q) = dB * Q
     X0 = _ctm_random_block(Xoshiro(seed), scalartype(B), colsd, kp)
@@ -750,12 +753,13 @@ function _ctm_interface_proj(B, ins::Vector{<:Index}, maxdim::Integer, opts::CTM
     if Int(maxdim) >= dim(ins)                 # nothing to truncate: keep the basis intact
         co = adapt_like(B, combiner(ins))      # the reshape isometry, on B's device/eltype (vector, not
                                                # splat: keeps the graded dispatch)
-        return co, dag(co), combinedind(co)
+        c = combinedind(co)
+        return co, dag(co, [c]), c            # map adjoint: `co` is a map ins → c
     end
     # The subspace route when the gate takes it (`opts.svd`), the dense SVD otherwise.
     U = _ctm_onesided_subspace(B, ins, maxdim, opts, seed)
     isnothing(U) && (U = first(svd(B, ins; trunc = _ctm_trunc(maxdim, opts; rtol = 0.0))))
-    P = dag(U)                                 # conj: the seam's U is conj(V) for B viewed as (rest × ins)
+    P = dag(U, ins)                            # map adjoint of U: w → ins (the seam's U is conj(V) for B viewed as (rest × ins))
     return P, U, only(uniqueinds(P, ins))
 end
 
@@ -793,7 +797,7 @@ end
 # Putting the projectors in the SAME netcon call as the growth is the second half of the fix: the
 # optimiser may now apply an isometry BEFORE the site factors, truncating an interface before it is
 # grown rather than after.
-function _ctm_absorb(opts::CTMOptions, core::Vector{<:AbstractTensor}, extras...)
+function _ctm_absorb(opts::CTMOptions, core::Vector, extras...)
     isempty(core) && return nothing
     ts = copy(core)
     for e in extras
@@ -810,7 +814,7 @@ _ctm_pB(d, k) = (p = _ctm_nn(d, k); isnothing(p) ? nothing : p[2])
 # the block at the near end in the GREEDY pass — east/south corners and strips for a west/north
 # projector, and the next-row strip for a row strip's top projector. (The sweep uses a genuine
 # biorthogonal `P_B` instead.)
-_ctm_pAdag(d, k) = (p = _ctm_pA(d, k); isnothing(p) ? nothing : dag(p))
+_ctm_pAdag(d, k) = (p = _ctm_pA(d, k); isnothing(p) ? nothing : dag(p, [d[k][3]]))   # P_A: w → ins; map adjoint
 
 function _ctm_factor_table(cache::CTMEnvironmentCache)
     Lx, Ly = _ctm_dims(cache)
@@ -1073,7 +1077,7 @@ _ctm_legs_of(t, is) = filter(i -> i ∈ is, collect(inds(t)))
 function _ctm_stack(vs::AbstractVector, slots::AbstractVector)
     acc, w = vs[1], slots[1]
     if length(vs) == 1
-        fresh = Index(rand(UInt64), w.space, w.plev, "Link,cyc", w.dual)
+        fresh = Index(rand(UInt64), Tensors.space(w), plev(w), "Link,cyc", Tensors.isdual(w))
         return replaceind(acc, w, fresh)
     end
     for j in 2:length(vs)
@@ -1103,7 +1107,7 @@ _ctm_orthbasis(X, keep::Vector{<:Index}) = first(qr(X, keep))
 # (⟨N⟩ 0.5936 against 0.4870 exact); with the non-dual `V` basis on the right side and `Q` on the
 # left, the insertion identity holds to 1e-15 on every side. The reverse assignment (`V` on the
 # left) breaks the left side the same way, so this is direction-dependent, not a global choice.
-# See `_delta_pair` in gradedtensor.jl for the same handedness on a bare identity, and the fZ2
+# See `_delta_pair` in the tensor backend for the same handedness on a bare identity, and the fZ2
 # regression in test_ctmenvironment.jl. Dense tensors have no orientation; both routes agree.
 _ctm_orthbasis_fwd(X, keep::Vector{<:Index}) = last(svd(X, uniqueinds(X, keep)))
 
@@ -1130,8 +1134,10 @@ end
 # convention for `O = Brow · Acol` (bilinear over `ins`), out come `(P_A, P_B, w)`.
 function _ctm_whiten(Acol, Brow, ins::Vector{<:Index}, U, S, V)
     isk = map_diag(x -> inv(sqrt(x)), S)                 # S^{-1/2} on S's (u, v)
-    PA = (Acol * dag(V)) * dag(isk)                      # (ins…, u)
-    PB = (dag(U) * Brow) * dag(isk)                      # (v, ins…)
+    u, v = inds(S)
+    # Map adjoints (`dag(t, cod)`): V is a map v → bA, U a map u → bB, isk a map v → u.
+    PA = (Acol * dag(V, [v])) * dag(isk, [u])            # (ins…, u)
+    PB = (dag(U, [u]) * Brow) * dag(isk, [u])            # (v, ins…)
     uA = only(uniqueinds(PA, ins))
     PB = replaceind(PB, only(uniqueinds(PB, ins)), dag(uA))   # the opposite copy of P_A's bond
     return PA, PB, uA
@@ -1429,7 +1435,7 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
         kt = target(l); k = dim(w)
         if k < kt                                            # embed at rank, pad the rest with zeros
             z = new_index(a, kt - k; tags = "Link,pad")
-            z = z.dual == w.dual ? z : dag(z)                # pad leg oriented like P_A's bond
+            z = Tensors.isdual(z) == Tensors.isdual(w) ? z : dag(z)   # pad leg oriented like P_A's bond
             za = random_tensor(elt, vcat(_ctm_legs_of(a, ins[l]), [z])) * zero(elt)
             zb = random_tensor(elt, vcat(_ctm_legs_of(b, ins[l]), [dag(z)])) * zero(elt)
             a = directsum(a => w, za => z; tags = "Link,cyc")
@@ -1566,7 +1572,7 @@ function _ctm_align(pr, ins, prev)
     # `:cycle` at χ=8 with `degtol = 1e-8` read `F` off by 3.8 (Z2 4×4 D=4). Checked on the pair's
     # own product rather than against a bare identity, so fermionic parity conventions cannot
     # trip it: `P_B P_A` before and after, relabelled onto the same bond, must agree.
-    PAn, PBn = PA * R, dag(R) * PB
+    PAn, PBn = PA * R, dag(R, [wo]) * PB                 # R: wo → w; its map adjoint
     #
     # Unitarity is tested through what a unitary preserves — the norm of each factor — rather than
     # through `P_B P_A` before and after. That product is `𝟙 + E` with `E` the pair's own

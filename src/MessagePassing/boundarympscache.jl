@@ -192,8 +192,8 @@ function set_interpartition_messages!(
     m_keys = keys(messages(bmps_cache))
     #Only graded fitting needs a generic full-support cold start. Keep its randomness
     #local and repeatable; dense messages retain the deterministic delta initializer.
-    graded_rng = tensortype(bmps_cache) <: Tensors.GradedTensor ?
-        Random.Xoshiro(_graded_bmps_init_seed) : nothing
+    #Gradedness is read off a message once the defaults exist (works for states and forms alike).
+    graded_rng = nothing
     for pe in quotientedges
         es = sorted_edges(bmps_cache, pe)
         for e in es
@@ -201,7 +201,8 @@ function set_interpartition_messages!(
                 setmessage!(bmps_cache, e, default_message(bmps_cache, e))
             end
         end
-        if tensortype(bmps_cache) <: Tensors.GradedTensor
+        if Tensors.isgraded(message(bmps_cache, first(es)))
+            graded_rng === nothing && (graded_rng = Random.Xoshiro(_graded_bmps_init_seed))
             set_graded_interpartition_messages!(bmps_cache, es, graded_rng)
         else
             for i in 1:(length(es) - 1)
@@ -225,24 +226,15 @@ function _crossing_inds(bmps_cache::BoundaryMPSCache, e::NamedEdge)
     return vcat(cinds, prime.(cinds))
 end
 
-#The adjoint of a boundary-MPS message in the fitting metric: for graded (fermionic)
-#tensors dag with the supertrace twist on the CROSSING legs only (see
-#Tensors.fit_adjoint); plain dag otherwise.
-fit_adjoint_message(bmps_cache::BoundaryMPSCache, e::NamedEdge, m) = dag(m)
+#The adjoint of a boundary-MPS message in the fitting metric: the bra rail tensor of the ALS
+#sweep. Dense: `conj`. Graded fermionic data needs a parity twist on the crossing legs
+#(Tensors.fit_adjoint), so the QR-orthonormalised bra rail pairs with the ket rail as an identity.
+fit_adjoint_message(bmps_cache::BoundaryMPSCache, e::NamedEdge, m) = Tensors.fit_adjoint(m, _crossing_inds(bmps_cache, e))
 
 #Switch the message tensors on partition edges with their reverse (and fit-adjoint them)
 function switch_message!(bmps_cache::BoundaryMPSCache, e::NamedEdge)
     ms = messages(bmps_cache)
     me, mer = message(bmps_cache, e), message(bmps_cache, reverse(e))
-    if me isa Tensor && mer isa Tensor && !Base.mightalias(me.data, mer.data)
-        #Both old messages are consumed by the swap. Conjugate their storage in place and
-        #only rebuild the lightweight index wrappers instead of allocating two adjoints.
-        me.data .= conj.(me.data)
-        mer.data .= conj.(mer.data)
-        set!(ms, e, Tensor(map(dag, mer.inds), mer.data))
-        set!(ms, reverse(e), Tensor(map(dag, me.inds), me.data))
-        return bmps_cache
-    end
     set!(ms, e, fit_adjoint_message(bmps_cache, e, mer))
     set!(ms, reverse(e), fit_adjoint_message(bmps_cache, e, me))
     return bmps_cache
@@ -315,19 +307,9 @@ function gauge_step!(
     m1, m2 = message(bmps_cache, e1), message(bmps_cache, e2)
     @assert !isempty(commoninds(m1, m2))
     left_inds = uniqueinds(m1, m2)
-    if m1 isa Tensor && m2 isa Tensor
-        #A gauge move needs an isometry and a remainder, not an SVD. Consume m1 into Q,
-        #then consume m2 as the destination of m2*R. This keeps the centre shift inside
-        #the shared arena instead of leaving one SVD workspace/output set per ALS step for
-        #the Julia GC to discover after the sweep.
-        m1, Y = Tensors.left_orthogonalize(m1, left_inds; consume_input = true)
-        m2 = contract([m2, Y]; sequence = [1, 2], dest = m2)
-        Tensors._release_storage!(Y.data)
-    else
-        #TensorKit supplies the symmetry-aware QR used for graded boundary MPS tensors.
-        m1, Y = Tensors.left_orthogonalize(m1, left_inds)
-        m2 = m2 * Y
-    end
+    #A gauge move needs an isometry and a remainder, not an SVD (symmetry-aware QR on graded data).
+    m1, Y = Tensors.left_orthogonalize(m1, left_inds)
+    m2 = m2 * Y
     setmessage!(bmps_cache, e1, m1)
     setmessage!(bmps_cache, e2, m2)
     return bmps_cache
@@ -367,17 +349,6 @@ function inserter!(
         m::Tensor,
     )
     rev = reverse(update_e)
-    old = message(bmps_cache, rev)
-    if old isa Tensor && length(old.data) == length(m.data) &&
-            eltype(old.data) === eltype(m.data)
-        #The reverse message can carry the same elements with a different axis order.
-        #Reuse the whole allocation and reshape its contiguous storage to the new wrapper.
-        dest = reshape(old.data, size(m.data))
-        dest .= conj.(m.data)
-        setmessage!(bmps_cache, rev, Tensor(map(dag, m.inds), dest))
-        Base.mightalias(old.data, m.data) || Tensors._release_storage!(m.data)
-        return bmps_cache
-    end
     setmessage!(bmps_cache, rev, fit_adjoint_message(bmps_cache, update_e, m))
     return bmps_cache
 end
@@ -429,7 +400,7 @@ function update_message!(
             cf += n
             if alg.kwargs.normalize && n != 0
                 #`m` was freshly extracted and is consumed by `inserter!` below.
-                rmul!(data(m), inv(n))
+                TensorInterface.scale!(m, inv(n))
             end
             inserter!(alg, bmps_cache, update_e, m)
             prev_e = update_e

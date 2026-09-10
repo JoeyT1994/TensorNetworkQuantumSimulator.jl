@@ -79,9 +79,9 @@
         #rather than treating its negative spectrum as disposable roundoff.
         mi = Tensors.Index(Tensors.graded_space("fU1", [0 => 1, 1 => 1]), "message")
         msg = TI.delta(ComplexF64, mi, TI.prime(TI.dag(mi)))
-        trees = collect(Tensors.TK.fusiontrees(msg.data))
-        @test length(trees) == 2
-        msg.data[last(trees)...] .*= -1
+        @test length(TI.data(msg)) == 2                  # one entry per sector block
+        A = TI.array(msg); A[2, 2] *= -1                 # sector order (0, 1): flip the odd block
+        msg = TI.from_array(A, TI.inds(msg)...)
         msg_psd = Tensors.psd_gauge(msg)
         @test TI.array(msg_psd) ≈ Matrix{ComplexF64}(LinearAlgebra.I, 2, 2)
         msg_sqrt, msg_inv_sqrt = TNQS.pseudo_sqrt_inv_sqrt(msg; cutoff = 0.0)

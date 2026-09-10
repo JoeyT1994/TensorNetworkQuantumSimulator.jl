@@ -955,6 +955,52 @@ a graded update would remove most of the fresh-session latency. On a 3×3, bound
 (0.03 s) is ~20× cheaper than CTM at χ=16 (0.5 s) — per-vertex 4C+4T rings are more work than one
 boundary MPS on a lattice that small.
 
+## Backend switch: TensorKit → ITensorBase/GradedArrays — *2026-09-10*
+
+`src/Tensors/ITensorBackend.jl` replaces `Tensors.jl` + `gradedtensor.jl` behind the same
+`TensorInterface` seam; the generic CTM/BP/BMPS code is unchanged except where noted. Dense and
+graded tensors are the same type (`ITensor` over `Array` or `AbelianGradedArray`), so the two
+paths share every code line. Dense: all test files pass, CTM is faster than the TensorKit backend
+(two-projector testset 25 s vs 65 s). Graded (Z2, U1, fZ2, fU1, fU1×U1): constructors, gates,
+exact/BP/BMPS/CTM observables, fermionic chain/spinful/2D against dense Jordan–Wigner.
+
+**What differs, and the traps found (all measured in a scratch env, then gated by the suite).**
+
+1. *Two adjoints.* GradedArrays contracts in the supertrace convention: the identity inserted on a
+   DUAL leg is the parity-twisted identity. Consequences: (a) `conj` is a homomorphism over
+   contraction and is the right BRA for a network (`dag(t)`); the only correction is a twist on
+   dangling dual "Charge" legs, without which the norm of an odd-parity product state is −1.
+   (b) `conj` is NOT the adjoint of an isometry with mixed-orientation legs: `B·conj(U)·U ≠ B` for
+   `U = svd(B, ins).U` when `ins` mixes arrows (every CTM interface: ket bond + bra bond). The
+   projector adjoint is `conj` plus a twist on the dual legs of the codomain and the non-dual legs
+   of the domain (the two sets agree up to the trivial twist of a flux-zero block) — new seam verb
+   `dag(t, cod)`; `gram(a, b, legs) = dag(a, legs) * b`. No bond-arrow convention or pre-twisted
+   factor can make `(conj(U), U)` a projector pair on a mixed interface (proved by exhaustion over
+   the leg-class rules), so the CTM sites that mean the map adjoint now say so: one-sided
+   `P = dag(U, ins)`, the greedy `dag(P_A, [w])`, whitening `dag(V, [v])`, `dag(U, [u])`,
+   `dag(isk, [u])`, the subspace `applyadj` (`dag(Brow, rows)`, `dag(Acol, ins)`, `dag(B, rows)`),
+   `dag(PBo, [wo])`, the alignment `dag(R, [wo])`. Ground truth: plaquette insertion identity,
+   `:cut`/`:cycle` at lossless χ equal to exact contraction to 1e-15 on Z2, fZ2 and fU1.
+2. *Combiner.* The graded fusion isometry is the identity on the fused space with its domain leg
+   split by `unmatricize` (needs a `FusedGradedMatrix`); `t * C` fuses, `(t*C) * dag(C, [c])`
+   splits. The lossless CTM branch returns `(co, dag(co, [c]), c)`.
+3. *Boundary-MPS bra rail.* The one-site ALS is exact only with `fit_adjoint(m, crossing) = conj`
+   plus a twist on the NON-dual crossing legs, never on the MPS bonds (exhaustive search against an
+   exact MPS fit; direction-independent; the TensorKit backend's recipe). Restored on the seam.
+4. *Link sectors.* `GA.dual` on a `SectorRange` sets an arrow flag and is not `==` to the base
+   label, so the BMPS link allocation looked up `wr[dual(q)]`, found nothing, and fell back to a
+   trivial-sector-only link: graded boundary MPS silently returned the BP value at every χ (Z2 and
+   fermions alike). Fixed with a label-based `dual_sector`; Z2 4×4 D=2 BMPS now hits the exact norm
+   to 1e-15 at χ ≥ 4.
+5. *In-place scaling.* `rmul!(data(t), c)` is a no-op on block-sparse storage (`data` is a copy);
+   graded gate application was not normalising tensors (Z2 state vs dense twin norms disagreed by
+   e¹⁶, observables agreed). New seam verb `scale!(t, c)`.
+6. *Diagonal maps* must touch the diagonal only (a `copyto!` into a `FusedGradedMatrix` hits
+   forbidden blocks); `state`/`op` reject charged states/operators on graded sites (the old error).
+
+Compile latency dominates graded runs (package precompile ~4–6 min after a source edit); probe new
+conventions in a scratch environment with the ITensorBase stack alone (seconds) before the suite.
+
 ## What made `:cycle` work
 
 Two things. Everything else in the design doc is failed attempts.

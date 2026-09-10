@@ -2,7 +2,7 @@
 
 [![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/)
 
-A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks (TNs) of near-arbitrary geometry. Built on a native named-index tensor backend (dense arrays + [TensorOperations](https://github.com/Jutho/TensorOperations.jl) contraction + [MatrixAlgebraKit](https://github.com/QuantumKitHub/MatrixAlgebraKit.jl) factorizations) and [NamedGraphs](https://github.com/ITensor/NamedGraphs.jl).
+A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks (TNs) of near-arbitrary geometry. Built on the [ITensorBase](https://github.com/ITensor/ITensorBase.jl) named-index tensor stack (dense arrays and [GradedArrays](https://github.com/ITensor/GradedArrays.jl) symmetric/fermionic block-sparse arrays, [TensorAlgebra](https://github.com/ITensor/TensorAlgebra.jl) contraction, [MatrixAlgebraKit](https://github.com/QuantumKitHub/MatrixAlgebraKit.jl) factorizations) and [NamedGraphs](https://github.com/ITensor/NamedGraphs.jl).
 
 The main workhorses of the simulation are _belief propagation_ (BP) and the _singular value decomposition_ for applying gates, and _BP_ or _boundary MPS_ for estimating expectation values and sampling.
 
@@ -262,23 +262,7 @@ Custom gates can be defined by building the corresponding tensor with `op` on th
 
 ## GPU Support
 
-Both backends run on GPU end to end — gate application, belief propagation, boundary MPS, loop corrections, reduced density matrices, truncation, and sampling. The dense backend's fused hot-path kernels carve their workspace buffers from device memory (TensorOperations ≥ 5.8); the symmetric (graded) backend runs blockwise on device through TensorKit's GPU support, fermions included. Every path is validated against the reference `AbstractGPUArray` implementation under `allowscalar(false)` in `test/test_gpu_paths.jl`; factorizations dispatch to the vendor solver (CUSOLVER/ROCSOLVER) through MatrixAlgebraKit.
-
-Load the relevant Julia GPU package (e.g. CUDA.jl) and transfer the state or cache:
-
-```julia
-using TensorNetworkQuantumSimulator
-using CUDA
-
-g = named_grid((8, 8))
-ψ_cpu = random_tensornetworkstate(ComplexF32, g; bond_dimension = 8)
-ψ_gpu = CUDA.cu(ψ_cpu)
-
-@time expect(ψ_cpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
-@time expect(ψ_gpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
-```
-
-Caches can also be transferred: `CUDA.cu(BeliefPropagationCache(ψ))`. Significant speedups are seen on NVIDIA GPUs at moderate to large bond dimensions.
+GPU support is being re-established after the switch of the tensor backend to ITensorBase/GradedArrays (September 2026): the previous CUDA extension and fused device kernels targeted the TensorKit backend and have been removed with it. Dense and graded tensors now share one code path, so device support will come through the `Adapt`-based `adapt`/`cu` transfer of the underlying arrays once the ITensorBase stack's GPU paths are validated here. `test/test_gpu_paths.jl` is skipped until then.
 
 ## Algorithm Guide
 

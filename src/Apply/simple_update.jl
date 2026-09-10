@@ -113,7 +113,7 @@ function simple_update(
 
     if normalize_tensors
         for ψᵥ in updated_tensors
-            rmul!(data(ψᵥ), inv(norm(ψᵥ)))
+            TensorInterface.scale!(ψᵥ, inv(norm(ψᵥ)))
         end
     end
 

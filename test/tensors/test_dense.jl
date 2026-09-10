@@ -21,7 +21,7 @@
         Bk = Tensor([kj, kk], copy(B))
         @test tarray(Ak * Bk, ki, kk) ≈ A * B
         Ck = Tensor([kk], rand(2))
-        @test length(vec((Ak * Ck).data)) == 24
+        @test length(vec(TI.array(Ak * Ck))) == 24
         @test TI.scalar(Ak * Tensor([ki, kj], copy(A))) ≈
             TI.scalar(TI.contract([Ak, Ak]; sequence = [1, 2]))
     end
@@ -33,13 +33,13 @@
         c = TI.combinedind(C)
         Tc = T * C
         @test sort(TI.dim.(TI.inds(Tc))) == [2, 6]
-        @test tarray(Tc * C, ki, kj, kk) ≈ T.data
+        @test tarray(Tc * C, ki, kj, kk) ≈ TI.array(T)
         l1, l2, ln = Index(2, "l1"), Index(3, "l2"), Index(5, "ln")
         A = Tensor([ki, l1], rand(2, 2))
         B = Tensor([ki, l2], rand(2, 3))
         D = TI.directsum([ln], A => (l1,), B => (l2,))
-        @test tarray(D, ki, ln)[:, 1:2] ≈ A.data
-        @test tarray(D, ki, ln)[:, 3:5] ≈ B.data
+        @test tarray(D, ki, ln)[:, 1:2] ≈ TI.array(A)
+        @test tarray(D, ki, ln)[:, 3:5] ≈ TI.array(B)
     end
 
     @testset "factorizations" begin
@@ -58,7 +58,7 @@
             F1k, F2k, speck = TI.factorize_svd(
                 Tk, [ki, kj]; ortho = "none", singular_values! = svk, maxdim
             )
-            @test size(svk[].data, 1) <= maxdim
+            @test size(TI.array(svk[]), 1) <= maxdim
             maxdim == 6 && @test tarray(F1k * F2k, ki, kj, kk, kl) ≈ A
             maxdim == 6 && @test speck.truncerr < 1e-12
             maxdim == 3 && @test speck.truncerr > 0

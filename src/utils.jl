@@ -18,8 +18,7 @@ end
 #Fermionic messages carry a per-message parity gauge (odd-sector sign); square roots
 #need the PSD representative. Identity for non-fermionic backends; see psd_gauge in
 #ftensor.jl.
-parity_message_gauge(M) = M
-parity_message_gauge(M::Tensors.GradedTensor) = Tensors.psd_gauge(M)
+parity_message_gauge(M) = Tensors.isgraded(M) ? Tensors.psd_gauge(M) : M
 
 function _psd_root_eigenvalue(x, cutoff, inverse::Bool)
     λ = real(x)
@@ -50,7 +49,8 @@ function eigendecomp(A, linds, rinds; ishermitian = false, kwargs...)
     @assert ishermitian
     D, U = eigen(A, linds, rinds; ishermitian, kwargs...)
     ul, ur = noncommonind(D, U), commonind(D, U)
-    Ul = replaceinds(U, vcat(rinds, ur), vcat(linds, ul))
+    # Array literals, not `vcat`: an Index is itself a range, so `vcat(i, j)` would splice their elements.
+    Ul = replaceinds(U, Index[rinds, ur], Index[linds, ul])
     return Ul, D, dag(U)
 end
 

@@ -1,4 +1,4 @@
-# Fermionic quench dynamics with the TensorKit backend at fermion-parity (fZ2) symmetry.
+# Fermionic quench dynamics with the graded (GradedArrays) backend at fermion-parity (fZ2) symmetry.
 #
 # Spinless free fermions: a charge-density-wave product state quenched under
 # nearest-neighbour hopping H = -t Σ (c†ᵢcⱼ + h.c.). Everything fermionic is native:

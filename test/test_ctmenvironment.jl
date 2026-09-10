@@ -566,7 +566,6 @@ end
     # The `:cut` engine is written in backend verbs, so a Z2-conserving state and its dense twin
     # (same product state, same conserving circuit) must give the SAME truncated CTMRG numbers:
     # the truncation rule runs over the merged spectrum of all sectors. Lossless χ is exact on both.
-    using TensorNetworkQuantumSimulator.Tensors: GradedTensor
     function z2_state(symmetry; D)
         Random.seed!(11)
         g = named_grid((4, 4))
@@ -585,7 +584,7 @@ end
                  (cvm_freenergy(c), real(expect(c, ("Z", [(2, 2)])))))
 
     ψd, ψg = z2_state(nothing; D = 2), z2_state("Z2"; D = 2)
-    @test ψg[(1, 1)] isa GradedTensor
+    @test TNQS.Tensors.isgraded(ψg[(1, 1)])
     lnN = log(abs(norm_sqr(ψd; alg = "exact")))
     zx = real(expect(ψd, ("Z", [(2, 2)]); alg = "exact"))
     @test log(abs(norm_sqr(ψg; alg = "exact"))) ≈ lnN atol = 1.0e-12          # same state
@@ -688,8 +687,9 @@ end
         ψ = random_tensornetworkstate(Float64, g, siteinds("S=1/2", g); bond_dimension = D)
         for v in vertices(g)
             t = ψ[v]
-            A = zeros(Float64, size(t.data)); A[1] = 1.0            # site ↑, every bond in state 1
-            ψ[v] = TNQS.Tensors.Tensor(copy(inds(t)), A .+ ε .* t.data)
+            At = TNQS.TensorInterface.array(t, inds(t)...)
+            A = zeros(Float64, size(At)); A[1] = 1.0                # site ↑, every bond in state 1
+            ψ[v] = TNQS.TensorInterface.from_array(A .+ ε .* At, inds(t)...)
         end
         return ψ
     end

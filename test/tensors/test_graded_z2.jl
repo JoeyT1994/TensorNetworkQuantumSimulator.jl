@@ -1,6 +1,5 @@
-@testset "graded (TensorKit Z2) backend" begin
+@testset "graded (Z2) backend" begin
     Random.seed!(0x5eed_0002)
-    using TensorNetworkQuantumSimulator.Tensors: GradedTensor
 
     function graded_digest(sectors)
         g = named_grid((3, 3))
@@ -25,7 +24,7 @@
 
     ψd, zd, zxd, ed = graded_digest(nothing)
     ψg, zg, zxg, eg = graded_digest([0 => 1, 1 => 1])
-    @test ψg[(1, 1)] isa GradedTensor
+    @test Tensors.isgraded(ψg[(1, 1)])
     @test zd ≈ zg atol = 1e-10
     @test zxd ≈ zxg atol = 1e-10
     @test ed ≈ eg atol = 1e-12
@@ -41,10 +40,7 @@
     @test !isempty(messages(cold1))
     @test all(message(cold1, e) ≈ message(cold2, e) for e in keys(messages(cold1)))
 
-    nstored = sum(
-        sum(p -> length(ψg[v].data[p[1], p[2]]), Tensors.TK.fusiontrees(ψg[v].data); init = 0)
-            for v in vertices(ψg)
-    )
+    nstored = sum(length(TI.data(ψg[v])) for v in vertices(ψg))
     nfull = sum(prod(Int[TI.dim(i) for i in TI.inds(ψg[v])]) for v in vertices(ψg))
     @test nstored <= 0.5 * nfull
 

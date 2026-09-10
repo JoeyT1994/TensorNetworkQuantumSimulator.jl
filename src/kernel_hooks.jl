@@ -20,33 +20,9 @@ simple update gets its memory bound from consumed destinations and backend facto
 #regions, graded tensors — returns `nothing` and takes the generic path with identical
 #results. Gate application is deliberately not fused here: its generic contractions reuse
 #consumed tensors, while the dominant tall split uses a low-workspace polar decomposition.
-function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector{<:Tensor}; normalize)
-    ψ = tns[v]
-    ψ isa Tensor || return nothing
-    sinds = siteinds(tns, v)
-    all(i -> i isa Index, sinds) || return nothing
-    return Tensors.fused_norm_message(ψ, collect(Index, sinds), incoming_ms; normalize)
-end
-
-function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Vector{<:Tensor}; op_strings::Function)
-    length(vs) == 1 || return nothing
-    v = only(vs)
-    ψ = tns[v]
-    ψ isa Tensor || return nothing
-    sinds = siteinds(tns, v)
-    all(i -> i isa Index, sinds) || return nothing
-    str = op_strings(v)
-    o = if str == "I"
-        nothing
-    elseif str == "ρ" || length(sinds) != 1
-        return nothing
-    else
-        adapt_like(ψ, op(str, only(sinds)))
-    end
-    c = Tensors.fused_norm_closure(ψ, collect(Index, sinds), incoming_ms; op = o)
-    (c === nothing || !isempty(inds(c))) && return nothing
-    return scalar(c)
-end
+#The ITensorBase backend has no fused kernel yet: every closure takes the generic seam path.
+norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector{<:Tensor}; normalize) = nothing
+norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Vector{<:Tensor}; op_strings::Function) = nothing
 
 #Direct entry point for circuits already given as backend tensors
 function apply_gates(circuit::Vector{<:Tensor}, ψ_bpc::BeliefPropagationCache; kwargs...)
@@ -55,7 +31,7 @@ end
 
 #Backend tensor gates inside generic (e.g. Any-typed) circuit vectors pass through the
 #circuit-tuple path unchanged; the acting vertices are inferred from the site indices.
-function totensor(gate::Union{Tensor, Tensors.GradedTensor}, g::NamedGraph, sinds::Dictionary)
+function totensor(gate::Tensor, g::NamedGraph, sinds::Dictionary)
     verts = [v for v in keys(sinds) if any(i -> i ∈ inds(gate), sinds[v])]
     return gate, verts
 end
@@ -168,12 +144,6 @@ function set_graded_interpartition_messages!(
         setmessage!(bmps_cache, es[i], t)
     end
     return bmps_cache
-end
-
-#The adjoint of a graded boundary-MPS message in the fitting metric (see
-#Tensors.fit_adjoint); the generic fallback in boundarympscache.jl is a plain dag.
-function fit_adjoint_message(bmps_cache::BoundaryMPSCache, e::NamedEdge, m::Tensors.GradedTensor)
-    return Tensors.fit_adjoint(m, _crossing_inds(bmps_cache, e))
 end
 
 #Graded purification (infinite-temperature identity) state: per vertex the pairing

@@ -1,8 +1,5 @@
 # Array of a Tensor in a requested index order.
-function tarray(t::Tensor, is...)
-    perm = map(i -> findfirst(==(i), t.inds), collect(is))
-    return permutedims(t.data, perm)
-end
+tarray(t::Tensor, is...) = TI.array(t, is...)
 
 # Dense Jordan-Wigner reference implementation shared by the fermionic tests.
 const JW_ANNIHILATION = ComplexF64[0 1; 0 0]
