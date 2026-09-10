@@ -773,6 +773,22 @@ end
 function LinearAlgebra.eigen(t::AbstractTensor, linds, rinds; ishermitian::Bool = false, kwargs...)
     ishermitian || error("eigen: only ishermitian = true is implemented")
     lv = _ascarried(t, _indvec(linds)); rv = _ascarried(t, _indvec(rinds))
+    if isgraded(t) && length(lv) == 1 && length(rv) == 1 && findfirst(==(lv[1]), inds(t)) == 2
+        # Fermionic sign trap: matricising a 2-leg tensor with the SECOND stored leg as codomain
+        # transposes the two legs, and a transposition of two odd legs carries the fermionic sign, so
+        # the odd-parity block comes back negated — a positive-definite message reads as having
+        # negative eigenvalues (measured: block eigenvalues +0.087, +0.297, `eigh_full` returned
+        # −0.087, −0.297) and every `sqrt` downstream fails. Decompose in stored order (codomain =
+        # first leg) and map the result onto the requested labelling: the eigenvector tensor is
+        # `conj(V)` named onto `rinds`, the eigenvalue matrix keeps its arrows. Verified: `Ul·D·dag(U)`
+        # reproduces M in M's own orientation and `ψ·√M·dag(√M⁻¹) = ψ` to 1e-16.
+        D, V = MAK.eigh_full(t, Tuple(rv), Tuple(lv))
+        d1, d2 = inds(D)
+        lk = _fresh_like(d2, "Link,eigen")
+        U = TensorInterface.replaceinds(TensorInterface.replaceinds(conj(V), [lv[1]], [rv[1]]), [d2], [lk])
+        Dt = TensorInterface.replaceinds(TensorInterface.replaceinds(D, [d1], [lk]), [d2], [TensorInterface.prime(lk)])
+        return Dt, U
+    end
     D, V = MAK.eigh_full(t, Tuple(lv), Tuple(rv))
     d1, d2 = inds(D)                       # (fresh, fresh); V is on (domain…, d2)
     lk = _fresh_like(d2, "Link,eigen")

@@ -1005,8 +1005,60 @@ exact/BP/BMPS/CTM observables, fermionic chain/spinful/2D against dense Jordan�
    ping-pong buffer, ψ̄ folded into the closing GEMM — ψ + two buffers live (3F), no permutations.
    Agrees with the generic path to 1e-15; anything unrecognised falls back.
 
+8. *Hermitian eigen on fermionic bonds.* Matricising a 2-leg tensor with the SECOND stored leg as
+   codomain transposes the legs, and a transposition of two odd legs carries the fermionic sign, so
+   `eigh_full` returns the odd-parity block negated: a positive message came back with eigenvalues
+   −0.087, −0.297 and `symmetric_gauge!` (hence every fermionic boundary-MPS expectation on a state
+   whose stored leg order puts the unprimed bond second) died in `sqrt`. `pseudo_sqrt_inv_sqrt` was
+   unaffected only because it passes the stored order. (A first fix keyed on arrow duality instead
+   of leg order broke the Jordan–Wigner tests — occupations off by 0.15 — and was caught the same
+   night.) The seam's `eigen` now decomposes in stored order and maps back (`conj(V)` onto the
+   requested leg); verified `Ul·D·dag(U) = M` in M's orientation and `ψ·√M·dag(√M⁻¹) = ψ` to 1e-16.
+   Regression test: fermionic 2D testset "eigen of both message orientations".
+
 Compile latency dominates graded runs (package precompile ~4–6 min after a source edit); probe new
 conventions in a scratch environment with the ITensorBase stack alone (seconds) before the suite.
+
+## Performance audit after the backend switch — *2026-09-10 (night)*
+
+Harnesses in the session scratchpad (`bench_peak.jl`, `bench_ctm.jl`, `bench_bmps.jl`,
+`bench_graded.jl`): a `named_comb_tree((3, 3))` whose centre tensor (2·D³, F = 500 MB at D = 250)
+dominates every other tensor, so the resident-set high-water mark over an operation reads in
+units of F; CTM/BMPS on random 6×6 / 8×8 grids. Single BLAS thread. Controls: `Fixes` (TensorKit
+backend) and `main` (ITensors backend), in worktrees.
+
+| operation (D = 250 comb) | main | Fixes | FixesV2 before | FixesV2 now |
+|---|---|---|---|---|
+| BP, 3 iterations: time / peak | 44 s / 7.1 F | 30.6 s / 0.1 F | 29.5 s / 0.5 F | same |
+| simple update, 1 layer: time / peak / churn | 46 s / 6.3 F / 41 F | 42.5 s / 2.8 F / 2.9 F | 49.5 s / 5.4 F / 28 F | 42.2 s / 3.3 F / 15 F |
+
+*BP.* The generic sequence path matricises both operands of every pairwise contraction (TensorAlgebra
+skips the copy only when the contracted legs are already contiguous at an end — measured 1 F vs 2 F
+per product), so a message cost 8–9 F and 3× the time. The fused kernel (`fused_norm_message`,
+`fused_norm_scalar`) absorbs each message along its bond by GEMM into two pooled buffers: ψ + 2F
+live. It applies to any dense state vertex with standard doubled messages; graded, MPS-link and ρ
+cases fall back.
+
+*Simple update.* Three seams were allocating stubs after the port: `absorb_chain` (environment
+chain), `left_orthogonalize(consume_input)`, `contract(...; dest)`. Now: chains `mul!` into the
+consumed input's storage ping-ponging with one pooled buffer, laid out so the next factor
+contracts by a free reshape; the QR factorises the matricised workspace in place (`qr_compact!`)
+and writes Q into the consumed storage; a two-factor `contract` writes into `dest`. Peak 3.3 F: the
+remaining 0.3 F is TensorAlgebra materialising a permuted-output temporary; without the layout trick
+it is 3.05 F at 50 s/layer. The QR itself is 8 of the 14 s of a centre gate (LAPACK Householder,
+inherent at one thread).
+
+*CTM.* L=6 D=4 χ=64 `:cut`, 3 sweeps: 81 s (Fixes 79 s), peak over baseline 403 MB (Fixes 623 MB).
+At L=6 D=3 χ=32 the new backend was 10–17% slower (small-matrix overheads). Profile of that sweep:
+contractions 40% (of which permuted copies ~11% and output zero-fill ~3%, both inside TensorAlgebra),
+SVD 21%, QR 8%, `_hdot` 6% (an `aligndims` copy even when leg orders agree — removed), GC ~20%.
+(A micro-benchmark suggested MatrixAlgebraKit's default "safe" SVD driver was 6× slower than plain
+divide-and-conquer at 288×288; measured cleanly through the tensor interface both take 0.04 s and the
+CTM sweep did not change — the default stays.)
+
+*Graded (fZ2 4×4 D=3, Z2 4×4 D=2).* fermionic CTM `:cut` 6 sweeps 10.4 s (Fixes 36.8 s); `:cycle`
+11.4 s (9.2 s); exact contraction 50 s (108 s); Z2 BMPS χ=16 2.4 s (9.8 s); Z2 BP 1.3 s (3.0 s).
+Observables identical to the digits printed.
 
 ## What made `:cycle` work
 

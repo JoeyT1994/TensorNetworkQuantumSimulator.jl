@@ -63,4 +63,36 @@
         @test e4 < 0.01 * e0
         @test e8 < 1.0e-12
     end
+
+    # REGRESSION (2026-09-10): eigen-decomposing a Hermitian message with its SECOND stored leg as the
+    # codomain transposes two odd legs (a fermionic sign), so the odd-parity eigenvalues came back
+    # negated — a positive block read as negative — and
+    # `symmetric_gauge!` — and every fermionic boundary-MPS expectation on a state with alternating
+    # bond arrows — died in `sqrt`. Both leg orders must give non-negative eigenvalues, reconstruct
+    # the message in its own orientation, and the gauge must leave the state invariant.
+    @testset "eigen of both message orientations (symmetric gauge)" begin
+        g = named_grid((2, 2))
+        s = TNQS.siteinds("Fermion", g)
+        ψ = tensornetworkstate(ComplexF64, v -> v == (1, 1) ? "Occ" : "Emp", g, s)
+        layer = Any[("F_hop", (src(e), dst(e)), 0.4) for e in edges(g)]
+        ψ, _ = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 4, cutoff = 1.0e-14))
+        bpc = update(BeliefPropagationCache(ψ); maxiter = 50, tolerance = 1.0e-12)
+        for e in edges(TNQS.graph(bpc))
+            M = TNQS.parity_message_gauge(TNQS.message(bpc, e))
+            i1, i2 = TI.inds(M)
+            for (li, ri) in ((i1, i2), (i2, i1))
+                Q, D, Qdag = TNQS.eigendecomp(M, li, ri; ishermitian = true)
+                dv = real.([TI.array(D)[k, k] for k in 1:TI.dim(li)])
+                @test minimum(dv) > -1.0e-10
+                @test norm(TI.array(Q * D * Qdag, TI.inds(M)...) - TI.array(M)) < 1.0e-10 * norm(TI.array(M))
+            end
+        end
+        n_before = real(norm_sqr(ψ; alg = "exact"))
+        z_before = real(only(expect(ψ, ("N", [(1, 2)]); alg = "exact")))
+        ψg = TNQS.network(TNQS.symmetric_gauge(bpc))
+        @test real(norm_sqr(ψg; alg = "exact")) ≈ n_before rtol = 1.0e-8
+        @test real(only(expect(ψg, ("N", [(1, 2)]); alg = "exact"))) ≈ z_before atol = 1.0e-10
+        # the boundary-MPS path that gauges the state first
+        @test real(only(expect(ψ, ("N", [(1, 2)]); alg = "boundarymps", mps_bond_dimension = 8))) ≈ z_before atol = 1.0e-8
+    end
 end
