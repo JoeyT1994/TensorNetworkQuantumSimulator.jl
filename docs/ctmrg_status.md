@@ -998,6 +998,13 @@ exact/BP/BMPS/CTM observables, fermionic chain/spinful/2D against dense Jordan�
 6. *Diagonal maps* must touch the diagonal only (a `copyto!` into a `FusedGradedMatrix` hits
    forbidden blocks); `state`/`op` reject charged states/operators on graded sites (the old error).
 
+7. *BP hot path.* The generic sequence path matricises both operands of every pairwise
+   contraction (a permuted F-sized copy each), measured at 8–9 F allocated and 3× the time per
+   message at D = 12 against the old arena kernel. Restored as `fused_norm_message` /
+   `fused_norm_scalar` (dense only): messages absorbed along their bond by slice GEMMs into a
+   ping-pong buffer, ψ̄ folded into the closing GEMM — ψ + two buffers live (3F), no permutations.
+   Agrees with the generic path to 1e-15; anything unrecognised falls back.
+
 Compile latency dominates graded runs (package precompile ~4–6 min after a source edit); probe new
 conventions in a scratch environment with the ITensorBase stack alone (seconds) before the suite.
 

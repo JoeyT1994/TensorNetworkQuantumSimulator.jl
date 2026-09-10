@@ -1129,6 +1129,185 @@ function TensorInterface.has_closure_gauge(t::AbstractTensor)
     end
 end
 
+# ── Fused double-layer BP kernels (dense data) ──────────────────────────────────────────
+# The BP message update ψ·Πm·ψ̄ is the inner loop of every sweep. The generic sequence path
+# matricises both operands of every pairwise contraction (a permuted copy of the F-sized chain
+# intermediate each time), which measured ~8–9 F of allocation and 3× the time of the old fused
+# kernel at D = 12. Here each incoming message is absorbed along its bond with slice GEMMs into a
+# ping-pong buffer (no permutations: the bond dimension is split out of the column-major layout as
+# (pre, D, post)), and the conjugate of ψ is folded into the closing GEMM. Live memory: ψ and two
+# buffers = 3F, plus the D² message. Structure not recognised → `nothing` (generic path).
+
+# ψ's data as a strided array, or nothing when the kernel does not apply.
+function _fused_data(ψ::AbstractTensor)
+    isgraded(ψ) && return nothing
+    A = IB.unnamed(ψ)
+    A isa StridedArray || return nothing
+    return A
+end
+
+# For a standard doubled message on bond `b` of ψ (legs (b, b′) with b′ = prime(b)), the position
+# of `b` among ψ's legs and the message matrix M[b, b′]; nothing otherwise.
+function _fused_message_slot(m::AbstractTensor, ψinds::Vector{<:Index})
+    ndims(m) == 2 || return nothing
+    isgraded(m) && return nothing
+    i1, i2 = inds(m)
+    b, bp = TensorInterface.plev(i1) == 0 ? (i1, i2) : (i2, i1)
+    (TensorInterface.plev(b) == 0 && TensorInterface.plev(bp) == 1 && TensorInterface.noprime(bp) == b) || return nothing
+    k = findfirst(==(b), ψinds)
+    k === nothing && return nothing
+    M = IB.unnamed(aligndims(m, (b, bp)))
+    M isa StridedArray || return nothing
+    return k, M
+end
+
+# Task-local buffer pool for the chain intermediates: two F-sized buffers per element type, reused
+# across messages (the kernel returns only the D² result, never a buffer). Live memory during a
+# message update is therefore ψ + 2 buffers = 3F + change, and steady-state heap churn ~0.
+function _fused_buffers(::Type{T}, n::Integer) where {T}
+    pool = get!(task_local_storage(), :tnqs_fused_buffers) do
+        Dict{DataType, Tuple{Vector, Vector}}()
+    end::Dict{DataType, Tuple{Vector, Vector}}
+    bufs = get(pool, T, nothing)
+    if bufs === nothing || length(bufs[1]) < n
+        bufs = (Vector{T}(undef, n), Vector{T}(undef, n))
+        pool[T] = bufs
+    end
+    return bufs
+end
+
+# out[a, b′, c] = Σ_b cur[a, b, c] · M[b, b′] along dimension k, without permuting. Large `pre`:
+# one GEMM per c-slice. Small `pre` (the site leg in front of the bond): fold it into a single GEMM
+# with kron(Mᵀ, 𝟙_pre) — `pre`× more flops than the slices, but one BLAS call instead of `post`
+# tiny ones (measured 0.63 ms → GEMM-bound at D = 12, pre = 2, post = 1728).
+function _absorb_dim!(out::AbstractArray, cur::AbstractArray, M::AbstractMatrix, k::Integer)
+    dims = size(cur)
+    pre = prod(dims[1:(k - 1)]; init = 1); D = dims[k]; post = prod(dims[(k + 1):end]; init = 1)
+    C = reshape(cur, pre, D, post); O = reshape(out, pre, D, post)
+    if pre == 1
+        LinearAlgebra.mul!(reshape(O, D, post), transpose(M), reshape(C, D, post))
+    elseif post == 1
+        LinearAlgebra.mul!(reshape(O, pre, D), reshape(C, pre, D), M)
+    elseif pre <= 8 && post > 8
+        K = kron(transpose(M), LinearAlgebra.I(pre))                  # (pre·D)² — small
+        LinearAlgebra.mul!(reshape(O, pre * D, post), K, reshape(C, pre * D, post))
+    else
+        for c in 1:post
+            LinearAlgebra.mul!(view(O, :, :, c), view(C, :, :, c), M)
+        end
+    end
+    return out
+end
+
+# Absorb every incoming message (and optional site operators) into ψ's data. Returns the chain
+# result (a pooled buffer; ψ's own data is never written) or nothing. `slots` are (k, M) pairs.
+function _fused_chain(A::StridedArray, slots::Vector)
+    T = promote_type(eltype(A), (eltype(M) for (_, M) in slots)...)
+    isempty(slots) && return T == eltype(A) ? A : T.(A)
+    cur = T == eltype(A) ? A : T.(A)
+    b1, b2 = _fused_buffers(T, length(A))
+    buf1 = reshape(view(b1, 1:length(A)), size(A)); buf2 = reshape(view(b2, 1:length(A)), size(A))
+    out = buf1
+    for (k, M) in slots
+        _absorb_dim!(out, cur, M, k)
+        cur, out = out, (out === buf1 ? buf2 : buf1)
+    end
+    return cur
+end
+
+# R[b′, b] = Σ_{a,c} conj(Ψ[a, b′, c]) T[a, b, c] over the split (pre, D, post) of the outgoing bond.
+# Small `pre`: one (pre·D)² GEMM over c followed by a partial trace over a; large `pre`: c-slices.
+function _close_bond!(R::AbstractMatrix, Ψ3::AbstractArray{<:Any, 3}, T3::AbstractArray{<:Any, 3})
+    pre, D, post = size(Ψ3)
+    T = eltype(R)
+    if post == 1
+        LinearAlgebra.mul!(R, adjoint(reshape(Ψ3, pre, D)), reshape(T3, pre, D))
+    elseif pre <= 8
+        G = reshape(Ψ3, pre * D, post) * adjoint(reshape(T3, pre * D, post))   # G[(a,b′),(a2,b)] = Σ_c Ψ T̄
+        fill!(R, zero(T))
+        G4 = reshape(G, pre, D, pre, D)
+        for b in 1:D, bp in 1:D, a in 1:pre
+            R[bp, b] += conj(G4[a, bp, a, b])                               # conj(Ψ) T = conj(Ψ T̄)
+        end
+    else
+        fill!(R, zero(T))
+        for c in 1:post
+            LinearAlgebra.mul!(R, adjoint(view(Ψ3, :, :, c)), view(T3, :, :, c), one(T), one(T))
+        end
+    end
+    return R
+end
+
+# Outgoing message on the one bond of ψ not covered by `incoming`: R[b′, b] = Σ conj(ψ)[…b′…] T[…b…].
+function fused_norm_message(ψ::AbstractTensor, sinds::Vector{<:Index}, incoming::Vector; normalize::Bool = true)
+    A = _fused_data(ψ)
+    A === nothing && return nothing
+    ψinds = collect(Index, inds(ψ))
+    slots = Any[]
+    covered = falses(length(ψinds))
+    for m in incoming
+        sl = _fused_message_slot(m, ψinds)
+        sl === nothing && return nothing
+        covered[sl[1]] && return nothing
+        covered[sl[1]] = true
+        push!(slots, sl)
+    end
+    open = [k for k in eachindex(ψinds) if !covered[k] && !(ψinds[k] in sinds)]
+    length(open) == 1 || return nothing
+    all(k -> covered[k] || ψinds[k] in sinds || k == only(open), eachindex(ψinds)) || return nothing
+    kout = only(open)
+    Tm = _fused_chain(A, slots)
+    dims = size(A)
+    pre = prod(dims[1:(kout - 1)]; init = 1); D = dims[kout]; post = prod(dims[(kout + 1):end]; init = 1)
+    T = eltype(Tm)
+    Ψ3 = reshape(A, pre, D, post); T3 = reshape(Tm, pre, D, post)
+    bout = ψinds[kout]; boutp = TensorInterface.prime(bout)
+    if pre == 1
+        # R[b, b′] = Σ_c T[b, c] conj(ψ[b′, c])
+        R = Matrix{T}(undef, D, D)
+        LinearAlgebra.mul!(R, reshape(T3, D, post), adjoint(reshape(Ψ3, D, post)))
+        legs = (bout, boutp)
+    else
+        R = Matrix{T}(undef, D, D)
+        _close_bond!(R, Ψ3, T3)
+        legs = (boutp, bout)
+    end
+    if normalize
+        s = sum(R)
+        iszero(s) || (R .*= inv(s))
+    end
+    return ITensor(R, legs)
+end
+
+# Single-vertex closure ψ·Πm·(ops)·ψ̄ → scalar; `ops` are (s′, s) operator tensors on site legs.
+function fused_norm_scalar(ψ::AbstractTensor, sinds::Vector{<:Index}, incoming::Vector, ops::Vector)
+    A = _fused_data(ψ)
+    A === nothing && return nothing
+    ψinds = collect(Index, inds(ψ))
+    slots = Any[]
+    covered = falses(length(ψinds))
+    for m in incoming
+        sl = _fused_message_slot(m, ψinds)
+        sl === nothing && return nothing
+        covered[sl[1]] && return nothing
+        covered[sl[1]] = true
+        push!(slots, sl)
+    end
+    for o in ops
+        (ndims(o) == 2 && !isgraded(o)) || return nothing
+        i1, i2 = inds(o)
+        s, sp = TensorInterface.plev(i1) == 0 ? (i1, i2) : (i2, i1)
+        (TensorInterface.plev(sp) == 1 && TensorInterface.noprime(sp) == s && s in sinds) || return nothing
+        k = findfirst(==(s), ψinds)
+        (k === nothing || covered[k]) && return nothing
+        covered[k] = true
+        push!(slots, (k, IB.unnamed(aligndims(o, (s, sp)))))   # M[s, s′] = O[s′, s]: T[…s′…] = Σ_s ψ[…s…] O[s′, s]
+    end
+    all(k -> covered[k] || ψinds[k] in sinds, eachindex(ψinds)) || return nothing
+    Tm = _fused_chain(A, slots)
+    return LinearAlgebra.dot(vec(A), vec(Tm))                    # Σ conj(ψ) T
+end
+
 # ── Hilbert inner products ──────────────────────────────────────────────────────────────
 # NamedDimsArrays' `dot` on graded tensors is the CONTRACTION (with the fermionic twists), which
 # is not positive definite on mixed-orientation fermionic tensors. KrylovKit and the CTM cycle

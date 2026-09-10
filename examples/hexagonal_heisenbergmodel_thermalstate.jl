@@ -4,8 +4,6 @@ using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuant
 function main()
     χ = 32
     g = named_hexagonal_lattice_graph(2,2; periodic = true)
-    #U(1) (Sz-conserving) graded purification: ancilla site legs carry the dual
-    #representation, so the infinite-temperature identity state is flux-zero per site
     s = siteinds("S=1/2", g; inds_per_site = 2, symmetry = "U1")
     ψ = identity_tensornetworkstate(ComplexF64, g, s)
     ψ_bpc = update(BeliefPropagationCache(ψ))
@@ -25,10 +23,8 @@ function main()
     logz = -freenergy(ψ_bpc)
     rescale!(ψ_bpc)
     for i in 1:nsteps
-        t1 = time()
         ψ_bpc, errs = apply_gates(two_site_gates,ψ_bpc;apply_kwargs)
         logz -= freenergy(ψ_bpc)
-
         rescale!(ψ_bpc)
         if i % 5 == 0
             #Doubled because we prepared sqrt state and measured over the norm
