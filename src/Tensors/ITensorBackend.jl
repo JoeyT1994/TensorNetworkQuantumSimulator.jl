@@ -432,15 +432,133 @@ end
 function TensorInterface.contract(ts::Vector{<:AbstractTensor}; sequence = nothing, dest = nothing, kwargs...)
     isnothing(sequence) && return reduce(*, ts)
     sequence isa Integer && return ts[sequence]
+    # `dest`: a tensor the caller has finished with, offered as storage for the result. Honoured for
+    # a two-factor contraction whose result fits it and does not alias either operand (else the
+    # result goes to a pooled buffer and is copied into `dest`); longer trees ignore it.
+    if length(ts) == 2 && dest isa AbstractTensor
+        r = _contract_into(ts[1], ts[2], dest)
+        r === nothing || return r
+    end
     return _contract_seq(ts, sequence)
 end
 _contract_seq(ts::Vector, x::Integer) = ts[x]
 _contract_seq(ts::Vector, x::Union{Vector, Tuple}) = mapreduce(y -> _contract_seq(ts, y), *, x)
 
-# Internal simple-update / boundary-MPS seams that the previous backend specialised for its
-# arena; here they are the plain generic operations.
-left_orthogonalize(t, linds; consume_input::Bool = false) = LinearAlgebra.qr(t, linds)
-absorb_chain(t, envs, dest) = reduce(*, envs; init = t)
+# ── Consumed destinations (simple update) ───────────────────────────────────────────────
+# Generic ITensorBase operations (`mul!` into a named destination), arranged so that the result of a
+# step lands in storage the caller has relinquished instead of fresh memory. Dense strided data only;
+# anything else takes the ordinary allocating path with identical results.
+
+_dense_storage(t::AbstractTensor) = (A = IB.unnamed(t); (!isgraded(t) && A isa StridedArray) ? A : nothing)
+_aliases(a::AbstractArray, b::AbstractArray) = Base.mightalias(a, b)
+
+# The result indices of `a * b` (a's open legs, then b's) and their dimensions.
+function _product_inds(a::AbstractTensor, b::AbstractTensor)
+    ia, ib = collect(Index, inds(a)), collect(Index, inds(b))
+    open_a = filter(i -> !(i in ib), ia); open_b = filter(i -> !(i in ia), ib)
+    return vcat(open_a, open_b)
+end
+
+# A tensor on `is` viewing the first prod(dims) entries of `storage` (a Vector or Array).
+function _view_tensor(storage::StridedArray, is::Vector{<:Index})
+    n = prod(TensorInterface.dim.(is); init = 1)
+    v = reshape(view(vec(storage), 1:n), TensorInterface.dim.(is)...)
+    return ITensor(v, Tuple(is))
+end
+
+# `a * b` written into `dest`'s storage when it fits and aliases neither operand. Otherwise into a
+# pooled buffer, then copied into `dest` (a memcpy, so the caller's storage still ends up holding
+# the result). Returns a tensor over `dest`'s storage, or nothing when the types do not allow it.
+function _contract_into(a::AbstractTensor, b::AbstractTensor, dest::AbstractTensor)
+    A, B, Dst = _dense_storage(a), _dense_storage(b), _dense_storage(dest)
+    (A === nothing || B === nothing || Dst === nothing) && return nothing
+    T = promote_type(eltype(A), eltype(B))
+    eltype(Dst) == T || return nothing
+    out = _product_inds(a, b)
+    n = prod(TensorInterface.dim.(out); init = 1)
+    n <= length(Dst) || return nothing
+    if _aliases(Dst, A) || _aliases(Dst, B)
+        buf = first(_fused_buffers(T, n))
+        tmp = _view_tensor(buf, out)
+        LinearAlgebra.mul!(tmp, a, b)
+        r = _view_tensor(Dst, out)
+        copyto!(IB.unnamed(r), IB.unnamed(tmp))
+        return r
+    end
+    r = _view_tensor(Dst, out)
+    LinearAlgebra.mul!(r, a, b)
+    return r
+end
+
+# Environment chain t · e₁ · e₂ ⋯ (shape-preserving 2-index factors), the result in `dest`'s storage
+# (or fresh when `dest` is nothing). Intermediates ping-pong between one pooled buffer and `dest`'s
+# storage once `t`'s data is no longer needed, so the chain costs t + one buffer live instead of one
+# fresh tensor per factor.
+function absorb_chain(t::AbstractTensor, envs::Vector, dest)
+    isempty(envs) && return t
+    A = _dense_storage(t)
+    ok = A !== nothing && all(e -> _dense_storage(e) !== nothing, envs) &&
+        (dest === nothing || _dense_storage(dest) !== nothing)
+    ok || return reduce(*, envs; init = t)
+    T = promote_type(eltype(A), (eltype(IB.unnamed(e)) for e in envs)...)
+    n = length(A)
+    Dst = dest === nothing ? nothing : _dense_storage(dest)
+    (Dst !== nothing && (eltype(Dst) != T || length(Dst) < n)) && (Dst = nothing)
+    buf1, buf2 = _fused_buffers(T, n)
+    # slots: the pooled buffer, and dest's storage once the input has been read (when dest aliases
+    # t, that is after the first step; otherwise immediately). With no dest, the second slot is the
+    # other pooled buffer and the result is copied out fresh at the end.
+    slots = Dst === nothing ? (buf1, buf2) : (buf1, Dst)
+    cur = t
+    k = 0
+    for e in envs
+        k += 1
+        out_inds = _product_inds(cur, e)
+        target = slots[mod1(k, 2)]
+        if target === Dst && k == 1 && _aliases(Dst, A)
+            target = buf2                                    # first step may not overwrite the input
+        end
+        r = _view_tensor(target, out_inds)
+        LinearAlgebra.mul!(r, cur, e)
+        cur = r
+    end
+    if Dst === nothing
+        return ITensor(copy(IB.unnamed(cur)), Tuple(inds(cur)))
+    end
+    if !_aliases(IB.unnamed(cur), Dst)
+        r = _view_tensor(Dst, collect(Index, inds(cur)))
+        copyto!(IB.unnamed(r), IB.unnamed(cur))
+        cur = r
+    end
+    return cur
+end
+
+# Left-orthogonalisation Q·R with Q on `linds`. Consuming: the matricised copy is factorised in place
+# by LAPACK (geqrf + or/ungqr — Q overwrites the workspace, no second F-sized array), and when the
+# input's storage is separate from that workspace, Q is placed into it. Live memory: input + one
+# F-sized workspace. Non-consuming or non-BLAS data: the seam's `qr`.
+function left_orthogonalize(t, linds; consume_input::Bool = false)
+    A = _dense_storage(t)
+    consume_input && A !== nothing && eltype(A) <: LinearAlgebra.BlasFloat || return LinearAlgebra.qr(t, linds)
+    li = _ascarried(t, _present_inds(t, linds))
+    ri = TensorInterface.uniqueinds(t, li)
+    isempty(li) && return LinearAlgebra.qr(t, linds)
+    is = collect(Index, inds(t))
+    perm = [findfirst(==(i), is) for i in vcat(li, ri)]
+    dl = prod(TensorInterface.dim.(li)); dr = prod(TensorInterface.dim.(ri); init = 1)
+    W = perm == 1:length(is) ? copy(A) : permutedims(A, perm)      # the workspace (one F)
+    M = reshape(W, dl, dr)
+    k = min(dl, dr)
+    R = similar(M, k, dr)
+    # Q (dl × k) written straight into the consumed input's storage when that is separate from the
+    # workspace and large enough; otherwise a fresh matrix. MAK's in-place QR destroys `M`.
+    Q = (dl * k <= length(A) && !_aliases(A, W)) ? reshape(view(vec(A), 1:(dl * k)), dl, k) : similar(M, dl, k)
+    MAK.qr_compact!(M, (Q, R))
+    b = Index(k, "Link,qr")
+    Qt = ITensor(reshape(Q, (TensorInterface.dim.(li)..., k)), Tuple(vcat(li, [b])))
+    Rt = ITensor(reshape(R, (k, TensorInterface.dim.(ri)...)), Tuple(vcat([b], ri)))
+    return Qt, Rt
+end
 _release_storage!(x) = nothing
 
 # ── Diagonal operations ─────────────────────────────────────────────────────────────────
@@ -1312,7 +1430,13 @@ end
 # NamedDimsArrays' `dot` on graded tensors is the CONTRACTION (with the fermionic twists), which
 # is not positive definite on mixed-orientation fermionic tensors. KrylovKit and the CTM cycle
 # deflation need the Hilbert pairing, so route both through the raw storage, aligned by name.
-_hdot(a::AbstractTensor, b::AbstractTensor) = LinearAlgebra.dot(IB.unnamed(a), IB.unnamed(aligndims(b, Tuple(inds(a)))))
+function _hdot(a::AbstractTensor, b::AbstractTensor)
+    ia = Tuple(inds(a))
+    # `aligndims` copies `b` even when the orders already agree (the common case: two sweeps of the
+    # same environment); skip it then.
+    bb = all(((x, y),) -> x == y, zip(ia, inds(b))) && ndims(a) == ndims(b) ? b : aligndims(b, ia)
+    return LinearAlgebra.dot(IB.unnamed(a), IB.unnamed(bb))
+end
 LinearAlgebra.dot(a::Tensor, b::Tensor) = _hdot(a, b)
 VectorInterface.inner(a::Tensor, b::Tensor) = _hdot(a, b)
 
