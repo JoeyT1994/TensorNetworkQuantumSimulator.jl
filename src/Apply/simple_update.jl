@@ -32,15 +32,6 @@ function simple_update(
         updated_tensors = ITensor[ITensors.apply(o, only(ψ⃗))]
         s_values, err = nothing, 0
     else
-        if blocked_gates()
-            # Mathematically the same as the branch below, but bounded in peak memory. Returns
-            # `nothing` for anything it does not specialise, in which case we carry on here.
-            blocked = blocked_two_site_update(
-                o, ψ⃗; envs, normalize_tensors, sqrt_cutoff, consume_inputs, apply_kwargs...
-            )
-            isnothing(blocked) || return blocked
-        end
-
         # When envs is empty no gauging happens and the cutoff is unused, so fall back to
         # the scalartype of the local tensors to materialize a valid default without erroring.
         sqrt_cutoff_ref = isempty(envs) ? first(ψ⃗) : first(envs)
