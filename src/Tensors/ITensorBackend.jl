@@ -109,6 +109,44 @@ function TensorInterface.new_index(ref::Union{Index, AbstractVector{<:Index}}, d
 end
 TensorInterface.new_index(t::AbstractTensor, d::Integer; tags = "") = TensorInterface.new_index(collect(inds(t)), d; tags)
 
+# Zero-padding index for a retained bond `w` on interface `ins`, bringing it to total width `kt`
+# (nothing when `w` is already that wide). Dense: a fresh index of the missing width. Graded: the
+# padded bond must have the SAME sector structure every sweep, or the CTM's unitary alignment
+# between sweeps is blockwise rectangular and declines (measured: 26 declines per run and a slow drift
+# of the fermionic `:cycle` at over-parametrised χ). So the target multiplicity per sector is fixed
+# by the interface alone — `kt` split over the sectors of the fused interface space in proportion to
+# their multiplicities (never below what `w` already carries) — and the pad fills each sector up to
+# it. The pad carries `w`'s arrow.
+function TensorInterface.pad_index(w::Index, ins::AbstractVector{<:Index}, kt::Integer; tags = "Link,pad")
+    k = TensorInterface.dim(w)
+    k >= kt && return nothing
+    isgraded(w) || return Index(Int(kt) - k, String(tags))
+    fused = reduce(GA.tensor_product, (space(i) for i in ins))
+    secs = collect(GA.sectors(fused)); mult = collect(GA.blocklengths(fused))
+    have = Dict{Any, Int}(c => n for (c, n) in zip(GA.sectors(space(w)), GA.blocklengths(space(w))))
+    # proportional allocation of kt, floored at the retained count, capped by the sector's capacity
+    tot = sum(mult)
+    target = Dict{Any, Int}(c => clamp(round(Int, Int(kt) * m / tot), get(have, c, 0), m) for (c, m) in zip(secs, mult))
+    excess = sum(values(target)) - Int(kt)
+    # trim (or grow) the largest-slack sectors until the total is exactly kt, respecting the floors/caps
+    while excess != 0
+        if excess > 0
+            cands = [c for c in secs if target[c] > get(have, c, 0)]
+            isempty(cands) && break
+            c = argmax(c -> target[c] - get(have, c, 0), cands); target[c] -= 1; excess -= 1
+        else
+            cands = [c for (c, m) in zip(secs, mult) if target[c] < m]
+            isempty(cands) && break
+            c = argmax(c -> mult[findfirst(==(c), secs)] - target[c], cands); target[c] += 1; excess += 1
+        end
+    end
+    pads = [c => target[c] - get(have, c, 0) for c in secs if target[c] > get(have, c, 0)]
+    isempty(pads) && return nothing
+    sp = GA.gradedrange(pads)
+    sp = isdual(w) ? GA.dual(sp) : sp
+    return Index(sp, String(tags))
+end
+
 # The "charge 1" sector of a sector type, for the fresh-link split above.
 _unit_charge(::Type{S}) where {S <: GA.SectorRange} = _unit_charge_label(S)
 _unit_charge_label(::Type{GA.SectorRange{TKS.U1Irrep}}) = GA.U1(1)

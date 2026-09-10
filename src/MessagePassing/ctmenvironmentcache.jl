@@ -1433,9 +1433,11 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
         a, b, w = ab                                         # b * a = 𝟙 exactly
         (isfinite(norm(a)) && isfinite(norm(b))) || return nothing
         kt = target(l); k = dim(w)
-        if k < kt                                            # embed at rank, pad the rest with zeros
-            z = new_index(a, kt - k; tags = "Link,pad")
-            z = Tensors.isdual(z) == Tensors.isdual(w) ? z : dag(z)   # pad leg oriented like P_A's bond
+        # Embed at rank, pad the rest with zeros. The pad's sectors are fixed by the interface (see
+        # `pad_index`), so the padded bond has the same graded structure every sweep and `_ctm_align`
+        # can rotate it onto the previous sweep's; oriented like P_A's bond.
+        z = k < kt ? pad_index(w, ins[l], kt) : nothing
+        if z !== nothing
             za = random_tensor(elt, vcat(_ctm_legs_of(a, ins[l]), [z])) * zero(elt)
             zb = random_tensor(elt, vcat(_ctm_legs_of(b, ins[l]), [dag(z)])) * zero(elt)
             a = directsum(a => w, za => z; tags = "Link,cyc")
@@ -1551,8 +1553,8 @@ function _ctm_align(pr, ins, prev)
     (isnothing(prev) || length(prev) < 3) && return pr
     PA, PB, w = pr
     PAo, _, wo = prev
-    dim(wo) == dim(w) || return pr
-    issetequal(collect(inds(PAo)), vcat(collect(ins), [wo])) || return pr   # same raw space?
+    dim(wo) == dim(w) || (_ctm_stat!(:align_dim); return pr)
+    issetequal(collect(inds(PAo)), vcat(collect(ins), [wo])) || (_ctm_stat!(:align_space); return pr)   # same raw space?
     R = try
         M = gram(PA, PAo, ins)                           # (w, wo) = P_A† P_A⁰ over the raw legs (Hilbert, any backend)
         U, S, V = svd(M, [w])
@@ -1562,9 +1564,10 @@ function _ctm_align(pr, ins, prev)
         U * replaceind(V, only(uniqueinds(V, [wo])), dag(uU))
     catch err
         err isa InterruptException && rethrow()
+        _ctm_stat!(:align_error)
         return pr                                        # any other trouble: keep the unaligned pair
     end
-    all(isfinite, (norm(PA), norm(PAo), norm(PB), norm(R))) || return pr
+    all(isfinite, (norm(PA), norm(PAo), norm(PB), norm(R))) || (_ctm_stat!(:align_nonfinite); return pr)
     # The alignment must preserve `Π = P_A P_B`, i.e. R must be unitary. Equal total dimension does
     # not guarantee that on a graded bond: the old and new bonds can distribute the same width over
     # the sectors differently (zero-padding lands wherever `new_index` puts it), and a Procrustes map
@@ -1593,7 +1596,8 @@ function _ctm_align(pr, ins, prev)
         err isa InterruptException && rethrow()
         false
     end
-    ok || return pr
+    ok || (_ctm_stat!(:align_nonunitary); return pr)
+    _ctm_stat!(:align_ok)
     return (PAn, PBn, wo)
 end
 

@@ -2,11 +2,12 @@
 TensorInterface: the seam between TensorNetworkQuantumSimulator and the tensor backend.
 
 Every tensor-level verb the package uses is a generic function owned by this module. The
-Tensors module implements them twice: for the dense backend (`Tensor`: named-index tensors
-over arrays, TensorOperations contraction, MatrixAlgebraKit factorizations) and the graded
-backend (`GradedTensor`: the same `Index` labels over TensorKit `TensorMap`s — symmetries
-and fermions). Shared label bookkeeping lives once on their supertype `AbstractTensor`; a
-further backend adds its own methods here without touching call sites.
+Tensors module (src/Tensors/ITensorBackend.jl) implements them for ITensorBase named tensors:
+dense arrays and GradedArrays block-sparse arrays (abelian symmetries and fermions) are one
+tensor type, contracted by TensorAlgebra and factorised by MatrixAlgebraKit, so the graded path
+shares every line with the dense one and differs only in the seam methods that must respect
+arrows and parity (see rule 5). A further backend adds its own methods here without touching
+call sites.
 
 The rules:
   1. Tensor verbs come only from here; no backend library is referenced outside its module.
@@ -34,8 +35,9 @@ The rules:
 
 What a backend must implement, by group:
 
-  Index construction : new_index(dim; tags) and new_index(ref, dim; tags), sim, dag,
-                       prime, noprime
+  Index construction : new_index(dim; tags) and new_index(ref, dim; tags), pad_index(w, ins,
+                       kt) (zero-padding index with a sector structure fixed by the interface,
+                       nothing when not needed), sim, dag, prime, noprime
   Index queries      : inds, dim, plev, tags, commonind(s), uniqueinds, unioninds,
                        noncommonind(s), hascommoninds
   Index replacement  : replaceind(s) (relabeling, no data movement)
@@ -49,7 +51,8 @@ What a backend must implement, by group:
   Contraction        : contract(ts::Vector; sequence), Base.:*, scalar, apply
   Diagonal ops       : map_diag, map_diag!
   Factorizations     : the LinearAlgebra generics of rule 3, factorize_svd
-  Storage/type       : datatype, scalartype, array, data (raw storage vector, mutable view)
+  Storage/type       : datatype, scalartype, array, data (raw storage as a vector; a copy on
+                       block-sparse data — scale in place with scale!)
   Traits             : has_closure_gauge (default false; true when multi-vertex closures
                        can carry a parity-gauge sign — see loopcorrection.jl)
 =#
@@ -90,7 +93,7 @@ for f in [
         :dag, :prime, :noprime, :sim, :replaceind, :replaceinds,
         # construction
         :onehot, :projector, :delta, :combiner, :combinedind, :random_tensor,
-        :directsum, :charge_sectors, :op, :state, :new_index, :from_array,
+        :directsum, :charge_sectors, :op, :state, :new_index, :pad_index, :from_array,
         # contraction / evaluation
         :contract, :scalar, :apply, :inner,
         # diagonal ops
