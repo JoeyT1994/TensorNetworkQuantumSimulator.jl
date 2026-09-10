@@ -6,7 +6,7 @@ function main()
     g = named_hexagonal_lattice_graph(2,2; periodic = true)
     #U(1) (Sz-conserving) graded purification: ancilla site legs carry the dual
     #representation, so the infinite-temperature identity state is flux-zero per site
-    s = siteinds("S=1/2", g; inds_per_site = 2)
+    s = siteinds("S=1/2", g; inds_per_site = 2, symmetry = "U1")
     ψ = identity_tensornetworkstate(ComplexF64, g, s)
     ψ_bpc = update(BeliefPropagationCache(ψ))
 
