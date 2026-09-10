@@ -150,8 +150,8 @@ end
 @eval module $(gensym())
 using LinearAlgebra: Diagonal, I, istriu, norm, svd, transpose
 using Random: Random
-using TensorNetworkQuantumSimulator: absorb_matrices, absorb_matrices_mul, absorb_matrices_qr,
-    gate_split, simple_update_dense!, truncation_strategy
+using TensorNetworkQuantumSimulator: TensorNetworkQuantumSimulator, absorb_into!, gate_split,
+    qr_backward!, qr_forward!, simple_update_dense!, truncation_strategy
 using Test: @test, @testset, @test_throws
 
 # Built from `mapslices` so it shares no machinery with the code under test.
@@ -224,90 +224,117 @@ function update_vs_reference(; a1, a2, n1, n2, d1 = 2, d2 = 2, b = 3, maxdim = n
     return (; got, want, u1, u2, svals, err, k)
 end
 
+# `qr_forward!`/`qr_backward!` write into `own` and a scratch slot rather than returning fresh
+# arrays, so these wrappers hand them buffers and leave the caller's tensor intact.
+const TOPS = TensorNetworkQuantumSimulator.TensorOperations
+const BK = TOPS.DefaultBackend()
+const AL = TOPS.DefaultAllocator()
+
+function forward(A, matrices)
+    own, scratch = similar(vec(A)), similar(vec(A))
+    return qr_forward!(own, scratch, A, ntuple(identity, ndims(A)), matrices, BK, AL)..., own, scratch
+end
+
+function absorb_chain(A, matrices; transposed = false)
+    src, dst = copy(A), similar(A)
+    for (k, mat) in enumerate(matrices)
+        absorb_into!(dst, src, mat, k, transposed, BK, AL)
+        src, dst = dst, src
+    end
+    return src
+end
+
 @testset "Dense simple update" begin
     Random.seed!(1234)
 
-    @testset "absorb_matrices absorbs axis by axis, $k matrices" for k in 0:3
+    @testset "absorb_into! absorbs axis by axis, $k matrices" for k in 1:3
         A = randn(ComplexF64, ntuple(_ -> 3, k)..., 2, 4)
         matrices = ntuple(_ -> randn(ComplexF64, 3, 3), k)
         for transposed in (false, true)
-            want = absorb_reference(A, matrices; transposed)
-            @test absorb_matrices(A, matrices; transposed) ≈ want
+            @test absorb_chain(A, matrices; transposed) ≈
+                absorb_reference(A, matrices; transposed)
         end
     end
 
-    @testset "absorb_matrices leaves its input alone" begin
-        A = randn(ComplexF64, 3, 3, 2)
-        keep = copy(A)
-        absorb_matrices(A, (randn(ComplexF64, 3, 3),))
-        @test A == keep
-    end
-
-    @testset "absorb_matrices_qr: $elt, transposed = $transposed" for
-            elt in (Float64, ComplexF64), transposed in (false, true)
-
+    @testset "qr_forward!: $elt" for elt in (Float64, ComplexF64)
         dims, qrdims = (4, 3), (2, 3)          # deliberately unequal leading dims
         A = randn(elt, dims..., qrdims...)
         matrices = (randn(elt, 4, 4), randn(elt, 3, 3))
         m, n = prod(dims), prod(qrdims)
 
-        want = absorb_reference(A, matrices; transposed)
-        Q, R = absorb_matrices_qr(A, matrices; transposed)
+        want = absorb_reference(A, matrices)
+        Q, R, in_scratch = forward(A, matrices)
 
         @test size(Q) == (dims..., n)
         @test size(R) == (n, qrdims...)
+        @test !isnothing(in_scratch)           # tall row block, so the in-place branch
         Qm, Rm = reshape(Q, m, n), reshape(R, n, n)
         @test Qm * Rm ≈ reshape(want, m, n)
         @test Qm' * Qm ≈ I                     # the QR's Q is isometric
         @test istriu(Rm)
     end
 
-    @testset "absorb_matrices_qr splits at the matrix count" begin
+    @testset "qr_forward! splits at the matrix count" begin
         A = randn(4, 3, 2, 5)
         matrices = (randn(4, 4), randn(3, 3))
         want = absorb_reference(A, matrices)
-        Q, R = absorb_matrices_qr(A, matrices)
+        Q, R, _ = forward(A, matrices)
         @test size(Q) == (4, 3, 10)
         @test size(R) == (10, 2, 5)
         @test reshape(Q, 12, 10) * reshape(R, 10, 10) ≈ reshape(want, 12, 10)
     end
 
-    # A degree-1 vertex gives a wide row block, where Q comes back square.
-    @testset "absorb_matrices_qr carries a wide row block, $b bond" for b in (3, 5)
+    # A degree-1 vertex gives a wide row block, where Q comes back square and the QR is not
+    # done in place, so `qr_forward!` reports `nothing`.
+    @testset "qr_forward! carries a wide row block, $b bond" for b in (3, 5)
         a, d = 2, 2
         A = randn(ComplexF64, a, d, b)
         envs = (randn(ComplexF64, a, a),)
         inv_envs = map(m -> transpose(inv(m)), envs)
         @assert a < d * b
 
-        Q, R = absorb_matrices_qr(A, envs)
+        Q, R, in_scratch, own, scratch = forward(A, envs)
         @test size(Q) == (a, a)
         @test size(R) == (a, d, b)
+        @test isnothing(in_scratch)
         @test reshape(Q, a, a) * reshape(R, a, d * b) ≈ reshape(absorb_reference(A, envs), a, d * b)
-        @test absorb_matrices_mul(Q, inv_envs, R; transposed = true) ≈ A
+        @test qr_backward!(own, scratch, Q, R, inv_envs, in_scratch, BK, AL) ≈ A
     end
 
-    # Absorbing the inverse environments and multiplying `R` back must undo the first half. The
-    # inverse direction contracts each matrix's second index, which is what `transposed` does.
-    @testset "absorb_matrices_mul inverts absorb_matrices_qr, $k env legs" for k in 1:3
+    # Absorbing the inverse environments and multiplying `R` back must undo the forward leg.
+    @testset "qr_backward! inverts qr_forward!, $k env legs" for k in 1:3
         a = 8
         A = randn(ComplexF64, ntuple(_ -> a, k)..., 2, 3)
         envs = ntuple(_ -> randn(ComplexF64, a, a), k)
         inv_envs = map(m -> transpose(inv(m)), envs)
 
-        Q, R = absorb_matrices_qr(A, envs)
-        @test absorb_matrices_mul(Q, inv_envs, R; transposed = true) ≈ A
+        Q, R, in_scratch, own, scratch = forward(A, envs)
+        @test qr_backward!(own, scratch, Q, R, inv_envs, in_scratch, BK, AL) ≈ A
+    end
+
+    # The result outgrows both slots, so `qr_backward!` has to size fresh buffers for it.
+    @testset "qr_backward! handles a grown bond" begin
+        a, d, b = 8, 2, 3
+        A = randn(ComplexF64, a, a, d, b)
+        envs = (randn(ComplexF64, a, a), randn(ComplexF64, a, a))
+        inv_envs = map(m -> transpose(inv(m)), envs)
+        Q, R, in_scratch, own, scratch = forward(A, envs)
+        grown = cat(R, R; dims = ndims(R))     # doubles the trailing bond
+        u = qr_backward!(own, scratch, Q, grown, inv_envs, in_scratch, BK, AL)
+        @test size(u) == (a, a, d, 2b)
+        @test u ≈ cat(A, A; dims = ndims(A))
     end
 
     # A truncating SVD shrinks `R`'s trailing extent, a grown bond enlarges it.
-    @testset "absorb_matrices_mul handles R narrower and wider than chi" begin
+    @testset "qr_backward! handles R narrower and wider than chi" begin
         Q = randn(ComplexF64, 8, 8, 2, 6)
         envs = (randn(ComplexF64, 8, 8), randn(ComplexF64, 8, 8))
         for cols in (2, 6, 9)
             R = randn(ComplexF64, 6, 2, cols)
             absorbed = absorb_reference(Q, envs; transposed = true)
             want = reshape(reshape(absorbed, 128, 6) * reshape(R, 6, 2cols), 8, 8, 2, 2, cols)
-            u = absorb_matrices_mul(Q, envs, R; transposed = true)
+            own, scratch = similar(vec(Q)), similar(vec(Q))
+            u = qr_backward!(own, scratch, Q, R, envs, nothing, BK, AL)
             @test u ≈ want
             @test size(u) == (8, 8, 2, 2, cols)
         end

@@ -446,6 +446,10 @@ function apply_gates(
     return ψ_bpc, truncation_errors
 end
 
+function gate_allocator(bp_cache::BeliefPropagationCacheMPI, t::ITensor)
+    return message_allocator!(message_scratch(bp_cache), ITensors.data(t))
+end
+
 function adapt_gate(gate::ITensor, ψ_bpc::BeliefPropagationCacheMPI)
     gate = if scalartype(gate) <: Complex
         adapt(complex(scalartype(ψ_bpc)), gate)
@@ -548,7 +552,17 @@ function apply_gate!(
         setindex_preserve!(ψ_bpc, ITensor(), v)
     end
 
-    updated_tensors, s_values, err = simple_update_dense(gate, ψ⃗; envs, apply_kwargs...)
+    allocator = gate_allocator(ψ_bpc, first(ψ⃗))
+    if nv == 1
+        u = onesite_update!(gate, only(ψ⃗); allocator)
+        if !isnothing(u)
+            setindex_preserve!(ψ_bpc, u, only(v⃗))
+            return ψ_bpc, 0
+        end
+    end
+    updated_tensors, s_values, err = simple_update_dense(
+        gate, ψ⃗; envs, allocator, apply_kwargs...
+    )
     if nv == 2
         v1, v2 = v⃗
         setbondmessages!(ψ_bpc, NamedEdge(v1 => v2), s_values, first(updated_tensors))
@@ -606,7 +620,7 @@ function apply_boundary_gate!(
     u, s_values, err = simple_update_dense_boundary(
         gate, ψᵥ;
         envs, lb, compute = role.compute, other_rank = role.peer,
-        comm = communicator(ψ_bpc), apply_kwargs...,
+        comm = communicator(ψ_bpc), allocator = gate_allocator(ψ_bpc, ψᵥ), apply_kwargs...,
     )
 
     setindex_preserve!(ψ_bpc, u, v)
