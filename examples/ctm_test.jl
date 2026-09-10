@@ -4,8 +4,8 @@ using TensorNetworkQuantumSimulator: update
 using Random
 function main()
     Random.seed!(1234)
-    #g = named_hexagonal_lattice_graph(4,4)
-    g = named_grid((4,4))
+    g = named_hexagonal_lattice_graph(2,2)
+    #g = named_grid((4,4))
     s = siteinds("S=1/2", g)
     ψ = random_tensornetworkstate(ComplexF64, g,s; bond_dimension = 4)
     ψ = gauge_and_scale(ψ)
@@ -18,7 +18,7 @@ function main()
     Rs= [1,2,4,8, 16]
     for R in Rs
         @show R
-        ψ_ctm_cpu = CTMEnvironmentCache(ψ, R; projector)
+        ψ_ctm_cpu = CTMEnvironmentCache(ψ, R)
         t1= time()
         ψ_ctm_cpu = update(ψ_ctm_cpu; maxiter = 100, tolerance = 1e-14, verbose = false)
         t2 = time()

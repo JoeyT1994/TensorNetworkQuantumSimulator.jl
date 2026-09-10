@@ -56,7 +56,7 @@ governs, referenced below.
 | `optimal_max` | `12` | tensor count above which contraction-order search falls back from exhaustive netcon to greedy. A FEASIBILITY gate — see `_ctm_contract`. |
 | `projector` | `:cut` | which interface projector to derive: `:cut` (optimal rank-χ truncation of one bipartition) or `:cycle` (four-corner cycle, which makes `F` stationary). See "Choosing a projector" below. |
 | `cycle_rankcut` | `0.0` | ⚠️ **`:cycle` only.** Relative cutoff on the four-corner cycle spectrum: retained modes with `abs(λ) ≤ cycle_rankcut · abs(λ_max)` are dropped. Guards the OVER-parametrised regime (χ above the state's rank), where the surplus near-null modes are arbitrary and wander sweep to sweep. `0` disables — deliberately the default: a fixed MAGNITUDE cutoff that fixes over-parametrised cases breaks higher-entanglement ones (measured 2026-08-19: 1e-10 repairs 5×5 nl=3 but degrades 4×4 nl=4 from 1e-15 to 7.6e-11, and no smaller value threads the needle — junk and real weight OVERLAP in magnitude across cases). `cycle_gapcut` below is the gap-based rule that does thread it. Distinct from `qr_cutoff`, which cuts the biorthogonal OVERLAP. |
-| `cycle_gapcut` | `1e-4` | ⚠️ **`:cycle` only.** Noise-cliff rank cut: truncate the trailing spectral block below the first cliff that is BOTH steep (`abs(λ_{j+1}) ≤ cycle_gapcut · abs(λ_j)`) and genuinely tiny (`abs(λ_{j+1}) ≤ √eps · abs(λ_1)`). Gap-based where `cycle_rankcut` is magnitude-based: measured cliffs are 1.8e5 into a noise block against ≤ 4.5e2 anywhere inside a physical decay, so the rule kills the over-parametrised wander while leaving deep-but-real modes (down to 3.4e-14 relative, measured to carry observable weight) untouched. `0` disables. The left/right spectral-consistency guard (see `_ctm_cycle_projectors`) is always on and independent of this knob. |
+| `cycle_gapcut` | `0.0` | ⚠️ **`:cycle` only.** Noise-cliff rank cut: truncate the trailing spectral block below the first cliff that is BOTH steep (`abs(λ_{j+1}) ≤ cycle_gapcut · abs(λ_j)`) and genuinely tiny (`abs(λ_{j+1}) ≤ √eps · abs(λ_1)`). `0` disables — **the default since 2026-09-09.** It was `1e-4` (motivated 2026-08-21 by an over-parametrised 5×5 whose retained noise was drawn differently left and right); the left/right spectral-consistency guard introduced at the same time handles that case on its own, and with that guard plus the degenerate-partner restarts an A/B over lossless, under-truncated and over-parametrised cases (dense 4×4 D=2 χ=8/16, random 4×4 χ=32, random 5×5 χ=8/16, TFIM 5×5 χ=8/16/32) found the cut never helping and hurting three times: it removes deep-but-real directions — the √eps floor is generous because a cycle eigenvalue is the FOURTH power of a corner's, so a 4e-9 cycle mode is a ~1e-2 corner mode. Measured: the lossless dense 4×4 observable 2.4e-7 → 1.7e-15, χ=8 2.3e-7 → 9e-9, random 5×5 χ=8 2.3e-4 → 1.5e-5, everything else bit-identical. Keep it as a knob for a case the guard demonstrably misses. |
 | `svd` | `:auto` | **`:cut` only.** How the truncated SVD behind each interface projector is computed. `:dense` is the dense route — thin QR of each enlarged corner and a FULL SVD of their `n × n` overlap, `n = χ·D²` on a double layer, costing `O(n³) = O(χ³D⁶)` per interface although only `χ` triplets are used. `:subspace` is matrix-free — block subspace iteration on the enlarged corners themselves, warm-started from the previous sweep's projector (see `_ctm_subspace_svd`), costing `O(n²χ) = O(χ³D⁴)` per interface, the boundary-MPS scaling. `:auto` (default) picks `:subspace` on dense tensors whenever the block is large enough for it to win (see `_ctm_use_subspace`) and `:dense` otherwise — including on graded (symmetric) tensors, where a cold start cannot yet allocate its block across sectors; force `:subspace` there explicitly. |
 | `svd_oversample` | `16` | `:subspace` only. Extra block columns beyond `χ`. The retained `χ`-dimensional subspace converges like `(σ_{χ+p+1}/σ_χ)²` per iteration, so oversampling buys convergence on slowly decaying spectra; each column costs one more `n²` GEMM per application. |
 | `svd_maxiter` | `10` | `:subspace` only. Cap on block iterations per projector; the route bails out to the dense SVD as soon as the residual decay predicts the cap will not suffice (see `_ctm_subspace_svd`). Warm-started interfaces typically exit after 1–3; a cold start needs more, and a cap of 6 measured too tight for the first sweeps on a 9×9 D=3 PEPS at χ=48. |
@@ -139,7 +139,12 @@ Base.@kwdef struct CTMOptions
     # that is BOTH steep (|λ_{j+1}| ≤ cycle_gapcut·|λ_j|) and genuinely tiny (|λ_{j+1}| ≤ √eps·|λ_1|).
     # `0` disables. Unlike `cycle_rankcut`, this is gap-based, which is what separates noise from
     # deep-but-real modes — see the derivation note in `_ctm_cycle_projectors`.
-    cycle_gapcut::Float64 = 1.0e-4
+    # DEFAULT 0 since 2026-09-09: with the left/right consistency guard and the degenerate-partner
+    # restarts in place, an A/B over lossless, under-truncated and over-parametrised cases found the
+    # cut never helping and thrice hurting — it removes deep-but-real directions whose cycle weight
+    # is the FOURTH power of their single-corner weight (dense 4×4 D=2 at the lossless χ = 16:
+    # observable 2.4e-7 with the cut, 1.7e-15 without). See the options table.
+    cycle_gapcut::Float64 = 0.0
     # Truncated-SVD route for the `:cut` projector — see the table above and `_ctm_subspace_svd`.
     svd::Symbol = :auto
     svd_oversample::Int = 16
@@ -1032,6 +1037,9 @@ end
 # ZERO-PADDED, never declined: `Π = P_A P_B` keeps rank `kres` while the index width stays stable
 # across sweeps (see the padding note in `_ctm_cycle_finish`). Filling the shortfall instead was tried
 # two ways and both degrade with χ — see "the falsified fillers" in docs/finite_ctmrg_design.md.
+# ⚠️ One kind of closure is NOT a spectrum running out: a DEGENERATE eigenvalue, of which a single
+# Krylov start vector can see only one copy. Those partners carry real weight and are recovered by
+# restarting on the deflated operator — see `_ctm_cycle_schur` inside the function.
 #
 # Consequently `F` is stationary only in the subspace the cycle RESOLVES. Measured on the 5×5 that
 # suffices for machine-precision stationarity at every χ ≥ 9 (`marginal_inconsistency` 3.2e-16 /
@@ -1053,8 +1061,21 @@ _ctm_legs_of(t, is) = filter(i -> i ∈ is, collect(inds(t)))
 # sum along the slot legs, one column per vector. Returns the basis; its bond is the leg not in
 # `vs[1]`'s other legs. (On graded data the slot legs carry the vectors' sectors, so the bond
 # comes out with one count per sector.)
+#
+# A SINGLE vector gets a FRESH bond too (same space and orientation as its slot leg, new id). The
+# slot legs are the charge legs of `_ctm_cycle_projectors`, and the left start vectors carry
+# `dag` of the right ones — the SAME index identity with the opposite flag. Returning the lone
+# vector unchanged therefore handed `_ctm_biorth` a left and a right basis sharing a bond id, which
+# the overlap `Brow * Acol` then contracted along with the interface, leaving a scalar: every
+# kres = 1 plaquette declined to the cut (measured 2026-09-09: `:cycle` at χ = 1 declined 4 of 4 on
+# a fermionic 3×3, dense or graded alike). The direct sum never had the problem because it mints a
+# fresh index.
 function _ctm_stack(vs::AbstractVector, slots::AbstractVector)
     acc, w = vs[1], slots[1]
+    if length(vs) == 1
+        fresh = Index(rand(UInt64), w.space, w.plev, "Link,cyc", w.dual)
+        return replaceind(acc, w, fresh)
+    end
     for j in 2:length(vs)
         acc = directsum(acc => w, vs[j] => slots[j]; tags = "Link,cyc")
         w = only(uniqueinds(acc, vs[1]))
@@ -1069,6 +1090,22 @@ end
 # pivoting it was measured (8 seeds) to be bit-identical where the deficiency never fires and slightly
 # WORSE where it does, and it does not fix the 8×8 plateau. See docs/ctmrg_status.md.
 _ctm_orthbasis(X, keep::Vector{<:Index}) = first(qr(X, keep))
+
+# The same range, for a basis that is propagated FORWARD around the cycle (`V_R[l+1] ∝ A_l V_R[l]`).
+#
+# ⚠️ FERMIONIC HANDEDNESS. On graded tensors a factorization's fresh bond has an orientation: `Q`
+# (and `U`) come back with a DUAL bond, `R` (and `V`) with a non-dual one. A biorthogonal pair
+# built from bases whose bond orientation does not match the direction the basis was propagated
+# in inserts a PARITY TWIST on odd sectors instead of the identity — `P_B P_A = 𝟙` still holds
+# bilinearly, but `Bp (P_A P_B) Bc ≠ Bp Bc` in the network. Measured 2026-09-09 on a 3×3 fU1/fZ2
+# CDW quench at the lossless χ = 16: with `Q` bases on the right-propagated side, Z of a plaquette
+# with its four pairs inserted moved by 9.65% and every `:cycle` observable sat at the BP value
+# (⟨N⟩ 0.5936 against 0.4870 exact); with the non-dual `V` basis on the right side and `Q` on the
+# left, the insertion identity holds to 1e-15 on every side. The reverse assignment (`V` on the
+# left) breaks the left side the same way, so this is direction-dependent, not a global choice.
+# See `_delta_pair` in gradedtensor.jl for the same handedness on a bare identity, and the fZ2
+# regression in test_ctmenvironment.jl. Dense tensors have no orientation; both routes agree.
+_ctm_orthbasis_fwd(X, keep::Vector{<:Index}) = last(svd(X, uniqueinds(X, keep)))
 
 # Whiten a pair into a biorthogonal projector pair over the interface `ins`.
 #
@@ -1154,7 +1191,10 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
     scale = zero(real(elt))
     for (_, xR, _) in starts
         v = xR / norm(xR); sc = zero(real(elt))
-        for _ in 1:5
+        # A ONE-dimensional sector is its own eigenvector: one application reads |λ| exactly (and
+        # `_ctm_cycle_schur` has the matching shortcut). On fU1 double layers most sectors are
+        # one-dimensional — a 16-dim bond fused into 16 of them on the 3×3 quench.
+        for _ in 1:(length(data(xR)) == 1 ? 1 : 5)
             w = act(v); nw = norm(w)
             (isfinite(nw) && nw > 0) || break
             v, sc = w / nw, nw
@@ -1167,20 +1207,92 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
     # `verbosity = 0`: `schursolve` stopping on a closed invariant subspace smaller than `kcyc` is
     # ROUTINE here (the four-fold spectrum runs out before the bond does), handled by `kres` below —
     # KrylovKit's per-call warning for it buries real problems in noise.
-    alg = Arnoldi(; krylovdim = max(4kcyc + 8, 24), tol = 1.0e-16, verbosity = 0)
+    # PER-SECTOR Krylov dimension: `max(4k + 8, 24)` capped at the sector's own dimension (a full
+    # Arnoldi on an n-dimensional space is exact after n steps; anything beyond is wasted `act`
+    # calls). On graded data the fused interface splits into many small sectors (the fU1 3×3's
+    # 16-dim bond fuses into 16 one-dimensional ones). KrylovKit needs `krylovdim > k`. NOTE: this is
+    # a tidy-up, not a measured win — the "slow χ = 1" that prompted it (328 s per `update`) turned
+    # out to be compilation latency: the same `update` is 1.2 s once the process is warm.
+    arnoldi(k::Integer, n::Integer) = Arnoldi(; krylovdim = clamp(n, k + 1, max(4k + 8, 24)),
+                                              tol = 1.0e-16, verbosity = 0)
     # One solve per sector and side. Every entry: (|λ|, sector, position in that sector's Schur
     # list, converged?) — the sector lists are then MERGED by magnitude for all the rank decisions.
+    #
+    # DEGENERATE EIGENVALUES NEED RESTARTS. A Krylov space grown from ONE start vector contains
+    # exactly one vector per DISTINCT eigenvalue: the projections of the start onto each eigenspace.
+    # So on an eigenvalue of multiplicity m, `schursolve` finds one Schur vector and then "closes" —
+    # `info.converged` < k with nothing left to expand — and the other m − 1 partners, which carry
+    # the SAME eigenvalue weight, are silently dropped. Double-layer cycles are full of exact
+    # degeneracies: ket↔bra exchange, lattice symmetries of the state, and on graded data the
+    # sector structure. Measured 2026-09-09 on the 2×2 fZ2 CDW test state at χ = 16: the even sector
+    # (dim 8) closed at 5 of 8, the three unresolved partners of the 1.1e-5 eigenvalue carried
+    # 3.4e-5 = 7.6e-4 of Z, and the plaquette insertion identity was off by exactly that. This is
+    # almost certainly the "Krylov space closes at ~19-22 of a requested 32" on the 5×5 benchmark
+    # that motivated the (falsified) fillers — the right filler is the degenerate partners, and
+    # only a restart can find them.
+    #
+    # `_ctm_cycle_schur` therefore restarts on the DEFLATED operator `P f P`, `P = 1 − Q Q†` over the
+    # Schur vectors already found (Hilbert projection — `Q` is orthonormal in `inner`). For an
+    # invariant `span(Q)` the compression to its complement has exactly the remaining eigenvalues
+    # (block-triangular Schur form), and the union of `Q` with the new Schur vectors is again an
+    # invariant subspace, so the retained bases stay what the rank logic below assumes. The
+    # deflated eigenvalues reappear as ~0 — the noise-cliff cut and the left/right consistency
+    # guard below drop those, exactly as they drop any other null tail. Restarts stop when the
+    # deflated start vector vanishes (complement exhausted), when a solve converges nothing, or
+    # when a solve returns UNCONVERGED Ritz values (the space did not close; more restarts cannot
+    # help and the unconverged tail is kept, `ok = false`, for the gap tests only).
+    #
+    # Each restart draws a FRESH start vector (same legs, next draws of the plaquette's own `rng`,
+    # so still deterministic): the closed Krylov space CONTAINS the vector it was grown from, so
+    # deflating that one gives exactly zero.
+    function _ctm_cycle_schur(f, x0, k::Integer, alg)
+        vecs = Any[]; vals = Any[]; oks = Bool[]
+        function deflate(y)
+            for q in vecs
+                y = y - q * dot(q, y)
+            end
+            return y
+        end
+        legs = collect(inds(x0))
+        if length(data(x0)) == 1                 # one-dimensional sector: x0 IS the Schur vector
+            x = x0 / norm(x0)
+            return Any[x], Any[dot(x, f(x))], Bool[true]
+        end
+        for attempt in 1:(k + 1)                 # every attempt adds ≥ 1 vector or stops
+            need = k - length(vecs)
+            need <= 0 && break
+            x = attempt == 1 ? x0 : deflate(random_tensor(rng, elt, legs))
+            nx = norm(x)
+            (isfinite(nx) && nx > 1.0e-8 * norm(x0)) || break
+            g = isempty(vecs) ? f : (y -> deflate(f(deflate(y))))
+            _, V, λ, info = schursolve(g, x, need, :LM, alg)
+            nconv = info.converged
+            nconv >= 1 || break
+            for j in 1:nconv
+                push!(vecs, V[j]); push!(vals, λ[j]); push!(oks, true)
+            end
+            if nconv < length(λ)                 # did not close: keep the Ritz tail, stop restarting
+                for j in (nconv + 1):length(λ)
+                    push!(vals, λ[j]); push!(oks, false)
+                end
+                break
+            end
+        end
+        return vecs, vals, oks
+    end
     vecsR = Vector{Any}(undef, length(starts)); vecsL = Vector{Any}(undef, length(starts))
     entR = NamedTuple{(:mag, :s, :j, :ok), Tuple{Float64, Int, Int, Bool}}[]
     entL = similar(entR)
     try
         for (si, (c, xR, xL)) in enumerate(starts)
-            k = min(kcyc, length(data(xR)))     # a sector holds at most its own dimension
-            _, VRv, valsR, iR = schursolve(fwd, xR, k, :LM, alg)
-            _, VLv, valsL, iL = schursolve(bwd, xL, k, :LM, alg)
+            n = length(data(xR))
+            k = min(kcyc, n)                     # a sector holds at most its own dimension
+            alg = arnoldi(k, n)
+            VRv, valsR, okR = _ctm_cycle_schur(fwd, xR, k, alg)
+            VLv, valsL, okL = _ctm_cycle_schur(bwd, xL, k, alg)
             vecsR[si] = VRv; vecsL[si] = VLv
-            append!(entR, ((mag = Float64(abs(valsR[j])), s = si, j = j, ok = j <= iR.converged) for j in eachindex(valsR)))
-            append!(entL, ((mag = Float64(abs(valsL[j])), s = si, j = j, ok = j <= iL.converged) for j in eachindex(valsL)))
+            append!(entR, ((mag = Float64(abs(valsR[j])), s = si, j = j, ok = okR[j]) for j in eachindex(valsR)))
+            append!(entL, ((mag = Float64(abs(valsL[j])), s = si, j = j, ok = okL[j]) for j in eachindex(valsL)))
         end
     catch err
         err isa InterruptException && rethrow()
@@ -1273,7 +1385,7 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
     # Propagate the invariant subspace around the plaquette: right bases forward, `V_R[l+1] ∝ A_l V_R[l]`;
     # left bases backward, `V_L[l] ∝ V_L[l+1] A_l` — each re-orthonormalised.
     for l in 1:3
-        VR[l + 1] = _ctm_orthbasis(As[l] * VR[l], ins[l + 1])
+        VR[l + 1] = _ctm_orthbasis_fwd(As[l] * VR[l], ins[l + 1])   # NOT `_ctm_orthbasis`: see its note
     end
     for l in (4, 3, 2)
         VL[l] = _ctm_orthbasis(VL[mod1(l + 1, 4)] * As[l], ins[l])

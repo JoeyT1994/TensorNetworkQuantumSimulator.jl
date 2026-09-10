@@ -6,7 +6,7 @@ function main()
     g = named_hexagonal_lattice_graph(2,2; periodic = true)
     #U(1) (Sz-conserving) graded purification: ancilla site legs carry the dual
     #representation, so the infinite-temperature identity state is flux-zero per site
-    s = siteinds("S=1/2", g; inds_per_site = 2, symmetry = "U1")
+    s = siteinds("S=1/2", g; inds_per_site = 2)
     ψ = identity_tensornetworkstate(ComplexF64, g, s)
     ψ_bpc = update(BeliefPropagationCache(ψ))
 
@@ -28,6 +28,7 @@ function main()
         t1 = time()
         ψ_bpc, errs = apply_gates(two_site_gates,ψ_bpc;apply_kwargs)
         logz -= freenergy(ψ_bpc)
+
         rescale!(ψ_bpc)
         if i % 5 == 0
             #Doubled because we prepared sqrt state and measured over the norm
@@ -36,6 +37,7 @@ function main()
             println("Inverse temp is $(β) and BP measured free energy density is $(f_bp)")
             f_htse_order4 = -log(2) - (9/64)*J*J*β*β - (3/128)*J*J*J*β*β*β + (27/2048)*J*J*J*J*β*β*β*β
             println("Abs diff between BP value and fourth order HTSE is $(abs(f_htse_order4 - f_bp))")
+
         end
 
     end

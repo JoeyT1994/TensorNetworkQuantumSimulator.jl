@@ -58,6 +58,12 @@ function main()
 
     println("Boundary MPS measured magnetisation on central site with MPS rank $(mps_bond_dimension) MPSs is $(only(sz_bmps))")
 
+    ψ = gauge_and_scale(ψ)
+    ψ_ctm = update(CTMEnvironmentCache(ψ, mps_bond_dimension; projector = :cycle))
+    sz_ctmrg = expect(ψ_ctm, [("Z", [central_site])])
+
+    println("CTMRG measured magnetisation on central site with MPS rank $(mps_bond_dimension) MPSs is $(only(sz_ctmrg))")
+
     #Sample from q(x) and get p(x) / q(x) for each sample too
     nsamples = 50
     bitstrings = sample_directly_certified(ψ, nsamples; alg = "boundarymps", norm_mps_bond_dimension = mps_bond_dimension)

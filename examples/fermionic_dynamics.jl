@@ -34,8 +34,8 @@ function correlation_matrix(g, tt, T, occupied)
     return C, idx
 end
 
-function evolve(g, occupied; tt = 1.0, dt = 0.05, nsteps = 10, χ = 16)
-    s = siteinds("Fermion", g; symmetry = "fZ2")
+function evolve(g, occupied; tt = 1.0, dt = 0.05, nsteps = 10, χ = 4)
+    s = siteinds("Fermion", g; symmetry = "fU1")
     ψ = tensornetworkstate(ComplexF64, v -> v ∈ occupied ? "Occ" : "Emp", g, s)
     #second-order Trotter layer: half-steps forward then reversed
     half = Any[]
@@ -50,7 +50,6 @@ function evolve(g, occupied; tt = 1.0, dt = 0.05, nsteps = 10, χ = 16)
     return network(ψ_bpc), nsteps * dt
 end
 
-function main(; tt = 1.0, dt = 0.0025, nsteps = 200)
 function main(; tt = 1.0, dt = 0.01, nsteps = 50)
     Random.seed!(123)
     println("== 1. Comb tree: BP is exact, deviation = Trotter only ==")
@@ -69,18 +68,12 @@ function main(; tt = 1.0, dt = 0.01, nsteps = 50)
     v, w = (2, 1), (2, 2)   #an edge inside a single boundary-MPS partition
     cdagc_exact = C[idx[v], idx[w]]
     density_exact = real(C[idx[w], idx[w]])
-    bmps = update(BoundaryMPSCache(ψ, 48))
-    cdagc_bmps = only(expect(bmps, ("CdagC", (v, w)); alg = "boundarymps"))
-    cdagc_bp = only(expect(ψ, ("CdagC", (v, w)); alg = "bp"))
-    density_bmps = real(only(expect(bmps, ("N", [w]); alg = "boundarymps")))
+    bmps = update(CTMEnvironmentCache(ψ, 16; projector = :cycle))
+    density_bmps = real(only(expect(bmps, ("N", [w]))))
     density_bp = real(only(expect(ψ, ("N", [w]); alg = "bp")))
-    println("T = $T:  ⟨c†_$(v) c_$(w)⟩")
-    println("  exact        ", round(cdagc_exact; sigdigits = 6))
-    println("  boundary MPS ", round(cdagc_bmps; sigdigits = 6), "   |Δ| = ", round(abs(cdagc_bmps - cdagc_exact); sigdigits = 3))
-    println("  BP           ", round(cdagc_bp; sigdigits = 6), "   |Δ| = ", round(abs(cdagc_bp - cdagc_exact); sigdigits = 3))
     println("T = $T:  ⟨N_$(w)⟩")
     println("  exact        ", round(density_exact; sigdigits = 8))
-    println("  boundary MPS ", round(density_bmps; sigdigits = 8), "   |Δ| = ", round(abs(density_bmps - density_exact); sigdigits = 3))
+    println("  CTMRG :cycle ", round(density_bmps; sigdigits = 8), "   |Δ| = ", round(abs(density_bmps - density_exact); sigdigits = 3))
     println("  BP           ", round(density_bp; sigdigits = 8), "   |Δ| = ", round(abs(density_bp - density_exact); sigdigits = 3))
     return nothing
 end

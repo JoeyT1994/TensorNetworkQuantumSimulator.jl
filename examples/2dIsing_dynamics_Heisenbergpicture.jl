@@ -15,14 +15,14 @@ function main()
     ψ0 = copy(ψI)
     setindex_preserve!(ψ0, noprime(ψ0[vz] * op("Z", s[vz][1])), vz)
 
-    maxdim, cutoff = 4, 1.0e-14
+    maxdim, cutoff = 16, 1.0e-14
     apply_kwargs = (; maxdim, cutoff, normalize_tensors = false)
     #Parameters for BP, as the graph is not a tree (it has loops), we need to specify these
 
     ψ0 = normalize(ψ0; alg = "bp")
     ψ = copy(ψ0)
 
-    ψ_bpc = BeliefPropagationCache(ψ)
+    ψ_bpc = update(BeliefPropagationCache(ψ))
 
     h, J = -1.0, -1.0
     no_trotter_steps = 10
@@ -58,10 +58,10 @@ function main()
 
         ψ = network(ψ_bpc)
         #Take traces
-        tr_ψt = inner(ψ, ψI; alg = "bp")
+        tr_ψt = inner(ψ, ψI; alg = "exact")
         tr_ψtψ0 = inner(ψ, ψ0; alg = "bp")
-        println("Trace(O(t)) is $(tr_ψt)")
-        println("Trace(O(t)O(0)) is $(tr_ψtψ0)")
+        println("Exact measured Trace(O(t)) is $(tr_ψt)")
+        println("BP measured Trace(O(t)O(0)) is $(tr_ψtψ0)")
 
         # printing
         println("Took time: $(t.time) [s]. Max bond dimension: $(maxvirtualdim(ψ_bpc))")

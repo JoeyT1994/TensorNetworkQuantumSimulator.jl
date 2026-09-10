@@ -6,7 +6,7 @@ using Logging: NullLogger, with_logger
 using Statistics: median
 using Random
 using TensorNetworkQuantumSimulator
-using Test: @testset, @test, @test_throws, @test_logs
+using Test: @testset, @test, @test_throws, @test_logs, TestLogger
 const TNQS = TensorNetworkQuantumSimulator
 
 @testset "CVM free energy: Ising, anisotropic and non-square" begin
@@ -626,6 +626,55 @@ end
     nex = real(only(expect(ψf, ("N", [(2, 2)]); alg = "exact")))
     cf = update(CTMEnvironmentCache(ψf, 16); maxiter = 30, tolerance = 1.0e-12)
     @test real(expect(cf, ("N", [(2, 2)]))) ≈ nex atol = 1.0e-12
+    # `:cycle` has the same trap one level up: its bases are propagated around the plaquette by a
+    # factorization, and the RIGHT-propagated ones must carry a NON-dual fresh bond
+    # (`_ctm_orthbasis_fwd`). With the `Q` basis there instead, every pair still satisfied
+    # `P_B P_A = 𝟙` bilinearly but inserted a parity twist: Z of a plaquette with its four pairs
+    # inserted moved by 9.65%, and on a 3×3 fU1 CDW quench the `:cycle` observable sat at the BP
+    # value (⟨N⟩ 0.5936 against 0.4870 exact) at every χ, including the lossless one. Measured
+    # 2026-09-09. Both fermionic gradings, since fU1 locks parity to the charge.
+    #
+    # The gate is the PLAQUETTE INSERTION IDENTITY — the four pairs inserted exactly as the sweep
+    # inserts them (NW: P_A,P_A; NE: P_B on N, P_A on E; SW: P_A on S, P_B on W; SE: P_B,P_B) must
+    # leave the closed plaquette contraction (= Z on a 2×2) unchanged — plus the observable at the
+    # lossless χ, which must be exact like `:cut`'s.
+    #
+    # The observable also guards a SECOND, non-fermionic defect found on this state: a Krylov space
+    # grown from one start vector holds one vector per DISTINCT eigenvalue, so on the 3-fold
+    # degenerate 1.1e-5 eigenvalue of this cycle `schursolve` "closed" at 13 of 16 and the dropped
+    # partners cost 7.6e-4 of Z and 3e-4 of ⟨N⟩. `_ctm_cycle_schur` restarts on the deflated operator
+    # and recovers them; without the restarts this assertion fails at 3e-4 (fZ2) / 9e-4 (fU1).
+    function plaquette_Z(ψc, χ, fam)
+        c = CTMEnvironmentCache(ψc, χ; projector = :cycle)
+        S0 = vertex_environments(c); tbl = TNQS._ctm_factor_table(c); opts = c.options
+        E = Dict(sym => TNQS._ctm_enlarged(S0, tbl, sym, 2, 2, opts) for sym in (:NW, :NE, :SE, :SW))
+        cyc = fam ? TNQS._ctm_cycle_projectors(E[:NW], E[:NE], E[:SE], E[:SW], χ, opts, hash((2, 2))) : nothing
+        ap(t, side, which) = isnothing(cyc) ? t : t * getfield(cyc, side)[which]
+        NW = ap(ap(E[:NW], :N, 1), :W, 1); NE = ap(ap(E[:NE], :N, 2), :E, 1)
+        SW = ap(ap(E[:SW], :S, 1), :W, 2); SE = ap(ap(E[:SE], :S, 2), :E, 2)
+        return scalar(((SW * SE) * NE) * NW), isnothing(cyc)
+    end
+    for sym in ("fZ2", "fU1")
+        sc = siteinds("Fermion", gf; symmetry = sym)
+        ψc = tensornetworkstate(ComplexF64, v -> isodd(sum(v)) ? "Occ" : "Emp", gf, sc)
+        ψc, _ = apply_gates(vcat(hop, reverse(hop)), ψc; apply_kwargs = (; maxdim = 4, cutoff = 1.0e-16))
+        Z0, _ = plaquette_Z(ψc, 16, false)
+        Z1, declined = plaquette_Z(ψc, 16, true)
+        @test !declined
+        @test abs(Z1 - Z0) / abs(Z0) < 1.0e-12
+        nexc = real(only(expect(ψc, ("N", [(2, 2)]); alg = "exact")))
+        cc = update(CTMEnvironmentCache(ψc, 16; projector = :cycle);
+                    maxiter = 30, tolerance = 1.0e-12, convergence = :marginal)
+        @test real(expect(cc, ("N", [(2, 2)]))) ≈ nexc atol = 1.0e-12
+        # kres = 1 must not decline: a lone Krylov vector used to keep its charge leg as the bond,
+        # and the left vector carries `dag` of that same leg, so the two bases shared an index id
+        # and their overlap contracted to a scalar (`_ctm_stack`). χ = 1 is the cheap way to hit it.
+        logger = TestLogger()
+        with_logger(logger) do
+            update(CTMEnvironmentCache(ψc, 1; projector = :cycle); maxiter = 5)
+        end
+        @test !any(occursin("declined", string(r.message)) for r in logger.logs)
+    end
 
 end
 

@@ -864,10 +864,88 @@ stationary to 3e-9 and a 1.4% residual — the 9→4 heavy-truncation limit-cycl
 convention error. (2) `P_B P_A` viewed as a dense matrix through `array` looks like diag(±1) on
 fermions; that view is convention-laden, the network insertion is the test that counts.
 
+**Fermionic `:cycle` — a parity twist in the propagated bases, found and fixed (2026-09-09).** Symptom:
+on a 3×3 fU1/fZ2 CDW quench (D=4, 50 second-order Trotter steps), `:cycle` read `⟨N⟩` 0.5936 at
+χ=1, 4 AND the lossless χ=16 while `:cut` at χ=16 and boundary MPS agreed on 0.48705 — i.e. `:cycle`
+sat at the BP value (0.5941) regardless of χ, with every pair full rank and no plaquette declined.
+It was NOT convergence (an exact fixed point after two sweeps, |ΔF| = 0), NOT rank collapse, NOT
+geometry. The plaquette insertion identity `Z(with all four pairs) = Z` was the discriminating
+test: 1e-15 for `:cut` and for `:cycle` on dense tensors, **9.65% off** for `:cycle` on either
+fermionic grading. Isolating the propagation step by step: bases propagated FORWARD
+(`V_R[l+1] ∝ A_l V_R[l]`) through `_ctm_orthbasis` (the `Q` of a QR, whose fresh bond is DUAL in
+the graded backend) twist; the same `Q` on the backward-propagated `V_L` is exact; raw
+(unorthonormalised) propagation is exact on both sides. Swapping to a non-dual-bond basis (`V` of
+an SVD, or `R` of a QR) on the right side alone restores 1e-15 on every interface; swapping the
+left side too breaks it again. So the fresh bond's orientation has to match the propagation
+direction — the same handedness `_delta_pair` documents for a bare identity. Fix:
+`_ctm_orthbasis_fwd` (SVD `V`) for `V_R`, `_ctm_orthbasis` unchanged for `V_L`; dense tensors
+are unaffected. Regression: the 2×2 fZ2/fU1 CDW case with `projector = :cycle` next to the `:cut`
+one. Lesson, again: `P_B P_A = 𝟙` is necessary and useless as a check on fermions — only the network
+insertion counts.
+
+Two things found in the same session, neither fermion-specific:
+
+* **kres = 1 always declined** (`:cycle` at χ = 1 declined 4 of 4 on the fermionic 3×3, dense would
+  too). `_ctm_stack` returned a lone Krylov vector unchanged, with its dim-1 charge leg as the bond;
+  the left start vector carries `dag` of that same leg, so left and right bases shared an index id
+  and `_ctm_biorth`'s overlap contracted it along with the interface, down to a scalar. Fixed: a
+  single vector gets a fresh `Link,cyc` bond like the direct sum mints for two or more.
+* **A single-vector Krylov solve cannot resolve a DEGENERATE eigenvalue — and double-layer cycles
+  are full of them.** Symptom: on the 2×2 fZ2/fU1 CDW test state at the lossless χ = 16, `:cycle`
+  resolved 13 (fZ2) / 10 (fU1) of 16 directions, the plaquette insertion identity was off by
+  7.6e-4 / 4.0e-4 (against 1e-15 for `:cut`), and the observable by 3e-4 / 9e-4. Instrumenting
+  per sector: the fZ2 even sector (dim 8) "closed" at 5 of 8 with the three missing directions being
+  partners of a 3-fold-degenerate eigenvalue (1.1e-5) whose weight, 3.4e-5, is exactly the deficit
+  in Z. A Krylov space grown from one start vector holds exactly one vector per DISTINCT eigenvalue
+  (the projections of the start onto the eigenspaces), so multiplicity is invisible to it and
+  `schursolve` reports a closed invariant subspace. Ket↔bra exchange, lattice symmetries of the
+  state and graded sector structure all produce exact multiplicities. This is almost certainly the
+  "closes at ~19-22 of a requested 32" on the 5×5 benchmark that motivated the falsified fillers —
+  the right filler is the degenerate partners. Fix: `_ctm_cycle_schur` restarts `schursolve` on the
+  deflated operator `P M P`, `P = 1 − QQ†` over the Schur vectors found so far, from a FRESH random
+  start (the closed Krylov space contains the vector it grew from, so deflating that one is exactly
+  zero); the compression to the complement of an invariant subspace has exactly the remaining
+  eigenvalues and the union is again invariant. Each restart recovers ONE more copy of a degenerate
+  eigenvalue (the same one-per-distinct-eigenvalue limit applies to the complement), so a
+  multiplicity-m eigenvalue costs m − 1 small restarts — measured: three restarts of one vector each
+  on the 2×2, after which kres = 16 and the inserted plaquette reproduces Z to 1e-16. The deflated
+  eigenvalues come back as ~0 and are removed by the existing noise-cliff and left/right guards.
+  Same signature on a DENSE 4×4 D=2 state before the fix: insertion identity 1e-15, observable
+  stuck at 2.4e-7 at the lossless χ = 16. ⚠️ The dense `array` of a fermionic tensor is NOT a faithful
+  matrix of the categorical map — its `eigvals` did not match the Krylov spectrum (they came out as
+  geometric means of the true clusters); do not use it to cross-check graded spectra.
+* **`cycle_gapcut` default → 0 (2026-09-09).** The noise-cliff cut was the χ-independent 1e-10…1e-8
+  observable floor listed as open below: a cycle eigenvalue is the fourth power of a corner's, so
+  the √eps tininess floor lets the cut remove modes with ~1e-2 corner weight (dense 4×4 D=2, lossless
+  χ = 16: plaquette (2,4) spectrum 1, 3e-3, 1e-4, 4e-9 — the last is steep and tiny, cut, observable
+  2.4e-7 off while `marginal_inconsistency` reads 7e-17; without the cut 1.7e-15). A/B with the
+  cut on/off over dense 4×4 χ=8/16, the suite's over-parametrised random 4×4 χ=32, random 5×5
+  χ=8/16 and TFIM 5×5 nl=3 χ=8/16/32: off is never worse and better three times (2.4e-7 → 1.7e-15,
+  2.3e-7 → 9e-9, 2.3e-4 → 1.5e-5); the over-parametrised case is bit-identical, i.e. the
+  left/right consistency guard alone removes the surplus noise the cut was added for. The knob
+  stays for a case the guard demonstrably misses. Lesson: stationarity metrics do not see this
+  loss — `marg` was 7e-17 on the 2.4e-7 case — only a comparison against an exact observable does.
+* **The `:cut` subspace route never converges on the fermionic states tried** (2×2 CDW, 3×3 CDW
+  quench, weakly-hopped 3×3 CDW; χ = 2…8, forced with `svd = :subspace`): every interface bails to
+  the dense route on the rate extrapolation, so results are identical to `:dense` by construction.
+  Fermion safety of that route is therefore UNTESTED, not established. Low risk today because
+  `:auto` never selects it on graded data.
+
 **Geometry guard.** `CTMEnvironmentCache` now rejects any bond between non-adjacent grid positions
 (periodic lattices, e.g. `named_hexagonal_lattice_graph(...; periodic = true)`): a wraparound bond
 rides uncontracted inside every block and the sweep's contractions grow exponentially at any χ.
 That was the "insanely slow at χ=1" on the hexagonal thermal-state example.
+
+**Performance notes (2026-09-10 measurement).** On the fermionic (fU1) 3×3 quench, `:cycle` at χ = 1
+took 384 s for a 30-sweep `update` in a fresh process and **1.2 s** for the identical call in the same
+process with the contraction-sequence cache emptied (0.4 s warm). Steady-state sweeps are 0.08 s
+(χ = 1) and 1.0 s (χ = 16). Netcon is NOT the cost: `ExhaustiveSearch` takes 0.1 ms on a 5-tensor
+corner list and 1–2 ms on a 10-tensor ring, and delivers orders 1.4–3× cheaper in flops than
+`GreedyMethod` (TreeSA matches it at 200–600 ms). The first-run cost is Julia method specialisation
+per new contraction pattern on the graded backend, ~0.2–2 s per pattern, and the graded double
+layer produces many patterns (99 sequence-cache entries for one 3×3 `update`). The remedy remains a
+PrecompileTools workload covering a dense, a graded and a fermionic CTM `update`; nothing in the
+sweep itself is worth optimising before that. Original notes follow.
 
 **Performance notes.** JIT dominates fresh sessions: first dense CTM solve ~18 s, first graded ~65 s,
 first fermionic ~88 s, graded `apply_gates` compile ~116–130 s; the solves themselves are 0.05–1 s.
