@@ -115,4 +115,28 @@
     @test spec.truncerr < 1e-13
     Q, R = qr(T4, [si', sj'])
     @test norm(Q * R - T4) < 1e-10
+
+    # `pad_index`: the CTM cycle route pads a retained bond to width `kt`; on graded data the padded
+    # bond's per-sector multiplicities must depend on the interface only, not on how the retained
+    # bond happened to split its width (or the sweep-to-sweep unitary alignment declines).
+    ins = [si, TI.dag(sj)]                                   # fused: Z2(0) => 4, Z2(1) => 5
+    kt = 4
+    sector_totals(w, z) = begin
+        d = Dict{Any, Int}()
+        for i in (w, z)
+            i === nothing && continue
+            for (c, n) in zip(Tensors.GA.sectors(Tensors.space(i)), Tensors.GA.blocklengths(Tensors.space(i)))
+                d[c] = get(d, c, 0) + n
+            end
+        end
+        d
+    end
+    w1 = Tensors.Index(Tensors.graded_space("Z2", [0 => 1, 1 => 1]), "w")
+    w2 = Tensors.Index(Tensors.graded_space("Z2", [0 => 2]), "w")
+    z1, z2 = TI.pad_index(w1, ins, kt), TI.pad_index(w2, ins, kt)
+    @test TI.dim(w1) + TI.dim(z1) == kt && TI.dim(w2) + TI.dim(z2) == kt
+    @test sector_totals(w1, z1) == sector_totals(w2, z2)
+    @test Tensors.isdual(TI.pad_index(TI.dag(w1), ins, kt)) == true
+    @test TI.pad_index(w1, ins, TI.dim(w1)) === nothing
+    @test TI.pad_index(Tensors.Index(3, "d"), [Tensors.Index(2, "a")], 5) !== nothing   # dense: plain width
 end

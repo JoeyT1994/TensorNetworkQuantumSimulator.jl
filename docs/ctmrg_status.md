@@ -1046,6 +1046,13 @@ exact/BP/BMPS/CTM observables, fermionic chain/spinful/2D against dense Jordan�
     spectra, as the subspace-route notes already say. Element types: ComplexF32, Float32 and Float64
     states run through BP, gate application, CTM and boundary MPS without error.
 
+**Upstream-bound costs (not fixable in this package without custom contraction code).** TensorAlgebra
+matricises a contraction operand by a permuted copy whenever its contracted legs are not contiguous
+at an end (measured 1 F vs 2 F per product), zero-fills every allocated output, and `mul!` into a
+preallocated destination is slower than the allocating product on contiguous legs (3.5×); GradedArrays
+pays a per-block bookkeeping cost that dominates at D ≤ 4. These account for the remaining 10–30%
+gaps to the TensorKit backend on CTM/BMPS and for GC's ~17–20% share of a sweep.
+
 Compile latency dominates graded runs (package precompile ~4–6 min after a source edit); probe new
 conventions in a scratch environment with the ITensorBase stack alone (seconds) before the suite.
 
