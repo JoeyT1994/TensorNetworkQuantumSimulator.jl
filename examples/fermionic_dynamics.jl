@@ -71,10 +71,14 @@ function main(; tt = 1.0, dt = 0.01, nsteps = 50)
     bmps = update(CTMEnvironmentCache(ψ, 16; projector = :cycle))
     density_bmps = real(only(expect(bmps, ("N", [w]))))
     density_bp = real(only(expect(ψ, ("N", [w]); alg = "bp")))
+    #exact contraction of the (Trotterised, truncated) tensor network itself: the reference for the
+    #contraction methods, while `density_exact` is the continuous-time free-fermion value
+    density_tn = real(only(expect(ψ, ("N", [w]); alg = "exact")))
     println("T = $T:  ⟨N_$(w)⟩")
-    println("  exact        ", round(density_exact; sigdigits = 8))
-    println("  CTMRG :cycle ", round(density_bmps; sigdigits = 8), "   |Δ| = ", round(abs(density_bmps - density_exact); sigdigits = 3))
-    println("  BP           ", round(density_bp; sigdigits = 8), "   |Δ| = ", round(abs(density_bp - density_exact); sigdigits = 3))
+    println("  exact (free fermions)   ", round(density_exact; sigdigits = 8))
+    println("  exact TN contraction    ", round(density_tn; sigdigits = 8), "   |Δ| = ", round(abs(density_tn - density_exact); sigdigits = 3), "  (Trotter + truncation)")
+    println("  CTMRG :cycle χ=16       ", round(density_bmps; sigdigits = 8), "   |Δ vs TN| = ", round(abs(density_bmps - density_tn); sigdigits = 3))
+    println("  BP                      ", round(density_bp; sigdigits = 8), "   |Δ vs TN| = ", round(abs(density_bp - density_tn); sigdigits = 3))
     return nothing
 end
 
