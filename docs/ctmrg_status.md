@@ -1162,6 +1162,22 @@ simple-update layer took 1.7 s on the device against 12.7 s on the CPU in Comple
 `hexagonal_heisenbergmodel_thermalstate.jl` (CUDA.cu → Float32) reproduces the CPU free energies
 to 4e-6.
 
+Peak live device memory (`benchmarks/gpu_peak.jl`: pass–fail under a hard CUDA.jl memory limit,
+which forces collection before it throws, so the smallest passing headroom over the baseline of
+state + BP messages is the high-water mark of live tensors; comb tree, D = 250 ComplexF32, F =
+250 MB, baseline 3.05 F):
+
+| operation | fits with headroom | fails with headroom |
+|---|---|---|
+| one BP iteration | 1.0 F | — (smallest tried) |
+| one gate (consuming `apply_gates!`) | 2.75 F | 2.5 F |
+| a full layer of gates | 3.0 F | 2.0 F |
+
+So the device peak is the same ≤ 3 F + change measured on the CPU (3.3 F including the runtime),
+and a layer does not accumulate beyond one gate. The pool's own high-water counters and
+`used_memory` read after the operation (+5.8 F before a GC) count uncollected garbage and are not
+the live peak.
+
 ## What made `:cycle` work
 
 Two things. Everything else in the design doc is failed attempts.

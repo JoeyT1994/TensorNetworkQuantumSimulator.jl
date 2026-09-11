@@ -12,6 +12,7 @@ with `--project=<that worktree>` to compare backends.
 | `boundarymps.jl` | boundary-MPS iterations on a random L×L grid | `julia --project=. benchmarks/boundarymps.jl 6 3 32` |
 | `graded.jl` | fermionic CTM and Z2 boundary MPS / BP timings on gate-built graded states | `julia --project=. benchmarks/graded.jl` |
 | `gpu.jl` | CPU vs GPU (CUDA) speed of one BP iteration and one centre-bond gate on the comb tree, both precisions, best of two | `julia --project=. benchmarks/gpu.jl 60,120,200` |
+| `gpu_peak.jl` | peak LIVE device memory of one BP iteration / one gate / one layer on the comb tree, as pass–fail under a hard CUDA.jl memory limit (bisect the limit; the smallest passing headroom over the baseline of state + messages is the peak, in units of F) | `JULIA_CUDA_HARD_MEMORY_LIMIT=1513000000 julia --project=. benchmarks/gpu_peak.jl 250 f32 gate` |
 | `robustness_graded.jl` | CTM `:cut`/`:cycle` and boundary MPS against exact contraction as χ grows, fermionic and Z2 (with its dense twin) | `julia --project=. benchmarks/robustness_graded.jl` |
 
 The peak-memory reading is the process high-water mark over the timed operation minus the
