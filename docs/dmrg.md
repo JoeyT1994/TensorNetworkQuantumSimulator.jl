@@ -67,6 +67,25 @@ on a 6-site comb tree at D = 8 reproduces exact diagonalisation to 1e-15 after t
 The state improves with D and is variational in the exact energy; the χ = 1 estimator is 5% off
 the exact energy of its own state — that gap is what the MP-BP environments (phase 2) remove.
 
+## The response solve needs no preconditioner at χ = 1 — *measured 2026-09-11*
+
+The response is solved in the fixed-point (Jacobian) form `(1 − J) X′ = ∂λF`, not the Hessian form
+`∂²ₓZ_B X′ = −∂λ∂ₓZ_B`. Heisenberg + field, tolerance 1e-10 on the tangent:
+
+| case | tangent dim | Gauss–Seidel sweeps | GMRES matvecs (no preconditioner) | ρ(J) |
+|---|---|---|---|---|
+| 3×3 D=2 random / DMRG state | 384 | 21 / 10 | 42 / 18 | 0.59 / 0.30 |
+| 3×3 D=4 random / DMRG state | 1536 | 17 / 19 | 38 / 32 | 0.50 / 0.42 |
+| 4×4 D=3 random / DMRG state | 1728 | 20 / 13 | 41 / 26 | 0.59 / 0.61 |
+
+`1 − J` is well conditioned whenever BP is a stable fixed point (ρ(J) < 1), because the message
+normalisation has already divided out the vertex and edge scalars that make the raw Bethe Hessian
+badly scaled, and fixed the gauge (scale) null space. Formally the Hessian is (minus) a
+block-diagonal metric built from the Zᵥ, Zₑ times `(1 − J)`, so block-Jacobi preconditioning of the
+Hessian form is the Jacobian form. Gauss–Seidel is the cheaper of the two here; GMRES is the
+fallback when ρ(J) → 1, and the form to use for χ > 1 environments where the update iteration is
+known not to be stable.
+
 ## Cost and what is next
 
 Per vertex update: one response solve (a few BP-sweep equivalents with (r + 1)× wider messages)

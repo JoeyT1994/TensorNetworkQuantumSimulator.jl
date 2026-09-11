@@ -104,7 +104,7 @@ linearised normalised message update `m = F̃(X)/ΣF̃(X)`:
 solved by Gauss–Seidel sweeps in the cache's edge sequence (exact after one sweep on a tree; a
 contraction whenever BP itself is stable). Returns a `Dictionary` over directed edges.
 """
-function message_response(bpc::BeliefPropagationCache, gen::GeneratingOperator; maxiter::Int = 100, tol::Real = 1.0e-10, verbose::Bool = false)
+function message_response(bpc::BeliefPropagationCache, gen::GeneratingOperator; maxiter::Int = 100, tol::Real = 1.0e-10, verbose::Bool = false, history = nothing)
     es = edge_sequence(bpc)
     dX = Dictionary{NamedEdge, Any}()
     for e in es
@@ -138,6 +138,7 @@ function message_response(bpc::BeliefPropagationCache, gen::GeneratingOperator; 
             set!(dX, e, dm)
         end
         verbose && println("response sweep $it: max relative change $diff")
+        history === nothing || push!(history, diff)
         diff < tol && break
     end
     diff < tol || @warn "message_response: not converged to $tol (last change $diff)"
