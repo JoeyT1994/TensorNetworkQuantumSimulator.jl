@@ -76,6 +76,18 @@
         @test tarray(Ms, hi1, hi2) * tarray(Ms, hi1, hi2) ≈ M
         @test tarray(Ms, hi1, hi2) * tarray(Mis, hi1, hi2) ≈ one(M)
 
+        #`ishermitian = true` is an assertion: a matrix that is Hermitian up to single-precision
+        #roundoff (a D = 250 ComplexF32 BP message on the device failed MatrixAlgebraKit's exact
+        #check) must decompose, and the result must be the decomposition of its Hermitian part.
+        a32 = randn(ComplexF32, 120, 120)
+        H32 = a32 * a32'
+        N32 = randn(ComplexF32, 120, 120); N32 = (N32 - N32') * (1.0f-5 * norm(H32) / norm(N32))
+        Hn32 = H32 + N32                                          # anti-Hermitian perturbation
+        gi, gj = Index(120, "g"), Index(120, "g2")
+        Qn, Dn, Qndag = TNQS.eigendecomp(Tensor([gi, gj], copy(Hn32)), gi, gj; ishermitian = true)
+        @test eltype(TI.array(Qn)) == ComplexF32
+        @test norm(tarray(Qn * Dn * Qndag, gi, gj) - H32) < 1.0e-5 * norm(H32)
+
         #A PSD eigensolve may acquire a small negative eigenvalue from roundoff.
         #cutoff = 0 retains every strictly positive mode but must still project that
         #negative mode out, without changing the complex storage type.

@@ -81,6 +81,9 @@
             M = TNQS.parity_message_gauge(TNQS.message(bpc, e))
             i1, i2 = TI.inds(M)
             for (li, ri) in ((i1, i2), (i2, i1))
+                # the Hermitian projection `eigen` applies must be the identity on an exactly
+                # Hermitian fermionic message, in either orientation (map adjoint, not the bra)
+                @test norm(TI.array(Tensors._hermitian_part(M, [li], [ri]), TI.inds(M)...) - TI.array(M)) < 1.0e-13 * norm(TI.array(M))
                 Q, D, Qdag = TNQS.eigendecomp(M, li, ri; ishermitian = true)
                 dv = real.([TI.array(D)[k, k] for k in 1:TI.dim(li)])
                 @test minimum(dv) > -1.0e-10

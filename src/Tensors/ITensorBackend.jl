@@ -841,12 +841,27 @@ function TensorInterface.factorize_svd(t::AbstractTensor, linds; ortho = "none",
     return F1, F2, Spectrum(truncerr)
 end
 
+# The Hermitian part ½(t + t†) of a square map `t` with codomain legs `cod` and domain legs `dom`
+# (paired in order, so `dom[k]` carries the dual space of `cod[k]`). `ishermitian = true` is the
+# caller's assertion; roundoff — single precision, long GEMM sums on the device — nevertheless
+# breaks the exact Hermitian check MatrixAlgebraKit runs before `eigh` (measured: a D = 250
+# ComplexF32 BP message failed it), and its `hermitian_tol` keyword does not reach cuSOLVER. LAPACK's
+# `Hermitian` wrapper read one triangle and so projected implicitly; this is the generic form of
+# the same step, built from the map adjoint of rule 5 so it is right on fermionic sectors too.
+function _hermitian_part(t::AbstractTensor, cod, dom)
+    ta = TensorInterface.dag(t, cod)
+    old = vcat(TensorInterface.dag.(cod), TensorInterface.dag.(dom))
+    ta = TensorInterface.replaceinds(ta, old, vcat(dom, cod))   # simultaneous relabel (Base.replace)
+    return TensorInterface.scale!(t + ta, one(real(eltype(t))) / 2)
+end
+
 # Hermitian eigendecomposition: D on (link′, link) with the eigenvalues, U on (rinds…, link),
 # such that `U · D · dag(U)′`-style reconstruction holds as in the previous backend
 # (symmetric_gauge relies on it).
 function LinearAlgebra.eigen(t::AbstractTensor, linds, rinds; ishermitian::Bool = false, kwargs...)
     ishermitian || error("eigen: only ishermitian = true is implemented")
     lv = _ascarried(t, _indvec(linds)); rv = _ascarried(t, _indvec(rinds))
+    t = _hermitian_part(t, lv, rv)
     if isgraded(t) && length(lv) == 1 && length(rv) == 1 && findfirst(==(lv[1]), inds(t)) == 2
         # Fermionic sign trap: matricising a 2-leg tensor with the SECOND stored leg as codomain
         # transposes the two legs, and a transposition of two odd legs carries the fermionic sign, so

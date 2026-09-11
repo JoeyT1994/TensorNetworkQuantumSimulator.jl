@@ -1133,7 +1133,15 @@ and a CPU/GPU comparison of every algorithm on one state, `test/test_gpu_paths.j
   host array; a `map_diag` closure captured a `Type` (not isbits for kernels);
 - `datatype` returned the fully parametrised array type, so `adapt_like` asked for
   `CuArray{T,5}(::Matrix)` — it returns the storage family with element type only;
-- the `:cycle` route's random start and pad vectors were host tensors.
+- the `:cycle` route's random start and pad vectors were host tensors;
+- at D = 250 in ComplexF32 a BP message failed MatrixAlgebraKit's exact Hermitian check before
+  `eigh` (roundoff of long single-precision GEMM sums; the `hermitian_tol` keyword is forwarded
+  into cuSOLVER's `heevd!` and errors there). The seam's Hermitian `eigen` now projects onto the
+  Hermitian part first — `½(t + t†)` built from the rule-5 map adjoint, so it is the identity on
+  exactly Hermitian dense, Z2 and fermionic messages (checked to 1e-17) — which is what LAPACK's
+  one-triangle `Hermitian` read did implicitly on the old backend;
+- `random_tensornetworkstate` gave both ends of a bond the same index copy; on graded spaces the
+  two ends must be mutually dual (the first BP contraction failed on mismatched axes).
 
 Host and device agree to 1e-12 on BP, exact contraction, gate application (both entry points),
 CTM `:cut`/`:cycle` and lossless boundary MPS; truncated boundary MPS differs by the fitting

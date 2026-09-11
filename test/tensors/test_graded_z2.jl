@@ -139,4 +139,29 @@
     @test Tensors.isdual(TI.pad_index(TI.dag(w1), ins, kt)) == true
     @test TI.pad_index(w1, ins, TI.dim(w1)) === nothing
     @test TI.pad_index(Tensors.Index(3, "d"), [Tensors.Index(2, "a")], 5) !== nothing   # dense: plain width
+
+    @testset "random graded state: dual bond copies, BP, Hermitian eigen" begin
+        # the two ends of every bond must carry mutually dual index copies, or the very first
+        # BP contraction fails on mismatched axes (it did before the constructor dualised one end)
+        gr = named_grid((3, 3))
+        sr = siteinds("S=1/2", gr; sectors = [0 => 1, 1 => 1], symmetry = "Z2")
+        ψr = random_tensornetworkstate(ComplexF64, gr, sr; bond_dimension = 4)
+        for e in edges(gr)
+            b = only(TI.commoninds(ψr[src(e)], ψr[dst(e)]))
+            bs = TI.inds(ψr[src(e)])[findfirst(==(b), TI.inds(ψr[src(e)]))]
+            bd = TI.inds(ψr[dst(e)])[findfirst(==(b), TI.inds(ψr[dst(e)]))]
+            @test Tensors.isdual(bs) != Tensors.isdual(bd)
+        end
+        n_exact = real(norm_sqr(ψr; alg = "exact"))
+        @test n_exact > 0
+        bpc = update(BeliefPropagationCache(ψr); maxiter = 30, tolerance = 1.0e-10)
+        @test isfinite(real(only(expect(bpc, ("Z", [(2, 2)])))))
+        for e in Iterators.take(edges(TNQS.graph(bpc)), 3)
+            M = TNQS.parity_message_gauge(TNQS.message(bpc, e))
+            i1, i2 = TI.inds(M)
+            @test norm(TI.array(Tensors._hermitian_part(M, [i1], [i2]), i1, i2) - TI.array(M)) < 1.0e-13 * norm(TI.array(M))
+            Q, D, Qdag = TNQS.eigendecomp(M, i1, i2; ishermitian = true)
+            @test norm(TI.array(Q * D * Qdag, i1, i2) - TI.array(M)) < 1.0e-10 * norm(TI.array(M))
+        end
+    end
 end

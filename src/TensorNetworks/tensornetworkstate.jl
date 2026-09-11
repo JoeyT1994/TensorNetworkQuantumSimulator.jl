@@ -101,7 +101,8 @@ Generate a random `TensorNetworkState` on graph `g` with local state indices giv
 function random_tensornetworkstate(eltype, g::AbstractGraph, siteinds::Dictionary = default_siteinds(g); bond_dimension::Integer = 1)
     vs = collect(vertices(g))
     l = Dict(e => new_index(only(siteinds[src(e)]), bond_dimension) for e in edges(g))
-    l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
+    # the two ends of a bond carry mutually dual copies (a no-op on dense indices)
+    l = merge(l, Dict(reverse(e) => dag(l[e]) for e in edges(g)))
     tensors = Dictionary{vertextype(g), Any}()
     for v in vs
         is = vcat(siteinds[v], [l[NamedEdge(v => vn)] for vn in neighbors(g, v)])
