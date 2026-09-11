@@ -1039,6 +1039,13 @@ exact/BP/BMPS/CTM observables, fermionic chain/spinful/2D against dense Jordan�
     Set `BLAS.set_num_threads(1)` for small-D sweeps; no code-level heuristic was added (global
     BLAS state is the caller's).
 
+12. *6×6 cross-method stress (no exact reference).* ⟨N⟩ on a gate-built fZ2 6×6 D=3 state: `:cut`,
+    `:cycle` and boundary MPS agree to 7e-5 at χ=8, 5e-7 at χ=32, 3e-8 at χ=48 (145 s / 162 s / 14 s).
+    On a random dense 6×6 D=3 state (flat spectrum) the spread is 4e-3 at χ=8 and 4e-5 at χ=48, and
+    `:cycle` there costs 430 s at χ=48 against 37 s for `:cut` — the Krylov route is not for flat
+    spectra, as the subspace-route notes already say. Element types: ComplexF32, Float32 and Float64
+    states run through BP, gate application, CTM and boundary MPS without error.
+
 Compile latency dominates graded runs (package precompile ~4–6 min after a source edit); probe new
 conventions in a scratch environment with the ITensorBase stack alone (seconds) before the suite.
 
