@@ -5,7 +5,7 @@ using CUDA
 function main()
     χ = 32
     g = named_hexagonal_lattice_graph(2,2; periodic = true)
-    s = siteinds("S=1/2", g; inds_per_site = 2, symmetry = "U1")
+    s = siteinds("S=1/2", g; inds_per_site = 2)
     ψ = identity_tensornetworkstate(ComplexF64, g, s)
     ψ_bpc = update(BeliefPropagationCache(ψ))
     ψ_bpc = CUDA.cu(ψ_bpc)

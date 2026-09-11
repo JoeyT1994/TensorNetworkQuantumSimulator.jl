@@ -27,9 +27,12 @@ function _precompile_workload(g)
     return nothing
 end
 
+# Development switch: `TNQS_SKIP_PRECOMPILE_WORKLOAD=1 julia ...` skips the workload (package
+# precompile back to ~20 s) for edit–run loops; the PrecompileTools `precompile_workload`
+# preference does the same persistently.
 @setup_workload begin
     g = named_grid((2, 2))
-    @compile_workload begin
+    haskey(ENV, "TNQS_SKIP_PRECOMPILE_WORKLOAD") || @compile_workload begin
         try
             # one-sweep CTM runs warn about not certifying; keep the precompile log clean
             Logging.with_logger(() -> _precompile_workload(g), Logging.NullLogger())

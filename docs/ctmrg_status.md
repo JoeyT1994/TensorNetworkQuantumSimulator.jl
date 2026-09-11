@@ -1058,9 +1058,9 @@ gaps to the TensorKit backend on CTM/BMPS and for GC's ~17–20% share of a swee
     paths at 2×2 size during package precompilation: measured after, 0.4 s dense and 9 s graded, with
     load 6.5 → 9.6 s and the full test suite 16 → 13.5 min. The price is the package's own
     precompile: 152 s instead of ~20 s after every source edit. For development sessions switch the
-    workload off (Revise keeps working as before):
-    `using Preferences; set_preferences!(TensorNetworkQuantumSimulator, "precompile_workload" => false)`
-    (PrecompileTools reads that preference; delete it to restore the fast startup).
+    workload off with `TNQS_SKIP_PRECOMPILE_WORKLOAD=1 julia --project=. …` (the package precompile
+    is then ~15 s again; the PrecompileTools `precompile_workload` preference does the same
+    persistently, but needs Preferences.jl in the active environment).
 
 JIT latency dominated graded runs before the precompile workload (item 13); probe new
 conventions in a scratch environment with the ITensorBase stack alone (seconds) before the suite.

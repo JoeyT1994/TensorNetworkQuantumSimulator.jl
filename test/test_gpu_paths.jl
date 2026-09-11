@@ -2,159 +2,65 @@
 using Test: @test, @testset
 using TensorNetworkQuantumSimulator
 const TNQS = TensorNetworkQuantumSimulator
+using LinearAlgebra: norm
+using Random: Random
+using Adapt: adapt
 
-# GPU-path validation without hardware: JLArray is the reference AbstractGPUArray, run
-# under allowscalar(false) so any scalar index or silent host round-trip throws. The
-# fused kernels run with device-backed BufferAllocators (TensorOperations ≥ 5.8), and the
-# graded (TensorKit) backend runs blockwise on device. JLArray cannot exercise the GPU
-# solver library or the device sort/scan/findall kernels CUDA.jl ships — those are
-# shimmed through host copies below; on hardware the vendor extensions cover them.
-const HAS_JLARRAYS = !isnothing(Base.find_package("JLArrays"))
-HAS_JLARRAYS || @info "JLArrays not available: skipping GPU-path checks"
+# GPU-path validation on real hardware: the same dense state on host and device through BP, exact
+# contraction, gate application (both the copying and the consuming entry points), CTM (`:cut`,
+# `:cycle`) and boundary MPS must agree to roundoff. Scalar indexing is disallowed so any silent
+# host round-trip inside a device path throws. Skipped when CUDA is not functional (CI without a GPU).
+const HAS_CUDA = try
+    @eval using CUDA
+    CUDA.functional()
+catch
+    false
+end
+HAS_CUDA || @info "CUDA not functional: skipping GPU-path checks"
 
-if HAS_JLARRAYS
-    @eval begin
-        using JLArrays: JLArray
-        using GPUArraysCore: allowscalar
-        using Adapt: adapt
-        using LinearAlgebra: LinearAlgebra
-        using Random: Random
-        import MatrixAlgebraKit as MAK
-    end
-
-    # ── Solver shims: factorize on a host copy, results back to device. Real hardware
-    # dispatches these to CUSOLVER/ROCSOLVER through MAK's vendor extensions. ──────────
-    const AnyJL = Union{
-        JLArray,
-        Base.ReshapedArray{<:Any, <:Any, <:JLArray},
-        SubArray{<:Any, <:Any, <:JLArray},
-        LinearAlgebra.Adjoint{<:Any, <:JLArray},
-        LinearAlgebra.Transpose{<:Any, <:JLArray},
-    }
-    _tojl(out) = map(x -> adapt(JLArray, x), out)
-    #host copy with a finiteness check: a rare, seed-independent flake has fed LAPACK a
-    #non-finite input here (suspected uninitialized device-buffer read upstream); fail
-    #with a diagnosable message instead of LAPACK's "invalid argument"
-    function _host(A)
-        Ah = Array(A)
-        any(!isfinite, Ah) && error(
-            "GPU harness: non-finite values reached a factorization input " *
-                "(suspect an uninitialized device buffer read upstream)"
-        )
-        return Ah
-    end
-    MAK.qr_compact(A::AnyJL, args...; kwargs...) = _tojl(MAK.qr_compact(_host(A), args...; kwargs...))
-    MAK.svd_compact(A::AnyJL, args...; kwargs...) = _tojl(MAK.svd_compact(_host(A), args...; kwargs...))
-    MAK.eigh_full(A::AnyJL, args...; kwargs...) = _tojl(MAK.eigh_full(_host(A), args...; kwargs...))
-    MAK.svd_trunc(A::AnyJL, args...; kwargs...) = _tojl(MAK.svd_trunc(_host(A), args...; kwargs...))
-    function MAK.qr_compact!(A::JLArray{<:Any, 2}, (Q, R)::Tuple, alg::MAK.Householder; kwargs...)
-        Qh, Rh = MAK.qr_compact(_host(A))
-        copyto!(Q, Qh)
-        copyto!(R, Rh)
-        return Q, R
-    end
-    function MAK.svd_compact!(A::JLArray{<:Any, 2}, USVᴴ::Tuple, alg::MAK.SafeDivideAndConquer; kwargs...)
-        Uh, Sh, Vᴴh = MAK.svd_compact(_host(A); kwargs...)
-        U, Sd, Vᴴ = USVᴴ
-        copyto!(U, Uh)
-        copyto!(parent(Sd), parent(Sh))
-        copyto!(Vᴴ, Vᴴh)
-        return U, Sd, Vᴴ
-    end
-    function MAK.eigh_full!(A::JLArray{<:Any, 2}, DV::Tuple, alg::MAK.RobustRepresentations; kwargs...)
-        Dh, Vh = MAK.eigh_full(_host(A); kwargs...)
-        D, V = DV
-        copyto!(parent(D), parent(Dh))
-        copyto!(V, Vh)
-        return D, V
-    end
-    MAK.ishermitian_approx(A::JLArray{<:Any, 2}; kwargs...) = MAK.ishermitian_approx(_host(A); kwargs...)
-    MAK.isantihermitian_approx(A::JLArray{<:Any, 2}; kwargs...) = MAK.isantihermitian_approx(_host(A); kwargs...)
-
-    # ── Device-primitive shims: JLArrays lacks sort/scan/findall kernels that CUDA.jl
-    # and AMDGPU.jl provide natively. ───────────────────────────────────────────────────
-    Base.sortperm(v::JLArray{<:Real, 1}; kwargs...) = adapt(JLArray, sortperm(Array(v); kwargs...))
-    Base.cumsum(v::JLArray{<:Real, 1}; kwargs...) = adapt(JLArray, cumsum(Array(v); kwargs...))
-    Base.findall(f::ComposedFunction{typeof(!), typeof(iszero)}, v::JLArray{<:Any, 1}) = findall(f, Array(v))
-    Base.findall(v::JLArray{Bool, 1}) = findall(Array(v))
-
-    @testset "GPU paths (JLArray, allowscalar(false))" begin
-        allowscalar(false)
-        #Diagonal transforms must not rely on scalar indexing. In particular, preserve
-        #off-diagonal zeros even for functions where f(0) != 0.
-        i = TNQS.new_index(4)
-        d_cpu = TNQS.from_array(Matrix{Float32}(LinearAlgebra.I, 4, 4), TNQS.prime(i), i)
-        d_gpu = adapt(JLArray, d_cpu)
-        d_shifted = TNQS.map_diag(x -> x + 2, d_gpu)
-        @test Array(TNQS.data(d_shifted)) == 3 .* Matrix{Float32}(LinearAlgebra.I, 4, 4)
-
+if HAS_CUDA
+    CUDA.allowscalar(false)
+    @testset "GPU paths (CUDA)" begin
+        Random.seed!(3)
         g = named_grid((4, 4))
-        ψ = tensornetworkstate(ComplexF32, v -> iseven(sum(v)) ? "↑" : "↓", g, siteinds("S=1/2", g))
-        layer = Any[("Rz", [v], 0.4) for v in vertices(g)]
-        for ces in edge_color(g, 4)
-            append!(layer, ("Rxx", pair, 0.7) for pair in ces)
+        s = siteinds("S=1/2", g)
+        ψ = random_tensornetworkstate(ComplexF64, g, s; bond_dimension = 3)
+        ψg = adapt(CuArray, ψ)
+        @test TNQS.TensorInterface.data(ψg[(1, 1)]) isa CuArray
+        obs = ("Z", [(2, 2)])
+        layer = Any[("Rzz", (src(e), dst(e)), 0.3) for e in edges(g)]
+        append!(layer, ("Rx", [v], 0.2) for v in vertices(g))
+        apply_kwargs = (; maxdim = 4, cutoff = 1.0e-12)
+
+        z(x) = real(only(x))
+        @test z(expect(ψg, obs; alg = "bp")) ≈ z(expect(ψ, obs; alg = "bp")) atol = 1.0e-12
+        @test z(expect(ψg, obs; alg = "exact")) ≈ z(expect(ψ, obs; alg = "exact")) atol = 1.0e-12
+
+        ψ2, _ = apply_gates(layer, ψ; apply_kwargs)
+        ψ2g, _ = apply_gates(layer, ψg; apply_kwargs)
+        @test z(expect(ψ2g, obs; alg = "bp")) ≈ z(expect(ψ2, obs; alg = "bp")) atol = 1.0e-12
+        @test TNQS.TensorInterface.data(ψ2g[(2, 2)]) isa CuArray             # stays on the device
+        # the consuming entry point (fused kernel + consumed destinations on device storage)
+        bpc = BeliefPropagationCache(deepcopy(ψ)); bpcg = BeliefPropagationCache(deepcopy(ψg))
+        bpc, _ = apply_gates!(layer, bpc; apply_kwargs, update_cache = true)
+        bpcg, _ = apply_gates!(layer, bpcg; apply_kwargs, update_cache = true)
+        @test z(expect(bpcg, obs)) ≈ z(expect(bpc, obs)) atol = 1.0e-12
+
+        for kw in ((;), (; projector = :cycle))
+            ckw = haskey(kw, :projector) ? (; convergence = :marginal) : (;)
+            c = TNQS.update(CTMEnvironmentCache(ψ, 16; kw...); maxiter = 6, tolerance = 1.0e-8, ckw...)
+            cg = TNQS.update(CTMEnvironmentCache(ψg, 16; kw...); maxiter = 6, tolerance = 1.0e-8, ckw...)
+            @test z(expect(cg, obs)) ≈ z(expect(c, obs)) atol = 1.0e-10
         end
-        circuit = reduce(vcat, [layer for _ in 1:2])
-        apply_kwargs = (; maxdim = 4, cutoff = 1.0f-7)
 
-        ψc, _ = apply_gates(circuit, ψ; apply_kwargs)
-        zc = real(only(expect(ψc, ("Z", [(2, 2)]); alg = "bp")))
-        zbc = real(only(expect(ψc, ("Z", [(2, 2)]); alg = "boundarymps", mps_bond_dimension = 4)))
-        nc = real(norm_sqr(ψc; alg = "loopcorrections", max_configuration_size = 4))
+        # boundary MPS at a lossless χ (D² = 9 per bond, two bonds per cut on a 4-row column → 81)
+        @test z(expect(ψg, obs; alg = "boundarymps", mps_bond_dimension = 81)) ≈
+            z(expect(ψ, obs; alg = "boundarymps", mps_bond_dimension = 81)) atol = 1.0e-10
 
-        ψg = adapt(JLArray, ψ)
-        @test ψg[(1, 1)].data isa JLArray
-        ψgt, _ = apply_gates(circuit, ψg; apply_kwargs)
-        @test ψgt[(1, 1)].data isa JLArray   #no silent host fallback through the gate path
-
-        z = real(only(expect(ψgt, ("Z", [(2, 2)]); alg = "bp")))
-        @test z ≈ zc atol = 1.0f-4
-        zb = real(only(expect(ψgt, ("Z", [(2, 2)]); alg = "boundarymps", mps_bond_dimension = 4)))
-        @test zb ≈ zbc atol = 1.0f-4
-        n = real(norm_sqr(ψgt; alg = "loopcorrections", max_configuration_size = 4))
-        @test n ≈ nc rtol = 1.0f-4
-
-        ρ = reduced_density_matrix(ψgt, [(2, 2)]; alg = "bp")
-        @test ρ.data isa JLArray
-        ψtr = truncate(ψgt; alg = "bp", maxdim = 2)
-        @test ψtr[(1, 1)].data isa JLArray
-        samples = sample(ψgt, 2; alg = "boundarymps", norm_mps_bond_dimension = 4, projected_mps_bond_dimension = 4)
-        @test length(samples) == 2
-    end
-
-    @testset "GPU paths, graded (fU1 fermions, odd filling)" begin
-        allowscalar(false)
-        #Deterministic stream for the random-conserving boundary-MPS init. NOTE: a rare
-        #LAPACK failure has been seen here even seeded (so not RNG-driven) — the _host
-        #finiteness check above exists to diagnose it on its next appearance.
-        Random.seed!(1234)
-        g = named_grid((2, 3))
-        s = TNQS.siteinds("Fermion", g; symmetry = "fU1")
-        ψ = tensornetworkstate(ComplexF64, v -> isodd(sum(v)) ? "Occ" : "Emp", g, s)
-        half = Any[]
-        for ces in edge_color(g, 4)
-            append!(half, ("F_hop", pair, -0.05) for pair in ces)
-        end
-        circuit = vcat(half, reverse(half))
-        apply_kwargs = (; maxdim = 8, cutoff = 1.0e-12)
-
-        ψc, _ = apply_gates(circuit, ψ; apply_kwargs)
-        nc = real(norm_sqr(ψc; alg = "bp"))
-        e_h = first(filter(e -> src(e)[1] == dst(e)[1], collect(edges(g))))
-        w1, w2 = src(e_h), dst(e_h)
-        cc = only(expect(ψc, ("CdagC", (w1, w2)); alg = "bp"))
-        lc = real(norm_sqr(ψc; alg = "loopcorrections", max_configuration_size = 4))
-        bc = only(expect(ψc, ("CdagC", (w1, w2)); alg = "boundarymps", mps_bond_dimension = 8))
-
-        ψg = adapt(JLArray, ψ)
-        ψgt, _ = apply_gates(circuit, ψg; apply_kwargs)
-        @test ψgt[(1, 1)].data.data isa JLArray   #TensorMap storage stays on device
-
-        @test real(norm_sqr(ψgt; alg = "bp")) ≈ nc atol = 1.0e-10
-        @test only(expect(ψgt, ("CdagC", (w1, w2)); alg = "bp")) ≈ cc atol = 1.0e-10
-        #loop corrections exercise the odd-filling closure-gauge baseline on device
-        @test real(norm_sqr(ψgt; alg = "loopcorrections", max_configuration_size = 4)) ≈ lc rtol = 1.0e-8
-        @test only(expect(ψgt, ("CdagC", (w1, w2)); alg = "boundarymps", mps_bond_dimension = 8)) ≈ bc atol = 1.0e-8
+        # ComplexF32 through `cu`, the example's route
+        ψ32 = CUDA.cu(ψ)
+        @test eltype(TNQS.TensorInterface.data(ψ32[(1, 1)])) == ComplexF32
+        @test z(expect(ψ32, obs; alg = "bp")) ≈ z(expect(ψ, obs; alg = "bp")) atol = 1.0e-4
     end
 end
 end

@@ -1169,8 +1169,8 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
     rng = Xoshiro(seed)
     starts = Tuple{Any, Any, Any}[]              # (charge leg, right start, left start)
     for c in charge_sectors(wR)
-        xR = random_tensor(rng, elt, vcat(wR, [c]))
-        xL = random_tensor(rng, elt, vcat(wL, [dag(c)]))
+        xR = adapt_like(ENW, random_tensor(rng, elt, vcat(wR, [c])))     # on the blocks' device
+        xL = adapt_like(ENW, random_tensor(rng, elt, vcat(wL, [dag(c)])))
         (norm(xR) > 0 && norm(xL) > 0) || continue
         push!(starts, (c, xR, xL))
     end
@@ -1267,7 +1267,7 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
         for attempt in 1:(k + 1)                 # every attempt adds ≥ 1 vector or stops
             need = k - length(vecs)
             need <= 0 && break
-            x = attempt == 1 ? x0 : deflate(random_tensor(rng, elt, legs))
+            x = attempt == 1 ? x0 : deflate(adapt_like(x0, random_tensor(rng, elt, legs)))
             nx = norm(x)
             (isfinite(nx) && nx > 1.0e-8 * norm(x0)) || break
             g = isempty(vecs) ? f : (y -> deflate(f(deflate(y))))
@@ -1464,8 +1464,8 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
         # can rotate it onto the previous sweep's; oriented like P_A's bond.
         z = k < kt ? pad_index(w, ins[l], kt) : nothing
         if z !== nothing
-            za = random_tensor(elt, vcat(_ctm_legs_of(a, ins[l]), [z])) * zero(elt)
-            zb = random_tensor(elt, vcat(_ctm_legs_of(b, ins[l]), [dag(z)])) * zero(elt)
+            za = adapt_like(a, random_tensor(elt, vcat(_ctm_legs_of(a, ins[l]), [z])) * zero(elt))
+            zb = adapt_like(b, random_tensor(elt, vcat(_ctm_legs_of(b, ins[l]), [dag(z)])) * zero(elt))
             a = directsum(a => w, za => z; tags = "Link,cyc")
             b = directsum(b => w, zb => dag(z); tags = "Link,cyc")
             w = only(uniqueinds(a, ins[l]))

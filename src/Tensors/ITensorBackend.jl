@@ -166,7 +166,21 @@ Base.ndims(t::AbstractTensor) = length(inds(t))
 TensorInterface.inds(t::AbstractTensor; plev = nothing) =
     plev === nothing ? collect(Index, inds(t)) : filter(i -> IB.plev(i) == plev, collect(Index, inds(t)))
 TensorInterface.scalartype(t::AbstractTensor) = eltype(t)
-TensorInterface.datatype(t::AbstractTensor) = typeof(IB.unnamed(t))
+# Storage family of a tensor with its element type but WITHOUT the dimension count (`Array{T}`,
+# `CuArray{T}`), unwrapped to the root array of views/reshapes/`Diagonal`: `adapt_like(ref, t)` uses
+# it to move tensors of any rank onto `ref`'s device.
+TensorInterface.datatype(t::AbstractTensor) = _storage_family(IB.unnamed(t))
+function _storage_family(A::AbstractArray)
+    R = _root_array(A)
+    return Base.typename(typeof(R)).wrapper{eltype(A)}
+end
+_root_array(A::AbstractArray) = A
+_root_array(A::SubArray) = _root_array(parent(A))
+_root_array(A::Base.ReshapedArray) = _root_array(parent(A))
+_root_array(A::Diagonal) = _root_array(A.diag)
+_root_array(A::LinearAlgebra.Adjoint) = _root_array(parent(A))
+_root_array(A::LinearAlgebra.Transpose) = _root_array(parent(A))
+_root_array(A::Base.PermutedDimsArray) = _root_array(parent(A))
 TensorInterface.array(t::AbstractTensor) = Array(IB.unnamed(t))
 function TensorInterface.array(t::AbstractTensor, is::Index...)
     length(is) == ndims(t) || error("array: expected $(ndims(t)) indices, got $(length(is))")
@@ -189,6 +203,8 @@ function TensorInterface.scale!(t::AbstractTensor, c::Number)
         for I in GA.eachblockstoredindex(A)
             view(A, I) .*= c
         end
+    elseif A isa Diagonal
+        A.diag .*= c
     else
         A .*= c
     end
@@ -198,7 +214,7 @@ end
 # Fully-projected graded networks contract down to spectator dim-1 charge legs rather than a
 # bare number; the entry is the amplitude (zero when the total charge is wrong).
 function TensorInterface.scalar(t::AbstractTensor)
-    ndims(t) == 0 && return t[]
+    ndims(t) == 0 && return only(Array(IB.unnamed(t)))         # no scalar indexing (device arrays)
     all(i -> length(i) == 1, inds(t)) || error("scalar: tensor with inds $(inds(t)) is not a scalar")
     return sum(Array(IB.unnamed(t)))
 end
@@ -516,7 +532,7 @@ function _contract_into(a::AbstractTensor, b::AbstractTensor, dest::AbstractTens
     n = prod(TensorInterface.dim.(out); init = 1)
     n <= length(Dst) || return nothing
     if _aliases(Dst, A) || _aliases(Dst, B)
-        buf = first(_fused_buffers(T, n))
+        buf = first(_fused_buffers(A, T, n))
         tmp = _view_tensor(buf, out)
         LinearAlgebra.mul!(tmp, a, b)
         r = _view_tensor(Dst, out)
@@ -542,7 +558,7 @@ function absorb_chain(t::AbstractTensor, envs::Vector, dest)
     n = length(A)
     Dst = dest === nothing ? nothing : _dense_storage(dest)
     (Dst !== nothing && (eltype(Dst) != T || length(Dst) < n)) && (Dst = nothing)
-    buf1, buf2 = _fused_buffers(T, n)
+    buf1, buf2 = _fused_buffers(A, T, n)
     # slots: the pooled buffer, and dest's storage once the input has been read (when dest aliases
     # t, that is after the first step; otherwise immediately). With no dest, the second slot is the
     # other pooled buffer and the result is copied out fresh at the end.
@@ -618,8 +634,15 @@ function TensorInterface.map_diag!(f::Function, out::AbstractTensor, t::Abstract
     ndims(t) == 2 || error("map_diag: expected a 2-index tensor")
     A = IB.unnamed(t)
     O = IB.unnamed(out)
-    for k in 1:minimum(size(O))
-        O[k, k] = f(A[k, k])
+    if isgraded(t)
+        for k in 1:minimum(size(O))
+            O[k, k] = f(A[k, k])
+        end
+    elseif O isa Diagonal && A isa Diagonal       # factorization output: work on the stored diagonal
+        O.diag .= f.(A.diag)
+    else                                          # dense: broadcast over the diagonal view (device-safe)
+        do_ = view(O, LinearAlgebra.diagind(O)); da = view(A, LinearAlgebra.diagind(A))
+        do_ .= f.(da)
     end
     return out
 end
@@ -723,9 +746,22 @@ function _svd_split(t::AbstractTensor, linds; maxdim = nothing, cutoff = nothing
         total = kept2 + err^2
         truncerr = total > 0 ? err^2 / total : 0.0
     end
-    return U, S, Vh, truncerr
+    return U, _densify(S), Vh, truncerr
 end
-_diagvals(S::AbstractTensor) = (A = IB.unnamed(S); [A[k, k] for k in 1:minimum(size(A))])
+# MatrixAlgebraKit hands back singular/eigen-value matrices as `Diagonal` wrappers. TensorAlgebra
+# allocates a contraction's output from its FIRST operand's storage, and `similar` of a
+# `Diagonal{<:CuArray}` is a host array — so `S * V` on device data mixed host and device storage.
+# Densify the (small, k×k) diagonal on the same device as its data; every downstream diagonal op
+# then sees ordinary dense storage.
+_densify(t::AbstractTensor) = (A = IB.unnamed(t); A isa Diagonal ? ITensor(_densify_array(A), Tuple(inds(t))) : t)
+function _densify_array(D::Diagonal)
+    n = length(D.diag)
+    M = similar(D.diag, n, n)
+    fill!(M, zero(eltype(M)))
+    view(M, LinearAlgebra.diagind(M)) .= D.diag
+    return M
+end
+_diagvals(S::AbstractTensor) = (A = IB.unnamed(S); isgraded(S) ? [A[k, k] for k in 1:minimum(size(A))] : A isa Diagonal ? Array(A.diag) : Array(view(A, LinearAlgebra.diagind(A))))
 # Retag the two legs of the central matrix (and the matching bond legs of U / Vh).
 function _relabel_bond(t::AbstractTensor, old::Index, tags::AbstractString)
     new = IB.named(space(_ascarried(t, old)), IB.IndexName(; tags = _totags(tags), plev = IB.plev(old)))
@@ -787,7 +823,7 @@ function TensorInterface.factorize_svd(t::AbstractTensor, linds; ortho = "none",
     up = TensorInterface.prime(u)
     T = eltype(U)
     if ortho == "none"
-        sq = TensorInterface.map_diag(x -> T(sqrt(real(x))), S)     # (u, v)
+        sq = TensorInterface.map_diag(x -> sqrt(real(x)), S)        # (u, v); no type captured (device kernels need isbits closures)
         F1 = U * _rename(sq, v, up)                                # (li…, u′)  — u′ in the v slot's orientation
         F2 = _rename(sq, u, up) * Vh                               # (u′, ri…)  — u′ in the u slot's orientation
     elseif ortho == "left"
@@ -821,6 +857,7 @@ function LinearAlgebra.eigen(t::AbstractTensor, linds, rinds; ishermitian::Bool 
         # `conj(V)` named onto `rinds`, the eigenvalue matrix keeps its arrows. Verified: `Ul·D·dag(U)`
         # reproduces M in M's own orientation and `ψ·√M·dag(√M⁻¹) = ψ` to 1e-16.
         D, V = MAK.eigh_full(t, Tuple(rv), Tuple(lv))
+        D = _densify(D)
         d1, d2 = inds(D)
         lk = _fresh_like(d2, "Link,eigen")
         U = TensorInterface.replaceinds(TensorInterface.replaceinds(conj(V), [lv[1]], [rv[1]]), [d2], [lk])
@@ -828,6 +865,7 @@ function LinearAlgebra.eigen(t::AbstractTensor, linds, rinds; ishermitian::Bool 
         return Dt, U
     end
     D, V = MAK.eigh_full(t, Tuple(lv), Tuple(rv))
+    D = _densify(D)
     d1, d2 = inds(D)                       # (fresh, fresh); V is on (domain…, d2)
     lk = _fresh_like(d2, "Link,eigen")
     Dt = _rename(_rename(D, d1, TensorInterface.prime(lk)), d2, lk)
@@ -1344,14 +1382,17 @@ end
 # Task-local buffer pool for the chain intermediates: two F-sized buffers per element type, reused
 # across messages (the kernel returns only the D² result, never a buffer). Live memory during a
 # message update is therefore ψ + 2 buffers = 3F + change, and steady-state heap churn ~0.
-function _fused_buffers(::Type{T}, n::Integer) where {T}
+function _fused_buffers(ref::AbstractArray, ::Type{T}, n::Integer) where {T}
+    # keyed by the storage family of `ref` (Array, CuArray, …) and the element type, so device data
+    # gets device buffers
+    key = (Base.typename(typeof(ref)).wrapper, T)
     pool = get!(task_local_storage(), :tnqs_fused_buffers) do
-        Dict{DataType, Tuple{Vector, Vector}}()
-    end::Dict{DataType, Tuple{Vector, Vector}}
-    bufs = get(pool, T, nothing)
+        Dict{Any, Tuple{AbstractVector, AbstractVector}}()
+    end::Dict{Any, Tuple{AbstractVector, AbstractVector}}
+    bufs = get(pool, key, nothing)
     if bufs === nothing || length(bufs[1]) < n
-        bufs = (Vector{T}(undef, n), Vector{T}(undef, n))
-        pool[T] = bufs
+        bufs = (similar(ref, T, n), similar(ref, T, n))
+        pool[key] = bufs
     end
     return bufs
 end
@@ -1369,7 +1410,8 @@ function _absorb_dim!(out::AbstractArray, cur::AbstractArray, M::AbstractMatrix,
     elseif post == 1
         LinearAlgebra.mul!(reshape(O, pre, D), reshape(C, pre, D), M)
     elseif pre <= 8 && post > 8
-        K = kron(transpose(M), LinearAlgebra.I(pre))                  # (pre·D)² — small
+        Id = similar(M, pre, pre); fill!(Id, zero(eltype(M))); view(Id, LinearAlgebra.diagind(Id)) .= one(eltype(M))
+        K = kron(transpose(M), Id)                                     # (pre·D)² — small, on M's device
         LinearAlgebra.mul!(reshape(O, pre * D, post), K, reshape(C, pre * D, post))
     else
         for c in 1:post
@@ -1385,7 +1427,7 @@ function _fused_chain(A::StridedArray, slots::Vector)
     T = promote_type(eltype(A), (eltype(M) for (_, M) in slots)...)
     isempty(slots) && return T == eltype(A) ? A : T.(A)
     cur = T == eltype(A) ? A : T.(A)
-    b1, b2 = _fused_buffers(T, length(A))
+    b1, b2 = _fused_buffers(A, T, length(A))
     buf1 = reshape(view(b1, 1:length(A)), size(A)); buf2 = reshape(view(b2, 1:length(A)), size(A))
     out = buf1
     for (k, M) in slots
@@ -1406,8 +1448,8 @@ function _close_bond!(R::AbstractMatrix, Ψ3::AbstractArray{<:Any, 3}, T3::Abstr
         G = reshape(Ψ3, pre * D, post) * adjoint(reshape(T3, pre * D, post))   # G[(a,b′),(a2,b)] = Σ_c Ψ T̄
         fill!(R, zero(T))
         G4 = reshape(G, pre, D, pre, D)
-        for b in 1:D, bp in 1:D, a in 1:pre
-            R[bp, b] += conj(G4[a, bp, a, b])                               # conj(Ψ) T = conj(Ψ T̄)
+        for a in 1:pre                                                      # partial trace over a: conj(Ψ) T = conj(Ψ T̄)
+            R .+= conj.(view(G4, a, :, a, :))
         end
     else
         fill!(R, zero(T))
@@ -1444,11 +1486,11 @@ function fused_norm_message(ψ::AbstractTensor, sinds::Vector{<:Index}, incoming
     bout = ψinds[kout]; boutp = TensorInterface.prime(bout)
     if pre == 1
         # R[b, b′] = Σ_c T[b, c] conj(ψ[b′, c])
-        R = Matrix{T}(undef, D, D)
+        R = similar(A, T, D, D)
         LinearAlgebra.mul!(R, reshape(T3, D, post), adjoint(reshape(Ψ3, D, post)))
         legs = (bout, boutp)
     else
-        R = Matrix{T}(undef, D, D)
+        R = similar(A, T, D, D)
         _close_bond!(R, Ψ3, T3)
         legs = (boutp, bout)
     end

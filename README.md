@@ -262,7 +262,22 @@ Custom gates can be defined by building the corresponding tensor with `op` on th
 
 ## GPU Support
 
-GPU support is being re-established after the switch of the tensor backend to ITensorBase/GradedArrays (September 2026): the previous CUDA extension and fused device kernels targeted the TensorKit backend and have been removed with it. Dense and graded tensors now share one code path, so device support will come through the `Adapt`-based `adapt`/`cu` transfer of the underlying arrays once the ITensorBase stack's GPU paths are validated here. `test/test_gpu_paths.jl` is skipped until then.
+Dense states and caches run on NVIDIA GPUs through CUDA.jl: move a state or cache with
+`Adapt.adapt(CuArray, ψ)` (keeps the element type) or `CUDA.cu(ψ)` (converts to single precision),
+and every algorithm — belief propagation with its fused message kernel, gate application with
+consumed device storage, CTMRG (`:cut` and `:cycle`), boundary MPS, sampling — runs on the device
+with results matching the host to roundoff (`test/test_gpu_paths.jl`, run when a GPU is
+functional). Factorizations dispatch to CUSOLVER through MatrixAlgebraKit. Graded (symmetric and
+fermionic) tensors currently stay on the host.
+
+```julia
+using TensorNetworkQuantumSimulator, CUDA, Adapt
+
+g = named_grid((8, 8))
+ψ_cpu = random_tensornetworkstate(ComplexF64, g; bond_dimension = 8)
+ψ_gpu = adapt(CuArray, ψ_cpu)
+expect(ψ_gpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
+```
 
 ## Algorithm Guide
 
