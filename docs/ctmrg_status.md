@@ -1027,6 +1027,18 @@ exact/BP/BMPS/CTM observables, fermionic chain/spinful/2D against dense Jordan�
    5e-5 between two sweep parities; graded 3e-4 vs dense 2e-6 off exact) — an under-parametrised
    `:cycle` limitation, not a graded defect; at χ=16 both read 3.04e-6.
 
+10. *Graded `:cycle` speed.* Z2 4×4 D=4 χ=16, 3 sweeps: 62 s vs 22 s on the dense twin. Krylov
+    matvecs were 2382 vs 1386 because every charge sector requested the full χ; proportional per-
+    sector requests with a saturation re-solve cut that to 1950 at identical retained spectra, but
+    only 5% of the time: the remainder is GradedArrays' per-operation cost on the small blocks a
+    D=4 Z2 state has (the fermionic 4×4 D=3 `:cut` shows the other side of the same coin — 10 s
+    here against 37 s on the TensorKit backend). `:cycle_matvec` is counted in `CTM_SVD_STATS`.
+
+11. *BLAS threads.* The fused BP kernel issues many small GEMMs: with 8 OpenBLAS threads a D=12
+    grid runs 0.36 s vs 0.26 s single-threaded (threading overhead), while D=40 runs 9.9 s vs 16.7 s.
+    Set `BLAS.set_num_threads(1)` for small-D sweeps; no code-level heuristic was added (global
+    BLAS state is the caller's).
+
 Compile latency dominates graded runs (package precompile ~4–6 min after a source edit); probe new
 conventions in a scratch environment with the ITensorBase stack alone (seconds) before the suite.
 
