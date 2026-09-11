@@ -1016,6 +1016,17 @@ exact/BP/BMPS/CTM observables, fermionic chain/spinful/2D against dense Jordan�
    requested leg); verified `Ul·D·dag(U) = M` in M's orientation and `ψ·√M·dag(√M⁻¹) = ψ` to 1e-16.
    Regression test: fermionic 2D testset "eigen of both message orientations".
 
+9. *Graded `:cycle` at over-parametrised χ.* Fermionic 4×4 D=3: χ=24 certifies in 4 sweeps (3.6e-8)
+   but χ=36 had F stable to 1e-10 while the marginal signal grew sweep by sweep and ⟨N⟩ drifted to
+   6e-3 after 40 sweeps. The zero-padding of the retained bond drew its sectors from `new_index`,
+   so a padded bond's graded structure varied between sweeps. New seam verb `pad_index(w, ins, kt)`
+   fixes the per-sector target from the fused interface space; χ=36 now converges (9.5e-11 at 40
+   sweeps). `_ctm_align` outcomes are counted in `CTM_SVD_STATS`: on graded data the only declines
+   are in sweep 1, against the greedy seed (`:align_nonunitary` 26 fermionic / 36 Z2, then zero);
+   the dense twin never declines. The Z2 D=4 χ=8 case does not certify on EITHER backend (F flips by
+   5e-5 between two sweep parities; graded 3e-4 vs dense 2e-6 off exact) — an under-parametrised
+   `:cycle` limitation, not a graded defect; at χ=16 both read 3.04e-6.
+
 Compile latency dominates graded runs (package precompile ~4–6 min after a source edit); probe new
 conventions in a scratch environment with the ITensorBase stack alone (seconds) before the suite.
 
