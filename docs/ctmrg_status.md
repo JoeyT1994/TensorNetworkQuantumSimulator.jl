@@ -1168,6 +1168,16 @@ the host (2.6×) — but the FIRST device call at a new (element type, size) con
 code because the package does not depend on CUDA). Measure second calls only, one configuration
 per process, or the compile time swamps everything.
 
+Single precision and the PSD cutoff. The environment square roots in simple update discard
+message eigenvalues below `eps(T)^(2/3)`: 4e-5 in Float32 against 4e-11 in Float64. Measured on a
+4×4 grid, D = 8, 12 Trotter layers (Rzz, Rx, Ry), unit-norm BP messages: 10% of the eigenvalues sit
+below 4e-5 but they carry 9e-6 of the spectral weight; ⟨Z⟩ and ⟨X⟩ in ComplexF32 drift from the
+ComplexF64 trajectory by 1e-7 growing to a few 1e-6 over 12 layers, and lowering `sqrt_cutoff` to
+1e-6 leaves that drift unchanged (same magnitude, different sign pattern). The drift is plain
+single-precision roundoff, not the cutoff; a Float64 eigen of a Float32 message would not help
+because the message already carries 1e-7 relative error. `sqrt_cutoff` is the knob if a state
+ever has real environment weight in that window.
+
 Peak live device memory (`benchmarks/gpu_peak.jl`: pass–fail under a hard CUDA.jl memory limit,
 which forces collection before it throws, so the smallest passing headroom over the baseline of
 state + BP messages is the high-water mark of live tensors; comb tree, D = 250 ComplexF32, F =
