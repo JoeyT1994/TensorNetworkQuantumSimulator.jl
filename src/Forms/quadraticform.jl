@@ -1,6 +1,9 @@
-struct QuadraticForm{V} <: AbstractForm{V}
-    ket::TensorNetworkState{V}
-    operator::TensorNetworkState{V}
+# The operator layer is any tensor network on the same graph mapping the ket's site indices to
+# their primed copies: a product of on-site operators (a `TensorNetworkState`, the default) or a
+# `TensorNetworkOperator` with virtual bonds such as the generating operator of a Hamiltonian.
+struct QuadraticForm{V, K <: TensorNetworkState{V}, O <: AbstractTensorNetwork{V}} <: AbstractForm{V}
+    ket::K
+    operator::O
 end
 
 ket(qf::QuadraticForm) = qf.ket

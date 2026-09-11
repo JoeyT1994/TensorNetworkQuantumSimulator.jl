@@ -14,4 +14,5 @@ using Test
     include("test_contraction_sequences.jl")
     include("test_tensors.jl")
     include("test_gpu_paths.jl")
+    include("test_dmrg.jl")
 end

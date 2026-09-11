@@ -10,6 +10,7 @@ include("TensorNetworks/abstracttensornetwork.jl")
 include("TensorNetworks/tensornetwork.jl")
 include("TensorNetworks/tensornetworkstate.jl")
 include("TensorNetworks/tensornetworkstate_constructors.jl")
+include("TensorNetworks/tensornetworkoperator.jl")
 include("contraction_sequences.jl")
 include("contract.jl")
 include("Forms/abstractform.jl")
@@ -37,6 +38,7 @@ include("entanglement.jl")
 include("truncate.jl")
 include("rdm.jl")
 include("kernel_hooks.jl")
+include("dmrg.jl")
 
 
 export
@@ -136,7 +138,16 @@ export
     rdm,
     norm_factors,
     toriccode_groundstate,
-    ising_partitionfunction
+    ising_partitionfunction,
+    TensorNetworkOperator,
+    GeneratingOperator,
+    generating_operator,
+    generating_cache,
+    bethe_energy,
+    message_response,
+    effective_operators,
+    optimize_vertex!,
+    dmrg
 include("precompile.jl")
 
 end

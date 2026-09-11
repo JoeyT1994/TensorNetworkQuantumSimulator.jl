@@ -288,6 +288,15 @@ expect(ψ_gpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
 | Loop corrections | `alg = "loopcorrections"` | Any | Moderate | Systematic corrections to BP |
 | Exact contraction | `alg = "exact"` | Any (small systems) | Exponential | Exact |
 
+### Ground states: BP-DMRG
+
+`dmrg(ψ, H)` performs one-site variational ground-state sweeps on the bond dimension of `ψ` for a
+Hamiltonian given as a list of observable-style terms, e.g. `("ZZ", (v, w), J)` and `("X", [v], h)`.
+The Hamiltonian is embedded in a positive generating norm network (never contracted as ⟨ψ|H|ψ⟩),
+the energy is the λ-derivative of the Bethe estimator, and the local effective Hamiltonian includes
+the environment response. Exact DMRG on trees, the BP approximation on loopy graphs; see
+`docs/dmrg.md`. `bethe_energy(ψ, H)` evaluates the energy alone.
+
 ## Examples
 
 See the [examples/](examples/) directory for complete worked examples:
