@@ -1162,6 +1162,12 @@ simple-update layer took 1.7 s on the device against 12.7 s on the CPU in Comple
 `hexagonal_heisenbergmodel_thermalstate.jl` (CUDA.cu → Float32) reproduces the CPU free energies
 to 4e-6.
 
+CTM on the device (L = 6, D = 4, χ = 64, three `:cut` sweeps, ComplexF64): 35 s against 90 s on
+the host (2.6×) — but the FIRST device call at a new (element type, size) configuration costs
+~100 s of GPU-side JIT (70% of a 148 s first call; the PrecompileTools workload cannot cover CUDA
+code because the package does not depend on CUDA). Measure second calls only, one configuration
+per process, or the compile time swamps everything.
+
 Peak live device memory (`benchmarks/gpu_peak.jl`: pass–fail under a hard CUDA.jl memory limit,
 which forces collection before it throws, so the smallest passing headroom over the baseline of
 state + BP messages is the high-water mark of live tensors; comb tree, D = 250 ComplexF32, F =
