@@ -11,6 +11,7 @@ with `--project=<that worktree>` to compare backends.
 | `ctm.jl` | CTM `:cut` / `:cycle` sweeps on a random L×L grid | `julia --project=. benchmarks/ctm.jl cut 6 4 64` |
 | `boundarymps.jl` | boundary-MPS iterations on a random L×L grid | `julia --project=. benchmarks/boundarymps.jl 6 3 32` |
 | `graded.jl` | fermionic CTM and Z2 boundary MPS / BP timings on gate-built graded states | `julia --project=. benchmarks/graded.jl` |
+| `gpu.jl` | CPU vs GPU (CUDA) speed of one BP iteration and one centre-bond gate on the comb tree, both precisions, best of two | `julia --project=. benchmarks/gpu.jl 60,120,200` |
 | `robustness_graded.jl` | CTM `:cut`/`:cycle` and boundary MPS against exact contraction as χ grows, fermionic and Z2 (with its dense twin) | `julia --project=. benchmarks/robustness_graded.jl` |
 
 The peak-memory reading is the process high-water mark over the timed operation minus the

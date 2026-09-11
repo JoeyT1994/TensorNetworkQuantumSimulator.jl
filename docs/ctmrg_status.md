@@ -1116,6 +1116,44 @@ same — its two-row message needs χ=256.
 11.4 s (9.2 s); exact contraction 50 s (108 s); Z2 BMPS χ=16 2.4 s (9.8 s); Z2 BP 1.3 s (3.0 s).
 Observables identical to the digits printed.
 
+## GPU (CUDA.jl) on the ITensorBase backend — *2026-09-11*
+
+Dense states move to the device with `adapt(CuArray, ψ)` (element type kept) or `CUDA.cu(ψ)`
+(single precision); the network/cache `adapt_structure` methods carry every tensor. No extension
+is needed: TensorAlgebra contracts CuArrays, MatrixAlgebraKit factorises through CUSOLVER, and the
+package's own device code is generic (`similar` on the operand's storage, broadcast over diagonal
+views, no scalar indexing). What had to change (all found by the hexagonal thermal-state example
+and a CPU/GPU comparison of every algorithm on one state, `test/test_gpu_paths.jl`):
+
+- pooled buffers of the fused BP kernel and the consumed-destination chains were host Vectors —
+  the pool is keyed by the operand's storage family now;
+- `map_diag!`/`scale!`/`_diagvals`/`scalar` used scalar indexing or diagonal views of `Diagonal`
+  wrappers; MatrixAlgebraKit's `Diagonal{<:CuArray}` S/D are densified on the device (k×k) because
+  TensorAlgebra allocates a product's output from its first operand and `similar(::Diagonal)` is a
+  host array; a `map_diag` closure captured a `Type` (not isbits for kernels);
+- `datatype` returned the fully parametrised array type, so `adapt_like` asked for
+  `CuArray{T,5}(::Matrix)` — it returns the storage family with element type only;
+- the `:cycle` route's random start and pad vectors were host tensors.
+
+Host and device agree to 1e-12 on BP, exact contraction, gate application (both entry points),
+CTM `:cut`/`:cycle` and lossless boundary MPS; truncated boundary MPS differs by the fitting
+fixed point's roundoff (1.7e-5 at tolerance 1e-8, 3e-8 at 1e-13, 2.6e-15 at lossless χ). Graded
+tensors stay on the host.
+
+Speed (`benchmarks/gpu.jl`; comb tree, one BP iteration and one centre-bond gate, RTX A6000 vs a
+16-thread CPU, best of two):
+
+| D (F) | ComplexF32 BP / gate | ComplexF64 BP / gate |
+|---|---|---|
+| 60 (3–7 MB) | 3.4× / 3.1× | 2.1× / 1.8× |
+| 120 (28–55 MB) | 6.0× / 6.2× | 1.6× / 2.9× |
+| 200 (128–256 MB) | 14× / 15× | 1.4× / 4.8× |
+
+Single precision is where this card pays (its FP64 units run at 1/32 rate); at D = 250 a full
+simple-update layer took 1.7 s on the device against 12.7 s on the CPU in ComplexF32. The example
+`hexagonal_heisenbergmodel_thermalstate.jl` (CUDA.cu → Float32) reproduces the CPU free energies
+to 4e-6.
+
 ## What made `:cycle` work
 
 Two things. Everything else in the design doc is failed attempts.
