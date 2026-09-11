@@ -1160,8 +1160,8 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
     # Right vectors live on the west legs as ENW carries them (so `x * A₁` contracts), left vectors
     # as ESW carries them (so `u * A₄` contracts): `u · M · x` is a BILINEAR pairing, no conjugation.
     wR = _ctm_legs_of(ENW, ins[1]); wL = _ctm_legs_of(ESW, ins[1])
-    act(x) = (((x * As[1]) * As[2]) * As[3]) * As[4]
-    tca(u) = (((u * As[4]) * As[3]) * As[2]) * As[1]
+    act(x) = (_ctm_stat!(:cycle_matvec); (((x * As[1]) * As[2]) * As[3]) * As[4])
+    tca(u) = (_ctm_stat!(:cycle_matvec); (((u * As[4]) * As[3]) * As[2]) * As[1])
     # Seeded on plaquette POSITION only, so the start vectors are bit-identical every sweep. Seeding
     # on the bond dimensions too let them move whenever a rank shifted, which showed up as sweep-to-
     # sweep basis wander (state distance floor 1e-10 rather than 3e-11). One charge leg per sector;
@@ -1286,104 +1286,130 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
         end
         return vecs, vals, oks
     end
+    # PER-SECTOR KRYLOV BUDGET. Every charge sector gets its own Krylov solve, and requesting the full
+    # `kcyc` from each one made the graded route do ~1.7× the matvecs of the dense twin (measured Z2
+    # 4×4 D=4 χ=16: 2382 vs 1386 over three sweeps). The merged cut keeps only `kcyc` modes in total,
+    # so ask each sector for its proportional share of the interface (plus an oversample) first, and
+    # re-solve at the full request only the sectors the merge SATURATED — those whose every returned
+    # mode was retained, so more might have made the cut. Two passes at most; the retained spectrum is
+    # then identical to the full-request one.
+    ns = [length(data(xR)) for (_, xR, _) in starts]
+    ntot = sum(ns)
+    over = max(2, cld(kcyc, 4))
+    reqs = [min(ns[si], kcyc, cld(kcyc * ns[si], ntot) + over) for si in eachindex(starts)]
     vecsR = Vector{Any}(undef, length(starts)); vecsL = Vector{Any}(undef, length(starts))
-    entR = NamedTuple{(:mag, :s, :j, :ok), Tuple{Float64, Int, Int, Bool}}[]
-    entL = similar(entR)
-    try
-        for (si, (c, xR, xL)) in enumerate(starts)
-            n = length(data(xR))
-            k = min(kcyc, n)                     # a sector holds at most its own dimension
-            alg = arnoldi(k, n)
-            VRv, valsR, okR = _ctm_cycle_schur(fwd, xR, k, alg)
-            VLv, valsL, okL = _ctm_cycle_schur(bwd, xL, k, alg)
-            vecsR[si] = VRv; vecsL[si] = VLv
-            append!(entR, ((mag = Float64(abs(valsR[j])), s = si, j = j, ok = okR[j]) for j in eachindex(valsR)))
-            append!(entL, ((mag = Float64(abs(valsL[j])), s = si, j = j, ok = okL[j]) for j in eachindex(valsL)))
+    valsRs = Vector{Any}(undef, length(starts)); valsLs = Vector{Any}(undef, length(starts))
+    oksRs = Vector{Any}(undef, length(starts)); oksLs = Vector{Any}(undef, length(starts))
+    solved = zeros(Int, length(starts))          # the request each sector was last solved at
+    local entR, entL, kres, keepR, keepL
+    for pass in 1:2
+        try
+            for (si, (c, xR, xL)) in enumerate(starts)
+                solved[si] == reqs[si] && continue
+                k = reqs[si]
+                alg = arnoldi(k, ns[si])
+                vecsR[si], valsRs[si], oksRs[si] = _ctm_cycle_schur(fwd, xR, k, alg)
+                vecsL[si], valsLs[si], oksLs[si] = _ctm_cycle_schur(bwd, xL, k, alg)
+                solved[si] = k
+            end
+        catch err
+            err isa InterruptException && rethrow()
+            return nothing                          # fall through to the pairwise cut
         end
-    catch err
-        err isa InterruptException && rethrow()
-        return nothing                          # fall through to the pairwise cut
-    end
-    sort!(entR; by = e -> -e.mag); sort!(entL; by = e -> -e.mag)
-    # Solve the cycle at the rank it can actually RESOLVE. `schursolve` terminates when the Krylov
-    # space closes, which at an interior plaquette is ~19 of a requested 32: the four-fold product's
-    # spectrum is ~the 4th power of one corner's, so directions past that carry no cycle weight.
-    # Values beyond `info.converged` are unconverged Ritz estimates — fine for a gap test below,
-    # never used as retained modes.
-    nv = min(length(entR), length(entL))
-    nv < 1 && return nothing
-    aR = [entR[j].mag for j in 1:nv]; aL = [entL[j].mag for j in 1:nv]
-    kres = min(kcyc, nv, something(findfirst(e -> !e.ok, entR), nv + 1) - 1,
-               something(findfirst(e -> !e.ok, entL), nv + 1) - 1)
-    kres < 1 && return nothing
-    # LEFT/RIGHT SPECTRAL CONSISTENCY (always on). `λ(Mᵀ) = λ(M)`, so the two solves must retain
-    # the SAME spectrum; where their magnitudes disagree, the "pair" spans two DIFFERENT spectral
-    # sets and `Π = P_A·P_B` is not a spectral projector of anything — it is an arbitrary oblique
-    # projector redrawn every sweep. Measured (over-parametrised 5×5 TFIM χ=16): kres = 14 with a
-    # 44% magnitude mismatch — ten noise modes, drawn differently on each side, which IS the
-    # residual-grows-with-χ wander. Keep the longest agreeing prefix. The 1e-3 tolerance is ~20×
-    # looser than the worst healthy case measured (4.3e-5) and ~400× tighter than the failure.
-    # Magnitudes over the FULL merged lists, not just the retained prefix: the degtol back-off
-    # below must compare the retained boundary `aR[kres]` against the first DROPPED value
-    # `aR[kres+1]`, which only exists if the list extends past the cut.
-    for j in 1:kres
-        if abs(aR[j] - aL[j]) > 1.0e-3 * max(aR[j], aL[j])
-            kres = j - 1
-            break
+        entR = NamedTuple{(:mag, :s, :j, :ok), Tuple{Float64, Int, Int, Bool}}[]
+        entL = similar(entR)
+        for si in eachindex(starts)
+            append!(entR, ((mag = Float64(abs(valsRs[si][j])), s = si, j = j, ok = oksRs[si][j]) for j in eachindex(valsRs[si])))
+            append!(entL, ((mag = Float64(abs(valsLs[si][j])), s = si, j = j, ok = oksLs[si][j]) for j in eachindex(valsLs[si])))
         end
-    end
-    kres < 1 && return nothing
-    # NOISE-CLIFF RANK CUT (`opts.cycle_gapcut`, 0 disables). Truncate the trailing block below
-    # the first cliff that is BOTH steep (`aR[j+1] ≤ gapcut·aR[j]`) and genuinely tiny
-    # (`aR[j+1] ≤ √eps·aR[1]`). Magnitude alone cannot separate noise from deep-but-real modes —
-    # the falsified fixed `cycle_rankcut` default: junk sits at 1.6e-11·|λ_1| on one measured
-    # case while REAL weight sits at 6.4e-13·|λ_1| on another — but the CLIFF can: measured
-    # 1.8e5 into the noise block against ≤ 4.5e2 anywhere inside a physical decay. The two
-    # conditions guard each other: a genuine spectral gap of ~1e4 with real modes below it fails
-    # the tininess floor (the cycle spectrum is ~ the 4th power of a corner's, so modest corner
-    # gaps make large cycle cliffs), and a smooth decay into tininess fails the cliff.
-    if opts.cycle_gapcut > 0
-        fl = sqrt(eps(real(elt))) * aR[1]
-        for j in 1:(kres - 1)
-            if aR[j + 1] <= opts.cycle_gapcut * aR[j] && aR[j + 1] <= fl
-                kres = j
+        sort!(entR; by = e -> -e.mag); sort!(entL; by = e -> -e.mag)
+        # Solve the cycle at the rank it can actually RESOLVE. `schursolve` terminates when the Krylov
+        # space closes, which at an interior plaquette is ~19 of a requested 32: the four-fold product's
+        # spectrum is ~the 4th power of one corner's, so directions past that carry no cycle weight.
+        # Values beyond `info.converged` are unconverged Ritz estimates — fine for a gap test below,
+        # never used as retained modes.
+        nv = min(length(entR), length(entL))
+        nv < 1 && return nothing
+        aR = [entR[j].mag for j in 1:nv]; aL = [entL[j].mag for j in 1:nv]
+        kres = min(kcyc, nv, something(findfirst(e -> !e.ok, entR), nv + 1) - 1,
+                   something(findfirst(e -> !e.ok, entL), nv + 1) - 1)
+        kres < 1 && return nothing
+        # LEFT/RIGHT SPECTRAL CONSISTENCY (always on). `λ(Mᵀ) = λ(M)`, so the two solves must retain
+        # the SAME spectrum; where their magnitudes disagree, the "pair" spans two DIFFERENT spectral
+        # sets and `Π = P_A·P_B` is not a spectral projector of anything — it is an arbitrary oblique
+        # projector redrawn every sweep. Measured (over-parametrised 5×5 TFIM χ=16): kres = 14 with a
+        # 44% magnitude mismatch — ten noise modes, drawn differently on each side, which IS the
+        # residual-grows-with-χ wander. Keep the longest agreeing prefix. The 1e-3 tolerance is ~20×
+        # looser than the worst healthy case measured (4.3e-5) and ~400× tighter than the failure.
+        # Magnitudes over the FULL merged lists, not just the retained prefix: the degtol back-off
+        # below must compare the retained boundary `aR[kres]` against the first DROPPED value
+        # `aR[kres+1]`, which only exists if the list extends past the cut.
+        for j in 1:kres
+            if abs(aR[j] - aL[j]) > 1.0e-3 * max(aR[j], aL[j])
+                kres = j - 1
                 break
             end
         end
-    end
-    # `degtol` back-off — the SAME semantics as the cut path: never split a near-degenerate cluster
-    # at the cut. An invariant subspace that must split a cluster is ill-defined, and the sweep
-    # re-resolves it differently each time — the under-truncation limit cycle lands EXACTLY on one
-    # (measured `|λ_8| = |λ_9|` to displayed digits on random 5×5 at χ=8). At the default
-    # `degtol = 0` the `≤` still fires on EXACT magnitude ties — which on ⟨ψ|ψ⟩ networks are the
-    # (λ, conj λ) pairs the swap identity `conj(M) = S·M·S` forces on the spectrum (see
-    # docs/ctmrg_status.md, the falsified swap-symmetry entry) — so a conjugate pair straddling the
-    # cut is never split even with the knob off. On graded data a tie across two sectors is
-    # harmless in itself (the sector label separates the modes), but it is backed off all the same.
-    while kres > 1 && kres < length(aR) && abs(aR[kres] - aR[kres + 1]) <= opts.degtol * abs(aR[kres])
-        kres -= 1
-    end
-    # RANK-CAP (opts.cycle_rankcut > 0): drop the near-null tail of the cycle spectrum so that a χ
-    # larger than the state's rank does not carry arbitrary null modes. Off by default → committed.
-    if opts.cycle_rankcut > 0
-        capR = count(>(opts.cycle_rankcut * aR[1]), @view aR[1:kres])
-        capL = count(>(opts.cycle_rankcut * aL[1]), @view aL[1:kres])
-        kres = min(kres, capR, capL)
         kres < 1 && return nothing
-    end
-    # Retained bases: the leading `kres` of the merged RIGHT list, stacked along their charge legs;
-    # the left side takes the SAME number of modes per sector (its own leading ones in each sector).
-    # Per sector the two solves see one block and its transpose, so their spectra coincide and the
-    # counts must agree — letting the left side pick its own leading `kres` would let a cross-sector
-    # near-tie at the cut hand the two sides different sector contents, leaving `P_B P_A` rank-
-    # deficient in one sector and over-complete in another.
-    keepR = entR[1:kres]
-    keepL = eltype(entL)[]
-    for si in eachindex(starts)
-        nR = count(e -> e.s == si, keepR)
-        candL = filter(e -> e.s == si && e.ok, entL)
-        length(candL) >= nR || return nothing        # the left solve resolved fewer modes here
-        append!(keepL, candL[1:nR])
+        # NOISE-CLIFF RANK CUT (`opts.cycle_gapcut`, 0 disables). Truncate the trailing block below
+        # the first cliff that is BOTH steep (`aR[j+1] ≤ gapcut·aR[j]`) and genuinely tiny
+        # (`aR[j+1] ≤ √eps·aR[1]`). Magnitude alone cannot separate noise from deep-but-real modes —
+        # the falsified fixed `cycle_rankcut` default: junk sits at 1.6e-11·|λ_1| on one measured
+        # case while REAL weight sits at 6.4e-13·|λ_1| on another — but the CLIFF can: measured
+        # 1.8e5 into the noise block against ≤ 4.5e2 anywhere inside a physical decay. The two
+        # conditions guard each other: a genuine spectral gap of ~1e4 with real modes below it fails
+        # the tininess floor (the cycle spectrum is ~ the 4th power of a corner's, so modest corner
+        # gaps make large cycle cliffs), and a smooth decay into tininess fails the cliff.
+        if opts.cycle_gapcut > 0
+            fl = sqrt(eps(real(elt))) * aR[1]
+            for j in 1:(kres - 1)
+                if aR[j + 1] <= opts.cycle_gapcut * aR[j] && aR[j + 1] <= fl
+                    kres = j
+                    break
+                end
+            end
+        end
+        # `degtol` back-off — the SAME semantics as the cut path: never split a near-degenerate cluster
+        # at the cut. An invariant subspace that must split a cluster is ill-defined, and the sweep
+        # re-resolves it differently each time — the under-truncation limit cycle lands EXACTLY on one
+        # (measured `|λ_8| = |λ_9|` to displayed digits on random 5×5 at χ=8). At the default
+        # `degtol = 0` the `≤` still fires on EXACT magnitude ties — which on ⟨ψ|ψ⟩ networks are the
+        # (λ, conj λ) pairs the swap identity `conj(M) = S·M·S` forces on the spectrum (see
+        # docs/ctmrg_status.md, the falsified swap-symmetry entry) — so a conjugate pair straddling the
+        # cut is never split even with the knob off. On graded data a tie across two sectors is
+        # harmless in itself (the sector label separates the modes), but it is backed off all the same.
+        while kres > 1 && kres < length(aR) && abs(aR[kres] - aR[kres + 1]) <= opts.degtol * abs(aR[kres])
+            kres -= 1
+        end
+        # RANK-CAP (opts.cycle_rankcut > 0): drop the near-null tail of the cycle spectrum so that a χ
+        # larger than the state's rank does not carry arbitrary null modes. Off by default → committed.
+        if opts.cycle_rankcut > 0
+            capR = count(>(opts.cycle_rankcut * aR[1]), @view aR[1:kres])
+            capL = count(>(opts.cycle_rankcut * aL[1]), @view aL[1:kres])
+            kres = min(kres, capR, capL)
+            kres < 1 && return nothing
+        end
+        # Retained bases: the leading `kres` of the merged RIGHT list, stacked along their charge legs;
+        # the left side takes the SAME number of modes per sector (its own leading ones in each sector).
+        # Per sector the two solves see one block and its transpose, so their spectra coincide and the
+        # counts must agree — letting the left side pick its own leading `kres` would let a cross-sector
+        # near-tie at the cut hand the two sides different sector contents, leaving `P_B P_A` rank-
+        # deficient in one sector and over-complete in another.
+        keepR = entR[1:kres]
+        keepL = eltype(entL)[]
+        for si in eachindex(starts)
+            nR = count(e -> e.s == si, keepR)
+            candL = filter(e -> e.s == si && e.ok, entL)
+            length(candL) >= nR || return nothing        # the left solve resolved fewer modes here
+            append!(keepL, candL[1:nR])
+        end
+        # Saturated sectors: every mode the (reduced) request returned was retained. Re-solve those at
+        # the full request and merge again; otherwise the reduced solve already contains the cut.
+        sat = [si for si in eachindex(starts) if reqs[si] < min(ns[si], kcyc) && count(e -> e.s == si, keepR) == reqs[si]]
+        (pass == 1 && !isempty(sat)) || break
+        for si in sat
+            reqs[si] = min(ns[si], kcyc)
+        end
     end
     VR = Vector{Any}(undef, 4); VL = Vector{Any}(undef, 4)
     VR[1] = _ctm_stack([vecsR[e.s][e.j] for e in keepR], [starts[e.s][1] for e in keepR])
