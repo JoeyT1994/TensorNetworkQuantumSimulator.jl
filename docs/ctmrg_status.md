@@ -1067,6 +1067,13 @@ SVD 21%, QR 8%, `_hdot` 6% (an `aligndims` copy even when leg orders agree — r
 divide-and-conquer at 288×288; measured cleanly through the tensor interface both take 0.04 s and the
 CTM sweep did not change — the default stays.)
 
+*Boundary MPS.* L=6 D=3 χ=32, 3 iterations: 106 s (Fixes 80 s), peak over baseline 492 MB (Fixes
+547 MB), ~145 GB churn on both. Profile of one update: GEMM 37%, GC 17%, TensorAlgebra permuted
+operand copies ~20%, output zero-fill 8%, QR 6%. Contracting into an uninitialised destination via
+`mul!` was measured and rejected (3.5× slower on contiguous legs). The 25% gap is TensorAlgebra
+internals; dense boundary MPS agrees with exact contraction to 1e-15 at lossless χ on both backends.
+Harnesses are in `benchmarks/`.
+
 *Graded (fZ2 4×4 D=3, Z2 4×4 D=2).* fermionic CTM `:cut` 6 sweeps 10.4 s (Fixes 36.8 s); `:cycle`
 11.4 s (9.2 s); exact contraction 50 s (108 s); Z2 BMPS χ=16 2.4 s (9.8 s); Z2 BP 1.3 s (3.0 s).
 Observables identical to the digits printed.
