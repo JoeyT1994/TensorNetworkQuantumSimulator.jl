@@ -1,5 +1,6 @@
 using TensorNetworkQuantumSimulator
 using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuantumSimulator, freenergy, update
+using CUDA
 
 function main()
     χ = 32
@@ -7,6 +8,7 @@ function main()
     s = siteinds("S=1/2", g; inds_per_site = 2, symmetry = "U1")
     ψ = identity_tensornetworkstate(ComplexF64, g, s)
     ψ_bpc = update(BeliefPropagationCache(ψ))
+    ψ_bpc = CUDA.cu(ψ_bpc)
 
     println("Finite temp simulation of Hexagonal Heisenberg model in the thermodynamic limit")
     dβ = 0.01
