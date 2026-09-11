@@ -137,4 +137,6 @@ export
     norm_factors,
     toriccode_groundstate,
     ising_partitionfunction
+include("precompile.jl")
+
 end

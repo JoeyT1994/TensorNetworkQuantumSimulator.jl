@@ -6,6 +6,8 @@ authors = ["JoeyT1994 <jtindall@flatironinstitute.org>", "and contributors"]
 description = "A Julia package for quantum simulation with tensor networks of near-arbitrary topology."
 
 [deps]
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 Dictionaries = "85a47980-9c8c-11e8-2b9f-f7ca1fa99fb4"
 GradedArrays = "bc96ca6e-b7c8-4bb6-888e-c93f838762c2"
@@ -28,6 +30,8 @@ UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 VectorInterface = "409d34a3-91d5-4945-b6ec-7529ddf182d8"
 
 [compat]
+Logging = "1.10"
+PrecompileTools = "1"
 Adapt = "4.3.0"
 Dictionaries = "0.4"
 GradedArrays = "0.15"
