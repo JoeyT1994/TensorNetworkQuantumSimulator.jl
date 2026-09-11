@@ -1072,7 +1072,10 @@ CTM sweep did not change — the default stays.)
 operand copies ~20%, output zero-fill 8%, QR 6%. Contracting into an uninitialised destination via
 `mul!` was measured and rejected (3.5× slower on contiguous legs). The 25% gap is TensorAlgebra
 internals; dense boundary MPS agrees with exact contraction to 1e-15 at lossless χ on both backends.
-Harnesses are in `benchmarks/`.
+Harnesses are in `benchmarks/`. Graded boundary MPS has no convergence floor: fermionic 4×4 D=3 is
+exact (2e-16) at the lossless χ=81, and the 1e-7 readings at χ=24/36 are truncation (unchanged by a
+1e-14 fitting tolerance or 200 iterations); the fermionic example's 3.7e-7 plateau for χ ≥ 16 is the
+same — its two-row message needs χ=256.
 
 *Graded (fZ2 4×4 D=3, Z2 4×4 D=2).* fermionic CTM `:cut` 6 sweeps 10.4 s (Fixes 36.8 s); `:cycle`
 11.4 s (9.2 s); exact contraction 50 s (108 s); Z2 BMPS χ=16 2.4 s (9.8 s); Z2 BP 1.3 s (3.0 s).
