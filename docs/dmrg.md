@@ -282,6 +282,7 @@ imaginary-time simple update; the reference is boundary MPS on the START state.
 | D | χ | start, bMPS (χ_MPS) | after sweep 1 | sweep 2 (partial) | s/vertex | rejected |
 |---|---|---|---|---|---|---|
 | 3 | 16 | −3.15474148 (64) | −3.15475288 | −3.15476145 (23 of 36) | 45 alone, 55–80 with a second process | 26 of 59 |
+| 3 | **32** | −3.15474148 (64) | **−3.15477354** | — | 100 (125 with resume overheads) | 2 of 36 (3 damped) |
 | 4 | 16 | −3.15477533 (32) | −3.15477584 (3 vertices) | — | 194 | 1 of 3 |
 
 Energies per site. The D = 3 χ = 16 sweep lowers the energy by 2e-5 per site, but the rejections
@@ -289,8 +290,13 @@ are not random: rows 2–4, columns 3–5 — the BULK — are rejected in both 
 are accepted, and the damped half-step retry does not rescue them (proposed energies up to 6e-3
 per site ABOVE the current one). χ = 16 against a 3-bond interface of width 18³ is simply too
 little for a trustworthy `:cut` gradient in the bulk of a 6×6; the acceptance step is what keeps
-the run variational. Two processes at once cost every converge 3×, so the χ = 32 D = 3 sweep runs
-alone (below).
+the run variational. Two processes at once cost every converge 3×, so the χ = 32 D = 3 sweep ran
+alone: **one sweep, 31 of 36 vertices accepted outright, 3 by the damped half step, 2 rejected (both
+on the last row), energy per site −3.15474148 → −3.15477354**, i.e. 3.2e-5 per site below the
+simple-update start and within 1.8e-6 per site of the D = 4 simple-update state. The fixed-ring and
+FD-of-F energies agree to 2e-7 at χ = 32 where they differed by 1e-4 at χ = 16 — a usable
+convergence diagnostic. Wall clock: 36 vertices in 82 minutes including 14 process restarts
+(checkpointing the ±λ caches removed the 70–120 s rebuild per restart).
 
 **Symmetries.** `generating_operator` builds a graded auxiliary index as the direct sum of a dim-1
 trivial sector (the a = 0 norm slot) and the operator-Schmidt bond of the edge term, so its sectors
