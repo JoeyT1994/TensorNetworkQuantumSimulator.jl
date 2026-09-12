@@ -480,11 +480,14 @@ defaults to the measured window per projector (1e-6 for `:cycle`, 1e-7 for `:cut
 
 `refresh = :vertex` re-converges the three environments after every vertex (one energy per vertex
 update). `:checkerboard` / `:fourcolour` update a parity / (x mod 2, y mod 2) class against the
-same environments and refresh per class; `:sweep` refreshes once per sweep. Grouped refreshes are
-`Lx·Ly` times cheaper but overshoot — measured divergent undamped on the 4×4 D = 3 (`:sweep` at
-once, `:checkerboard` by the third refresh, `:fourcolour` by the ninth) and stable with
-`damping = 0.5`. Every refresh is an ACCEPTANCE step: an update that raises the energy by more than
-`accept_tol` (relative) is reverted and counted, with a warning at the end.
+same environments and refresh per class; `:rows` updates a row (first coordinate) at a time;
+`:sweep` refreshes once per sweep. Grouped refreshes are `Lx·Ly` times cheaper but overshoot —
+measured divergent undamped on the 4×4 D = 3 (`:sweep` at once, `:checkerboard` by the third
+refresh, `:fourcolour` by the ninth) and stable with `damping = 0.5`. On the 5×5 D = 3 from the
+BP-optimised start, `:rows` with `damping = 0.5` reaches in 4 sweeps (16 min) an energy below what
+`:vertex` reaches in 2 sweeps (80 min). Every refresh is an ACCEPTANCE step: an update that raises
+the energy by more than `accept_tol` (relative) is retried once with `retry_damping`, and if still
+uphill reverted and counted, with a warning at the end.
 
 `energy = :fd` (default) records `(F(+λ) − F(−λ)) / 2λ`, the implicit derivative with the
 environments re-converged, which under `:cut` at truncated χ is 100–500× more accurate than the
@@ -496,9 +499,9 @@ function dmrg(::Algorithm"ctmrg", ψ::TensorNetworkState, H::Vector; maxdim::Int
               projector::Symbol = :cut, λ::Union{Real, Nothing} = nothing, whiten_cutoff::Real = 1.0e-6,
               regauge::Bool = false, ctm_kwargs = (;), verbose::Bool = true,
               vertex_order = collect(vertices(ψ)), refresh::Symbol = :vertex, energy::Symbol = :fd,
-              damping::Real = 0, accept_tol::Real = 1.0e-9)
-    refresh in (:vertex, :sweep, :checkerboard, :fourcolour) || throw(ArgumentError(
-        "refresh must be :vertex, :sweep, :checkerboard or :fourcolour, got $(repr(refresh))"))
+              damping::Real = 0, accept_tol::Real = 1.0e-9, retry_damping::Real = 0.8)
+    refresh in (:vertex, :sweep, :checkerboard, :fourcolour, :rows) || throw(ArgumentError(
+        "refresh must be :vertex, :sweep, :checkerboard, :fourcolour or :rows, got $(repr(refresh))"))
     energy in (:ring, :window, :fd) || throw(ArgumentError("energy must be :ring, :window or :fd, got $(repr(energy))"))
     # Finite-difference step. Measured window (docs/dmrg.md): `:cycle` needs λ ≤ 1e-6 to keep the
     # ±λ warm starts in the basin of the λ = 0 fixed point, `:cut` needs λ ≤ 1e-7 on random states
@@ -539,6 +542,9 @@ function dmrg(::Algorithm"ctmrg", ψ::TensorNetworkState, H::Vector; maxdim::Int
     elseif refresh === :checkerboard
         par(v) = isodd(sum(Int, v))
         [filter(!par, vertex_order), filter(par, vertex_order)]
+    elseif refresh === :rows               # one refresh per row (first coordinate); measured best on the 5×5
+        rows = unique(v[1] for v in vertex_order)
+        [filter(v -> v[1] == r, vertex_order) for r in rows]
     else                                   # :fourcolour — (x mod 2, y mod 2) classes
         cls(v) = (mod(Int(v[1]), 2), mod(Int(v[2]), 2))
         [filter(v -> cls(v) == c, vertex_order) for c in ((0, 0), (1, 1), (0, 1), (1, 0))]
@@ -546,18 +552,30 @@ function dmrg(::Algorithm"ctmrg", ψ::TensorNetworkState, H::Vector; maxdim::Int
     for sweep in 1:nsweeps
         for group in groups
             old = Dict(v => ψ[v] for v in group)
-            for v in group
-                N, Heff = effective_operators(cache, cp, cm, gen, v, λ)
-                optimize_vertex!(ψ, v, N, Heff; whiten_cutoff, damping)
+            function try_group(damp)
+                for (v, t) in old
+                    ψ[v] = t
+                end
+                for v in group
+                    N, Heff = effective_operators(cache, cp, cm, gen, v, λ)
+                    optimize_vertex!(ψ, v, N, Heff; whiten_cutoff, damping = damp)
+                end
+                regauge && (ψ = _regauge_keep_inds(ψ))
+                cache_new = generating_cache(ψ, gen, maxdim; seed = cache, projector, ctm_kwargs...)
+                cp_new, cm_new, E_new = environments!(cache_new)
+                return cache_new, cp_new, cm_new, E_new
             end
-            regauge && (ψ = _regauge_keep_inds(ψ))
-            cache_new = generating_cache(ψ, gen, maxdim; seed = cache, projector, ctm_kwargs...)
-            cp_new, cm_new, E_new = environments!(cache_new)
+            cache_new, cp_new, cm_new, E_new = try_group(damping)
             # ACCEPTANCE: a variational step must not raise the energy. One that does means H_eff
             # was wrong in the direction taken (a near-null N_eff direction, an overshoot of a
             # grouped update), and letting it through is how the 4×4 D = 3 runs blew up from a
-            # 6e-5 gap to E = −38 in one step. Revert the group and keep the old environments.
-            if E_new > E + accept_tol * max(one(E), abs(E))
+            # 6e-5 gap to E = −38 in one step. Retry once with heavier damping (on the 5×5 the
+            # retry rescued every overshoot of a grouped update but one), else revert the group.
+            uphill(Enew) = Enew > E + accept_tol * max(one(E), abs(E))
+            if uphill(E_new) && retry_damping > damping
+                cache_new, cp_new, cm_new, E_new = try_group(retry_damping)
+            end
+            if uphill(E_new)
                 nreject += 1
                 for (v, t) in old
                     ψ[v] = t

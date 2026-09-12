@@ -391,3 +391,69 @@ update is the cost, and it is recomputed from scratch after every vertex.
    environment refresh, so the sweep scales past 4×4.
 4. Two-site updates so the bond dimension can grow; graded/fermionic operator networks (the
    auxiliary index needs sectors; `factorize_svd` already handles graded terms).
+
+## Where the 40 minutes per sweep go, and the two levers — *2026-09-12*
+
+Measured on the 5×5 D = 3 χ = 32 `:cut` sweep from the BP-optimised state (`scratchpad/ctm_profile.jl`,
+`run66.jl` runs A–E). The double layer is contracted lazily and the local problem is small; the
+cost is the number of environment re-convergences.
+
+| piece | cost |
+|---|---|
+| one CTM sweep of the generating network (aux leg widens every interface 9 → 18) | 2.3 s |
+| the same sweep on the plain norm network | ≈ 0.3 s |
+| dense ring operators at a vertex (162 × 162) | 0.05 s |
+| warm re-converge of the λ = 0 cache after one tensor changed (`:marginal`, 1e-12) | 4–5 sweeps |
+| warm re-converge of each ±λ cache | 2–4 sweeps |
+| **per vertex: three converges ≈ 12 sweeps** | **37–45 s** |
+
+What does not help: the `:free_energy` criterion at 1e-10 halves the sweeps but 7 of 10 updates are
+then rejected (FD of F needs F to ~1e-14, which the `:marginal` criterion delivers as a side effect);
+λ = 1e-6 to tolerate a looser F rejects the same way; tolerance 1e-10 vs 1e-12 under `:marginal`
+changes nothing (the criterion sets the sweep count, not the tolerance); re-gauging the BP start
+changes nothing. So the cost is structural: one full environment re-convergence per local update.
+
+**Lever 1 — fewer refreshes (grouped updates).** Update a group of vertices against the same three
+environments, refresh once, accept/damped-retry/reject the group as a whole (`refresh = :checkerboard`,
+`damping`). On the 5×5 a checkerboard sweep is 2 refreshes instead of 25, a row-wise sweep 5.
+Results below (`scratchpad/run_group.jl`).
+
+5×5 D = 3 χ = 32 `:cut`, from the BP-optimised state (per-site energy −3.14740771, gap 1.94e-5;
+exact −3.14742707), `damping = 0.5`, retry at 0.8, `:marginal` 1e-12, `scratchpad/run_group.jl`.
+Gaps are per site.
+
+| refresh | refreshes/sweep | s/sweep | after 1 | after 2 | after 3 | after 4 | retried / rejected |
+|---|---|---|---|---|---|---|---|
+| `:vertex` (SU start, earlier table) | 25 | ~1100 | 3.6e-6 | 2.2e-6 | | | 4 of 50 |
+| `:checkerboard` | 2 | 90–150 | 5.7e-6 | 2.9e-6 | 2.3e-6 | **2.2e-6** | 4 / 1 of 8 |
+| `:rows` | 5 | 230–280 | 3.9e-6 | 2.5e-6 | 2.1e-6 | **2.0e-6** | 2 / 1 of 20 |
+
+Row-wise updates are the better trade: 5× fewer refreshes than `:vertex`, a Gauss–Seidel order
+between rows (each row sees the rows already updated), and after four sweeps (16 min) an energy
+below what `:vertex` reached after two (≈ 40 min each). Both grouped schedules converge to the same
+2e-6 floor with a rejection at the end, which is the `:cut` gradient error at χ = 32 seen on the
+6×6, not the grouping. The damped retry (0.8) rescued every overshoot but one; without it half the
+checkerboard groups would have been rejected. Both are now in `dmrg(…; refresh = :rows | :checkerboard,
+damping, retry_damping)`.
+
+**Lever 2 — one environment set per global gradient (planned).** The FD ring operators at every
+vertex come from the same three caches, so one refresh gives the exact gradient of the CTM energy
+with respect to all 25 tensors: with `ε = t†H_eff t / t†N_eff t`, `∂E/∂t̄ = 2 (H_eff − ε N_eff) t / t†N_eff t`
+(the arbitrary multiple of `N_eff` in `H_eff` cancels). The plan:
+
+1. `energy_and_gradient(ψ, gen, χ; seed)`: three warm converges (≈ 37 s on the 5×5), `E_fd`, and
+   the gradient tensor at every vertex from `effective_operators` (25 × 0.05 s).
+2. Preconditioning by the local metric: direction `d_v = −N_eff⁻¹ (H_eff − ε N_eff) t_v` in the
+   whitened basis (cutoff 1e-6, the same drop of unused bond directions as the local eigensolve).
+   This is one inverse-iteration step towards the local eigenvector at every vertex simultaneously,
+   so a unit step is the Jacobi version of the one-site sweep; the line search below is what keeps
+   the simultaneous update from overshooting (the undamped `:sweep` refresh diverged on the 4×4).
+3. Line search on `E_fd` along the concatenated direction (each trial energy is one refresh) with
+   an Armijo backtrack from step 1, then L-BFGS (memory 5–10) over the whitened coefficients.
+4. Acceptance is built in (the line search never takes an uphill step); the refresh criterion stays
+   `:marginal`.
+
+Cost per iteration ≈ 1–3 refreshes (40–120 s) against 25 refreshes per sweep now; the open question
+is the iteration count, which the preconditioning is meant to keep near the number of sweeps the
+one-site sweep needs (2–3). Gradient consistency between the ring FD and the FD of F is already
+tested on the 3×3 (`test/test_dmrg.jl`, CTM testset).
