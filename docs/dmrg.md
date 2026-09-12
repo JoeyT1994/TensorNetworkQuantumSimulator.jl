@@ -251,6 +251,16 @@ the `:cycle` gradient at λ = 1e-5 is **2.2e-6** (0.107 without), and the FD-of-
 still cost 35 s each against a 51 s cold start on the 4×4 D = 3 χ = 32, so a `:cycle` sweep remains
 several times dearer than `:cut`; the sweep timing is recorded below.
 
+**A `:cycle` sweep, measured.** 4×4 D = 3, χ = 32, gap cut on, per-vertex refresh, CTM
+`maxiter = 30`, `tolerance = 1e-10`: the first vertex takes 37 s, every later one ~190 s — the
+λ = 0 re-converge after a state change runs to the iteration cap (this χ is far below the
+lossless 324 of the generating network, the regime where `:cycle` limit-cycles; the docs' remedy
+is χ). The FD-of-F energy descends exactly as `:cut`'s does (after three vertices −50.18647063
+against −50.18647066) while the fixed-ring energy is 8e-5 off, so an unconverged `:cycle`
+environment still yields a usable implicit-derivative energy. Unbounded, the second vertex alone
+exceeded the 10-minute cap twice. Net: with the floor and the basin fixed, a `:cycle` sweep is
+correct but ~12× dearer per vertex than `:cut` at this χ, for the same descent.
+
 **Refresh schedules (all `:cut`, 4×4 D = 3, χ = 32, FD-of-F energy, gap to ED):**
 
 | refresh | damping | refreshes/sweep | result |
@@ -264,6 +274,23 @@ several times dearer than `:cut`; the sweep timing is recorded below.
 Simultaneous one-site updates overshoot; damping controls it, at the price of slower descent. Every
 refresh is now an acceptance step (`accept_tol`): an update that raises the energy is reverted.
 The CTM `tolerance` (1e-10 vs 1e-12) changed neither the time per vertex nor the energy.
+
+**6×6 TFIM (g = 3), `:cut`, per-vertex refresh, FD-of-F energy, acceptance on.** Run through a
+resumable driver (checkpoint after every vertex, 10-minute invocations). Start states from
+imaginary-time simple update; the reference is boundary MPS on the START state.
+
+| D | χ | start, bMPS (χ_MPS) | after sweep 1 | sweep 2 (partial) | s/vertex | rejected |
+|---|---|---|---|---|---|---|
+| 3 | 16 | −3.15474148 (64) | −3.15475288 | −3.15476145 (23 of 36) | 45 alone, 55–80 with a second process | 26 of 59 |
+| 4 | 16 | −3.15477533 (32) | −3.15477584 (3 vertices) | — | 194 | 1 of 3 |
+
+Energies per site. The D = 3 χ = 16 sweep lowers the energy by 2e-5 per site, but the rejections
+are not random: rows 2–4, columns 3–5 — the BULK — are rejected in both sweeps, boundary vertices
+are accepted, and the damped half-step retry does not rescue them (proposed energies up to 6e-3
+per site ABOVE the current one). χ = 16 against a 3-bond interface of width 18³ is simply too
+little for a trustworthy `:cut` gradient in the bulk of a 6×6; the acceptance step is what keeps
+the run variational. Two processes at once cost every converge 3×, so the χ = 32 D = 3 sweep runs
+alone (below).
 
 **Symmetries.** `generating_operator` builds a graded auxiliary index as the direct sum of a dim-1
 trivial sector (the a = 0 norm slot) and the operator-Schmidt bond of the edge term, so its sectors
