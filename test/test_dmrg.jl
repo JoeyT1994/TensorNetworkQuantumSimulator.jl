@@ -104,5 +104,45 @@ end
         @test last(Es) > ed_ground_energy(g, H) - 0.5      # the Bethe energy of a D = 2 state is not below ED by much
         @test energy(ψ, H; alg = "exact") > ed_ground_energy(g, H) - 1.0e-8   # variational in the exact energy
     end
+
+    @testset "CTM (MP-BP) environments: ring energy, finite-difference gradient, one-site sweep" begin
+        # 3×3 TFIM, real D = 2 state. χ = 16 is lossless here (two D²·2 = 8-wide interfaces per
+        # corner), so the ring energy of the generating network must be the exact energy and the
+        # finite-difference H_eff must give the exact energy gradient.
+        g = named_grid((3, 3))
+        H = vcat(Any[("ZZ", (src(e), dst(e)), -1.0) for e in edges(g)], Any[("X", [v], -2.0) for v in vertices(g)])
+        ψ = random_tensornetworkstate(Float64, g, "S=1/2"; bond_dimension = 2)
+        ψ = gauge_and_scale(ψ)
+        gen = generating_operator(H, ψ)
+        @test TI.dim(only(virtualinds(gen.value, first(edges(g))))) == 2     # ZZ has operator-Schmidt rank 1
+        Eex = energy(ψ, H; alg = "exact")
+        for projector in (:cut, :cycle)
+            cache = generating_cache(ψ, gen, 16; projector)
+            @test cvm_freenergy(cache) ≈ log(norm_sqr(ψ; alg = "exact")) atol = 1.0e-9
+            @test bethe_energy(cache, gen) ≈ Eex atol = 1.0e-8
+            # gradient of the energy along a random direction at the centre vertex
+            λ = projector === :cycle ? 1.0e-6 : 1.0e-7     # the measured windows, see dmrg(::Algorithm"ctmrg")
+            cp = generating_cache(ψ, gen, 16; λ, seed = cache, projector)
+            cm = generating_cache(ψ, gen, 16; λ = -λ, seed = cache, projector)
+            v = (2, 2)
+            N, Hf = effective_operators(cache, cp, cm, gen, v, λ)
+            is = collect(TI.inds(ψ[v]))
+            x = vec(TI.array(ψ[v], is...))
+            δ = TI.random_tensor(Float64, is...); δ = δ / norm(δ); d = vec(TI.array(δ, is...))
+            Z = x' * N * x; Ev = (x' * Hf * x) / Z
+            grad = 2 * (d' * (Hf * x - Ev * N * x)) / Z
+            h = 1.0e-4
+            ψp = copy(ψ); ψp[v] = ψ[v] + h * δ
+            ψm = copy(ψ); ψm[v] = ψ[v] - h * δ
+            fd = (energy(ψp, H; alg = "exact") - energy(ψm, H; alg = "exact")) / (2h)
+            @test grad ≈ fd rtol = 1.0e-4
+        end
+        # one sweep descends monotonically and stays variational; ring energy = exact energy
+        ψ1, Es = dmrg(ψ, H; alg = "ctmrg", maxdim = 16, nsweeps = 1, projector = :cut, verbose = false)
+        @test all(diff(Es) .< 1.0e-8)
+        @test last(Es) ≈ energy(ψ1, H; alg = "exact") atol = 1.0e-8
+        @test last(Es) < Eex
+        @test last(Es) > ed_ground_energy(g, H) - 1.0e-8
+    end
 end
 end

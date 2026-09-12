@@ -215,15 +215,25 @@ function optimize_vertex!(bpc::BeliefPropagationCache, gen::GeneratingOperator, 
 end
 
 """
-    dmrg(ψ::TensorNetworkState, H::Vector; nsweeps = 5, bp_kwargs = (;), response_kwargs = (;), krylov_kwargs = (;), verbose = true)
+    dmrg(ψ::TensorNetworkState, H::Vector; alg = "bp", kwargs...)
 
-One-site variational ground-state search on the bond dimension of `ψ`: for every vertex in turn
-solve the local generalised eigenproblem of the Bethe energy (norm environment `N_eff`, effective
-Hamiltonian `H_eff` including the environment response), re-converge the generating norm network
-and its response, and record the Bethe energy. Exact DMRG on a tree; the BP (χ = 1) approximation
-on a loopy graph. Returns `(ψ, energies)` with one energy per vertex update.
+One-site variational ground-state search on the bond dimension of `ψ` for the Hamiltonian term
+list `H`, with the environments of
+
+- `alg = "bp"` (default): belief propagation (χ = 1). `kwargs`: `nsweeps = 5`, `bp_kwargs`,
+  `response_kwargs`, `krylov_kwargs`, `verbose`, `vertex_order`. Exact DMRG on a tree, the BP
+  approximation on a loopy graph.
+- `alg = "ctmrg"`: finite-CTMRG (matrix-product BP) rings of interface dimension `maxdim`
+  (required) on a 2D grid; see [`dmrg(::Algorithm"ctmrg", ...)`](@ref) for the keywords.
+
+Returns `(ψ, energies)` with one energy per vertex update.
 """
-function dmrg(ψ::TensorNetworkState, H::Vector; nsweeps::Int = 5, bp_kwargs = (;), response_kwargs = (;),
+dmrg(ψ::TensorNetworkState, H::Vector; alg = "bp", kwargs...) = dmrg(Algorithm(alg), ψ, H; kwargs...)
+
+# χ = 1: for every vertex in turn solve the local generalised eigenproblem of the Bethe energy
+# (norm environment `N_eff`, effective Hamiltonian `H_eff` including the environment response),
+# re-converge the generating norm network and its response, and record the Bethe energy.
+function _dmrg_bp(ψ::TensorNetworkState, H::Vector; nsweeps::Int = 5, bp_kwargs = (;), response_kwargs = (;),
               krylov_kwargs = (;), verbose::Bool = true, vertex_order = collect(vertices(ψ)))
     gen = generating_operator(H, ψ)
     bpc = generating_cache(copy(ψ), gen; bp_kwargs...)
@@ -239,3 +249,191 @@ function dmrg(ψ::TensorNetworkState, H::Vector; nsweeps::Int = 5, bp_kwargs = (
     end
     return ket(network(bpc)), energies
 end
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# CTM (matrix-product BP) environments — phase 2
+#
+# The same construction with the χ = 1 messages replaced by the finite-CTMRG rings of the
+# generating norm network ⟨ψ|G(λ)|ψ⟩. The rings are `CTMEnvironmentCache` environments of a
+# `QuadraticForm` whose operator layer is the generating operator, so the three-layer factor
+# list [ket, G, bra] runs through the corner moves unchanged (`bp_factors` of an `AbstractForm`).
+#
+# What differs from χ = 1 is how the environment RESPONSE dX/dλ enters. At χ = 1 it is a
+# linear solve on the message tangent space. Here it is never formed: the effective ring
+#
+#     E_λ ψᵥ = ring_λ · G(λ)ᵥ · ψᵥ
+#
+# is a CLOSED contraction over every truncated interface, hence invariant under the interface
+# gauge (the biorthogonal projector pairs, their sweep-to-sweep rotations), and its λ-derivative
+# is taken by a central finite difference of the rings re-converged at ±λ, warm-started from
+# λ = 0. No Hessian, no Jacobian-vector product of the Schur solve, no tangent gauge fixing.
+# The energy itself never sees the finite difference: it is the envelope-theorem derivative at
+# fixed rings (`bethe_energy`), and a finite-difference error in H_eff perturbs the variational
+# energy only at second order. Measured (docs/dmrg.md, 2026-09-11): with `:cycle` and λ = 1e-6
+# the gradient of the CTM energy agrees with the exact-energy derivative to 5e-6 at χ = 32 on
+# a 4×4 D = 3 TFIM state, where `:cut` at the same χ is off by 2e-2.
+#
+# `:cycle` needs a SMALL λ (1e-6): at λ ≥ 1e-5 the warm-started ±λ solves leave the basin of
+# the λ = 0 fixed point and land on a different invariant subspace (measured: gradient 10–50%
+# off, full cold-start cost). The finite-difference cancellation at 1e-6 is ~1e-10 relative
+# because the ring blocks are norm-rescaled, so there is a comfortable window.
+# ══════════════════════════════════════════════════════════════════════════════════════════
+
+# G(0) + λ ∂λG in the same representation — the operator layer of T(λ) to first order, which is
+# all a central difference at λ = 0 sees.
+function _shifted_operator(gen::GeneratingOperator, λ::Real)
+    vs = collect(vertices(gen.value))
+    ts = Dictionary(vs, [gen.value[v] + λ * gen.derivative[v] for v in vs])
+    return TensorNetworkOperator(ts, copy(graph(gen.value)), copy(siteinds(gen.value)))
+end
+
+"""
+    generating_cache(ψ, gen, maxdim; λ = 0, seed = nothing, projector = :cycle, kwargs...) -> CTMEnvironmentCache
+
+Converged finite-CTMRG environments (`4C + 4T` ring per vertex, interfaces truncated to
+`maxdim`) of the generating norm network `⟨ψ|G(λ)|ψ⟩`. `seed` warm-starts the sweep from
+another cache's environments (same state indices); `projector` and the remaining `kwargs`
+(`maxiter`, `tolerance`, `convergence`) go to [`CTMEnvironmentCache`](@ref) and [`update`](@ref).
+"""
+function generating_cache(ψ::TensorNetworkState, gen::GeneratingOperator, maxdim::Integer; λ::Real = 0,
+                          seed = nothing, projector::Symbol = :cycle, convergence::Symbol = :marginal,
+                          maxiter::Integer = 100, tolerance::Real = 1.0e-12, kwargs...)
+    operator = iszero(λ) ? gen.value : _shifted_operator(gen, λ)
+    cache = CTMEnvironmentCache(QuadraticForm(ψ, operator), maxdim; projector, kwargs...)
+    seed === nothing || (cache = _ctm_setenv(cache, environments(seed)))
+    return update(cache; maxiter, tolerance, convergence)
+end
+
+"""
+    bethe_energy(cache::CTMEnvironmentCache, gen::GeneratingOperator)
+
+The energy `∂λ Z_B(T(λ), X₀)|₀ / Z_B` of the CTM (CVM) functional at fixed rings — the envelope
+theorem — as `Σᵥ ⟨ringᵥ · ∂λGᵥ⟩ / ⟨ringᵥ · G(0)ᵥ⟩`. Only the vertex regions carry λ explicitly
+(edge and plaquette regions are environment blocks alone), and the per-block rescaling cancels in
+each ratio. O(ε²) in the truncation error under the stationary `:cycle` projector, O(ε) under `:cut`.
+"""
+function bethe_energy(cache::CTMEnvironmentCache, gen::GeneratingOperator)
+    qf = network(cache)
+    qf isa QuadraticForm || error("bethe_energy: the CTM cache must wrap a QuadraticForm over the generating operator")
+    ψ = ket(qf); opts = options(cache)
+    E = zero(real(scalartype(ψ)))
+    for v in vertices(ψ)
+        ring = vertex_ring(cache, v)
+        num = scalar(_ctm_contract(vcat(ring, [ψ[v], gen.derivative[v], bra_tensor(qf, v)]), opts))
+        den = scalar(_ctm_contract(vcat(ring, [ψ[v], gen.value[v], bra_tensor(qf, v)]), opts))
+        E += real(num / den)
+    end
+    return E
+end
+
+# Dense effective ring at `v`: `ring · opv` as a matrix from `ψᵥ`'s index set to its primed copy.
+function _dense_ring_operator(ring::Vector, opv, ψv, opts::CTMOptions)
+    E = _ctm_contract(vcat(ring, [opv]), opts)
+    is = collect(inds(ψv))
+    A = TensorInterface.array(E, prime.(is)..., is...)
+    n = prod(TensorInterface.dim.(is))
+    return reshape(A, n, n)
+end
+
+"""
+    effective_operators(cache, cache_plus, cache_minus, gen, v, λ) -> (N_eff, H_eff)
+
+Dense `N_eff` and `H_eff` at `v` from the λ = 0 ring and the central finite difference of the
+effective rings at ±λ (`generating_cache(ψ, gen, χ; λ = ±λ, seed = cache)`), in the basis of
+`ψ[v]`'s indices. Both are symmetrised. `H_eff` carries an arbitrary multiple of `N_eff` (the
+λ-derivative of the block rescaling), which shifts the generalised eigenvalue but not the
+eigenvector: the local Rayleigh quotient is NOT the energy, [`bethe_energy`](@ref) is.
+"""
+function effective_operators(cache::CTMEnvironmentCache, cache_plus::CTMEnvironmentCache,
+                             cache_minus::CTMEnvironmentCache, gen::GeneratingOperator, v, λ::Real)
+    opts = options(cache); ψv = ket(network(cache))[v]
+    G0, dG = gen.value[v], gen.derivative[v]
+    N = _dense_ring_operator(vertex_ring(cache, v), G0, ψv, opts)
+    Hp = _dense_ring_operator(vertex_ring(cache_plus, v), G0 + λ * dG, ψv, opts)
+    Hm = _dense_ring_operator(vertex_ring(cache_minus, v), G0 - λ * dG, ψv, opts)
+    H = (Hp - Hm) / (2λ)
+    return (N + N') / 2, (H + H') / 2
+end
+
+"""
+    optimize_vertex!(ψ, v, N, H; whiten_cutoff = 1e-6) -> eigenvalue
+
+Lowest generalised eigenvector of `H ψᵥ = E N ψᵥ` by whitening (`N = U S U†`, directions with
+`S < whiten_cutoff · S_max` dropped) and a dense Hermitian eigensolve, written into `ψ[v]`
+normalised to unit Frobenius norm. The cutoff is NOT a tolerance: a bond direction the state
+barely uses has an `N_eff` weight down at 1e-11 and an `H_eff` there that is pure truncation
+noise, and keeping it (cutoff 1e-12) measured as a monotone energy RISE of 3e-3 over a sweep on
+a 4×4 D = 3 state, where 1e-6 descends cleanly. Returns the eigenvalue (see
+[`effective_operators`](@ref) for why it is not the energy).
+"""
+function optimize_vertex!(ψ::TensorNetworkState, v, N::AbstractMatrix, H::AbstractMatrix; whiten_cutoff::Real = 1.0e-6)
+    S, U = eigen(Hermitian(N))
+    keep = S .> whiten_cutoff * maximum(S)
+    W = U[:, keep] * Diagonal(S[keep] .^ -0.5)
+    vals, vecs = eigen(Hermitian(W' * H * W))
+    x = W * vecs[:, 1]
+    T = scalartype(ψ[v])
+    T <: Real && (x = real(x))            # the operator tensors are complex; a real state stays real
+    is = collect(inds(ψ[v]))
+    ψnew = TensorInterface.from_array(reshape(Vector{T}(x), TensorInterface.dim.(is)...), is...)
+    ψ[v] = ψnew / norm(ψnew)
+    return real(vals[1])
+end
+
+# The Vidal/BP gauge with the ORIGINAL bond indices restored, so environments keyed on them can
+# still seed the next sweep. One-site updates put arbitrary weight on the bonds, and neither
+# projector's truncation is uniform in the gauge (`:cut` is not gauge equivariant at all).
+function _regauge_keep_inds(ψ::TensorNetworkState)
+    ψg = gauge_and_scale(ψ)
+    for e in edges(ψ)
+        old, new = virtualinds(ψ, e), virtualinds(ψg, e)
+        for v in (src(e), dst(e))
+            ψg[v] = replaceinds(ψg[v], new, old)
+        end
+    end
+    return ψg
+end
+
+"""
+    dmrg(ψ, H; alg = "ctmrg", maxdim, nsweeps = 2, projector = :cut, λ = nothing,
+         whiten_cutoff = 1e-6, regauge = false, ctm_kwargs = (;), verbose = true)
+
+One-site ground-state sweeps with finite-CTMRG (matrix-product BP) environments of interface
+dimension `maxdim`: at every vertex the λ = 0 rings are re-converged (warm-started), the ±λ
+rings give `H_eff` by finite difference, the local generalised eigenproblem is solved densely,
+and (with `regauge = true`) the state is put back in the Vidal gauge. Returns `(ψ, energies)`
+with one [`bethe_energy`](@ref) per vertex update. Dense (non-graded) states only for now.
+
+`projector = :cut` is the default although `:cycle` gives the ε² energy and a far more accurate
+gradient on a fixed state (docs/dmrg.md): once the state moves, the `:cycle` solves fall out of
+their warm-start basin and a sweep costs minutes per vertex against seconds for `:cut`. `λ`
+defaults to the measured window per projector (1e-6 for `:cycle`, 1e-7 for `:cut`).
+"""
+function dmrg(::Algorithm"ctmrg", ψ::TensorNetworkState, H::Vector; maxdim::Integer, nsweeps::Int = 2,
+              projector::Symbol = :cut, λ::Union{Real, Nothing} = nothing, whiten_cutoff::Real = 1.0e-6,
+              regauge::Bool = false, ctm_kwargs = (;), verbose::Bool = true,
+              vertex_order = collect(vertices(ψ)))
+    # Finite-difference step. Measured window (docs/dmrg.md): `:cycle` needs λ ≤ 1e-6 to keep the
+    # ±λ warm starts in the basin of the λ = 0 fixed point, `:cut` needs λ ≤ 1e-7 on random states
+    # (1e-5 is 10% off there, 4e-5 on a physical state); below 1e-8 the cancellation error shows.
+    λ = something(λ, projector === :cycle ? 1.0e-6 : 1.0e-7)
+    ψ = copy(ψ)
+    gen = generating_operator(H, ψ)
+    cache = generating_cache(ψ, gen, maxdim; projector, ctm_kwargs...)
+    energies = Float64[]
+    for sweep in 1:nsweeps
+        for v in vertex_order
+            cp = generating_cache(ψ, gen, maxdim; λ = λ, seed = cache, projector, ctm_kwargs...)
+            cm = generating_cache(ψ, gen, maxdim; λ = -λ, seed = cache, projector, ctm_kwargs...)
+            N, Heff = effective_operators(cache, cp, cm, gen, v, λ)
+            optimize_vertex!(ψ, v, N, Heff; whiten_cutoff)
+            regauge && (ψ = _regauge_keep_inds(ψ))
+            cache = generating_cache(ψ, gen, maxdim; seed = cache, projector, ctm_kwargs...)
+            push!(energies, bethe_energy(cache, gen))
+            verbose && println("sweep $sweep, vertex $v: E = $(last(energies))")
+        end
+    end
+    return ψ, energies
+end
+
+dmrg(::Algorithm"bp", ψ::TensorNetworkState, H::Vector; kwargs...) = _dmrg_bp(ψ, H; kwargs...)

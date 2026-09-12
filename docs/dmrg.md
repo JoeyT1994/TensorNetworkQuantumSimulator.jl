@@ -86,13 +86,111 @@ Hessian form is the Jacobian form. Gauss–Seidel is the cheaper of the two here
 fallback when ρ(J) → 1, and the form to use for χ > 1 environments where the update iteration is
 known not to be stable.
 
+## Phase 2: CTM (matrix-product BP) environments — *2026-09-11*
+
+`dmrg(ψ, H; alg = "ctmrg", maxdim = χ)`. The χ = 1 messages are replaced by the finite-CTMRG rings
+of the generating norm network: `CTMEnvironmentCache(QuadraticForm(ψ, G(0)), χ)`. Nothing in the
+CTM engine changes — the three-layer factor list `[ket, G, bra]` goes through the corner moves as
+any `AbstractForm` does, and the auxiliary index rides along on the interfaces (dimension r + 1 = 2
+for the TFIM, since ZZ has operator-Schmidt rank 1). Everything below is measured on the 4×4 TFIM
+at g = 3 (`H = −Σ ZZ − g Σ X`, ED −50.186623883), starting from imaginary-time simple-update states.
+
+### Energy at fixed rings (envelope theorem)
+
+`bethe_energy(cache, gen) = Σᵥ ⟨ringᵥ · ∂λGᵥ⟩ / ⟨ringᵥ · G(0)ᵥ⟩`: only the vertex regions of the CVM
+functional carry λ explicitly, and the block rescaling cancels per ratio. Error against the exact
+energy of the state:
+
+| χ | D = 2 `:cut` | D = 2 `:cycle` | D = 3 `:cut` | D = 3 `:cycle` | D = 3 bMPS |
+|---|---|---|---|---|---|
+| 8 | 1.4e-7 | 3.8e-9 | 2.1e-4 | **9.1e-7** | 3.1e-6 |
+| 16 | 4.0e-11 | 3.7e-9 | 8.3e-7 | **2.0e-8** | 5.1e-8 |
+| 32 | 2.8e-14 | 3.7e-9 | 1.5e-8 | 1.8e-8 | 5.9e-11 |
+| 64 | 2.1e-14 | 3.7e-9 | 3.1e-12 | 1.8e-8 | — |
+
+The stationary `:cycle` rings give the MP-BP ε² energy — 100–200× better than `:cut` at matched χ
+where both are truncated — but **floor at ~2e-8 (D = 3) / 4e-9 (D = 2) independent of χ**, while
+`:cut` goes to machine precision at lossless χ. The plain norm network under `:cycle` has no such
+floor (F and ⟨X⟩ exact to 1e-16 at the same χ), and none of the CTM convergence signals (F, worst
+region, marginals) see it, because at λ = 0 the half-insertion sector `a > 0` of the auxiliary
+index never crosses a truncated interface in a CLOSED contraction — every dst factor is `1 ⊗ |0⟩`
+there. The cycle's invariant-subspace criterion is therefore blind to that sector, and the energy
+(which reads it through the ring legs adjacent to the vertex) inherits whatever residual the Krylov
+solve left. Open problem; `:cut` sees the sector in its SVD and has no floor.
+
+### H_eff without a Hessian: finite difference of the effective ring
+
+The one-site problem needs the response of the rings to λ. Instead of a Hessian or Jacobian solve on
+the environment tangent space, the effective ring
+
+    E_λ ψᵥ = ring_λ · G(λ)ᵥ · ψᵥ
+
+is differentiated by a central finite difference of the rings **re-converged at ±λ, warm-started
+from λ = 0** (`generating_cache(ψ, gen, χ; λ = ±λ, seed = cache)`). `E_λ` is closed over every
+truncated interface, so the interface gauge — biorthogonal pairs, sweep-to-sweep basis rotations —
+cancels and no tangent gauge fixing is needed. The energy never sees the finite difference (it is
+the envelope derivative above); an error in `H_eff` moves the variational energy at second order.
+
+Gradient of the energy along a random direction at a vertex against a central difference of the
+exact energy, relative error:
+
+| state | χ | `:cut` | `:cycle` |
+|---|---|---|---|
+| 4×4 D = 2 (lossless) | 8, 32 | 4.4e-5 (plateau for λ ≤ 1e-5) | 5e-7 (λ = 1e-6) |
+| 4×4 D = 3, site (2,2) | 32 | 1.2e-4 | **8.2e-6** |
+| 4×4 D = 3, site (3,3) | 32 | **1.8e-2** | **4.5e-6** |
+| 4×4 D = 3, site (3,3) | 64 | 2.8e-5 | — |
+| 3×3 random D = 2 (lossless) | 8, 16 | 7.8e-8 (λ = 1e-7); 0.12 (λ = 1e-5) | 6.6e-10 (λ = 1e-6, 1e-7); 0.30 (λ = 1e-5) |
+
+Two things follow. **`:cycle` is the projector for the local solve**: at truncated χ its gradient is
+2000× more accurate than `:cut`'s at the same χ (the `:cut` plateau on the lossless state is the
+non-stationarity term, ∂ₓZ_B · dX/dψᵥ, which the ring of v sees only through its projectors). And
+**λ has a window**: the ±λ solves must stay in the basin of the λ = 0 fixed point. For `:cycle`,
+λ ≥ 1e-5 lands on a different invariant subspace (gradient 10–50% off, the warm start degenerates
+to a cold solve); λ = 1e-6 and 1e-7 are fine, 1e-8 shows the cancellation error (~1e-7). For
+`:cut` the random 3×3 state needs λ ≤ 1e-7. Defaults: 1e-6 (`:cycle`), 1e-7 (`:cut`). The
+cancellation floor is low because the ring blocks are norm-rescaled.
+
+### The local solve, and the whitening cutoff is not a tolerance
+
+`N_eff`, `H_eff` are formed densely (`(D⁴d)²`: 162² at D = 3, 512² at D = 4 — fine to D ≈ 6) and the
+generalised eigenproblem is solved by whitening `N = U S U†`. A simple-update D = 3 state has bond
+directions it barely uses: `N_eff` has eigenvalues down to **5e-11** of the largest. Keeping them
+(cutoff 1e-12 or 1e-8) puts the update into directions where `H_eff` is truncation noise, and the
+energy RISES monotonically — 3e-3 over a sweep at cutoff 1e-12, a blow-up to E = −34 at 1e-8 in
+sweep 2. Cutoff 1e-6 descends cleanly. Default 1e-6.
+
+### Sweeps against ED (4×4 TFIM, g = 3)
+
+| D | χ | projector | start gap | after 2 sweeps | s/vertex |
+|---|---|---|---|---|---|
+| 2 | 16 | `:cut` | 3.07e-3 | 1.52e-3 (monotone; the D = 2 variational floor) | 0.7–1 |
+| 2 | 16 | `:cycle`, λ = 1e-6 | 3.07e-3 | 1.52e-3 (identical trajectory to 1e-9) | 2.5–6, then 35 |
+| 3 | 32 | `:cut`, cutoff 1e-6 | 2.25e-4 | **2.77e-5** (small upticks: the 1.8e-2 gradient error) | 11–15 |
+
+The ring energy of the final state equals its exact energy to 1e-12 (D = 2) / 2e-8 (D = 3, the
+floor above). The `:cycle` sweep loses its warm starts part-way through the first sweep (per-vertex
+time 3 s → 35 s at D = 2) — the one-site update leaves the Vidal gauge, and the `:cycle` basin
+moves with it. At D = 3, χ = 32 neither a `:cycle` sweep with warm starts and no re-gauging nor one
+with index-preserving re-gauging (`regauge = true`) and cold starts finished ONE sweep within a
+60-minute cap (≥ 3.7 min per vertex against 11–15 s for `:cut`): the three `:cycle` solves per
+vertex each pay a cold-start-sized price once the state has moved. Re-gauging did not help the
+`:cut` run either (cutoff 1e-8, it blew up in sweep 2 where the un-gauged 1e-6 run was stable — the
+cutoff, not the gauge, was the variable that mattered) and is off by default. So today the usable
+configuration is `projector = :cut` for the sweep, with `:cycle` giving the better energy and the
+far better gradient on a fixed state but not yet an affordable sweep.
+
 ## Cost and what is next
 
-Per vertex update: one response solve (a few BP-sweep equivalents with (r + 1)× wider messages)
-plus a Lanczos whose matvec is one vertex contraction per incoming edge. The response is recomputed
-from scratch after every update; incremental refresh is the first optimisation.
+Per vertex update at χ = 1: one response solve plus a Lanczos. With CTM environments: three
+warm-started `update`s (λ = 0, ±λ) plus one dense eigensolve; the environment refresh after the
+update is the cost, and it is recomputed from scratch after every vertex.
 
-1. Two-site updates (open two neighbouring vertices; same response solve) so the bond dimension can grow.
-2. CTM `:cycle` environments: needs two-vertex CTM regions and an incremental environment refresh
-   (a full sweep at L = 6, D = 4, χ = 64 is 81 s on the CPU).
-3. Graded/fermionic operator networks (the auxiliary index needs sectors; `factorize_svd` already handles graded terms).
+1. The `:cycle` floor in the `a > 0` sector — a stationarity condition (or a Krylov tolerance) that
+   sees the half-insertion sector.
+2. Keeping the `:cycle` warm starts in their basin through a sweep (gauge, or a projector
+   continuation), so its 2000× gradient advantage is available at `:cut` cost.
+3. Frozen-environment schedules (update every vertex, then one re-converge) and an incremental
+   environment refresh, so the sweep scales past 4×4.
+4. Two-site updates so the bond dimension can grow; graded/fermionic operator networks (the
+   auxiliary index needs sectors; `factorize_svd` already handles graded terms).
