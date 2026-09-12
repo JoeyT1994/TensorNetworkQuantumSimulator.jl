@@ -143,6 +143,14 @@ end
         @test last(Es) ≈ energy(ψ1, H; alg = "exact") atol = 1.0e-8
         @test last(Es) < Eex
         @test last(Es) > ed_ground_energy(g, H) - 1.0e-8
+        # global L-BFGS with one environment set per step: every step descends (Armijo), the
+        # recorded FD-of-F energy is the exact energy (χ = 16 lossless), and stays variational
+        ψ2, E2 = dmrg(ψ, H; alg = "ctmrg_lbfgs", maxdim = 16, maxiter = 4, verbose = false)
+        @test length(E2) == 5
+        @test all(diff(E2) .< 0)
+        # (5e-8: the FD of F at λ = 1e-7 carries ~1e-15 / 1e-7 of roundoff; measured 1.6e-8 here)
+        @test last(E2) ≈ energy(ψ2, H; alg = "exact") atol = 5.0e-8
+        @test last(E2) > ed_ground_energy(g, H) - 1.0e-8
     end
 
     @testset "Z2-symmetric (graded) generating operator and sweep" begin

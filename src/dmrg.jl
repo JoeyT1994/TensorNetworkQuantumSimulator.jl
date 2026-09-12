@@ -594,3 +594,169 @@ function dmrg(::Algorithm"ctmrg", ψ::TensorNetworkState, H::Vector; maxdim::Int
 end
 
 dmrg(::Algorithm"bp", ψ::TensorNetworkState, H::Vector; kwargs...) = _dmrg_bp(ψ, H; kwargs...)
+
+# ---------------------------------------------------------------------------------------------
+# Global preconditioned gradient (L-BFGS) with one environment set per step.
+# ---------------------------------------------------------------------------------------------
+
+# Dict-valued vectors over the vertices: the concatenated state / gradient / direction.
+_vdot(a, b) = sum(real(dot(a[k], b[k])) for k in keys(a))
+_vaxpy(α, x, y) = Dict(k => y[k] .+ α .* x[k] for k in keys(y))
+_vscale(α, x) = Dict(k => α .* x[k] for k in keys(x))
+
+"""
+    dmrg(ψ, H; alg = "ctmrg_lbfgs", maxdim, maxiter = 20, projector = :cut, λ = nothing,
+         whiten_cutoff = 1e-6, memory = 8, step0 = 0.5, ls_max = 4, ctm_kwargs = (;), verbose = true)
+
+Ground-state optimisation with CTM (MP-BP) environments where ONE set of environments (λ = 0, ±λ)
+gives the energy `E = (F(+λ) − F(−λ)) / 2λ` and, from the same three caches, the finite-difference
+ring operators at EVERY vertex, hence the gradient of the energy with respect to all tensors at
+once: with `ε = t†H_eff t / t†N_eff t`, `∂E/∂t̄ = 2 (H_eff − ε N_eff) t / t†N_eff t` (the arbitrary
+multiple of `N_eff` in `H_eff` cancels). A one-site sweep pays one environment set per vertex
+for the same information. Measured on the 5×5 D = 3 χ = 32 one environment set is ≈ 40 s.
+
+Direction: L-BFGS (`memory` pairs) with the block-diagonal variable metric `H₀ = γ N_eff⁻¹`
+(restricted to the whitened subspace, `whiten_cutoff` as in [`optimize_vertex!`](@ref); γ the
+Barzilai–Borwein scalar of the last pair). The first step, and any step whose L-BFGS direction is
+not a descent direction or whose line search fails, uses the Jacobi direction `t* − t` with `t*`
+the local one-site optimum at every vertex — a unit step is the `refresh = :sweep` update, and
+`step0 = 0.5` is the damping that measured stable. Every step is an Armijo backtracking line search
+on the FD-of-F energy (each trial one environment set, `ls_max` trials), so no step goes uphill.
+No iteration starts after `time_limit` seconds. `memory = 0` is the Jacobi (damped `:sweep`) update
+with a line search and no quasi-Newton correction. Returns `(ψ, energies)` with the energy after
+each accepted step, `energies[1]` the start.
+"""
+function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdim::Integer, maxiter::Int = 20,
+              projector::Symbol = :cut, λ::Union{Real, Nothing} = nothing, whiten_cutoff::Real = 1.0e-6,
+              memory::Int = 8, step0::Real = 0.5, ls_max::Int = 4, ctm_kwargs = (;), verbose::Bool = true,
+              gtol::Real = 1.0e-10, time_limit::Real = Inf)
+    t_start = time()
+    λ = something(λ, projector === :cycle ? 1.0e-6 : 1.0e-7)
+    if projector === :cycle && !haskey(ctm_kwargs, :cycle_gapcut)
+        ctm_kwargs = (; cycle_gapcut = 1.0e-4, ctm_kwargs...)
+    end
+    ψ = copy(ψ)
+    gen = generating_operator(H, ψ)
+    vs = collect(vertices(ψ))
+    T = scalartype(ψ[first(vs)])
+    indsof = Dict(v => collect(inds(ψ[v])) for v in vs)
+    getx(ψ) = Dict(v => Vector{T}(vec(TensorInterface.array(ψ[v], indsof[v]...))) for v in vs)
+    function withx(ψ, x)
+        ψn = copy(ψ)
+        for v in vs
+            is = indsof[v]
+            ψn[v] = TensorInterface.from_array(reshape(Vector{T}(x[v]), TensorInterface.dim.(is)...), is...)
+        end
+        return ψn
+    end
+    function environments(ψ, seed)
+        cache = generating_cache(ψ, gen, maxdim; seed, projector, ctm_kwargs...)
+        cp = generating_cache(ψ, gen, maxdim; λ, seed = cache, projector, ctm_kwargs...)
+        cm = generating_cache(ψ, gen, maxdim; λ = -λ, seed = cache, projector, ctm_kwargs...)
+        return (cache, cp, cm), (cvm_freenergy(cp) - cvm_freenergy(cm)) / (2λ)
+    end
+    # Gradient, block preconditioner (N_eff⁻¹ on the whitened subspace, scaled by t†N t / 2 so it is
+    # dimensionless per vertex) and the Jacobi direction at every vertex from one environment set.
+    function gradient(envs, x)
+        cache, cp, cm = envs
+        # (distinct names from the outer `g, P, jac`: a closure assigning an enclosing-scope name
+        # writes THAT variable, which silently zeroed every curvature pair)
+        gd = Dict{eltype(vs), Vector{T}}(); Pd = Dict{eltype(vs), Matrix{T}}(); jd = Dict{eltype(vs), Vector{T}}()
+        for v in vs
+            N, Hm = effective_operators(cache, cp, cm, gen, v, λ)
+            t = x[v]; is = indsof[v]
+            nrm = real(dot(t, N * t)); ε = real(dot(t, Hm * t)) / nrm
+            gv = 2 .* ((Hm - ε * N) * t) ./ nrm
+            S, U = eigen(Hermitian(N)); keep = S .> whiten_cutoff * maximum(S)
+            Uk = U[:, keep]
+            Pv = (Uk * Diagonal(S[keep] .^ -1) * Uk') .* (nrm / 2)
+            W = Uk * Diagonal(S[keep] .^ -0.5)
+            vals, vecs = eigen(Hermitian(W' * Hm * W))
+            yopt = copy(t)
+            for j in 1:length(vals)               # lowest local eigenvector in the state's charge block
+                yj = W * vecs[:, j]; T <: Real && (yj = real(yj))
+                ty = TensorInterface.from_array(reshape(Vector{T}(yj), TensorInterface.dim.(is)...), is...)
+                yb = Vector{T}(vec(TensorInterface.array(ty, is...)))
+                norm(yb) > 0.5 * norm(yj) || continue
+                yopt = yb / norm(yb) * norm(t); ph = dot(t, yopt); ph == 0 || (yopt *= sign(ph))
+                break
+            end
+            gd[v] = T <: Real ? Vector{T}(real(gv)) : Vector{T}(gv)
+            Pd[v] = T <: Real ? Matrix{T}(real(Pv)) : Matrix{T}(Pv)
+            jd[v] = yopt - t
+        end
+        return gd, Pd, jd
+    end
+    applyP(P, q) = Dict(v => P[v] * q[v] for v in vs)
+    # Armijo backtracking along d from x; returns (accepted, α, trials, xn, ψn, envsn, En).
+    function linesearch(x, ψ, envs, E, d, slope, α)
+        local xn, ψn, envsn, En
+        for k in 1:ls_max
+            xn = _vaxpy(α, d, x)
+            # The energy is invariant under rescaling any tensor, so renormalise to unit norm here:
+            # otherwise the norm drifts, |F| grows and the roundoff of (F(+λ) − F(−λ)) / 2λ with it
+            # (measured 3e-8 vs 1e-9 on the 3×3 after four steps).
+            for v in vs
+                xn[v] = xn[v] ./ norm(xn[v])
+            end
+            ψn = withx(ψ, xn)
+            envsn, En = environments(ψn, envs[1])
+            En <= E + 1.0e-4 * α * slope && return (true, α, k, xn, ψn, envsn, En)
+            α /= 2
+        end
+        return (false, α, ls_max, xn, ψn, envsn, En)
+    end
+    x = getx(ψ)
+    envs, E = environments(ψ, nothing)
+    energies = [E]
+    verbose && println("lbfgs start: E = $E (per site $(E / length(vs)))")
+    g, P, jac = gradient(envs, x)
+    Ss = Vector{typeof(x)}(); Ys = Vector{typeof(x)}(); ρs = Float64[]
+    reset!() = (empty!(Ss); empty!(Ys); empty!(ρs))
+    fallback(g, P, jac) = _vdot(jac, g) < 0 ? ("jacobi", jac) : ("precgrad", _vscale(-1.0, applyP(P, g)))
+    for it in 1:maxiter
+        gnorm = sqrt(_vdot(g, g))
+        gnorm < gtol && (verbose && println("lbfgs: gradient norm $gnorm below gtol"); break)
+        time() - t_start > time_limit && (verbose && println("lbfgs: time limit reached after $(it - 1) iterations"); break)
+        t0 = time()
+        # Two-loop recursion with the variable metric H₀ = γ P.
+        d = nothing; kind = "lbfgs"
+        if !isempty(Ss)
+            q = Dict(v => copy(g[v]) for v in vs); αs = zeros(length(Ss))
+            for i in length(Ss):-1:1
+                αs[i] = ρs[i] * _vdot(Ss[i], q); q = _vaxpy(-αs[i], Ys[i], q)
+            end
+            Py = applyP(P, Ys[end]); γ = _vdot(Ss[end], Ys[end]) / _vdot(Ys[end], Py)
+            r = _vscale(γ, applyP(P, q))
+            for i in 1:length(Ss)
+                β = ρs[i] * _vdot(Ys[i], r); r = _vaxpy(αs[i] - β, Ss[i], r)
+            end
+            d = _vscale(-1.0, r)
+            verbose && println("  lbfgs direction: d·g = $(_vdot(d, g)), γ = $γ, $(length(Ss)) pairs")
+            _vdot(d, g) < 0 || (d = nothing; reset!())
+        end
+        d === nothing && ((kind, d) = fallback(g, P, jac))
+        α0 = kind == "lbfgs" ? 1.0 : step0
+        accepted, α, nls, xn, ψn, envsn, En = linesearch(x, ψ, envs, E, d, _vdot(d, g), α0)
+        if !accepted && kind == "lbfgs"           # fall back to the damped Jacobi step once
+            reset!(); kind, d = fallback(g, P, jac)
+            accepted, α, n2, xn, ψn, envsn, En = linesearch(x, ψ, envs, E, d, _vdot(d, g), step0)
+            nls += n2
+        end
+        if !accepted
+            verbose && println("lbfgs it $it: line search failed ($nls trials, $kind), stopping at E = $E")
+            break
+        end
+        gn, Pn, jacn = gradient(envsn, xn)
+        s = _vaxpy(-1.0, x, xn); y = _vaxpy(-1.0, g, gn); sy = _vdot(s, y)
+        verbose && println("  pair: s·y = $sy, |s| = $(sqrt(_vdot(s, s))), |y| = $(sqrt(_vdot(y, y))), s·g_new = $(_vdot(s, gn)), s·g_old = $(_vdot(s, g))")
+        if sy > 0
+            push!(Ss, s); push!(Ys, y); push!(ρs, 1 / sy)
+            length(Ss) > memory && (popfirst!(Ss); popfirst!(Ys); popfirst!(ρs))
+        end
+        x, ψ, envs, E, g, P, jac = xn, ψn, envsn, En, gn, Pn, jacn
+        push!(energies, E)
+        verbose && println("lbfgs it $it ($kind, α = $α, $nls energy evaluations, $(round(time() - t0, digits = 1)) s): E = $E (per site $(E / length(vs)))")
+    end
+    return ψ, energies
+end

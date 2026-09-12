@@ -457,3 +457,40 @@ Cost per iteration ≈ 1–3 refreshes (40–120 s) against 25 refreshes per swe
 is the iteration count, which the preconditioning is meant to keep near the number of sweeps the
 one-site sweep needs (2–3). Gradient consistency between the ring FD and the FD of F is already
 tested on the 3×3 (`test/test_dmrg.jl`, CTM testset).
+
+## Lever 2 built: global L-BFGS with one environment set per step — *2026-09-12*
+
+`dmrg(ψ, H; alg = "ctmrg_lbfgs", maxdim, maxiter, memory = 8, step0 = 0.5)`. One set of environments
+(λ = 0, ±λ; ≈ 40 s on the 5×5 D = 3 χ = 32) gives the FD-of-F energy and, from the same three caches,
+the finite-difference ring operators at every vertex, hence the exact gradient of the CTM energy with
+respect to all tensors (`∂E/∂t̄ = 2 (H_eff − ε N_eff) t / t†N_eff t`; the arbitrary multiple of `N_eff`
+in `H_eff` cancels). Direction by L-BFGS with the block variable metric `H₀ = γ N_eff⁻¹` (whitened
+subspace, Barzilai–Borwein γ); the first step and any fallback is the Jacobi direction `t* − t`
+(unit step = the `:sweep` update, `step0 = 0.5` the damping that measured stable); every step is an
+Armijo backtracking line search on the FD-of-F energy, so nothing goes uphill.
+
+One bug worth recording: the inner `gradient` closure assigned `g, P, jac`, names also assigned in
+the enclosing function, so Julia made them the SAME variables and every curvature pair came out
+`y = g_new − g_old = 0` — the optimiser silently ran as pure Jacobi. Distinct names fixed it.
+
+5×5 D = 3 χ = 32 `:cut` from the BP-optimised state (per-site gap 1.94e-5), `scratchpad/run_lbfgs.jl`;
+gaps per site against the exact −3.14742707:
+
+| method | environment sets | wall time | gap reached | note |
+|---|---|---|---|---|
+| `:vertex` sweeps × 2 (SU start) | 50 | 80 min | 2.2e-6 | 4 of 50 rejected |
+| `:rows` sweeps × 4 | 20 | 16 min | 2.0e-6 | 1 rejected at the end |
+| L-BFGS, 5 iterations | 7 | 7 min | **1.8e-6** | steps 2–5 full unit steps, one evaluation each |
+| L-BFGS, restarted (memory lost) +1 | 7 | 6 min | 1.8e-6 | line search then fails: the floor |
+| Jacobi only (`memory = 0`), 7 iterations | 20 | 19 min | 2.4e-6 | α = 0.125 at 3 evaluations per step, twice the cost of L-BFGS for less |
+
+The L-BFGS iterations 2–5 each took the unit step at the first trial (the variable metric is
+right), and each lowered the energy by more than a whole row-grouped sweep did. Everything stalls at
+the same 1.8–2.0e-6 floor: the line search fails there because the ring-FD gradient and the FD-of-F
+energy no longer agree at that precision, which is the `:cut` truncation error at χ = 32 already seen
+on the 6×6. That floor is now the thing to move (χ, or `:cycle` for its 2000× gradient accuracy), and
+the optimiser makes trying either affordable: ≈ 1 minute per iteration instead of 40 per sweep.
+
+From a random 3×3 start (far from quadratic) pure Jacobi steps beat L-BFGS (−19.77 vs −19.12 after
+12 steps; ED −19.79), so `memory = 0` is the right setting for a cold start and L-BFGS for the
+refinement after the BP stage — which is the operating mode anyway.
