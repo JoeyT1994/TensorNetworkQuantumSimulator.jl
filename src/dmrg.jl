@@ -104,14 +104,18 @@ linearised normalised message update `m = F̃(X)/ΣF̃(X)`:
 solved by Gauss–Seidel sweeps in the cache's edge sequence (exact after one sweep on a tree; a
 contraction whenever BP itself is stable). Returns a `Dictionary` over directed edges.
 """
-function message_response(bpc::BeliefPropagationCache, gen::GeneratingOperator; maxiter::Int = 100, tol::Real = 1.0e-10, verbose::Bool = false, history = nothing)
+function message_response(bpc::BeliefPropagationCache, gen::GeneratingOperator; maxiter::Int = 100, tol::Real = 1.0e-10, verbose::Bool = false, history = nothing, init = nothing)
     es = edge_sequence(bpc)
     dX = Dictionary{NamedEdge, Any}()
     for e in es
-        set!(dX, e, TensorInterface.scale!(copy(message(bpc, e)), 0))
+        # warm start from a previous response (the state changed at one vertex; the response
+        # barely does): measured 15 Gauss–Seidel sweeps cold against 3–5 warm on the 5×5 D = 3
+        m0 = init === nothing ? nothing : get(init, e, nothing)
+        set!(dX, e, m0 === nothing ? TensorInterface.scale!(copy(message(bpc, e)), 0) : copy(m0))
     end
-    # per directed edge: incoming edges, fixed factors and a contraction sequence shared by all
-    # single-message replacements (identical index structure)
+    # per directed edge: incoming edges, fixed factors, the EXPLICIT source term (∂λG at the
+    # vertex; constant over the iteration, so computed once) and a contraction sequence shared by
+    # all single-message replacements (identical index structure)
     plan = Dictionary{NamedEdge, Any}()
     for e in es
         u = src(e)
@@ -119,16 +123,17 @@ function message_response(bpc::BeliefPropagationCache, gen::GeneratingOperator; 
         ms = [message(bpc, ie) for ie in inc]
         F̃ = _region_scalar_tensor(vcat([_ket_tensor(bpc, u), gen.value[u], _bra_tensor(bpc, u)], ms), nothing)
         seq = contraction_sequence(vcat([_ket_tensor(bpc, u), gen.value[u], _bra_tensor(bpc, u)], ms); alg = "optimal")
-        set!(plan, e, (inc, ms, _value_sum(F̃), seq))
+        dF0 = contract(vcat([_ket_tensor(bpc, u), gen.derivative[u], _bra_tensor(bpc, u)], ms); sequence = seq)
+        set!(plan, e, (inc, ms, _value_sum(F̃), seq, dF0))
     end
     diff = Inf
     for it in 1:maxiter
         diff = 0.0
         for e in es
             u = src(e)
-            inc, ms, s, seq = plan[e]
+            inc, ms, s, seq, dF0 = plan[e]
             m = message(bpc, e)
-            dF = contract(vcat([_ket_tensor(bpc, u), gen.derivative[u], _bra_tensor(bpc, u)], ms); sequence = seq)
+            dF = dF0
             for (k, ie) in enumerate(inc)
                 ms2 = copy(ms); ms2[k] = dX[ie]
                 dF = dF + contract(vcat([_ket_tensor(bpc, u), gen.value[u], _bra_tensor(bpc, u)], ms2); sequence = seq)
@@ -182,7 +187,12 @@ function _norm_roots(bpc::BeliefPropagationCache, v; cutoff = nothing)
         m = message(bpc, e)
         aux = filter(i -> occursin("aux", string(TensorInterface.tags(i))), collect(TensorInterface.inds(m)))
         M = isempty(aux) ? m : m * TensorInterface.onehot(scalartype(m), only(aux) => 1)
-        r, ir = pseudo_sqrt_inv_sqrt(M; cutoff = isnothing(cutoff) ? defaulttol(M) : cutoff)
+        # `cutoff` is RELATIVE to the message scale (the PSD root's own cutoff is absolute on the
+        # eigenvalues). A bond direction the state barely uses has a message eigenvalue down at
+        # 1e-11 of the largest; keeping it puts the update into a direction where H_eff is noise —
+        # on the 5×5 D = 5 simple-update state this raised the Bethe energy by 0.033 in one sweep
+        # and crashed LAPACK in the next.
+        r, ir = pseudo_sqrt_inv_sqrt(M; cutoff = (isnothing(cutoff) ? 1.0e-6 : cutoff) * norm(M))
         push!(roots, r); push!(iroots, ir)
     end
     return roots, iroots
@@ -198,7 +208,8 @@ solve, and write the new tensor into the cache's ket (normalised to `⟨ψᵥ|N_
 messages are NOT updated here. Returns the local eigenvalue.
 """
 function optimize_vertex!(bpc::BeliefPropagationCache, gen::GeneratingOperator, dX, v;
-                          tol::Real = 1.0e-10, krylovdim::Int = 12, maxiter::Int = 20, sqrt_cutoff = nothing)
+                          tol::Real = 1.0e-10, krylovdim::Int = 12, maxiter::Int = 20, sqrt_cutoff = nothing,
+                          damping::Real = 0)
     N, H = effective_operators(bpc, gen, dX, v)
     roots, iroots = _norm_roots(bpc, v; cutoff = sqrt_cutoff)
     ψv = _ket_tensor(bpc, v)
@@ -209,7 +220,18 @@ function optimize_vertex!(bpc::BeliefPropagationCache, gen::GeneratingOperator, 
     x0 = flat(_apply_bond_maps(ψv, roots))
     vals, vecs, info = eigsolve(H̃, x0, 1, :SR; ishermitian = true, tol, krylovdim, maxiter)
     info.converged ≥ 1 || @warn "optimize_vertex!: Lanczos not converged at $v (residual $(info.normres))"
-    ψnew = _apply_bond_maps(unflat(vecs[1]), iroots)
+    x = vecs[1] / norm(vecs[1])
+    if !iszero(damping)
+        # The Bethe energy is not a Rayleigh quotient in ψᵥ (the messages depend on it through the
+        # loops), so the full eigen-step can overshoot: measured on the 5×5 D = 5 after one accepted
+        # update, the full step RAISES E_B by 2.8e-6 at the next vertices while a half step lowers it
+        # by 3e-6, with the gradient itself verified to 3e-4 against a finite difference. Mix in the
+        # whitened space (phase-aligned), which keeps the N_eff normalisation.
+        x0n = x0 / norm(x0); s = dot(x0n, x)
+        x = (1 - damping) * (s == 0 ? x : x * sign(s)) + damping * x0n
+        x = x / norm(x)
+    end
+    ψnew = _apply_bond_maps(unflat(x), iroots)
     setindex_preserve!(ket(network(bpc)), ψnew, v)
     return real(vals[1])
 end
@@ -234,19 +256,48 @@ dmrg(ψ::TensorNetworkState, H::Vector; alg = "bp", kwargs...) = dmrg(Algorithm(
 # (norm environment `N_eff`, effective Hamiltonian `H_eff` including the environment response),
 # re-converge the generating norm network and its response, and record the Bethe energy.
 function _dmrg_bp(ψ::TensorNetworkState, H::Vector; nsweeps::Int = 5, bp_kwargs = (;), response_kwargs = (;),
-              krylov_kwargs = (;), verbose::Bool = true, vertex_order = collect(vertices(ψ)))
+              krylov_kwargs = (;), verbose::Bool = true, vertex_order = collect(vertices(ψ)),
+              accept_tol::Real = 1.0e-9, warm_response::Bool = true, damping_schedule = (0.0, 0.5, 0.8))
     gen = generating_operator(H, ψ)
     bpc = generating_cache(copy(ψ), gen; bp_kwargs...)
     energies = Float64[]
+    E = real(bethe_energy(bpc, gen))
+    dX = nothing
+    nreject = 0
     for sweep in 1:nsweeps
         for v in vertex_order
-            dX = message_response(bpc, gen; response_kwargs...)
-            optimize_vertex!(bpc, gen, dX, v; krylov_kwargs...)
-            bpc = _hermitian_gauge!(update(bpc; bp_kwargs...))
-            push!(energies, real(bethe_energy(bpc, gen)))
-            verbose && println("sweep $sweep, vertex $v: E_B = $(last(energies))")
+            old = copy(bpc)               # messages and the one tensor about to change
+            try
+                dX = message_response(bpc, gen; init = warm_response ? dX : nothing, response_kwargs...)
+                # ACCEPTANCE with a damped retry: a variational step must not raise the energy. The
+                # full eigen-step is the minimiser of the local quadratic model only; when it
+                # overshoots (see `optimize_vertex!`), a damped step along the same direction usually
+                # still descends. Revert only when every damping fails.
+                accepted = false; Enew = E
+                for damping in damping_schedule
+                    optimize_vertex!(bpc, gen, dX, v; damping, krylov_kwargs...)
+                    bpc = _hermitian_gauge!(update(bpc; bp_kwargs...))
+                    Enew = real(bethe_energy(bpc, gen))
+                    Enew <= E + accept_tol * max(one(E), abs(E)) && (accepted = true; break)
+                    bpc = copy(old)
+                end
+                if accepted
+                    E = Enew
+                    verbose && println("sweep $sweep, vertex $v: E_B = $E")
+                else
+                    bpc = old; nreject += 1
+                    verbose && println("sweep $sweep, vertex $v: rejected (E_B would rise to $Enew from $E)")
+                end
+            catch err
+                err isa InterruptException && rethrow()
+                bpc = old; nreject += 1; dX = nothing
+                verbose && println("sweep $sweep, vertex $v: rejected ($(typeof(err)))")
+            end
+            push!(energies, E)
         end
     end
+    nreject > 0 && @warn "dmrg (bp): $nreject of $(nsweeps * length(vertex_order)) vertex updates were rejected " *
+                         "(energy rise or a failed local solve); consider a larger `sqrt_cutoff` in `krylov_kwargs`."
     return ket(network(bpc)), energies
 end
 

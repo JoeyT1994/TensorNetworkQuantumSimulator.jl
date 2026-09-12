@@ -305,6 +305,67 @@ updates, the same per-vertex rate the D = 3 sweep had on its first row). The fir
 (2,2) did not fit in a 10-minute invocation twice (a 300 s update plus a damped retry), so the
 D = 4 sweep stops there under the overnight cap; a full D = 4 sweep at this χ is ~3 h of CPU.
 
+## The χ = 1 stage first — *2026-09-12*
+
+The operating mode is: minimise at χ = 1 with BP-DMRG, then refine with the CTM projectors. On the
+5×5 TFIM from the simple-update starts (exact E₀ = −78.68567686; "true" energies by boundary MPS at
+χ = 32, which agrees with the exact contraction to 1e-10 at D = 3):
+
+| D | start: true gap | BP sweeps (s/sweep) | BP-optimised: true gap |
+|---|---|---|---|
+| 3 | 6.26e-4 | 2 (39, of which ~25 process start-up) | 4.84e-4 |
+| 4 | 6.52e-5 | 2 (41) | 3.30e-5 |
+| 5 | 2.98e-4 | first sweep RAISED E_B by 0.033, second crashed in LAPACK | — |
+
+BP converges in two sweeps and moves the true energy modestly (the Bethe energy sits 0.25 above the
+true energy here, so it is a different landscape). The D = 5 failure and the sweep's cost led to
+four changes in `_dmrg_bp` / `message_response` / `optimize_vertex!`:
+
+1. The explicit source term of the response is computed once per solve, not per Gauss–Seidel
+   iteration, and the response warm-starts from the previous vertex's (15 sweeps cold → 1–5 warm):
+   0.45 s → 0.22 s per vertex, the rest of the update (local solve 0.02 s, BP 0.05 s, energy 0.02 s)
+   is already cheap. A warm 5×5 D = 3 sweep is ~9 s.
+2. The whitening cutoff of the message square roots is relative to the message norm (1e-6);
+   it was the backend's absolute default.
+3. Every vertex update is an acceptance step, and a failed local solve (the LAPACK exception) is
+   caught and counted as a rejection.
+4. With 2 and 3 alone, D = 5 rejected 24 of 25 updates. Diagnosis: the gradient is right (3e-4
+   against a finite difference of the re-converged E_B) but the full eigen-step overshoots — the
+   Bethe energy is not a Rayleigh quotient in ψᵥ because the messages depend on it — raising E_B by
+   2.8e-6 where a half step lowers it by 3e-6. The sweep therefore retries a rejected vertex with
+   damping 0.5 and 0.8 before reverting (`damping_schedule`).
+
+After the four changes (same starts, same references):
+
+| D | start: true gap | BP sweeps (warm s/sweep) | rejected | BP-optimised: true gap |
+|---|---|---|---|---|
+| 3 | 6.26e-4 | 2 (11) | 0 | 4.84e-4 |
+| 4 | 6.52e-5 | 2 (14) | 0 | 3.30e-5 |
+| 5 | 2.98e-4 | 6 (30), E_B still falling 1.6e-6 per sweep | 4–19 of 25 per sweep | 1.82e-4 |
+
+D = 5 now descends monotonically, but slowly and with many reverted steps: the damped retries
+rescue some vertices, not all, so the χ = 1 quadratic model is a poor guide there. The
+BP-optimised D = 5 state (1.8e-4) is still worse than the D = 4 one (3.3e-5), inherited from its
+simple-update start.
+
+## 5×5 TFIM against exact diagonalisation — *2026-09-12*
+
+Exact reference by a matrix-free Lanczos on 2^25 states in the even ∏X-parity sector
+(`scratchpad/ed_tfim.jl`, 8 threads, 127 s, 92 matvecs): **E₀ = −78.68567686257818**, per site
+−3.14742707. Start states from imaginary-time simple update; the exact contraction of the D = 3
+start state takes 390 s (D ≥ 4 exceed the 10-minute cap, so those rows use the FD-of-F energy).
+
+| D | χ | projector | start gap | after sweep 1 | after sweep 2 | s/vertex | rejected |
+|---|---|---|---|---|---|---|---|
+| 3 | 32 | `:cut` | 6.25e-4 (exact) | 9.1e-5 | **5.5e-5** | 45 | 4 of 50 (3 damped) |
+| 4 | 32 | `:cut` | 6.52e-5 (bMPS χ=64) | | | 200 | |
+| 5 | 32 | `:cut` | 2.98e-4 (bMPS χ=32) | | | | |
+
+Gaps are total energies against E₀. The simple-update D = 5 start is worse than D = 4 (the
+imaginary-time schedule saturates), which is itself a reason to want a variational sweep. At
+D = 3 the second sweep's rejections sit in the bulk row y = 4, as on the 6×6 — the `:cut`
+gradient error at χ = 32 is the limiting factor there, not the ansatz.
+
 **Symmetries.** `generating_operator` builds a graded auxiliary index as the direct sum of a dim-1
 trivial sector (the a = 0 norm slot) and the operator-Schmidt bond of the edge term, so its sectors
 are the charges of the Aₐ and every factor is flux-zero; identities come from `op("I", ·)` so the
