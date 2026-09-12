@@ -284,6 +284,7 @@ imaginary-time simple update; the reference is boundary MPS on the START state.
 | 3 | 16 | −3.15474148 (64) | −3.15475288 | −3.15476145 (23 of 36) | 45 alone, 55–80 with a second process | 26 of 59 |
 | 3 | **32** | −3.15474148 (64) | **−3.15477354** | — | 100 (125 with resume overheads) | 2 of 36 (3 damped) |
 | 4 | 16 | −3.15477533 (32) | −3.15477584 (3 vertices) | — | 194 | 1 of 3 |
+| 4 | 24 | −3.15477533 (32) | −3.15477744 (7 vertices, row 1 + (1,2)) | — | 310 | 0 of 7 |
 
 Energies per site. The D = 3 χ = 16 sweep lowers the energy by 2e-5 per site, but the rejections
 are not random: rows 2–4, columns 3–5 — the BULK — are rejected in both sweeps, boundary vertices
@@ -297,6 +298,12 @@ simple-update start and within 1.8e-6 per site of the D = 4 simple-update state.
 FD-of-F energies agree to 2e-7 at χ = 32 where they differed by 1e-4 at χ = 16 — a usable
 convergence diagnostic. Wall clock: 36 vertices in 82 minutes including 14 process restarts
 (checkpointing the ±λ caches removed the 70–120 s rebuild per restart).
+
+D = 4 at χ = 24 (χ = 16 is below the bulk threshold already at D = 3): the first seven vertices
+all accepted, 310 s each, energy per site −3.15477533 → −3.15477744 (2.1e-6 per site in seven
+updates, the same per-vertex rate the D = 3 sweep had on its first row). The first bulk vertex
+(2,2) did not fit in a 10-minute invocation twice (a 300 s update plus a damped retry), so the
+D = 4 sweep stops there under the overnight cap; a full D = 4 sweep at this χ is ~3 h of CPU.
 
 **Symmetries.** `generating_operator` builds a graded auxiliary index as the direct sum of a dim-1
 trivial sector (the a = 0 norm slot) and the operator-Schmidt bond of the edge term, so its sectors
