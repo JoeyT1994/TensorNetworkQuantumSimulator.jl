@@ -86,6 +86,49 @@ function _vertex_value_and_derivative(factors::Vector, s::Index, elt)
     return value, deriv
 end
 
+# Left factor Σₐ Aₐ ⊗ |a⟩ (A₀ = 1), right factor 1 ⊗ |0⟩ and its λ-derivative Σₐ Bₐ ⊗ |a⟩, on a
+# fresh auxiliary index of dimension r + 1 shared by the three tensors. Dense sites: by arrays.
+function _dense_edge_factors(A, B, k, su, sw, elt)
+    r = TensorInterface.dim(k)
+    α = TensorInterface.new_index(r + 1; tags = "aux")
+    d, dw = TensorInterface.dim(su), TensorInterface.dim(sw)
+    Aarr = TensorInterface.array(A, su, TensorInterface.prime(su), k)
+    Barr = TensorInterface.array(B, sw, TensorInterface.prime(sw), k)
+    L = zeros(elt, d, d, r + 1)
+    for i in 1:d; L[i, i, 1] = one(elt); end
+    L[:, :, 2:end] .= Aarr
+    R0 = zeros(elt, dw, dw, r + 1)
+    for i in 1:dw; R0[i, i, 1] = one(elt); end
+    dR = zeros(elt, dw, dw, r + 1)
+    dR[:, :, 2:end] .= Barr
+    return TensorInterface.from_array(L, su, TensorInterface.prime(su), α),
+           TensorInterface.from_array(R0, sw, TensorInterface.prime(sw), α),
+           TensorInterface.from_array(dR, sw, TensorInterface.prime(sw), α)
+end
+
+# Graded sites: the auxiliary index is the direct sum of a dim-1 TRIVIAL sector (the a = 0 norm
+# slot) and the Schmidt bond `k`, whose sectors are the charges of the Aₐ (odd for X in a Z2 chain,
+# ±1 for S± under U(1)), so every factor stays flux-zero. Built with `directsum` so the left
+# factor mints the summed index and the right factors reuse its dual.
+function _graded_edge_factors(A, B, k, su, sw, elt)
+    α0 = Tensors.trivial_link_index(su; tags = "aux")
+    # each side's copy of the Schmidt bond, and a trivial slot carrying the SAME arrow (a direct
+    # sum cannot combine sectors with different arrows)
+    kA = only(filter(i -> i == k, collect(TensorInterface.inds(A))))
+    kB = only(filter(i -> i == k, collect(TensorInterface.inds(B))))
+    α0A = Tensors.isdual(kA) ? TensorInterface.dag(α0) : α0
+    α0B = Tensors.isdual(kB) ? TensorInterface.dag(α0) : α0
+    idu = TensorInterface.op("I", su)
+    idw = TensorInterface.op("I", sw)
+    L0 = idu * TensorInterface.onehot(elt, α0A => 1)
+    L = TensorInterface.directsum(L0 => [α0A], A => [kA]; tags = "aux")
+    α = only(TensorInterface.uniqueinds(L, [su, TensorInterface.prime(su)]))
+    R0w = idw * TensorInterface.onehot(elt, α0B => 1)
+    R0 = TensorInterface.directsum([TensorInterface.dag(α)], R0w => [α0B], TensorInterface.scale!(copy(B), zero(elt)) => [kB])
+    dR = TensorInterface.directsum([TensorInterface.dag(α)], TensorInterface.scale!(copy(R0w), zero(elt)) => [α0B], B => [kB])
+    return L, R0, dR
+end
+
 """
     generating_operator(H::Vector, ψ::TensorNetworkState; cutoff = 1e-14)
     generating_operator(H::Vector, s::Dictionary, g::NamedGraph; cutoff = 1e-14)
@@ -124,35 +167,23 @@ function generating_operator(H::Vector, s::Dictionary, g::NamedGraph; cutoff::Re
         # operator-Schmidt decomposition h = Σₐ Aₐ ⊗ Bₐ, with the singular values split evenly
         A, B, _ = factorize_svd(h, [su, TensorInterface.prime(su)]; ortho = "none", cutoff)
         k = only(TensorInterface.commoninds(A, B))
-        r = TensorInterface.dim(k)
-        α = TensorInterface.new_index(r + 1; tags = "aux")
-        d = TensorInterface.dim(su)
-        Aarr = TensorInterface.array(A, su, TensorInterface.prime(su), k)
-        Barr = TensorInterface.array(B, sw, TensorInterface.prime(sw), k)
-        # left factor: Σₐ Aₐ ⊗ |a⟩ with A₀ = 1 (λ-independent)
-        L = zeros(elt, d, d, r + 1)
-        for i in 1:d; L[i, i, 1] = one(elt); end
-        L[:, :, 2:end] .= Aarr
-        # right factor: 1 ⊗ |0⟩ at λ = 0, derivative Σₐ Bₐ ⊗ |a⟩
-        R0 = zeros(elt, TensorInterface.dim(sw), TensorInterface.dim(sw), r + 1)
-        for i in 1:TensorInterface.dim(sw); R0[i, i, 1] = one(elt); end
-        dR = zeros(elt, TensorInterface.dim(sw), TensorInterface.dim(sw), r + 1)
-        dR[:, :, 2:end] .= Barr
-        push!(factors[u], (TensorInterface.from_array(L, su, TensorInterface.prime(su), α), nothing))
-        push!(factors[w], (TensorInterface.from_array(R0, sw, TensorInterface.prime(sw), α),
-                           TensorInterface.from_array(dR, sw, TensorInterface.prime(sw), α)))
+        L, R0, dR = if Tensors.isgraded(su)
+            _graded_edge_factors(A, B, k, su, sw, elt)
+        else
+            _dense_edge_factors(A, B, k, su, sw, elt)
+        end
+        push!(factors[u], (L, nothing))
+        push!(factors[w], (R0, dR))
     end
     for (v, h) in vertex_terms
         sv = only(s[v])
-        harr = TensorInterface.array(h, sv, TensorInterface.prime(sv))
-        push!(factors[v], (TensorInterface.from_array(Matrix{elt}(LinearAlgebra.I, size(harr)), sv, TensorInterface.prime(sv)),
-                           TensorInterface.from_array(Array{elt}(harr), sv, TensorInterface.prime(sv))))
+        push!(factors[v], (TensorInterface.op("I", sv), h))
     end
     vals = Any[]; ders = Any[]
     for v in vs
         sv = only(s[v])
         if isempty(factors[v])
-            id = TensorInterface.from_array(Matrix{elt}(LinearAlgebra.I, TensorInterface.dim(sv), TensorInterface.dim(sv)), sv, TensorInterface.prime(sv))
+            id = TensorInterface.op("I", sv)
             push!(factors[v], (id, nothing))
         end
         val, der = _vertex_value_and_derivative(factors[v], sv, elt)

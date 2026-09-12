@@ -180,6 +180,102 @@ cutoff, not the gauge, was the variable that mattered) and is off by default. So
 configuration is `projector = :cut` for the sweep, with `:cycle` giving the better energy and the
 far better gradient on a fixed state but not yet an affordable sweep.
 
+## Overnight 2026-09-11/12: the `:cycle` floor and basin — two hypotheses tested
+
+Both are cheap experiments on the saved 4×4 states (each run capped at 10 min).
+
+**H1 — the ε² energy is the finite difference of F, not the fixed-ring formula.** A bond term is a
+two-point function in disguise, so the response term might be what the fixed-ring energy lacks.
+`E_F = (F(+λ) − F(−λ)) / 2λ` with the environments re-converged at ±λ:
+
+| D | χ | `:cut` ring | **`:cut` E_F** | `:cycle` ring | `:cycle` E_F | bMPS |
+|---|---|---|---|---|---|---|
+| 2 | 8 | 1.4e-7 | **2.5e-10** | 3.8e-9 | 3.3e-9 | — |
+| 2 | 16 | 4.0e-11 | 1.4e-9 | 3.7e-9 | 7.1e-9 | — |
+| 3 | 8 | 2.1e-4 | **1.4e-6** | 9.1e-7 | 8.8e-7 | 3.1e-6 |
+| 3 | 16 | 8.3e-7 | **8.1e-10** | 2.0e-8 | 2.0e-8 | 5.1e-8 |
+| 3 | 32 | 1.5e-8 | **3.0e-10** | 1.8e-8 | 2.0e-8 | 5.9e-11 |
+
+(λ = 1e-6 for E_F except the D = 3 χ = 16 `:cut` entry at 1e-7; the D = 2 lossless rows show the
+cancellation floor of the difference.) **Falsified for `:cycle`** — its floor is unchanged by the
+estimator, so it lives in the environments. **But for `:cut` the FD-of-F energy is the most
+accurate estimator of anything measured at matched truncated χ**: 100–500× better than the
+fixed-ring `:cut` energy, 25× better than `:cycle` at D = 3 χ = 16, 60× better than boundary MPS.
+The implicit derivative d/dλ ln Ẑ with X(λ) re-converged carries the projector response, and the
+`:cut` truncation error is evidently smooth in λ. It costs nothing in a sweep (the ±λ caches exist).
+
+**H2 — frozen-projector response.** Rebuild the ±λ blocks through the λ = 0 projectors with
+projector-free sweeps (`_ctm_block` over the shifted factor table), removing the eigen-solve and
+hence the basin. The machinery is sound: the converged `:cycle` state keeps every interface index
+sweep to sweep (36/36), and frozen sweeps reproduce F to 1e-15 in two passes. **Falsified for the
+gradient**: 12.7% (site (2,2)) and 1.6% (site (3,3)) error at D = 3 χ = 32 against 8e-6 / 5e-6 with
+re-converged projectors. The projector response IS the J^T G J term; it cannot be dropped.
+
+**Where the `:cycle` floor sits.** No plaquette was declined (pure `:cycle` lattice). Working
+through the cycle map with the auxiliary leg on the interface: a block on the dst side of a
+half-insertion carries only the a = 0 slice at λ = 0, so the left eigenvectors of Λ have no a > 0
+component, the right eigenvectors' a > 0 part is fixed by their a = 0 part through one application
+of Λ, and no closed contraction reads a > 0 across a truncated interface — the energy reads it only
+on the ring's open legs. The truncation criterion is therefore correct in principle; what differs
+from the plain norm network (no floor) is that the Krylov solve runs on an interface space with a
+nilpotent sector (eigenvalue 0 with Jordan structure), and a χ-independent, estimator-independent
+residual is what a non-normal Arnoldi leaves there. The same fragility at λ ≠ 0 (eigenvalues
+opening as λ^{1/k}) is the natural reading of the basin loss. The fix is inside
+`_ctm_cycle_projectors` — solve for the left vectors on the a = 0 sector and construct the right
+vectors' a > 0 part explicitly — which is solver surgery I did not attempt overnight. Deriving the
+projectors from the plain norm network and extending them over the auxiliary leg is NOT a
+shortcut: kept widths would grow as χ·2^depth, or the response is dropped (H2).
+
+**Localising the floor — and both `:cycle` problems solved without solver surgery.** Per-vertex
+energy contributions against the exact per-vertex values (D = 3, ring energy):
+
+| vertex | `:cycle` χ = 16 | `:cycle` χ = 32 | `:cycle` χ = 32, window 1 |
+|---|---|---|---|
+| (3,1), (1,3), (4,3), (3,4) | 4.5–4.6e-9 each | 4.5–4.6e-9 each | **≤ 9e-15** |
+| the other 12 | ≤ 4e-10 | ≤ 6e-14 | ≤ 1.5e-14 |
+
+The whole 1.8e-8 is four boundary vertices, each the dst of a ZZ bond whose partner sits inside a
+TWO-site boundary edge block (one- and three-site boundary blocks are exact). That block's interface
+rank is capped by its open leg (D·2·D = 18 < χ), so the truncation error there never shrinks with χ:
+this is precisely the MP-BP paper's edge plateau (Fig. 15, SM5) — one-point functions still converge
+because the edge error is orthogonal to the tangent plane, the bare two-point function does not. The
+exact 3×3 window (`vertex_window(cache, v, 1)`, now `bethe_energy(...; window = 1)` and
+`energy = :window`) moves the truncated environment past the partner and removes the plateau to
+machine precision; the `:cycle` energy is then ~2e-10 at χ = 16, the most accurate estimator measured.
+
+The same rank-capped interfaces carry surplus null modes, and those wander between the λ = 0 and ±λ
+solves — that is the basin loss. The existing noise-cliff cut removes them: with `cycle_gapcut = 1e-4`
+the `:cycle` gradient at λ = 1e-5 is **2.2e-6** (0.107 without), and the FD-of-F energy is 2.1e-9
+(below the 1.8e-8 ring floor). `cycle_rankcut = 1e-8` over-truncates (2.8e-4 gradient, 6.5e-7 energy).
+`dmrg(...; projector = :cycle)` now sets `cycle_gapcut = 1e-4` unless told otherwise. The ±λ solves
+still cost 35 s each against a 51 s cold start on the 4×4 D = 3 χ = 32, so a `:cycle` sweep remains
+several times dearer than `:cut`; the sweep timing is recorded below.
+
+**Refresh schedules (all `:cut`, 4×4 D = 3, χ = 32, FD-of-F energy, gap to ED):**
+
+| refresh | damping | refreshes/sweep | result |
+|---|---|---|---|
+| `:vertex` | 0 | 16 | 4.8e-5 after 1 sweep, 2.8e-5 after 2 (13–17 s per vertex) |
+| `:sweep` (Jacobi) | 0 | 1 | rises from the first refresh, E = −36 by the third |
+| `:checkerboard` | 0 | 2 | 8.3e-4 → 7.9e-3 → blows up |
+| `:checkerboard` | 0.5 | 2 | wobbles, then 3.8e-5 after 4 sweeps (193 s total) |
+| `:fourcolour` | 0 | 4 | 6.2e-5 after 2 sweeps, then blows up at the 9th refresh |
+
+Simultaneous one-site updates overshoot; damping controls it, at the price of slower descent. Every
+refresh is now an acceptance step (`accept_tol`): an update that raises the energy is reverted.
+The CTM `tolerance` (1e-10 vs 1e-12) changed neither the time per vertex nor the energy.
+
+**Symmetries.** `generating_operator` builds a graded auxiliary index as the direct sum of a dim-1
+trivial sector (the a = 0 norm slot) and the operator-Schmidt bond of the edge term, so its sectors
+are the charges of the Aₐ and every factor is flux-zero; identities come from `op("I", ·)` so the
+arrows are right, and the local solve takes the lowest eigenvector that survives projection onto the
+site's charge block. Rotated TFIM `H = −Σ XX − g Σ Z` (∏Z conserved; the XX must be a JOINT two-site
+operator on graded sites, `register_op!("XXjoint", …; nsites = 2)`, since a per-character "XX" builds
+charge-odd single-site X's) on the 3×3 at D = 2, χ = 16, same imaginary-time state in both
+representations: F and the ring energy exact for both projectors (≤ 1e-14), and a `:cut` sweep
+reproduces the dense sweep to 1e-9 (gap to ED 3.07e-4 in both). The graded sweep is 6× slower
+(65 s vs 10 s) — the graded CTM path, not the local solve.
+
 ## Cost and what is next
 
 Per vertex update at χ = 1: one response solve plus a Lanczos. With CTM environments: three

@@ -144,5 +144,41 @@ end
         @test last(Es) < Eex
         @test last(Es) > ed_ground_energy(g, H) - 1.0e-8
     end
+
+    @testset "Z2-symmetric (graded) generating operator and sweep" begin
+        # Rotated TFIM H = −Σ XX − g Σ Z conserves ∏Z. A joint two-site XX is needed on graded sites
+        # (a per-character "XX" would build charge-odd single-site X's). Graded and dense
+        # representations of the same imaginary-time state must agree on everything.
+        register_op!("XXjoint", (; kwargs...) -> kron([0.0 1; 1 0], [0.0 1; 1 0]); nsites = 2)
+        g = named_grid((3, 3)); gx = 3.0
+        H = vcat(Any[("XXjoint", (src(e), dst(e)), -1.0) for e in edges(g)], Any[("Z", [v], -gx) for v in vertices(g)])
+        function build(sym)
+            s = sym === nothing ? siteinds("S=1/2", g) : siteinds("S=1/2", g; sectors = [0 => 1, 1 => 1], symmetry = "Z2")
+            bpc = BeliefPropagationCache(tensornetworkstate(ComplexF64, v -> "↑", g, s))
+            layer = Any[("Rz", [v], im * gx * 0.1) for v in vertices(g)]
+            for ce in edge_color(g, 4); append!(layer, ("Rxx", pair, 2im * 0.1) for pair in ce); end
+            for _ in 1:15
+                bpc, _ = apply_gates(layer, bpc; apply_kwargs = (maxdim = 2, cutoff = 1.0e-12, normalize_tensors = true), verbose = false)
+            end
+            return gauge_and_scale(TNQS.network(bpc))
+        end
+        ψd, ψg = build(nothing), build("Z2")
+        @test TNQS.Tensors.isgraded(ψg[(1, 1)])
+        Ed = energy(ψd, H; alg = "exact"); Eg = energy(ψg, H; alg = "exact")
+        @test Ed ≈ Eg atol = 1.0e-9
+        gen_g = generating_operator(H, ψg)
+        α = only(virtualinds(gen_g.value, first(edges(g))))
+        @test TNQS.Tensors.isgraded(α) && TI.dim(α) == 2          # trivial ⊕ odd
+        for projector in (:cut, :cycle)
+            cache = generating_cache(ψg, gen_g, 16; projector)
+            @test cvm_freenergy(cache) ≈ log(real(norm_sqr(ψg; alg = "exact"))) atol = 1.0e-9
+            @test bethe_energy(cache, gen_g) ≈ Eg atol = 1.0e-9
+        end
+        ψd1, Esd = dmrg(ψd, H; alg = "ctmrg", maxdim = 16, nsweeps = 1, verbose = false)
+        ψg1, Esg = dmrg(ψg, H; alg = "ctmrg", maxdim = 16, nsweeps = 1, verbose = false)
+        @test last(Esd) ≈ last(Esg) atol = 1.0e-7                # same sweep in both representations
+        @test energy(ψg1, H; alg = "exact") ≈ last(Esg) atol = 1.0e-8
+        @test TNQS.Tensors.isgraded(ψg1[(2, 2)])
+    end
 end
 end

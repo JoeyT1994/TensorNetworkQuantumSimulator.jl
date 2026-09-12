@@ -312,13 +312,17 @@ theorem — as `Σᵥ ⟨ringᵥ · ∂λGᵥ⟩ / ⟨ringᵥ · G(0)ᵥ⟩`. On
 (edge and plaquette regions are environment blocks alone), and the per-block rescaling cancels in
 each ratio. O(ε²) in the truncation error under the stationary `:cycle` projector, O(ε) under `:cut`.
 """
-function bethe_energy(cache::CTMEnvironmentCache, gen::GeneratingOperator)
+function bethe_energy(cache::CTMEnvironmentCache, gen::GeneratingOperator; window::Integer = 0)
     qf = network(cache)
     qf isa QuadraticForm || error("bethe_energy: the CTM cache must wrap a QuadraticForm over the generating operator")
     ψ = ket(qf); opts = options(cache)
     E = zero(real(scalartype(ψ)))
     for v in vertices(ψ)
-        ring = vertex_ring(cache, v)
+        # `window = 1` keeps the 3×3 patch exact and removes the `:cycle` edge plateau: a bond
+        # term whose partner sits in a rank-capped two-site boundary block is otherwise read
+        # through that block's truncated interface, at a χ-independent 4.5e-9 per such vertex on
+        # the 4×4 D = 3 TFIM (docs/dmrg.md, overnight 2026-09-11/12).
+        ring = vertex_window(cache, v, window)
         num = scalar(_ctm_contract(vcat(ring, [ψ[v], gen.derivative[v], bra_tensor(qf, v)]), opts))
         den = scalar(_ctm_contract(vcat(ring, [ψ[v], gen.value[v], bra_tensor(qf, v)]), opts))
         E += real(num / den)
@@ -366,18 +370,32 @@ noise, and keeping it (cutoff 1e-12) measured as a monotone energy RISE of 3e-3 
 a 4×4 D = 3 state, where 1e-6 descends cleanly. Returns the eigenvalue (see
 [`effective_operators`](@ref) for why it is not the energy).
 """
-function optimize_vertex!(ψ::TensorNetworkState, v, N::AbstractMatrix, H::AbstractMatrix; whiten_cutoff::Real = 1.0e-6)
+function optimize_vertex!(ψ::TensorNetworkState, v, N::AbstractMatrix, H::AbstractMatrix;
+                          whiten_cutoff::Real = 1.0e-6, damping::Real = 0)
     S, U = eigen(Hermitian(N))
     keep = S .> whiten_cutoff * maximum(S)
     W = U[:, keep] * Diagonal(S[keep] .^ -0.5)
     vals, vecs = eigen(Hermitian(W' * H * W))
-    x = W * vecs[:, 1]
     T = scalartype(ψ[v])
-    T <: Real && (x = real(x))            # the operator tensors are complex; a real state stays real
     is = collect(inds(ψ[v]))
-    ψnew = TensorInterface.from_array(reshape(Vector{T}(x), TensorInterface.dim.(is)...), is...)
+    x0 = vec(TensorInterface.array(ψ[v], is...))
+    # On a graded site the dense problem is block-diagonal over the tensor's total charge, and the
+    # lowest eigenvector may sit in a block the state does not occupy; `from_array` projects onto
+    # the state's block, so take the lowest eigenvector that survives the projection.
+    local ψnew, val
+    for j in 1:length(vals)
+        x = W * vecs[:, j]
+        T <: Real && (x = real(x))        # the operator tensors are complex; a real state stays real
+        x = x / norm(x)
+        if !iszero(damping)               # mix with the old tensor, phase-aligned, then renormalise
+            s = dot(x0, x); x = (1 - damping) * (s == 0 ? x : x * sign(s)) + damping * (x0 / norm(x0))
+        end
+        ψnew = TensorInterface.from_array(reshape(Vector{T}(x), TensorInterface.dim.(is)...), is...)
+        val = vals[j]
+        norm(ψnew) > 0.5 && break
+    end
     ψ[v] = ψnew / norm(ψnew)
-    return real(vals[1])
+    return real(val)
 end
 
 # The Vidal/BP gauge with the ORIGINAL bond indices restored, so environments keyed on them can
@@ -408,31 +426,101 @@ with one [`bethe_energy`](@ref) per vertex update. Dense (non-graded) states onl
 gradient on a fixed state (docs/dmrg.md): once the state moves, the `:cycle` solves fall out of
 their warm-start basin and a sweep costs minutes per vertex against seconds for `:cut`. `λ`
 defaults to the measured window per projector (1e-6 for `:cycle`, 1e-7 for `:cut`).
+
+`refresh = :vertex` re-converges the three environments after every vertex (one energy per vertex
+update). `:checkerboard` / `:fourcolour` update a parity / (x mod 2, y mod 2) class against the
+same environments and refresh per class; `:sweep` refreshes once per sweep. Grouped refreshes are
+`Lx·Ly` times cheaper but overshoot — measured divergent undamped on the 4×4 D = 3 (`:sweep` at
+once, `:checkerboard` by the third refresh, `:fourcolour` by the ninth) and stable with
+`damping = 0.5`. Every refresh is an ACCEPTANCE step: an update that raises the energy by more than
+`accept_tol` (relative) is reverted and counted, with a warning at the end.
+
+`energy = :fd` (default) records `(F(+λ) − F(−λ)) / 2λ`, the implicit derivative with the
+environments re-converged, which under `:cut` at truncated χ is 100–500× more accurate than the
+fixed-ring `energy = :ring` ([`bethe_energy`](@ref)); `:window` is the fixed-ring energy over the
+exact 3×3 window, which removes the `:cycle` edge plateau. Under `:cycle`, `cycle_gapcut = 1e-4` is
+put into `ctm_kwargs` unless given (it keeps the ±λ solves in the basin of the λ = 0 fixed point).
 """
 function dmrg(::Algorithm"ctmrg", ψ::TensorNetworkState, H::Vector; maxdim::Integer, nsweeps::Int = 2,
               projector::Symbol = :cut, λ::Union{Real, Nothing} = nothing, whiten_cutoff::Real = 1.0e-6,
               regauge::Bool = false, ctm_kwargs = (;), verbose::Bool = true,
-              vertex_order = collect(vertices(ψ)))
+              vertex_order = collect(vertices(ψ)), refresh::Symbol = :vertex, energy::Symbol = :fd,
+              damping::Real = 0, accept_tol::Real = 1.0e-9)
+    refresh in (:vertex, :sweep, :checkerboard, :fourcolour) || throw(ArgumentError(
+        "refresh must be :vertex, :sweep, :checkerboard or :fourcolour, got $(repr(refresh))"))
+    energy in (:ring, :window, :fd) || throw(ArgumentError("energy must be :ring, :window or :fd, got $(repr(energy))"))
     # Finite-difference step. Measured window (docs/dmrg.md): `:cycle` needs λ ≤ 1e-6 to keep the
     # ±λ warm starts in the basin of the λ = 0 fixed point, `:cut` needs λ ≤ 1e-7 on random states
     # (1e-5 is 10% off there, 4e-5 on a physical state); below 1e-8 the cancellation error shows.
     λ = something(λ, projector === :cycle ? 1.0e-6 : 1.0e-7)
+    # `:cycle` on the generating network has rank-capped boundary interfaces whose surplus null
+    # modes wander between the λ = 0 and ±λ solves; the noise-cliff cut removes them. Measured
+    # (docs/dmrg.md, overnight): gradient error at λ = 1e-5 0.107 → 2.2e-6 with `cycle_gapcut = 1e-4`.
+    if projector === :cycle && !haskey(ctm_kwargs, :cycle_gapcut)
+        ctm_kwargs = (; cycle_gapcut = 1.0e-4, ctm_kwargs...)
+    end
     ψ = copy(ψ)
     gen = generating_operator(H, ψ)
     cache = generating_cache(ψ, gen, maxdim; projector, ctm_kwargs...)
     energies = Float64[]
+    nreject = 0
+    # The three environments of the current state. The ±λ caches also give the FD-of-F energy,
+    # `(F(+λ) − F(−λ)) / 2λ` — d/dλ ln Ẑ with the environments re-converged, which carries the
+    # projector response and is measured far more accurate than the fixed-ring `bethe_energy` under
+    # `:cut` at truncated χ (docs/dmrg.md, H1). `:window` is the fixed-ring energy over the exact
+    # 3×3 window, which removes the `:cycle` edge plateau (same doc).
+    function environments!(cache)
+        cp = generating_cache(ψ, gen, maxdim; λ = λ, seed = cache, projector, ctm_kwargs...)
+        cm = generating_cache(ψ, gen, maxdim; λ = -λ, seed = cache, projector, ctm_kwargs...)
+        E = energy === :fd ? (cvm_freenergy(cp) - cvm_freenergy(cm)) / (2λ) :
+            bethe_energy(cache, gen; window = energy === :window ? 1 : 0)
+        return cp, cm, E
+    end
+    cp, cm, E = environments!(cache)
+    # Vertices updated against the SAME environments before a refresh. `:vertex` is Gauss–Seidel;
+    # `:sweep` (Jacobi) measured divergent on the 4×4 D = 3 (E rose from the first sweep and blew
+    # up by the third); `:checkerboard` refreshes twice per sweep, after each parity class, so no
+    # two vertices updated together are neighbours.
+    groups = if refresh === :vertex
+        [[v] for v in vertex_order]
+    elseif refresh === :sweep
+        [vertex_order]
+    elseif refresh === :checkerboard
+        par(v) = isodd(sum(Int, v))
+        [filter(!par, vertex_order), filter(par, vertex_order)]
+    else                                   # :fourcolour — (x mod 2, y mod 2) classes
+        cls(v) = (mod(Int(v[1]), 2), mod(Int(v[2]), 2))
+        [filter(v -> cls(v) == c, vertex_order) for c in ((0, 0), (1, 1), (0, 1), (1, 0))]
+    end
     for sweep in 1:nsweeps
-        for v in vertex_order
-            cp = generating_cache(ψ, gen, maxdim; λ = λ, seed = cache, projector, ctm_kwargs...)
-            cm = generating_cache(ψ, gen, maxdim; λ = -λ, seed = cache, projector, ctm_kwargs...)
-            N, Heff = effective_operators(cache, cp, cm, gen, v, λ)
-            optimize_vertex!(ψ, v, N, Heff; whiten_cutoff)
+        for group in groups
+            old = Dict(v => ψ[v] for v in group)
+            for v in group
+                N, Heff = effective_operators(cache, cp, cm, gen, v, λ)
+                optimize_vertex!(ψ, v, N, Heff; whiten_cutoff, damping)
+            end
             regauge && (ψ = _regauge_keep_inds(ψ))
-            cache = generating_cache(ψ, gen, maxdim; seed = cache, projector, ctm_kwargs...)
-            push!(energies, bethe_energy(cache, gen))
-            verbose && println("sweep $sweep, vertex $v: E = $(last(energies))")
+            cache_new = generating_cache(ψ, gen, maxdim; seed = cache, projector, ctm_kwargs...)
+            cp_new, cm_new, E_new = environments!(cache_new)
+            # ACCEPTANCE: a variational step must not raise the energy. One that does means H_eff
+            # was wrong in the direction taken (a near-null N_eff direction, an overshoot of a
+            # grouped update), and letting it through is how the 4×4 D = 3 runs blew up from a
+            # 6e-5 gap to E = −38 in one step. Revert the group and keep the old environments.
+            if E_new > E + accept_tol * max(one(E), abs(E))
+                nreject += 1
+                for (v, t) in old
+                    ψ[v] = t
+                end
+                verbose && println("sweep $sweep: rejected update of $(length(group) == 1 ? "vertex $(only(group))" : "$(length(group)) vertices") (E would rise to $E_new from $E)")
+            else
+                cache, cp, cm, E = cache_new, cp_new, cm_new, E_new
+                verbose && println("sweep $sweep, after $(length(group) == 1 ? "vertex $(only(group))" : "$(length(group)) vertices"): E = $E")
+            end
+            push!(energies, E)
         end
     end
+    nreject > 0 && @warn "dmrg (ctmrg): $nreject of $(nsweeps * length(groups)) updates were rejected because they raised the energy; " *
+                         "consider a larger `maxdim`, a stricter `whiten_cutoff`, or `damping` for grouped refreshes."
     return ψ, energies
 end
 
