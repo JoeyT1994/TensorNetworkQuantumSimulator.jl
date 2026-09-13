@@ -334,8 +334,10 @@ _ctm_trunc(maxdim::Integer, opts::CTMOptions; rtol::Real = opts.qr_cutoff) =
 # is exactly what netcon would have returned. Keys are shape-only, so different networks of the
 # same geometry share entries and the cache is bounded by the number of distinct shapes.
 #
-# NOT thread-safe (plain `Dict`); this engine is single-threaded.
+# Guarded by `CTM_GLOBAL_LOCK` so that independent caches (the ±λ pair of the generating-function
+# DMRG) can be converged on separate Julia threads.
 const CTM_SEQ_CACHE = Dict{Any, Any}()
+const CTM_GLOBAL_LOCK = ReentrantLock()
 
 function _ctm_seq_key(ts::Vector)
     seen = Dict{Any, Int}()
@@ -354,10 +356,12 @@ function _ctm_contract(ts::Vector, opts::CTMOptions)
     length(ts) == 1 && return only(ts)
     length(ts) == 2 && return ts[1] * ts[2]          # no sequence to choose
     use_optimal = length(ts) <= opts.optimal_max
-    seq = get!(CTM_SEQ_CACHE, (_ctm_seq_key(ts), use_optimal)) do
-        use_optimal ?
-            contraction_sequence(ts; alg = "optimal") :
-            contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
+    seq = lock(CTM_GLOBAL_LOCK) do
+        get!(CTM_SEQ_CACHE, (_ctm_seq_key(ts), use_optimal)) do
+            use_optimal ?
+                contraction_sequence(ts; alg = "optimal") :
+                contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
+        end
     end
     return contract(ts; sequence = seq)
 end
@@ -459,9 +463,9 @@ _ctm_isgraded(t) = Tensors.isgraded(t)
 # Running counts for the subspace route — projectors by outcome (`:subspace`, `:dense` = bailed,
 # `:declined` = gate, `:skipped` = memo) and block iterations spent — so a run can be checked for
 # "did the cheap route actually run, and how hard did it work" without a profiler. Diagnostic
-# only; reset it yourself (`empty!`). NOT thread-safe, like `CTM_SEQ_CACHE`.
+# only; reset it yourself (`empty!`). Updates take `CTM_GLOBAL_LOCK`.
 const CTM_SVD_STATS = Dict{Symbol, Int}()
-_ctm_stat!(k::Symbol, n::Integer = 1) = (CTM_SVD_STATS[k] = get(CTM_SVD_STATS, k, 0) + n; nothing)
+_ctm_stat!(k::Symbol, n::Integer = 1) = (lock(CTM_GLOBAL_LOCK) do; CTM_SVD_STATS[k] = get(CTM_SVD_STATS, k, 0) + n; end; nothing)
 
 # The diagonal of a (u, v) singular-value tensor as a host vector of magnitudes, descending. O(k²)
 # through the dense array, on either backend (a graded diagonal comes out in sector order, hence
