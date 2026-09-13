@@ -699,12 +699,19 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
     if projector === :cycle && !haskey(ctm_kwargs, :cycle_gapcut)
         ctm_kwargs = (; cycle_gapcut = 1.0e-4, ctm_kwargs...)
     end
-    # Under `:cycle` the `:marginal` criterion plateaus at ~1e-10 (residual null-mode flutter of
-    # the rank-capped boundary interfaces) for many sweeps after F has settled to 1e-14 (measured
-    # 5×5 D = 3 χ = 32: 12 sweeps to pass 1e-12, plateau from sweep 5). A 1e-9 marginal tolerance
-    # is far below the gradient's own error and stops at the plateau.
+    # Under `:cycle` the `:marginal` criterion does not settle: after F has converged to 1e-13
+    # (sweep ~5) the worst vertex marginal flutters at 1e-10 after a small state change and at
+    # 1e-8 (with spikes to 4e-6) after a step-sized one — the wandering null modes of the
+    # rank-capped boundary interfaces — and passes a tight tolerance only by chance (measured 5×5
+    # D = 3 χ = 32: 12 and 16 sweeps against 4 for `:cut`, or the iteration cap). A 1e-8 relative
+    # flutter in a ring is two orders below the gradient error accepted under `:cut`, and the
+    # FD-of-F energy needs F, which is converged; so `:cycle` gets a 1e-7 marginal tolerance and a
+    # 30-sweep cap (a converge that hits the cap is still a converged F).
     if projector === :cycle && !haskey(ctm_kwargs, :tolerance)
-        ctm_kwargs = (; tolerance = 1.0e-9, ctm_kwargs...)
+        ctm_kwargs = (; tolerance = 1.0e-7, ctm_kwargs...)
+    end
+    if projector === :cycle && !haskey(ctm_kwargs, :maxiter)
+        ctm_kwargs = (; maxiter = 30, ctm_kwargs...)
     end
     ψ = copy(ψ)
     # `caches` (a Ref) warm-starts from a previous call's final λ = 0 cache, L-BFGS pairs and
