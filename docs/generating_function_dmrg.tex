@@ -1,0 +1,136 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage[hidelinks]{hyperref}
+\setlength{\parskip}{4pt}
+
+\title{Ground states of finite PEPS from a generating function:\\
+belief propagation first, then matrix-product BP environments}
+\author{TensorNetworkQuantumSimulator, \texttt{FixesV2DMRG}}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+
+\section*{The idea in one paragraph}
+
+We want the ground state of a local Hamiltonian $H=\sum_e h_e$ in a finite PEPS $|\psi\rangle$
+on an open square lattice. The usual variational route contracts the indefinite network
+$\langle\psi|H|\psi\rangle$. We never do that. Instead we embed $H$ in a \emph{positive} norm
+network through the generating operator
+\begin{equation}
+  G(\lambda)=\prod_e (1+\lambda h_e),\qquad
+  T(\lambda)=\langle\psi|G(\lambda)|\psi\rangle = \langle\psi|\psi\rangle
+  +\lambda\,\langle\psi|H|\psi\rangle+O(\lambda^2),
+\end{equation}
+so that the energy is a $\lambda$-derivative of a partition function,
+$E=\partial_\lambda \ln T(\lambda)|_{\lambda=0}$, and every environment we ever build is the
+positive double-layer environment of a norm-like network. Each edge factor $1+\lambda h_e$ is
+written with one auxiliary index of dimension $r+1$: slot~0 carries the identity (the norm
+sector), slots $1\ldots r$ carry the operator-Schmidt factors $A_a\otimes B_a$ of $h_e$. The whole
+approximate-contraction machinery of the package (BP at $\chi=1$, finite CTMRG at $\chi>1$)
+then applies to $T(\lambda)$ unchanged. With graded (symmetric) tensors the auxiliary index is a
+direct sum of the trivial sector and the Schmidt bond, so $\mathbb{Z}_2$ and $U(1)$ come for free.
+
+\section*{Energy and gradient without a Hessian}
+
+Write $Z_\chi(\lambda)$ for the approximate contraction of $T(\lambda)$ at environment
+dimension $\chi$ (Bethe free energy at $\chi=1$, the CVM/CTM free energy $F$ at $\chi>1$) and
+$X(\lambda)$ for its converged environments. Two facts do all the work.
+
+\begin{itemize}
+\item \textbf{Envelope theorem.} Because $X$ is a stationary point of the free energy,
+  $\partial_\lambda F(T(\lambda),X(\lambda))=\partial_\lambda F(T(\lambda),X)|_{X\ \mathrm{fixed}}$
+  to first order. The energy is therefore a sum of local ratios over the vertex regions with the
+  operator replaced by $\partial_\lambda G$, no response of the environment needed. In practice we
+  record the implicit central difference $E=\big[F(+\lambda)-F(-\lambda)\big]/2\lambda$ with the
+  environments re-converged at $\pm\lambda$ ($\lambda=10^{-7}$): under the truncating CTM
+  projector this carries the projector response and is $10^2$--$10^3$ times more accurate than the
+  fixed-environment formula, at no extra cost beyond the two environments we need anyway.
+\item \textbf{Effective operators by finite difference.} At a vertex $v$ the environment of
+  $T(\lambda)$ is a ring $R_\lambda(v)$ around the site. The norm and Hamiltonian effective
+  operators on the tensor $t_v$ are
+  \begin{equation}
+    N_{\rm eff}=\tfrac12\big[R_{+\lambda}\!\cdot G_0 + R_{-\lambda}\!\cdot G_0\big],\qquad
+    H_{\rm eff}=\frac{R_{+\lambda}\!\cdot G(+\lambda)-R_{-\lambda}\!\cdot G(-\lambda)}{2\lambda},
+  \end{equation}
+  dense $\dim(t_v)\times\dim(t_v)$ matrices (162$\times$162 at $D=3$). $H_{\rm eff}$ carries an
+  arbitrary multiple of $N_{\rm eff}$ (the $\lambda$-derivative of the block rescaling), which
+  shifts the local eigenvalue but not the eigenvector and cancels exactly in the gradient
+  \begin{equation}
+    \frac{\partial E}{\partial \bar t_v}=\frac{2\,(H_{\rm eff}-\varepsilon N_{\rm eff})\,t_v}{t_v^\dagger N_{\rm eff}t_v},
+    \qquad \varepsilon=\frac{t_v^\dagger H_{\rm eff}t_v}{t_v^\dagger N_{\rm eff}t_v}.
+  \end{equation}
+  Nothing is inverted; no Hessian appears. Both operators come from the same three
+  environments, so \emph{one} environment set gives the exact gradient at \emph{every} vertex.
+\end{itemize}
+
+\section*{The two stages}
+
+\paragraph{Stage 1: $\chi=1$ (belief propagation).} The environments are BP messages of
+$T(0)$; their linear response to $\lambda$ is a Gauss--Seidel sweep on the one-insertion sector
+(exact on a tree). A one-site sweep solves the local generalised eigenproblem
+$H_{\rm eff}t=\varepsilon N_{\rm eff}t$ matrix-free (whitened Lanczos) at each vertex, with a
+warm-started response, an acceptance test on the Bethe energy and a damped retry. This costs
+seconds per sweep and converges in 2--3 sweeps. It minimises the \emph{Bethe} energy, which is
+itself $10^{-2}$ per site off; what it produces is a state whose true energy is already within
+$10^{-5}$--$10^{-6}$ per site of exact on a $5\times5$ (Table~\ref{tab:results}).
+
+\paragraph{Stage 2: $\chi>1$ (matrix-product BP / finite CTMRG).} The environments are the
+$4C+4T$ rings of a position-resolved finite CTMRG at interface dimension $\chi$ (projector
+\texttt{:cut}). Because one environment set yields the whole gradient, the natural optimiser is
+global: L-BFGS over all tensors at once, with the block variable metric $H_0=\gamma N_{\rm eff}^{-1}$
+on the whitened subspace (directions with $N_{\rm eff}$ weight below $10^{-6}$ of the maximum are
+dropped; $\gamma$ is the Barzilai--Borwein scalar). The first step, and any fallback, is the
+Jacobi direction $t_v^\ast-t_v$ towards the local one-site optimum. Every step is an Armijo
+backtracking line search on $E=[F(+\lambda)-F(-\lambda)]/2\lambda$, so no accepted step raises the
+energy, and tensors are renormalised after each step. From the BP state the line search accepts
+the unit L-BFGS step at essentially every iteration.
+
+\paragraph{Cost.} An environment set is three CTM convergences ($\lambda=0,\pm\lambda$). The
+$\lambda=0$ one is built on the plain norm network and padded onto the generating network
+(the $a>0$ slots carry zero weight at $\lambda=0$), so it costs a fraction of the other two; the
+$\pm\lambda$ pair, which needs the auxiliary leg, is now 94\% of a set. On the $5\times5$ at
+$D=3$, $\chi=48$ a set is 50\,s, so an L-BFGS iteration is about a minute against 40 minutes for
+a one-site sweep with per-vertex refreshes of the same environments.
+
+\section*{What it gives}
+
+\begin{table}[H]
+\centering\small\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llrr}
+\toprule
+system & stage & $D=3$ & $D=4$ \\
+\midrule
+$5\times5$ TFIM, $g=3$, & simple update (start) & $2.5\times10^{-5}$ & $6.5\times10^{-5}$ \\
+error per site vs exact & stage 1 (BP, $\chi=1$) & $1.9\times10^{-5}$ & $1.3\times10^{-6}$ \\
+& stage 2 (CTM L-BFGS, $\chi=48$) & $8.2\times10^{-7}$ & $1.6\times10^{-7}$ \\
+\midrule
+$5\times5$, $g=3.04438$, $D=3$ & Yantao Wu, VMC + SR & $7.8\times10^{-7}$ & \\
+& stage 2 started from that state & $6.7\times10^{-7}$ (floor) & \\
+\midrule
+$6\times6$, $g=3$, $D=4$ & $E$/site: SU, BP, CTM & \multicolumn{2}{r}{$-3.15477533,\ -3.15477644,\ -3.15477967$} \\
+\bottomrule
+\end{tabular}
+\caption{Energy density errors against exact diagonalisation (matrix-free Lanczos on $2^{25}$
+states) on the $5\times5$ transverse-field Ising model $H=-\sum ZZ-g\sum X$, and energies on
+the $6\times6$ where no exact reference exists (boundary MPS at $\chi=32$ agrees with the
+optimiser's own estimate to $10^{-9}$). The $D=4$ stage-2 row is three iterations; the $D=3$
+row 22 iterations, still descending. The optimiser lowers an independently VMC-optimised state
+and then finds no downhill direction, which locates the $D=3$ floor at this $\chi$.}
+\label{tab:results}
+\end{table}
+
+\section*{What limits it, and what is next}
+
+The cost is the $\pm\lambda$ environment pair; \texttt{:cycle}, the stationary projector whose
+gradients are far more accurate, is not yet usable because its refresh after a state change runs
+to the iteration cap. Larger bond dimension needs longer runs, not new ideas: at $D=4$ on a
+$6\times6$ one environment set is eight minutes. The full derivation, every measured number and
+the falsified alternatives are in \texttt{docs/dmrg.md}; the code is
+\texttt{dmrg(\textit{$\psi$}, H; alg = "bp")} for stage 1 and
+\texttt{dmrg(\textit{$\psi$}, H; alg = "ctmrg\_lbfgs", maxdim)} for stage 2 in \texttt{src/dmrg.jl}.
+
+\end{document}
