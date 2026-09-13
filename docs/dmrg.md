@@ -617,3 +617,22 @@ an aux-free cache misses every bond term. The L-BFGS route never calls it (energ
 Test tolerances on "FD-of-F energy = exact energy" were widened from 1e-8 to 5e-8 in the two sweep
 tests: the difference of two free energies at λ = 1e-7 carries ~1e-15/1e-7 of roundoff, and the
 tests measured ±2e-8 with random sign; 1e-8 had been marginal.
+
+## The 5×5 table, closed for now — *2026-09-13 (overnight)*
+
+5×5 TFIM g = 3, exact E₀/site = −3.147427074503. Every column is the energy DENSITY's absolute
+error against exact; SU = imaginary-time simple-update start, BP = χ = 1 BP-DMRG from it, CTM =
+`dmrg(…; alg = "ctmrg_lbfgs")` with `:cut` from the BP state. Times are environment-set time,
+excluding process starts.
+
+| D | SU | BP stage | CTM L-BFGS | χ | iterations | time | how it ended |
+|---|---|---|---|---|---|---|---|
+| 3 | 2.5e-5 | 1.9e-5 | **8.2e-7** | 48 | 22 | ≈ 25 min | still descending 2%/it; stopped for time |
+| 4 | 6.5e-5 | 1.3e-6 | **1.55e-7** | 48 | 3 | ≈ 15 min | it 4: unit L-BFGS step and 1/8 Jacobi step both uphill in one-trial searches; a two-trial search does not fit the 10-min cap at 250 s per evaluation |
+| 5 | 3.0e-4 | 7.3e-6 | — | 24 | 0 | | one energy evaluation ≈ 11 min (±λ caches 296 + 311 s next to another job) > cap; the aux-free λ = 0 cache took 60 s where the full one could not finish in 600 s; start E_fd at χ = 24 = 7.3e-6, matching bMPS |
+
+Reading: the CTM stage buys 24× at D = 3 and 8× at D = 4 over the BP stage, and D = 4 after three
+iterations is 5× below the best D = 3. D = 5 needs either the cap lifted (≈ 15 min per iteration at
+χ = 24, uncontended) or a cheaper ±λ pair — the pair is now 94% of an environment set (lever 3
+section). The D = 4 ending is ambiguous between a χ = 48 floor and a line search that only needed
+α = 1/2; both cost a longer process to tell apart.
