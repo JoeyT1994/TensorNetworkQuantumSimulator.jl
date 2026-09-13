@@ -636,3 +636,51 @@ iterations is 5× below the best D = 3. D = 5 needs either the cap lifted (≈ 1
 χ = 24, uncontended) or a cheaper ±λ pair — the pair is now 94% of an environment set (lever 3
 section). The D = 4 ending is ambiguous between a χ = 48 floor and a line search that only needed
 α = 1/2; both cost a longer process to tell apart.
+
+## 6×6 D = 4: BP stage then CTM L-BFGS — *2026-09-13 (overnight)*
+
+No exact reference at this size; energies are densities measured by boundary MPS (bMPS, χ = 32,
+which agreed with χ = 64 to 1e-9 per site on the 5×5) where marked, and by the FD-of-F estimate of
+the optimiser otherwise (agreed with bMPS to 4e-10 on the 5×5).
+
+| stage | E/site | Δ vs SU | cost |
+|---|---|---|---|
+| simple update D = 4 (start) | −3.15477533 (bMPS) | | |
+| BP stage (χ = 1, 3 sweeps) | −3.15477644 (FD-of-F) | −1.1e-6 | 160 s |
+| CTM L-BFGS `:cut` χ = 32, it 1 (Jacobi α = 1/8) | −3.15477867 | −3.3e-6 | 430 s |
+| it 2 (L-BFGS unit step) | −3.15477967 | −4.3e-6 | 410 s |
+| it 3 (L-BFGS unit step) | −3.15477967 (+4e-9) | −4.3e-6 | 377 s |
+| final state by bMPS χ = 32 | **−3.15477967** (agrees with FD-of-F to 3e-9) | −4.3e-6 | 286 s to measure |
+
+It stopped at iteration 4 the way the 5×5 D = 4 did at χ = 48: the unit step was uphill and the
+Jacobi fallback, a second evaluation, pushed the process past the cap. The 4e-9 gain at iteration 3
+says the χ = 32 environment is the floor here (interfaces are D²·2 = 32 wide, so χ = 32 is lossless
+at one level only); the 5×5 D = 3 experience says the floor moves with χ, and χ = 48 at this size is
+≈ 2× the cost per set, i.e. hour-long processes.
+
+For scale: the earlier one-site `:vertex` sweep on this state at χ = 24 reached −3.15477744 after
+7 vertices at 310 s per vertex (docs, 2026-09-12); one L-BFGS iteration (one environment set for all
+36 tensors) went past that in 430 s.
+
+Cost anatomy at 6×6 D = 4 χ = 32, next to another job: aux-free λ = 0 cache 51 s cold; ±λ caches
+249 and 232 s from it; so an environment set is ≈ 8 min and one iteration per 10-minute process is
+the most the cap allows (the first iteration took 490 s including process start). A run that is
+allowed an hour would do 7 iterations in it.
+
+## State of play — *end of the 2026-09-12/13 overnight*
+
+Goal items: (1) tests rerun, 85/85 at `2b82a0d`; (2) lever 3 landed (aux-free λ = 0 environment,
+N_eff from the ±λ rings); (3) 5×5 table closed for D = 3 (8.2e-7) and D = 4 (1.55e-7), D = 5 out of
+reach under the 10-minute cap; (4) 6×6 D = 4: SU −3.15477533 → BP −3.15477644 → CTM L-BFGS
+−3.15477967 per site (bMPS-confirmed) in three iterations of ≈ 7 min.
+
+What limits everything now is the ±λ pair of environments (94% of a set) and the 10-minute cap:
+at 6×6 D = 4 χ = 32 one evaluation is ≈ 8 min, so a two-trial line search cannot run, and both the
+5×5 D = 4 and the 6×6 runs ended on that rather than on a verdict about their floors. Next, in
+order: allow hour-long processes for D ≥ 4 (or split one evaluation across processes, which the
+driver's PMSTEP mode already does for the cold start); a cheaper ±λ pair (seed −λ from +λ, reuse
+the ±λ projectors between iterations, or a response solve); the full-update-with-CTM baseline the
+user asked for, timed like for like; then `:cycle` once its refresh cost is fixed. Scratchpad
+drivers: `run_lbfgs.jl` (COLD0 / PMSTEP / MAXITER / LSMAX / STEP0 / START / TAG), `eval_state.jl`
+(L, FILE, ALG, CHIB), `bp_stage.jl` (L, D). Best states: `ckptl_L5_D3_chi48_cut_lbfgs.jls`,
+`ckptl_L5_D4_chi48_cut_lbfgs.jls`, `ckptl_L6_D4_chi32_cut_lbfgs.jls`, `bpstate_L6_D4.jls`.
