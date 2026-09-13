@@ -1779,10 +1779,25 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
     T = Dict{Tuple{Symbol, Int, Int}, Any}()
     PH = Dict{Tuple{Symbol, Int, Int}, Any}()
     PV = Dict{Tuple{Symbol, Int, Int}, Any}()
+    # Every enlarged corner depends on the PREVIOUS state `S` only, so all 4·(Lx−1)·(Ly−1) of them
+    # are built up front in parallel (Julia threads; run BLAS single-threaded — the blocks are
+    # small, BLAS threads measured no gain, and OpenBLAS is not safe under Julia threads with its
+    # own pool). The projector derivations, corner rebuilds and edge rebuilds below are likewise
+    # independent within a sweep and are threaded the same way; the shared `Dict`s are written
+    # under `dlock`, the sequence memo under `CTM_GLOBAL_LOCK`.
     enl = Dict{Tuple{Symbol, Int, Int}, Any}()
-    E(sym, x, y) = get!(enl, (sym, x, y)) do
-        _ctm_enlarged(S, tbl, sym, x, y, opts)
+    let ks = [(sym, x, y) for sym in (:NW, :NE, :SW, :SE) for x in 2:Lx for y in 2:Ly]
+        vals = Vector{Any}(undef, length(ks))
+        Threads.@threads for i in eachindex(ks)
+            sym, x, y = ks[i]
+            vals[i] = _ctm_enlarged(S, tbl, sym, x, y, opts)
+        end
+        for i in eachindex(ks)
+            enl[ks[i]] = vals[i]
+        end
     end
+    E(sym, x, y) = enl[(sym, x, y)]
+    dlock = ReentrantLock()
     # --- projector pass 1 of 2, `:cycle` only: all four of a plaquette's interfaces from ONE
     # cyclic problem, writing the SAME keys as the pairwise pass below.
     #
@@ -1848,30 +1863,61 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
     # The previous projector (transported onto the current lower basis) seeds the subspace
     # route's warm start before the derivation and the alignment after it; the cache's route memo
     # decides whether the subspace route is attempted on this interface at all.
-    route = Ref(:dense)
+    # Interfaces are independent within a sweep: `prev` is transported from the PREVIOUS sweep's
+    # projectors (`dold`), never from `dnew`, so the inward walk of `_ctm_each_interface` is only a
+    # deterministic ORDER, and the items it yields can be derived in parallel. The route memo and
+    # the projector dictionaries are the shared state; both are touched under `dlock`.
+    items = Tuple{Bool, Tuple{Symbol, Int, Int}, Tuple{Symbol, Int, Int}, Tuple{Symbol, Int, Int}, Tuple{Symbol, Int, Int}}[]
     _ctm_each_interface(Lx, Ly) do isH, key, below, ca, cb
+        push!(items, (isH, key, below, ca, cb))
+    end
+    Threads.@threads for it in items
+        isH, key, below, ca, cb = it
         dnew, dold = isH ? (PH, S.PH) : (PV, S.PV)
-        haskey(dnew, key) && return nothing            # `:cycle` pass 1 owns it
+        owned = lock(dlock) do
+            haskey(dnew, key)                          # `:cycle` pass 1 owns it
+        end
         Ba = E(ca...); Bb = E(cb...)
-        (isnothing(Ba) || isnothing(Bb)) && return nothing
-        ins = commoninds(Ba, Bb)
-        prev = _ctm_transport(_ctm_nn(dold, key), _ctm_nn(dold, below))
-        attempt = _ctm_route_try!(cache.route, key)
-        pr = _ctm_interface_proj2(Ba, Bb, ins, χ, opts, prev, hash(key); subspace = attempt, route)
-        attempt && _ctm_route_record!(cache.route, key, route[])
-        finish!(dnew, key, pr, ins, prev)
+        if !owned && !isnothing(Ba) && !isnothing(Bb)
+            ins = commoninds(Ba, Bb)
+            prev = _ctm_transport(_ctm_nn(dold, key), _ctm_nn(dold, below))
+            attempt = lock(dlock) do
+                _ctm_route_try!(cache.route, key)
+            end
+            route = Ref(:dense)
+            pr = _ctm_interface_proj2(Ba, Bb, ins, χ, opts, prev, hash(key); subspace = attempt, route)
+            if !isnothing(pr) && opts.gauge
+                pr = _ctm_align(pr, ins, prev)
+                pr = _ctm_remint(pr, ins, prev)
+            end
+            lock(dlock) do
+                attempt && _ctm_route_record!(cache.route, key, route[])
+                isnothing(pr) || (dnew[key] = pr)
+            end
+        end
     end
     # --- rebuild corners: P_A on the west/north side, P_B on the east/south side ----
     apA(t, pr) = isnothing(pr) || isnothing(t) ? t : t * pr[1]
     apB(t, pr) = isnothing(pr) || isnothing(t) ? t : t * pr[2]
     # Horizontal projector takes P_A on the west corners and P_B on the east; vertical takes
     # P_A on the north and P_B on the south. Keys are uniformly (fam, x−1, y) and (fam, x, y−1).
+    # Work items are (key, thunk); thunks run in parallel and the dictionary is filled after.
+    cwork = Tuple{Tuple{Symbol, Int, Int}, Function}[]
     for (sym, hfam, hA, vfam, vA) in ((:NW, :N, true,  :W, true), (:NE, :N, false, :E, true),
                                       (:SW, :S, true,  :W, false), (:SE, :S, false, :E, false))
         for x in 2:Lx, y in 2:Ly
-            t = (hA ? apA : apB)(E(sym, x, y), _ctm_nn(PH, (hfam, x - 1, y)))
-            C[(sym, x, y)] = _ctm_rescale((vA ? apA : apB)(t, _ctm_nn(PV, (vfam, x, y - 1))))
+            push!(cwork, ((sym, x, y), () -> begin
+                t = (hA ? apA : apB)(E(sym, x, y), _ctm_nn(PH, (hfam, x - 1, y)))
+                _ctm_rescale((vA ? apA : apB)(t, _ctm_nn(PV, (vfam, x, y - 1))))
+            end))
         end
+    end
+    cres = Vector{Any}(undef, length(cwork))
+    Threads.@threads for i in eachindex(cwork)
+        cres[i] = cwork[i][2]()
+    end
+    for i in eachindex(cwork)
+        C[cwork[i][1]] = cres[i]
     end
     # --- rebuild edges from the previous state, projected on both sides -------------
     # ONE netcon per edge over [previous edge; ket; bra; P_B; P_A]. The site's factors go in as a
@@ -1880,21 +1926,29 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
     # isometries into the same call also lets the optimiser truncate an interface before growing
     # across it. `_ctm_block` mirrors these four term for term; keep them in step.
     edge(block, facs, pB, pA) = _ctm_rescale(_ctm_absorb(opts, _ctm_list(block, facs), pB, pA))
+    twork = Tuple{Tuple{Symbol, Int, Int}, Function}[]
     for x in 1:Lx, y in 2:Ly                  # T_N: left = east side, right = west side
-        T[(:N, x, y)] = edge(_ctm_nn(S.T, (:N, x, y - 1)), _ctm_facs(tbl, x, y - 1),
-                             _ctm_pB(PH, (:N, x - 1, y)), _ctm_pA(PH, (:N, x, y)))
+        push!(twork, ((:N, x, y), () -> edge(_ctm_nn(S.T, (:N, x, y - 1)), _ctm_facs(tbl, x, y - 1),
+                                            _ctm_pB(PH, (:N, x - 1, y)), _ctm_pA(PH, (:N, x, y)))))
     end
     for x in 1:Lx, y in 2:Ly                  # T_S
-        T[(:S, x, y)] = edge(_ctm_nn(S.T, (:S, x, y + 1)), _ctm_facs(tbl, x, y),
-                             _ctm_pB(PH, (:S, x - 1, y)), _ctm_pA(PH, (:S, x, y)))
+        push!(twork, ((:S, x, y), () -> edge(_ctm_nn(S.T, (:S, x, y + 1)), _ctm_facs(tbl, x, y),
+                                            _ctm_pB(PH, (:S, x - 1, y)), _ctm_pA(PH, (:S, x, y)))))
     end
     for x in 2:Lx, y in 1:Ly                  # T_W: up = south side, down = north side
-        T[(:W, x, y)] = edge(_ctm_nn(S.T, (:W, x - 1, y)), _ctm_facs(tbl, x - 1, y),
-                             _ctm_pB(PV, (:W, x, y - 1)), _ctm_pA(PV, (:W, x, y)))
+        push!(twork, ((:W, x, y), () -> edge(_ctm_nn(S.T, (:W, x - 1, y)), _ctm_facs(tbl, x - 1, y),
+                                            _ctm_pB(PV, (:W, x, y - 1)), _ctm_pA(PV, (:W, x, y)))))
     end
     for x in 1:(Lx - 1), y in 1:Ly            # T_E
-        T[(:E, x + 1, y)] = edge(_ctm_nn(S.T, (:E, x + 2, y)), _ctm_facs(tbl, x + 1, y),
-                                 _ctm_pB(PV, (:E, x + 1, y - 1)), _ctm_pA(PV, (:E, x + 1, y)))
+        push!(twork, ((:E, x + 1, y), () -> edge(_ctm_nn(S.T, (:E, x + 2, y)), _ctm_facs(tbl, x + 1, y),
+                                                _ctm_pB(PV, (:E, x + 1, y - 1)), _ctm_pA(PV, (:E, x + 1, y)))))
+    end
+    tres = Vector{Any}(undef, length(twork))
+    Threads.@threads for i in eachindex(twork)
+        tres[i] = twork[i][2]()
+    end
+    for i in eachindex(twork)
+        T[twork[i][1]] = tres[i]
     end
     return CTMVertexEnvironments(C, T, PH, PV, Lx, Ly)
 end
