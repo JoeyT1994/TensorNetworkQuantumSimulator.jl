@@ -1829,11 +1829,19 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         return nothing
     end
     if opts.projector === :cycle
-        ncyc = ndec = 0
         cyc_pairs = Dict{Tuple{Symbol, Int, Int}, Any}()   # key => (pair, ins), finished below
-        for X in 2:Lx, Y in 2:Ly
-            cyc = _ctm_cycle_projectors(E(:NW, X, Y), E(:NE, X, Y), E(:SE, X, Y), E(:SW, X, Y),
-                                        χ, opts, hash((X, Y)))
+        # One cyclic problem per plaquette, independent given the enlarged corners: threaded (a
+        # `:cycle` sweep measured 3.5× a `:cut` sweep with this pass serial).
+        plaq = [(X, Y) for X in 2:Lx for Y in 2:Ly]
+        cycs = Vector{Any}(nothing, length(plaq))
+        Threads.@threads for i in eachindex(plaq)
+            X, Y = plaq[i]
+            cycs[i] = _ctm_cycle_projectors(E(:NW, X, Y), E(:NE, X, Y), E(:SE, X, Y), E(:SW, X, Y),
+                                            χ, opts, hash((X, Y)))
+        end
+        ncyc = ndec = 0
+        for i in eachindex(plaq)
+            cyc = cycs[i]; X, Y = plaq[i]
             if isnothing(cyc)
                 ndec += 1
                 continue

@@ -348,7 +348,7 @@ another cache's environments (same state indices); `projector` and the remaining
 """
 function generating_cache(ψ::TensorNetworkState, gen::GeneratingOperator, maxdim::Integer; λ::Real = 0,
                           seed = nothing, projector::Symbol = :cycle, convergence::Symbol = :marginal,
-                          maxiter::Integer = 100, tolerance::Real = 1.0e-12, aux_free::Bool = false, kwargs...)
+                          maxiter::Integer = 100, tolerance::Real = 1.0e-12, aux_free::Bool = false, verbose::Bool = false, kwargs...)
     if iszero(λ) && aux_free
         # LEVER 3. At λ = 0 the a > 0 slots of every bond carry zero weight (the src end of each
         # edge factor is λ·Aₐ), so the free energy and the norm ring N_eff of the generating
@@ -361,14 +361,14 @@ function generating_cache(ψ::TensorNetworkState, gen::GeneratingOperator, maxdi
         aux_of = _aux_by_bond(ψ, gen)
         ncache = CTMEnvironmentCache(QuadraticForm(ψ), maxdim; projector, kwargs...)
         seed === nothing || (ncache = _ctm_setenv(ncache, _map_env(environments(seed), t -> _strip_aux(t, aux_of))))
-        ncache = update(ncache; maxiter, tolerance, convergence)
+        ncache = update(ncache; maxiter, tolerance, convergence, verbose)
         gcache = CTMEnvironmentCache(QuadraticForm(ψ, gen.value), maxdim; projector, kwargs...)
         return _ctm_setenv(gcache, _map_env(environments(ncache), t -> _pad_aux(t, aux_of)))
     end
     operator = iszero(λ) ? gen.value : _shifted_operator(gen, λ)
     cache = CTMEnvironmentCache(QuadraticForm(ψ, operator), maxdim; projector, kwargs...)
     seed === nothing || (cache = _ctm_setenv(cache, environments(seed)))
-    return update(cache; maxiter, tolerance, convergence)
+    return update(cache; maxiter, tolerance, convergence, verbose)
 end
 
 # ket bond index ⇒ the auxiliary index of `gen.value` on that edge
@@ -698,6 +698,13 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
     λ = something(λ, projector === :cycle ? 1.0e-6 : 1.0e-7)
     if projector === :cycle && !haskey(ctm_kwargs, :cycle_gapcut)
         ctm_kwargs = (; cycle_gapcut = 1.0e-4, ctm_kwargs...)
+    end
+    # Under `:cycle` the `:marginal` criterion plateaus at ~1e-10 (residual null-mode flutter of
+    # the rank-capped boundary interfaces) for many sweeps after F has settled to 1e-14 (measured
+    # 5×5 D = 3 χ = 32: 12 sweeps to pass 1e-12, plateau from sweep 5). A 1e-9 marginal tolerance
+    # is far below the gradient's own error and stops at the plateau.
+    if projector === :cycle && !haskey(ctm_kwargs, :tolerance)
+        ctm_kwargs = (; tolerance = 1.0e-9, ctm_kwargs...)
     end
     ψ = copy(ψ)
     # `caches` (a Ref) warm-starts from a previous call's final λ = 0 cache, L-BFGS pairs and
