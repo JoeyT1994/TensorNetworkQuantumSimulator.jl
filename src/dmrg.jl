@@ -702,13 +702,14 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
     # Under `:cycle` the `:marginal` criterion does not settle: after F has converged to 1e-13
     # (sweep ~5) the worst vertex marginal flutters at 1e-10 after a small state change and at
     # 1e-8 (with spikes to 4e-6) after a step-sized one — the wandering null modes of the
-    # rank-capped boundary interfaces — and passes a tight tolerance only by chance (measured 5×5
-    # D = 3 χ = 32: 12 and 16 sweeps against 4 for `:cut`, or the iteration cap). A 1e-8 relative
-    # flutter in a ring is two orders below the gradient error accepted under `:cut`, and the
-    # FD-of-F energy needs F, which is converged; so `:cycle` gets a 1e-7 marginal tolerance and a
-    # 30-sweep cap (a converge that hits the cap is still a converged F).
+    # rank-capped boundary interfaces — and passes a 1e-12 tolerance only by chance (measured 5×5
+    # D = 3 χ = 32: 12 and 16 sweeps against 4 for `:cut`, or the iteration cap). 1e-7 is too
+    # loose: the ±λ converges then stop after 2 sweeps with rings inconsistent enough that the
+    # first Jacobi step is rejected (measured), while at 1e-10 the same step is accepted with the
+    # `:cut` energy drop and every converge takes 4–5 sweeps. So `:cycle` gets 1e-10 and a
+    # 30-sweep cap (a converge that hits the cap still has a converged F).
     if projector === :cycle && !haskey(ctm_kwargs, :tolerance)
-        ctm_kwargs = (; tolerance = 1.0e-7, ctm_kwargs...)
+        ctm_kwargs = (; tolerance = 1.0e-10, ctm_kwargs...)
     end
     if projector === :cycle && !haskey(ctm_kwargs, :maxiter)
         ctm_kwargs = (; maxiter = 30, ctm_kwargs...)
@@ -815,7 +816,7 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
     end
     verbose && same_state && println("lbfgs: reusing the handed-over environments (state unchanged)")
     energies = [E]
-    verbose && println("lbfgs start: E = $E (per site $(E / length(vs)))")
+    verbose && (println("lbfgs start: E = $E (per site $(E / length(vs)))"); flush(stdout))
     g, P, jac = gradient(envs, x)
     t_start = time()      # `time_limit` counts iterations only, not the cold start (291 s under `:cycle` on the 5×5)
     Ss = Vector{typeof(x)}(); Ys = Vector{typeof(x)}(); ρs = Float64[]
@@ -866,7 +867,7 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
         end
         x, ψ, envs, E, g, P, jac = xn, ψn, envsn, En, gn, Pn, jacn
         push!(energies, E)
-        verbose && println("lbfgs it $it ($kind, α = $α, $nls energy evaluations, $(round(time() - t0, digits = 1)) s): E = $E (per site $(E / length(vs)))")
+        verbose && (println("lbfgs it $it ($kind, α = $α, $nls energy evaluations, $(round(time() - t0, digits = 1)) s): E = $E (per site $(E / length(vs)))"); flush(stdout))
     end
     caches === nothing || (caches[] = (; envs, Ss, Ys, ρs, gen))
     return ψ, energies
