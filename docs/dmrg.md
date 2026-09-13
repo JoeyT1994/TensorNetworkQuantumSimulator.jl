@@ -765,3 +765,78 @@ affordable — is legitimate only under a stationary projector, i.e. `:cycle`, w
 property is exactly what makes frozen projectors correct there. So the response solve and `:cycle`
 are one project, not two, and its first task is the `:cycle` refresh cost. Not started; the
 choice is the user's.
+
+## `:cycle` made usable — *2026-09-13*
+
+The `:cycle` refresh problem, diagnosed on the 5×5 D = 3 χ = 32 (`scratchpad/cycle_refresh_diag.jl`,
+`cycle_pm.jl`, `cycle_one_iter.jl`), was two separate things.
+
+1. **Cost per sweep.** The per-plaquette cyclic projector pass was still serial after the sweep was
+   threaded; threaded, a `:cycle` sweep is ≈ 4 s against 1.5 s for `:cut` at 8 threads (the cyclic
+   problem, a Schur solve per plaquette, is intrinsically heavier). A `:cycle` environment set is
+   now ≈ 3× a `:cut` set (≈ 45 s against 16 s at χ = 32), not 12× or beyond the 10-minute cap.
+2. **The convergence criterion never settles.** After a state change the free energy is converged to
+   1e-13 by sweep 5, but the worst vertex-marginal change — the `:marginal` criterion — flutters at
+   1e-10 (small change) or 1e-8 with spikes to 4e-6 (step-sized change) for many sweeps and passes
+   1e-12 only by chance: 12 and 16 sweeps where `:cut` takes 4, or the cap. This is the wandering of
+   the rank-capped boundary interfaces' surplus null modes, the same object `cycle_gapcut` tames
+   for the gradient. The tolerance that matches what the optimiser needs was measured, not chosen:
+   1e-7 stops the ±λ converges after 2 sweeps and the first Jacobi step is then REJECTED (rings not
+   consistent enough); 1e-10 accepts it with the same energy drop as `:cut`, in 4–5 sweeps, no
+   plateau. `ctmrg_lbfgs` therefore defaults `:cycle` to `tolerance = 1e-10, maxiter = 10` (a
+   converge that hits the cap still has a converged F).
+
+Two more mechanics: the aux-free λ = 0 environment is projector-independent and seeds the `:cycle`
+±λ pair as well as the true one does (4 sweeps, same E_fd); and from a BP state the first Jacobi
+step must start at α = 1/8 under `:cycle` — trial states at α = 1/2 are far enough from the seed
+that their converges run toward the cap, and three of them exceed the process cap.
+
+**Gradient accuracy at χ = 32, 5×5 D = 3, the BP state** (`scratchpad/grad_check.jl`): ring gradient
+against the finite difference of the optimiser's own FD-of-F energy along a random direction
+(h = 1e-3; environments re-converged at each point), and the linear prediction of the energy
+change for the 1/8 Jacobi step at the centre vertex against the actual change.
+
+| projector | g·d vs FD | predicted vs actual ΔE for the step |
+|---|---|---|
+| `:cut`, tol 1e-12 | 23% off | −5.50e-5 vs −3.99e-5 (27% off) |
+| `:cycle`, tol 1e-10 | **4% off** | −4.49e-5 vs −4.30e-5 (**4% off**) |
+
+So at the χ where `:cut` floors (1.8e-6 per site), `:cycle`'s gradient is ~6× more consistent with
+its energy. This is the property the response solve needs (a stationary projector's environment
+response is captured by the envelope theorem, so frozen projectors are legitimate under `:cycle`
+and the linear response can be solved per insertion sector on norm-width interfaces).
+
+**What still limits it: a limit cycle after L-BFGS-sized steps.** After the second (unit L-BFGS)
+step, the ±λ converges have F stationary at 1e-13 from sweep 5 while the worst vertex marginal
+ALTERNATES between 5.1e-6 and 6.1e-6 for 25 more sweeps — a two-cycle of modes at the
+`cycle_gapcut = 1e-4` cliff flipping in and out of the kept set, not random flutter. The step those
+rings produce is accepted at the `:cut` energy (E after iteration 2 identical to `:cut` to 1e-9), so
+the gradient is fine; the CRITERION is what never passes. With the cut disabled
+(`cycle_gapcut = 0`, the engine's default since 2026-09-09) the first evaluation did not finish in
+10 minutes at all, so the cut stays. The optimiser therefore caps `:cycle` converges at 10 sweeps
+and lets its own acceptance test judge the gradient. The proper fix is hysteresis in the cliff
+decision (keep the previous sweep's rank unless the spectrum moved), inside `_ctm_cycle_projectors`.
+
+A practical lesson from the same afternoon: at 8 Julia threads on 8 cores two concurrent jobs halve
+each other, and three `:cycle` runs were killed by the 10-minute cap for that reason alone before
+the limit cycle was even visible. One threaded job at a time.
+
+**`:cycle` in the optimiser loop, 5×5 D = 3 χ = 32 from the BP state** (`run_lbfgs.jl PROJ=cycle`,
+8 threads, one job on the machine): iteration 1 (Jacobi α = 1/8) → 8.26e-6 per site in 39 s and
+iteration 2 (unit L-BFGS step) → 3.74e-6, both identical to the `:cut` trajectory to 1e-9. At
+iteration 3 the ±λ converges, capped at 10 sweeps inside the limit cycle, leave marginals at
+1e-6–7e-6, and the gradient built from them is no longer a descent direction: the L-BFGS trial,
+the Jacobi direction (not even downhill) and the preconditioned gradient all fail, and the run
+stops at 3.74e-6 — above the `:cut` χ = 32 floor of 1.8e-6 that the same start reaches in 6
+iterations. So today `:cycle` carries the large-gradient iterations and loses the small-gradient
+ones, which is the wrong way round for a refinement stage.
+
+**Where this leaves the `:cycle` project.** Refresh cost: fixed (3× `:cut` per set, 4–5 sweeps
+when it converges). Gradient accuracy when converged: confirmed (4% vs 23% at χ = 32). Open:
+the rank-capped null modes enter a limit cycle after a few optimiser steps, at the
+`cycle_gapcut` cliff and the left/right consistency test in `_ctm_cycle_projectors`, and the
+`:marginal` criterion then never certifies. The fix is hysteresis in those decisions — carry each
+plaquette's previous kept rank into the cyclic problem and keep it unless the spectrum has moved —
+an engine change in code whose history (docs/ctmrg_status.md) is full of falsified rank rules, so
+half a day with an uncertain outcome. It is the gate to both `:cycle` in the loop and the
+per-sector linear response solve. Not started; the decision is the user's.

@@ -711,8 +711,13 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
     if projector === :cycle && !haskey(ctm_kwargs, :tolerance)
         ctm_kwargs = (; tolerance = 1.0e-10, ctm_kwargs...)
     end
+    # After an L-BFGS-sized step the ±λ converges show a LIMIT CYCLE: F stationary at 1e-13 from
+    # sweep 5 while the worst marginal alternates between 5e-6 and 6e-6 for 25 more sweeps
+    # (modes at the `cycle_gapcut` threshold flipping in and out of the kept set). The criterion
+    # then never passes; the rings it leaves gave an accepted step at the `:cut` energy. Cap at 10
+    # sweeps and let the optimiser's acceptance test judge the gradient.
     if projector === :cycle && !haskey(ctm_kwargs, :maxiter)
-        ctm_kwargs = (; maxiter = 30, ctm_kwargs...)
+        ctm_kwargs = (; maxiter = 10, ctm_kwargs...)
     end
     ψ = copy(ψ)
     # `caches` (a Ref) warm-starts from a previous call's final λ = 0 cache, L-BFGS pairs and
