@@ -348,11 +348,63 @@ another cache's environments (same state indices); `projector` and the remaining
 """
 function generating_cache(ψ::TensorNetworkState, gen::GeneratingOperator, maxdim::Integer; λ::Real = 0,
                           seed = nothing, projector::Symbol = :cycle, convergence::Symbol = :marginal,
-                          maxiter::Integer = 100, tolerance::Real = 1.0e-12, kwargs...)
+                          maxiter::Integer = 100, tolerance::Real = 1.0e-12, aux_free::Bool = false, kwargs...)
+    if iszero(λ) && aux_free
+        # LEVER 3. At λ = 0 the a > 0 slots of every bond carry zero weight (the src end of each
+        # edge factor is λ·Aₐ), so the free energy and the norm ring N_eff of the generating
+        # network are those of the PLAIN norm network, whose interfaces are D² wide instead of
+        # (r+1)·D². Converge the norm network and pad its blocks onto the generating network's
+        # bonds with onehot(aux ⇒ 1) — measured identical F and N_eff to 1e-15 on the 3×3 and a
+        # ±λ warm start that is faster and closer to the exact energy than from the true λ = 0
+        # environment (docs/dmrg.md, lever 3). NOT for `bethe_energy`: the padded ring has no
+        # half-insertion components, so the ring energy of an aux-free cache is wrong.
+        aux_of = _aux_by_bond(ψ, gen)
+        ncache = CTMEnvironmentCache(QuadraticForm(ψ), maxdim; projector, kwargs...)
+        seed === nothing || (ncache = _ctm_setenv(ncache, _map_env(environments(seed), t -> _strip_aux(t, aux_of))))
+        ncache = update(ncache; maxiter, tolerance, convergence)
+        gcache = CTMEnvironmentCache(QuadraticForm(ψ, gen.value), maxdim; projector, kwargs...)
+        return _ctm_setenv(gcache, _map_env(environments(ncache), t -> _pad_aux(t, aux_of)))
+    end
     operator = iszero(λ) ? gen.value : _shifted_operator(gen, λ)
     cache = CTMEnvironmentCache(QuadraticForm(ψ, operator), maxdim; projector, kwargs...)
     seed === nothing || (cache = _ctm_setenv(cache, environments(seed)))
     return update(cache; maxiter, tolerance, convergence)
+end
+
+# ket bond index ⇒ the auxiliary index of `gen.value` on that edge
+function _aux_by_bond(ψ::TensorNetworkState, gen::GeneratingOperator)
+    aux_of = Dict{Any, Any}()
+    for e in edges(ψ)
+        a = only(virtualinds(gen.value, e))
+        for b in virtualinds(ψ, e)
+            aux_of[b] = a
+        end
+    end
+    return aux_of
+end
+# Pad a norm-network block onto the generating network: onehot(aux ⇒ 1) for every ket bond leg it
+# carries. Strip the inverse: contract every aux leg with onehot(aux ⇒ 1) (a projection onto the
+# norm slot for a true λ = 0 block, the exact inverse for a padded one).
+function _pad_aux(t, aux_of)
+    (t === nothing || !(t isa AbstractTensor)) && return t
+    for i in collect(TensorInterface.inds(t))
+        haskey(aux_of, i) && (t = t * TensorInterface.onehot(real(scalartype(t)), aux_of[i] => 1))
+    end
+    return t
+end
+function _strip_aux(t, aux_of)
+    (t === nothing || !(t isa AbstractTensor)) && return t
+    auxs = Set(values(aux_of))
+    for i in collect(TensorInterface.inds(t))
+        i in auxs && (t = t * TensorInterface.onehot(real(scalartype(t)), i => 1))
+    end
+    return t
+end
+# Apply `f` to every block tensor of the CVM environments, including the tensors inside the stored
+# projector tuples `(P_A, P_B, w, …)` (indices and non-tensors pass through).
+function _map_env(env::CTMVertexEnvironments, f)
+    mapd(d) = Dict(k => (v isa Tuple ? Tuple(f(x) for x in v) : f(v)) for (k, v) in d)
+    return CTMVertexEnvironments(mapd(env.C), mapd(env.T), mapd(env.PH), mapd(env.PV), env.Lx, env.Ly)
 end
 
 """
@@ -403,9 +455,16 @@ function effective_operators(cache::CTMEnvironmentCache, cache_plus::CTMEnvironm
                              cache_minus::CTMEnvironmentCache, gen::GeneratingOperator, v, λ::Real)
     opts = options(cache); ψv = ket(network(cache))[v]
     G0, dG = gen.value[v], gen.derivative[v]
-    N = _dense_ring_operator(vertex_ring(cache, v), G0, ψv, opts)
-    Hp = _dense_ring_operator(vertex_ring(cache_plus, v), G0 + λ * dG, ψv, opts)
-    Hm = _dense_ring_operator(vertex_ring(cache_minus, v), G0 - λ * dG, ψv, opts)
+    # N_eff from the ±λ rings (averaged: O(λ²) from the λ = 0 ring), NOT from `cache`'s ring.
+    # Every CVM block is rescaled to unit norm, so a ring's overall scale is set by which blocks it
+    # holds; the ±λ rings share one scale to O(λ) and so do H and this N, which is what makes
+    # `(H − εN) t / t†N t` the gradient of the energy. The λ = 0 ring can sit on a different scale
+    # (an aux-free cache's blocks carry no half-insertion weight, so their norm sector is ~2×
+    # larger — caught by the test) and is only the seed of the ±λ pair here.
+    ringp, ringm = vertex_ring(cache_plus, v), vertex_ring(cache_minus, v)
+    N = (_dense_ring_operator(ringp, G0, ψv, opts) + _dense_ring_operator(ringm, G0, ψv, opts)) / 2
+    Hp = _dense_ring_operator(ringp, G0 + λ * dG, ψv, opts)
+    Hm = _dense_ring_operator(ringm, G0 - λ * dG, ψv, opts)
     H = (Hp - Hm) / (2λ)
     return (N + N') / 2, (H + H') / 2
 end
@@ -625,13 +684,17 @@ on the FD-of-F energy (each trial one environment set, `ls_max` trials), so no s
 No iteration starts after `time_limit` seconds (counted after the initial environment set).
 `memory = 0` is the Jacobi (damped `:sweep`) update with a line search and no quasi-Newton
 correction. `caches::Ref` warm-starts from a previous call's final environments and L-BFGS pairs
-(`caches[] = nothing` for a cold start) and receives them on return, for chaining across processes. Returns `(ψ, energies)` with the energy after
+(`caches[] = nothing` for a cold start) and receives them on return, for chaining across processes.
+`aux_free = true` (default) converges the λ = 0 environment on the plain norm network and pads it
+onto the generating network (lever 3, see [`generating_cache`](@ref)): same F and N_eff, a fraction
+of the cost; the route never needs the ring energy, which that cache cannot give. Returns `(ψ, energies)` with the energy after
 each accepted step, `energies[1]` the start.
 """
 function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdim::Integer, maxiter::Int = 20,
               projector::Symbol = :cut, λ::Union{Real, Nothing} = nothing, whiten_cutoff::Real = 1.0e-6,
               memory::Int = 8, step0::Real = 0.5, ls_max::Int = 4, ctm_kwargs = (;), verbose::Bool = true,
-              gtol::Real = 1.0e-10, time_limit::Real = Inf, caches::Union{Nothing, Base.RefValue} = nothing)
+              gtol::Real = 1.0e-10, time_limit::Real = Inf, caches::Union{Nothing, Base.RefValue} = nothing,
+              aux_free::Bool = true)
     λ = something(λ, projector === :cycle ? 1.0e-6 : 1.0e-7)
     if projector === :cycle && !haskey(ctm_kwargs, :cycle_gapcut)
         ctm_kwargs = (; cycle_gapcut = 1.0e-4, ctm_kwargs...)
@@ -656,7 +719,7 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
         return ψn
     end
     function environments(ψ, seed)
-        cache = generating_cache(ψ, gen, maxdim; seed, projector, ctm_kwargs...)
+        cache = generating_cache(ψ, gen, maxdim; seed, projector, aux_free, ctm_kwargs...)
         cp = generating_cache(ψ, gen, maxdim; λ, seed = cache, projector, ctm_kwargs...)
         cm = generating_cache(ψ, gen, maxdim; λ = -λ, seed = cache, projector, ctm_kwargs...)
         return (cache, cp, cm), (cvm_freenergy(cp) - cvm_freenergy(cm)) / (2λ)

@@ -137,10 +137,33 @@ end
             fd = (energy(ψp, H; alg = "exact") - energy(ψm, H; alg = "exact")) / (2h)
             @test grad ≈ fd rtol = 1.0e-4
         end
+        # lever 3: the aux-free λ = 0 cache (norm network converged, blocks padded with
+        # onehot(aux ⇒ 1)) has the same F and N_eff as the true λ = 0 cache, and the ±λ pair seeded
+        # from it gives the exact energy by FD of F
+        let
+            c_full = generating_cache(ψ, gen, 16; projector = :cut)
+            c_free = generating_cache(ψ, gen, 16; projector = :cut, aux_free = true)
+            @test cvm_freenergy(c_free) ≈ cvm_freenergy(c_full) atol = 1.0e-12
+            v = (2, 2); opts = TNQS.options(c_full)
+            Nfull = TNQS._dense_ring_operator(TNQS.vertex_ring(c_full, v), gen.value[v], ψ[v], opts)
+            Nfree = TNQS._dense_ring_operator(TNQS.vertex_ring(c_free, v), gen.value[v], ψ[v], opts)
+            # proportional, not equal: every block is unit-normalised and the norm-network blocks
+            # carry no half-insertion weight, so the padded ring sits on its own overall scale
+            # (measured ~2×). This is why `effective_operators` takes N_eff from the ±λ rings.
+            @test norm(Nfree / norm(Nfree) - Nfull / norm(Nfull)) < 1.0e-10
+            λ = 1.0e-7
+            cp = generating_cache(ψ, gen, 16; λ, seed = c_free, projector = :cut)
+            cm = generating_cache(ψ, gen, 16; λ = -λ, seed = c_free, projector = :cut)
+            @test (cvm_freenergy(cp) - cvm_freenergy(cm)) / (2λ) ≈ Eex atol = 5.0e-8
+            # a second aux-free cache seeded from the first (the optimiser's warm path)
+            c_free2 = generating_cache(ψ, gen, 16; projector = :cut, aux_free = true, seed = c_free)
+            @test cvm_freenergy(c_free2) ≈ cvm_freenergy(c_full) atol = 1.0e-12
+        end
         # one sweep descends monotonically and stays variational; ring energy = exact energy
         ψ1, Es = dmrg(ψ, H; alg = "ctmrg", maxdim = 16, nsweeps = 1, projector = :cut, verbose = false)
         @test all(diff(Es) .< 1.0e-8)
-        @test last(Es) ≈ energy(ψ1, H; alg = "exact") atol = 1.0e-8
+        # 5e-8: the FD of F at λ = 1e-7 carries ~1e-15 / 1e-7 of roundoff (measured ±2e-8 here)
+        @test last(Es) ≈ energy(ψ1, H; alg = "exact") atol = 5.0e-8
         @test last(Es) < Eex
         @test last(Es) > ed_ground_energy(g, H) - 1.0e-8
         # global L-BFGS with one environment set per step: every step descends (Armijo), the
@@ -185,7 +208,7 @@ end
         ψd1, Esd = dmrg(ψd, H; alg = "ctmrg", maxdim = 16, nsweeps = 1, verbose = false)
         ψg1, Esg = dmrg(ψg, H; alg = "ctmrg", maxdim = 16, nsweeps = 1, verbose = false)
         @test last(Esd) ≈ last(Esg) atol = 1.0e-7                # same sweep in both representations
-        @test energy(ψg1, H; alg = "exact") ≈ last(Esg) atol = 1.0e-8
+        @test energy(ψg1, H; alg = "exact") ≈ last(Esg) atol = 5.0e-8   # FD-of-F roundoff, see the dense sweep
         @test TNQS.Tensors.isgraded(ψg1[(2, 2)])
     end
 end

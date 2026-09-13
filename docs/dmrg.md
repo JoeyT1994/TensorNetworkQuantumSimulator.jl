@@ -571,3 +571,49 @@ of a checkpoint), `run_group.jl` (grouped-refresh sweeps), `bp_stage.jl`, `ed_tf
 the machine) on the 5×5; then a 6×6 / 8×8 D = 4 demonstration measured by bMPS against the
 simple-update and BP-stage states at the same D (no exact reference there); `:cycle` after its
 refresh cost is fixed.
+
+## Lever 3: the aux-free λ = 0 environment — *2026-09-13 (overnight)*
+
+At λ = 0 every `a > 0` slot of a bond carries zero weight (the src end of each edge factor is
+`λ·Aₐ`), so the free energy and the norm ring `N_eff` of the generating network are those of the
+PLAIN norm network, whose interfaces are `D²` wide instead of `(r+1)·D²`. `generating_cache(…;
+aux_free = true)` converges the norm network (`QuadraticForm(ψ)`) and pads its blocks and stored
+projectors onto the generating network's bonds with `onehot(aux ⇒ 1)`; a seed is stripped the same
+way. Measured on the 3×3 (χ = 16 lossless): F identical to 2e-15, `N_eff` proportional to 2e-15,
+the padded environment a fixed point of the generating-network sweep (ΔF 3e-15), and the ±λ pair
+seeded from it faster (0.46 vs 0.93 s) and closer to the exact energy (1e-10 vs 1.4e-8) than from
+the true λ = 0 environment.
+
+**Proportional, not equal — and why `N_eff` now comes from the ±λ rings.** Every CVM block is
+rescaled to unit norm as it is built, so a ring's overall scale is set by which blocks it holds. The
+true λ = 0 blocks carry half-insertion (`a > 0`) weight, the padded ones none, so the padded ring's
+norm sector is ~2× larger. `H_eff` is built from the ±λ rings on THEIR scale; mixing it with an
+`N_eff` on the padded scale would rescale the gradient vertex by vertex (the test caught this).
+`effective_operators` therefore takes `N_eff = (ring₊·G₀ + ring₋·G₀)/2`, O(λ²) from the λ = 0 ring
+and on exactly the scale of `H_eff`; the λ = 0 cache is only the seed of the ±λ pair. This is the
+correct construction independently of lever 3 (the 3×3 gradient test still passes to 1e-4 relative).
+
+**Timing, 5×5 D = 3 χ = 48 `:cut` (`scratchpad/auxfree_time.jl`, run next to another job):**
+
+| | λ = 0 warm (after a one-tensor change) | +λ | −λ | environment set |
+|---|---|---|---|---|
+| full | 17.9 s | 24.0 s | 23.7 s | 65.6 s |
+| aux-free | **3.1 s** | 23.5 s | 23.3 s | **49.9 s** |
+
+The λ = 0 part is 6× cheaper; the set is 24% cheaper because the ±λ pair, which needs the
+auxiliary leg, is now 94% of it. (The cold λ = 0 converge measured 32 s in both modes, but the
+aux-free mode ran first in the process and carried the JIT compilation; not a clean number.) In
+the optimiser the first iteration's three evaluations took 183 s against 205 s before, at the same
+energy to 4e-10. Lever 3 as scoped is done and on by default in `ctmrg_lbfgs`; the remaining cost
+is the ±λ pair, i.e. the finite-difference construction itself. The ways past it are a cheaper
+warm start for ±λ (seed −λ from +λ, or reuse the ±λ projectors across iterations) or replacing the
+pair by a linear response of the environment to λ (the frozen-projector version of which was
+falsified earlier at χ = 1 accuracy; a full response solve is a separate project).
+
+**Not for `bethe_energy`.** The padded ring has no half-insertion components, so the ring energy of
+an aux-free cache misses every bond term. The L-BFGS route never calls it (energy = FD of F).
+`aux_free` is off by default in `generating_cache` and on by default in `dmrg(…; alg = "ctmrg_lbfgs")`.
+
+Test tolerances on "FD-of-F energy = exact energy" were widened from 1e-8 to 5e-8 in the two sweep
+tests: the difference of two free energies at λ = 1e-7 carries ~1e-15/1e-7 of roundoff, and the
+tests measured ±2e-8 with random sign; 1e-8 had been marginal.
