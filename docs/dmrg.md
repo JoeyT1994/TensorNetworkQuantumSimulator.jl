@@ -684,3 +684,38 @@ user asked for, timed like for like; then `:cycle` once its refresh cost is fixe
 drivers: `run_lbfgs.jl` (COLD0 / PMSTEP / MAXITER / LSMAX / STEP0 / START / TAG), `eval_state.jl`
 (L, FILE, ALG, CHIB), `bp_stage.jl` (L, D). Best states: `ckptl_L5_D3_chi48_cut_lbfgs.jls`,
 `ckptl_L5_D4_chi48_cut_lbfgs.jls`, `ckptl_L6_D4_chi32_cut_lbfgs.jls`, `bpstate_L6_D4.jls`.
+
+## Against Yantao Wu's VMC-optimised 5×5 D = 3 state (g = 3.04438) — *2026-09-13*
+
+Yantao Wu's PEPS (`examples/data/peps/data_ising_5x5/isingZZX_5x5_D3_g3.04438.npz`, optimised by
+sampling + stochastic reconfiguration; "very well optimized, my double layer experiments reduced
+energy by only 1e-6 or so" per the covering email) is the one independently optimised state on file
+with an exact reference in reach. Imported through `scratchpad/import_yantao.jl` (the file is a
+single pickle of jax arrays, not a zip; unpickled with stub modules so no float32 truncation) and
+checked against the recorded references: `ln⟨ψ|ψ⟩ = −6.217866847854579` (ref …575),
+`⟨X⟩(3,3) = 0.9169005981284838` (ref …483). Exact 5×5 ground energy at g = 3.04438 by the same
+matrix-free Lanczos: **E₀ = −79.72801918747975, −3.18912076749919 per site** (124 s).
+
+| state (5×5, D = 3, g = 3.04438) | E/site | gap/site | cost |
+|---|---|---|---|
+| Yantao, VMC + SR | −3.1891199915 (bMPS χ = 32 and 64 agree to 1e-9) | **7.8e-7** | (theirs) |
+| simple update, imaginary time | −3.1890992871 (bMPS χ = 32) | 2.15e-5 | 40 s |
+| BP stage (χ = 1, 2 sweeps) | −3.1891047034 (bMPS χ = 32) | 1.61e-5 | 45 s |
+| CTM L-BFGS `:cut` χ = 48 from the BP state | −3.1891196457 (bMPS χ = 64; FD-of-F agrees to 3e-10) | **1.12e-6** after 11 iterations, still descending 2%/it | ≈ 15 min of environment sets |
+| CTM L-BFGS from Yantao's state | −3.1891200956 (bMPS χ = 64) | **6.72e-7** after 3 unit steps, then every trial uphill (6 tried) | ≈ 7 min |
+
+Reading. (1) Yantao's VMC + SR state is very good for D = 3: 7.8e-7 per site, and our optimiser
+started FROM it gains 14% in three unit L-BFGS steps and then finds no downhill direction at all,
+so **≈ 6.7e-7 is the D = 3 floor at χ = 48 `:cut`**, and their state was within 15% of it. The
+start energy the CTM estimate assigned to their state agreed with bMPS to 5e-10, i.e. the import
+and the estimator are both right. (2) Our simple-update → BP → CTM route at the same g follows the
+g = 3 trajectory exactly (iteration 5: 1.54e-6 vs 1.79e-6; iteration 9: 1.18e-6 vs 1.21e-6) and at
+11 iterations sits at 1.12e-6, 45% above Yantao's state; at g = 3 the same route needed 22
+iterations for 8.2e-7 and was still descending, so matching a VMC-optimised D = 3 state costs
+this route roughly 25–30 iterations ≈ 30–35 minutes of environment sets on the 5×5, against 45 s
+for the BP stage that gets to 1.6e-5. (3) The BP stage alone is 20× above the VMC state at D = 3, so
+"BP is already close" holds against exact at the 1e-5 level, not against a well-optimised state
+at the 1e-6 level; the CTM stage is what closes that gap, and it can also refine the VMC state.
+What we cannot say from this: whether the 6.7e-7 floor is D = 3's variational limit or the χ = 48
+gradient error — the 5×5 D = 3 g = 3 run showed χ = 48 ≡ χ = 64 iteration for iteration, which
+argues for the former, but a χ = 64 start from Yantao's state is the direct test (≈ 15 min).
