@@ -622,21 +622,27 @@ not a descent direction or whose line search fails, uses the Jacobi direction `t
 the local one-site optimum at every vertex — a unit step is the `refresh = :sweep` update, and
 `step0 = 0.5` is the damping that measured stable. Every step is an Armijo backtracking line search
 on the FD-of-F energy (each trial one environment set, `ls_max` trials), so no step goes uphill.
-No iteration starts after `time_limit` seconds. `memory = 0` is the Jacobi (damped `:sweep`) update
-with a line search and no quasi-Newton correction. Returns `(ψ, energies)` with the energy after
+No iteration starts after `time_limit` seconds (counted after the initial environment set).
+`memory = 0` is the Jacobi (damped `:sweep`) update with a line search and no quasi-Newton
+correction. `caches::Ref` warm-starts from a previous call's final environments and L-BFGS pairs
+(`caches[] = nothing` for a cold start) and receives them on return, for chaining across processes. Returns `(ψ, energies)` with the energy after
 each accepted step, `energies[1]` the start.
 """
 function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdim::Integer, maxiter::Int = 20,
               projector::Symbol = :cut, λ::Union{Real, Nothing} = nothing, whiten_cutoff::Real = 1.0e-6,
               memory::Int = 8, step0::Real = 0.5, ls_max::Int = 4, ctm_kwargs = (;), verbose::Bool = true,
-              gtol::Real = 1.0e-10, time_limit::Real = Inf)
-    t_start = time()
+              gtol::Real = 1.0e-10, time_limit::Real = Inf, caches::Union{Nothing, Base.RefValue} = nothing)
     λ = something(λ, projector === :cycle ? 1.0e-6 : 1.0e-7)
     if projector === :cycle && !haskey(ctm_kwargs, :cycle_gapcut)
         ctm_kwargs = (; cycle_gapcut = 1.0e-4, ctm_kwargs...)
     end
     ψ = copy(ψ)
-    gen = generating_operator(H, ψ)
+    # `caches` (a Ref) warm-starts from a previous call's final λ = 0 cache, L-BFGS pairs and
+    # generating operator (its auxiliary index ids must match the cache's), and receives them on
+    # return, so a run can be chained across processes without the cold converge (291 s under
+    # `:cycle` vs ~40 s warm on the 5×5 D = 3).
+    seed0 = caches === nothing ? nothing : caches[]
+    gen = seed0 !== nothing && haskey(seed0, :gen) ? seed0.gen : generating_operator(H, ψ)
     vs = collect(vertices(ψ))
     T = scalartype(ψ[first(vs)])
     indsof = Dict(v => collect(inds(ψ[v])) for v in vs)
@@ -707,11 +713,29 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
         return (false, α, ls_max, xn, ψn, envsn, En)
     end
     x = getx(ψ)
-    envs, E = environments(ψ, nothing)
+    # If the handed-over environments belong to THIS state (chained run, nothing changed), reuse
+    # them outright — one environment set saved per invocation; otherwise seed from them.
+    same_state = seed0 !== nothing && haskey(seed0, :envs) &&
+                 all(norm(ψ[v] - ket(network(seed0.envs[1]))[v]) ≤ 1.0e-13 * norm(ψ[v]) for v in vs)
+    envs, E = if same_state && seed0.envs[2] !== nothing
+        seed0.envs, (cvm_freenergy(seed0.envs[2]) - cvm_freenergy(seed0.envs[3])) / (2λ)
+    elseif same_state                     # only the λ = 0 cache handed over: add the ±λ pair
+        cache0 = seed0.envs[1]
+        cp0 = generating_cache(ψ, gen, maxdim; λ, seed = cache0, projector, ctm_kwargs...)
+        cm0 = generating_cache(ψ, gen, maxdim; λ = -λ, seed = cache0, projector, ctm_kwargs...)
+        (cache0, cp0, cm0), (cvm_freenergy(cp0) - cvm_freenergy(cm0)) / (2λ)
+    else
+        environments(ψ, seed0 === nothing ? nothing : seed0.envs[1])
+    end
+    verbose && same_state && println("lbfgs: reusing the handed-over environments (state unchanged)")
     energies = [E]
     verbose && println("lbfgs start: E = $E (per site $(E / length(vs)))")
     g, P, jac = gradient(envs, x)
+    t_start = time()      # `time_limit` counts iterations only, not the cold start (291 s under `:cycle` on the 5×5)
     Ss = Vector{typeof(x)}(); Ys = Vector{typeof(x)}(); ρs = Float64[]
+    if seed0 !== nothing && haskey(seed0, :Ss)  # the pairs stay valid: same state, same gradient
+        append!(Ss, seed0.Ss); append!(Ys, seed0.Ys); append!(ρs, seed0.ρs)
+    end
     reset!() = (empty!(Ss); empty!(Ys); empty!(ρs))
     fallback(g, P, jac) = _vdot(jac, g) < 0 ? ("jacobi", jac) : ("precgrad", _vscale(-1.0, applyP(P, g)))
     for it in 1:maxiter
@@ -758,5 +782,6 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
         push!(energies, E)
         verbose && println("lbfgs it $it ($kind, α = $α, $nls energy evaluations, $(round(time() - t0, digits = 1)) s): E = $E (per site $(E / length(vs)))")
     end
+    caches === nothing || (caches[] = (; envs, Ss, Ys, ρs, gen))
     return ψ, energies
 end

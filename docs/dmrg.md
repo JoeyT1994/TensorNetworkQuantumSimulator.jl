@@ -494,3 +494,80 @@ the optimiser makes trying either affordable: ≈ 1 minute per iteration instead
 From a random 3×3 start (far from quadratic) pure Jacobi steps beat L-BFGS (−19.77 vs −19.12 after
 12 steps; ED −19.79), so `memory = 0` is the right setting for a cold start and L-BFGS for the
 refinement after the BP stage — which is the operating mode anyway.
+
+## Moving the floor: χ = 48 and 64, and `:cycle` — *2026-09-12*
+
+Same 5×5 D = 3 BP-optimised start (per-site gap 1.94e-5), L-BFGS as above, chained across
+processes with `caches` (environments + L-BFGS pairs + generating operator handed over, so no
+cold start and no memory loss between invocations). Gaps per site against the exact −3.14742707.
+
+| χ | env. set | it 1 | it 2 | it 4 | it 6 | it 8 | it 10 | it 16 | it 22 |
+|---|---|---|---|---|---|---|---|---|---|
+| 32 | 40 s | 9.7e-6 | 5.8e-6 | 2.3e-6 | 1.8e-6 (floor) | | | | |
+| 48 | 65 s | 8.3e-6 | 3.7e-6 | 2.2e-6 | 1.6e-6 | 1.3e-6 | 1.15e-6 | 9.8e-7 | **8.2e-7** |
+| 64 | 95 s | 8.3e-6 | 3.7e-6 | 2.6e-6 | 1.67e-6 | 1.35e-6 | | | |
+
+- **The floor moves with χ.** At χ = 48 the descent continues past the χ = 32 floor with unit
+  L-BFGS steps at every iteration from the second on (one environment set each), 5% per iteration
+  at iteration 10 and still 2% at iteration 22 (no floor reached; stopped for time). χ = 64 tracks
+  χ = 48 iteration for iteration (1.35e-6 vs 1.34e-6 at iteration 8), so χ = 48 is converged in χ
+  here. The energy is real: boundary MPS at χ = 64 gives the iteration-10 χ = 48 state a per-site gap
+  of 1.1507e-6 against the optimiser's own FD-of-F estimate of 1.1503e-6 (4e-10 apart). The final
+  **D = 3 state, gap 8.2e-7 per site, is below the D = 4 BP-stage result** (1.3e-6), 24× below the
+  D = 3 BP start (1.9e-5) and 30× below the D = 3 simple-update start (2.5e-5). Total cost 22
+  iterations ≈ 25 min of environment sets (plus ~1 min of process start per 4-minute invocation).
+- **`:cycle` does not fit the 10-minute cap.** Cold environment set 285 s; a warm one after a state
+  change runs to the iteration cap (the known refresh problem), so a single iteration is ≥ 3 sets
+  ≈ 10 min and every attempt was killed. The optimiser cannot hide that; the `:cycle` refresh cost
+  stays the prerequisite for using its gradient accuracy.
+- **Two mechanics fixes** on the way: `time_limit` now excludes the initial environment set, and the
+  handoff carries the generating operator (a fresh one has fresh auxiliary index ids, and the saved
+  caches then fail to contract — the same mismatch `run66.jl` solved by checkpointing `gen`).
+
+**D = 4 and D = 5 from their BP-optimised states** (`:cut`, gaps per site; environment set at
+D = 4 χ = 48 ≈ 300 s, so one iteration per 10-minute process):
+
+| D | χ | BP start | it 1 | it 2 | status |
+|---|---|---|---|---|---|
+| 4 | 48 | 1.32e-6 | 5.7e-7 (Jacobi, α = 1/8) | **4.1e-7** (L-BFGS unit step) | stopped for time; still descending |
+| 5 | 32 | 7.3e-6 | | | the λ = 0 cache alone does not converge inside 10 min next to another job; untested |
+
+D = 4 after two iterations (4.1e-7) is the best state of the day at any D; the BP stage had it at
+1.3e-6 and simple update at 6.5e-5.
+
+## State of play — *end of 2026-09-12*
+
+**Operating mode.** BP-DMRG at χ = 1 (`alg = "bp"`) from a simple-update start, then
+`dmrg(ψ, H; alg = "ctmrg_lbfgs", maxdim = 48, memory = 8, step0 = 0.125)` with `:cut`. On the 5×5
+TFIM this takes D = 3 from a 2.5e-5 simple-update gap to 8.2e-7 per site in 22 iterations (≈ 25 min
+of environment sets) and D = 4 from 6.5e-5 to 4.1e-7 in two iterations.
+
+**What is verified.** Exact gradient at every vertex from one environment set (3×3 test against
+the FD of the exact energy); L-BFGS energy = bMPS energy to 4e-10 on the 5×5; χ = 48 converged in χ
+at D = 3 (χ = 64 identical); every accepted step descends (Armijo); 81 tests pass as of commit
+`b4e6bca`. The `caches` handoff (environments, L-BFGS pairs, generating operator; verbatim reuse when
+the state is unchanged) and the `time_limit` placement were added after that test run and exercised
+by the chained 5×5 runs, not by the test file — rerun `test/test_dmrg.jl` first thing.
+
+**What limits it.** (1) Cost per environment set: the auxiliary leg doubles every interface, so a
+set is ~7× a plain-norm CTM sweep; 40 s (D = 3, χ = 32) → 65 s (χ = 48) → 300 s (D = 4, χ = 48) →
+> 600 s cold (D = 5). The aux-free λ = 0 environment (lever 3) is the next engineering target.
+(2) `:cycle`: its refresh after a state change runs to the iteration cap, so one iteration is ≥ 3
+sets at 150–250 s; not usable until that is fixed. (3) The 10-minute cap: half of today's mechanics
+were checkpointing; a D = 5 or 8×8 study needs hour-long runs.
+
+**What is not known.** Whether the D = 3 descent (still 2%/iteration at 22) ends at a true D = 3
+minimum or trails off; whether the `:cut` gradient error biases the minimiser at larger sizes
+(no sign of it at 5×5 by χ = 48 vs 64); L-BFGS robustness from a cold start (Jacobi carries it on
+the 3×3; from the BP state it was never needed after iteration 1).
+
+**Files.** Optimiser in `src/dmrg.jl` (`dmrg(::Algorithm"ctmrg_lbfgs")`); scratchpad drivers
+`run_lbfgs.jl` (env vars L D CHI PROJ MAXITER MEMORY STEP0 LSMAX BUDGET COLD0 TAG; checkpoints
+`ckptl_<tag>.jls` with `caches`, energies `energiesl_<tag>.csv`), `eval_state.jl` (bMPS/exact energy
+of a checkpoint), `run_group.jl` (grouped-refresh sweeps), `bp_stage.jl`, `ed_tfim.jl`. Best states:
+`ckptl_L5_D3_chi48_cut_lbfgs.jls` (8.2e-7), `ckptl_L5_D4_chi48_cut_lbfgs.jls` (4.1e-7).
+
+**Next, in order.** Rerun tests; the aux-free λ = 0 environment; finish D = 4 (and D = 5 alone on
+the machine) on the 5×5; then a 6×6 / 8×8 D = 4 demonstration measured by bMPS against the
+simple-update and BP-stage states at the same D (no exact reference there); `:cycle` after its
+refresh cost is fixed.
