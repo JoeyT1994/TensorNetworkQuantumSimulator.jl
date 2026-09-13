@@ -720,8 +720,17 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
     end
     function environments(ψ, seed)
         cache = generating_cache(ψ, gen, maxdim; seed, projector, aux_free, ctm_kwargs...)
-        cp = generating_cache(ψ, gen, maxdim; λ, seed = cache, projector, ctm_kwargs...)
-        cm = generating_cache(ψ, gen, maxdim; λ = -λ, seed = cache, projector, ctm_kwargs...)
+        # The ±λ converges are independent: run them as two tasks when Julia has threads (the
+        # sweep itself is threaded too; run BLAS single-threaded — measured 5×5 D = 3 χ = 48: the
+        # pair 48 s sequential → 33 s concurrent at BLAS = 1, and BLAS threads bought nothing).
+        if Threads.nthreads() >= 2
+            tp = Threads.@spawn generating_cache(ψ, gen, maxdim; λ, seed = cache, projector, ctm_kwargs...)
+            tm = Threads.@spawn generating_cache(ψ, gen, maxdim; λ = -λ, seed = cache, projector, ctm_kwargs...)
+            cp, cm = fetch(tp), fetch(tm)
+        else
+            cp = generating_cache(ψ, gen, maxdim; λ, seed = cache, projector, ctm_kwargs...)
+            cm = generating_cache(ψ, gen, maxdim; λ = -λ, seed = cache, projector, ctm_kwargs...)
+        end
         return (cache, cp, cm), (cvm_freenergy(cp) - cvm_freenergy(cm)) / (2λ)
     end
     # Gradient, block preconditioner (N_eff⁻¹ on the whitened subspace, scaled by t†N t / 2 so it is

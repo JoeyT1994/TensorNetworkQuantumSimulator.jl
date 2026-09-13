@@ -356,11 +356,19 @@ function _ctm_contract(ts::Vector, opts::CTMOptions)
     length(ts) == 1 && return only(ts)
     length(ts) == 2 && return ts[1] * ts[2]          # no sequence to choose
     use_optimal = length(ts) <= opts.optimal_max
+    # Key and (on a miss) the sequence search are computed OUTSIDE the lock; only the dictionary
+    # access is serialised. A miss computed twice by two threads is harmless — netcon is
+    # deterministic — and misses are rare after the first sweep.
+    key = (_ctm_seq_key(ts), use_optimal)
     seq = lock(CTM_GLOBAL_LOCK) do
-        get!(CTM_SEQ_CACHE, (_ctm_seq_key(ts), use_optimal)) do
-            use_optimal ?
-                contraction_sequence(ts; alg = "optimal") :
-                contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
+        get(CTM_SEQ_CACHE, key, nothing)
+    end
+    if seq === nothing
+        seq = use_optimal ?
+            contraction_sequence(ts; alg = "optimal") :
+            contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
+        lock(CTM_GLOBAL_LOCK) do
+            CTM_SEQ_CACHE[key] = seq
         end
     end
     return contract(ts; sequence = seq)
@@ -2146,8 +2154,12 @@ cvm_freenergy(env::CTMVertexEnvironments, cache::CTMEnvironmentCache) =
 # The marginal is what the observable sees, so it settles when the observable does.
 function _ctm_vertex_marginals(env::CTMVertexEnvironments, cache::CTMEnvironmentCache)
     net = network(cache); opts = cache.options
-    out = Dict{Any, Any}()
-    for ((x, y), v) in cache.grid
+    # One ring contraction per vertex, independent: threaded like the sweep (the `:marginal`
+    # criterion measured 1.5–2 s serial per sweep against a 3 s threaded rebuild at 8 threads).
+    entries = collect(cache.grid)
+    res = Vector{Any}(nothing, length(entries))
+    Threads.@threads for i in eachindex(entries)
+        (x, y), v = entries[i]
         ts = _ctm_region_blocks(env, x, y)
         isempty(ts) && continue
         net isa TensorNetworkState && append!(ts, norm_factors(net, [v]; op_strings = _ -> "ρ"))
@@ -2159,7 +2171,11 @@ function _ctm_vertex_marginals(env::CTMVertexEnvironments, cache::CTMEnvironment
         end
         n = norm(m)
         (isfinite(n) && n > 0) || continue
-        out[v] = m / n
+        res[i] = m / n
+    end
+    out = Dict{Any, Any}()
+    for i in eachindex(entries)
+        res[i] === nothing || (out[last(entries[i])] = res[i])
     end
     return out
 end

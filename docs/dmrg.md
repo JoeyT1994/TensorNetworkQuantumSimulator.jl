@@ -719,3 +719,49 @@ at the 1e-6 level; the CTM stage is what closes that gap, and it can also refine
 What we cannot say from this: whether the 6.7e-7 floor is D = 3's variational limit or the χ = 48
 gradient error — the 5×5 D = 3 g = 3 run showed χ = 48 ≡ χ = 64 iteration for iteration, which
 argues for the former, but a χ = 64 start from Yantao's state is the direct test (≈ 15 min).
+
+## Speed, item 1: threads, not tricks — *2026-09-13*
+
+Measured on the 5×5 D = 3 χ = 48 `:cut` environment set from the BP state (`scratchpad/pm_variants.jl`,
+`sweep_threads.jl`, `sweep_profile.jl`). Every variant reports the same F and E_fd to the last digit
+unless said otherwise.
+
+**What did not help.** Seeding −λ from the +λ cache: 26.1 s against 24.9 s from λ = 0. Seeding the
+±λ pair from the previous iteration's ±λ caches after a state change: 24.7 s against 23.5 s from
+the new λ = 0 cache (E_fd differs by 2e-9, a different truncation basin). The sweep count is set by
+how fast the projector bases settle, not by the starting blocks. BLAS threads: a converge takes
+24 s at one BLAS thread and 23.5 s at four — the blocks are too small for BLAS to parallelise.
+
+**What did.** Julia threads, with BLAS single-threaded (OpenBLAS with its own pool under Julia
+threads crashed in `cblas_xerbla`; at `BLAS.set_num_threads(1)` everything is stable and
+bit-reproducible across thread counts).
+
+| | serial | 8 threads |
+|---|---|---|
+| one CTM sweep, block rebuild (`sweep_vertex_environments`) | 6.4 s | 3.2 s |
+| one CTM sweep, total (`update`, `:marginal` criterion) | 6.5–8 s | 4.6 s, then **2.6–3.6 s** after threading the criterion |
+| −λ converge (warm from λ = 0) | 25.3 s | 11.7 s |
+| ±λ pair (two tasks, each a threaded sweep) | 48 s | 33 s at 2 threads; ≈ 20 s at 8 (from 24–30 s iterations) |
+| L-BFGS unit-step iteration in the optimiser | 47–65 s | **23–33 s** |
+
+The sweep threads over the enlarged corners, the `:cut` projector derivations (independent within
+a sweep because `prev` is transported from the PREVIOUS sweep's projectors) and the corner and edge
+rebuilds; shared dictionaries and the route memo are written under a lock; the contraction-sequence
+memo computes its key and any miss outside `CTM_GLOBAL_LOCK`. The `:marginal` criterion's per-vertex
+ring contractions are threaded too. The ±λ converges run as two tasks in `ctmrg_lbfgs`.
+
+Net for the day: an environment set went 65.6 s (start of the night) → 49.9 s (aux-free λ = 0) →
+≈ 25 s (threads); an L-BFGS iteration on the 5×5 D = 3 χ = 48 is now under half a minute. Run with
+`julia -t 8` and `BLASN=1` (the drivers default to it).
+
+**Item 2 (response solve), reassessed after reading the sweep.** The gradient needs the λ-response
+of the environments INCLUDING the projectors — that is why the frozen-projector response was
+falsified under `:cut`. A proper response solve therefore differentiates through the SVD-based
+projector construction and iterates the linearised sweep on the aux-widened network; a cheap
+finite-difference Jacobian of one sweep costs as many widened sweeps as the ±λ pair does today.
+The version that IS cheap — one linear solve per insertion sector on norm-width interfaces, the
+one that scales linearly with the operator-Schmidt rank of the edge terms and would make Hubbard
+affordable — is legitimate only under a stationary projector, i.e. `:cycle`, whose envelope
+property is exactly what makes frozen projectors correct there. So the response solve and `:cycle`
+are one project, not two, and its first task is the `:cycle` refresh cost. Not started; the
+choice is the user's.
