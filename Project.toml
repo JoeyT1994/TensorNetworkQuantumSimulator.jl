@@ -39,7 +39,7 @@ SplitApplyCombine = "1.2.3"
 StatsBase = "0.34.4"
 TensorAlgebra = "0.20.0"
 TypeParameterAccessors = "0.3.10, 0.4"
-VectorInterface = "0.5"
+VectorInterface = "0.6"
 julia = "1.10"
 
 [extras]
