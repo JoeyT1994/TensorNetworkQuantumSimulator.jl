@@ -8,7 +8,7 @@ module Ops
 
 using ITensorBase: ITensorBase, Index, id
 using TensorAlgebra: project
-using ..TensorNetworkQuantumSimulator: project_aux
+using ..TensorNetworkQuantumSimulator: maybe_project_aux
 
 export state, op, OpName, SiteType, @OpName_str, @SiteType_str
 
@@ -33,8 +33,8 @@ function state(name::AbstractString, i::Index)
     return state(v, i)
 end
 # Vector form (legacy `ITensor(v, i)` for a state vector): the state vector as an `ITensor`
-# over `i`, through the `project_aux` utility.
-state(v::AbstractVector{<:Number}, i::Index) = project_aux(v, i)
+# over `i`, through the `maybe_project_aux` utility.
+state(v::AbstractVector{<:Number}, i::Index) = maybe_project_aux(v, i)
 
 #
 # Operators. Legacy ITensors exposes operators through the `OpName` / `SiteType`
@@ -59,7 +59,7 @@ end
 
 # Embed a `d^n × d^n` operator matrix (computational basis, first site most
 # significant) into an `ITensor` with codomain `prime.(sites)` (outputs) and
-# domain `sites` (inputs). Routed through `project_aux` (like `state`): a graded
+# domain `sites` (inputs). Routed through `maybe_project_aux` (like `state`): a graded
 # operator that is odd under the site grading (e.g. `X`/`Y`, bare `c`/`c†`) has no
 # parity-block-diagonal `(prime.(sites), sites)` map, so it gets a trailing auxiliary
 # charge leg instead of throwing an `InexactError`. Even operators and dense (ungraded)
@@ -69,7 +69,7 @@ function _op_matrix_to_itensor(M::AbstractMatrix, sites::Tuple)
     n = length(sites)
     A = reshape(Matrix{ComplexF64}(M), (reverse(ds)..., reverse(ds)...))
     A = permutedims(A, (reverse(1:n)..., reverse((n + 1):(2n))...))
-    return project_aux(A, ITensorBase.prime.(sites), sites)
+    return maybe_project_aux(A, ITensorBase.prime.(sites), sites)
 end
 
 # Top-level `op(name, sites...; kwargs...)`. The identity is dimension-general (used
