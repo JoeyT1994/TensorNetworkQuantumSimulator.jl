@@ -1,13 +1,14 @@
 name = "TensorNetworkQuantumSimulator"
 uuid = "4de3b72a-362e-43dd-83ff-3f381eda9f9c"
 license = "MIT"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["JoeyT1994 <jtindall@flatironinstitute.org>", "and contributors"]
 description = "A Julia package for quantum simulation with tensor networks of near-arbitrary topology."
 
 [deps]
 Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 Dictionaries = "85a47980-9c8c-11e8-2b9f-f7ca1fa99fb4"
+GradedArrays = "bc96ca6e-b7c8-4bb6-888e-c93f838762c2"
 Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
 ITensorBase = "4795dd04-0d67-49bb-8f44-b89c448a1dc7"
 KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
@@ -23,11 +24,24 @@ TensorAlgebra = "68bd88dc-f39d-4e12-b2ca-f046b68fcc6a"
 TypeParameterAccessors = "7e5a90cf-f82e-492e-a09b-e3e26432c138"
 VectorInterface = "409d34a3-91d5-4945-b6ec-7529ddf182d8"
 
+[sources.GradedArrays]
+rev = "mf/tensoralgebra-0.21"
+url = "https://github.com/ITensor/GradedArrays.jl"
+
+[sources.ITensorBase]
+rev = "mf/tensoralgebra-0.21"
+url = "https://github.com/ITensor/ITensorBase.jl"
+
+[sources.TensorAlgebra]
+rev = "develop"
+url = "https://github.com/ITensor/TensorAlgebra.jl"
+
 [compat]
 Adapt = "4.3.0"
 Dictionaries = "0.4"
+GradedArrays = "0.16.3"
 Graphs = "1.8.0"
-ITensorBase = "0.14.0"
+ITensorBase = "0.14.2"
 KrylovKit = "0.10.2"
 LinearAlgebra = "1.10"
 MatrixAlgebraKit = "0.6.8"
@@ -37,7 +51,7 @@ SimpleGraphAlgorithms = "0.6.0"
 SimpleGraphConverter = "0.1.0"
 SplitApplyCombine = "1.2.3"
 StatsBase = "0.34.4"
-TensorAlgebra = "0.20.0"
+TensorAlgebra = "0.21.0"
 TypeParameterAccessors = "0.3.10, 0.4"
 VectorInterface = "0.6"
 julia = "1.10"

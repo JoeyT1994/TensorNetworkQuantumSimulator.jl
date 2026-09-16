@@ -41,10 +41,10 @@ function simple_update(
             ket_ind, bra_ind = commonind(env, ψᵥ), uniqueind(env, ψᵥ)
             # Factorize from bra to ket (codomain = bra), the bipartition in which the
             # fermionic message is PSD.
-            return sqrth_invsqrth_safe(
-                project_hermitian(env, (ket_ind,), (bra_ind,)),
-                (bra_ind,), (ket_ind,); atol = sqrt_cutoff, rtol = 0
-            )
+            env = project_hermitian(env, (ket_ind,), (bra_ind,))
+            sqrt_env = sqrth_safe(env, (bra_ind,), (ket_ind,); atol = sqrt_cutoff, rtol = 0)
+            inv_sqrt_env = invsqrth_safe(env, (bra_ind,), (ket_ind,); atol = sqrt_cutoff, rtol = 0)
+            return sqrt_env, inv_sqrt_env
         end
         sqrt_inv_sqrt_envs_v1 = map(env -> sqrt_invsqrt(env, ψ⃗[1]), envs_v1)
         sqrt_inv_sqrt_envs_v2 = map(env -> sqrt_invsqrt(env, ψ⃗[2]), envs_v2)
