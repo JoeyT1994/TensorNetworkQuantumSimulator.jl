@@ -897,6 +897,7 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
             ψn = withx(ψ, xn)
             envsn, En = environments(ψn, envs[1])
             En <= E + 1.0e-4 * α * slope && return (true, α, k, xn, ψn, envsn, En)
+            verbose && (println("    trial $k rejected: α = $α, slope d·g = $slope, E_trial − E = $(En - E)"); flush(stdout))
             α /= 2
         end
         return (false, α, ls_max, xn, ψn, envsn, En)

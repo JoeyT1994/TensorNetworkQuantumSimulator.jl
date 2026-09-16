@@ -2144,6 +2144,38 @@ The `4C + 4T` ring enclosing `v` — [`vertex_window`](@ref) at `w = 0`. Its ope
 """
 vertex_ring(cache::CTMEnvironmentCache, v) = vertex_window(cache, v, 0)
 
+"""
+    region_ring(cache::CTMEnvironmentCache, vs) -> Vector{AbstractTensor}
+
+The environment of the vertex set `vs`: the `4C + 4T` ring of its bounding box with the factors of
+every box position NOT in `vs` inserted. Its open legs are the ket and bra virtual indices leaving
+`vs`, so for two neighbours it is the `envs` a two-site [`full_update`](@ref) takes, and it pairs
+with `norm_factors(ψ, vs; op_strings)` for a region observable. `vs` need not fill its box.
+"""
+function region_ring(cache::CTMEnvironmentCache, vs::AbstractVector)
+    env = _ctm_env_checked(cache)
+    tbl = _ctm_factor_table(cache)
+    xy = [_ctm_coords(cache, v) for v in vs]
+    xL, xR = minimum(first.(xy)), maximum(first.(xy)) + 1
+    yT, yB = minimum(last.(xy)), maximum(last.(xy)) + 1
+    ts = AbstractTensor[]
+    for b in (_ctm_nn(env.C, (:NW, xL, yT)), _ctm_nn(env.C, (:NE, xR, yT)),
+              _ctm_nn(env.C, (:SW, xL, yB)), _ctm_nn(env.C, (:SE, xR, yB)))
+        isnothing(b) || push!(ts, b)
+    end
+    for c in xL:(xR - 1), b in (_ctm_nn(env.T, (:N, c, yT)), _ctm_nn(env.T, (:S, c, yB)))
+        isnothing(b) || push!(ts, b)
+    end
+    for r in yT:(yB - 1), b in (_ctm_nn(env.T, (:W, xL, r)), _ctm_nn(env.T, (:E, xR, r)))
+        isnothing(b) || push!(ts, b)
+    end
+    for c in xL:(xR - 1), r in yT:(yB - 1)
+        (c, r) in xy && continue
+        haskey(tbl, (c, r)) && append!(ts, tbl[(c, r)])
+    end
+    return ts
+end
+
 # Grid position of a vertex, by lookup rather than by trusting `v == (x, y)` — a network's
 # vertices need not be 1-based or contiguous. O(1) via the `coords` inverse map (a linear scan
 # here made a lattice-wide observable pass O(V²)).

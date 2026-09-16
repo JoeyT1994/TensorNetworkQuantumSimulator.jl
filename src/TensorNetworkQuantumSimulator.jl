@@ -98,6 +98,7 @@ export
     environments,
     vertex_environments,
     vertex_ring,
+    region_ring,
     vertex_window,
     TensorNetwork,
     AbstractTensorNetwork,
