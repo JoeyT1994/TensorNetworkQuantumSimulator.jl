@@ -928,3 +928,52 @@ sweeps (align the retained invariant subspace to last sweep's, or fix the interi
 from the spectrum), which is an engine project with its own falsified-idea history, not a
 half-day item. `:cut` remains the workhorse; the per-sector response solve stays gated. The
 hexagonal Heisenberg result stands on `:cut`.
+
+## Is G ≈ P?  The frozen-projector response, retested — *2026-09-15*
+
+The MP-BP note (Zaletel et al., draft) writes the environment response as G = −(Z_XX)⁻¹ = P(1 − ΔP)⁻¹,
+with P propagation through the tangent-plane projectors and Δ the O(ε) diagonal blocks, and
+conjectures the propagation spectrum may be O(ε²), i.e. G ≈ P. In our engine "G ≈ P" is a concrete
+recipe: build the ±λ environments through the λ = 0 projectors FROZEN (projector-free block
+sweeps, `frozen_generating_cache`), and compare the gradient with the fully re-converged one. The
+2026-09-12 "H2" run had called this falsified at 12.7% under `:cycle` — at a lossless χ, where
+frozen and free cannot differ, so that number was the block-scale mismatch in the old
+`effective_operators` (N_eff from the λ = 0 ring), not physics. Redone with the current operators
+(`scratchpad/gp_test.jl`; TFIM D = 3, ring gradient along a random direction at the centre):
+
+| lattice, χ (truncation) | projector | free gradient vs exact FD | frozen vs free | frozen cost / free cost |
+|---|---|---|---|---|
+| 4×4, χ = 12 (18-wide interfaces) | `:cut` | 2.7% | **220%** | |
+| 4×4, χ = 12 | `:cycle` | **0.03%** | 12% | |
+| 5×5, χ = 32 (BP state) | `:cut` | (23% at h = 1e-3, earlier) | **244%** | 4 s / 20 s |
+| 5×5, χ = 32 | `:cycle` | (4%, earlier) | **0.95%** | 7 s / 50 s |
+
+Energies (first derivatives) agree to 1e-8 in every case — the envelope theorem needs no
+response. Reading: under `:cut` the frozen response is wrong by O(1), as the falsification said,
+because a truncating cut is not stationary. Under `:cycle` it converges to the free one as the
+truncation error shrinks (12% → 1% from χ = 12 to χ = 32), so G → P at a stationary fixed point
+and the O(ε²) conjecture is at least consistent with two points. At χ = 32 the 1% frozen/free
+difference is below the 4% error of the free `:cycle` gradient itself against the exact one.
+
+**Why this matters more than the number.** The frozen ±λ pair is a linear fixed-point iteration
+with no projector derivation: no rank decision, no subspace to wander, hence none of the limit
+cycle that stopped `:cycle` in the optimiser loop after two steps (2026-09-13/15). It is also 7×
+cheaper than the free pair. `dmrg(…; alg = "ctmrg_lbfgs", projector = :cycle, frozen_pm = true)`
+now uses it; the λ = 0 `:cycle` converge (well-behaved: 4–5 sweeps after a step) is the only
+nonlinear solve left per iteration. Under `:cut` it is refused.
+
+**In the loop: stalled at iteration 2 — verdict negative.** 5×5 D = 3 χ = 32 from the BP state,
+`frozen_pm = true`: iteration 1 (Jacobi, α = 1/8) descends 1.94e-5 → 1.57e-5 per site (the free
+gradient's first step reached 8.3e-6); at iterations 2 and 3 the unit L-BFGS step and the 1/8
+Jacobi step are both uphill, and only α = 1/16 is accepted, for 2e-8 per site each time. The frozen
+sweeps themselves converged (no warning), so the gradient is simply not a descent direction once
+the state has moved off the point where G ≈ P was measured — the 1% was at ONE vertex on the BP
+state; over all 25 vertices and after a step the projector response evidently matters at O(1) for
+the direction even when it is 1% for a single component. Two further facts from the run: (i) the
+frozen ±λ pair from the aux-free padded λ = 0 environment left legs open in `_ctm_block` (a
+10-leg intermediate, out of memory) — the frozen route is dense-only AND needs the true λ = 0
+environment; (ii) with the ±λ pair cheap, the λ = 0 `:cycle` re-converge after a state change
+(50–90 s) dominates an evaluation (≈ 107 s), so even a working frozen gradient would not have
+made `:cycle` cheaper than `:cut`. Conclusion: G ≈ P is a statement about one gradient component
+at a stationary point, not about the descent direction along an optimisation; the frozen response
+stays as a diagnostic, and `:cycle` in the loop still needs the subspace-continuity work.
