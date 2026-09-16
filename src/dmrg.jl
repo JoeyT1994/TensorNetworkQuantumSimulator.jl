@@ -376,6 +376,44 @@ function generating_cache(ψ::TensorNetworkState, gen::GeneratingOperator, maxdi
     return update(cache; maxiter, tolerance, convergence, verbose)
 end
 
+"""
+    frozen_generating_cache(ψ, gen, maxdim, λ, cache0; nsweeps = 30, tol = 1e-13) -> CTMEnvironmentCache
+
+The λ-shifted environment with the PROJECTORS FROZEN at those of the converged λ = 0 cache
+`cache0`: the blocks are rebuilt through the fixed projectors by projector-free sweeps
+(`_ctm_block`) until the free energy is stationary — a linear fixed-point iteration, no
+projector derivation, no rank decision, hence none of the `:cycle` limit cycle. This is the
+"G ≈ P" approximation of the MP-BP response: valid to the extent the fixed point is stationary.
+Measured (5×5 TFIM D = 3 χ = 32, BP state, centre vertex): under `:cycle` the frozen gradient is
+within 0.95% of the free one at 7× less cost; at a hard truncation (4×4 χ = 12) 12%; under `:cut`
+it is wrong by 244% (no stationarity). Use only with `projector = :cycle`.
+"""
+function frozen_generating_cache(ψ::TensorNetworkState, gen::GeneratingOperator, maxdim::Integer, λ::Real,
+                                 cache0::CTMEnvironmentCache; nsweeps::Integer = 30, tol::Real = 1.0e-13)
+    opts = options(cache0)
+    S0 = environments(cache0)
+    S1 = sweep_vertex_environments(cache0, S0)      # projectors derived FROM S0's pieces (see `_ctm_block`)
+    op = iszero(λ) ? gen.value : _shifted_operator(gen, λ)
+    cλ = _ctm_setenv(CTMEnvironmentCache(QuadraticForm(ψ, op), maxdim; projector = opts.projector,
+                                         cycle_gapcut = opts.cycle_gapcut), S1)
+    tbl = _ctm_factor_table(cλ)
+    S = S1; Fprev = NaN
+    for _ in 1:nsweeps
+        C = Dict{Tuple{Symbol, Int, Int}, Any}(); T = Dict{Tuple{Symbol, Int, Int}, Any}()
+        for (k, _) in S.C
+            b = _ctm_block(S, tbl, S1, (:C, k...), opts); isnothing(b) || (C[k] = _ctm_rescale(b))
+        end
+        for (k, _) in S.T
+            b = _ctm_block(S, tbl, S1, (:T, k...), opts); isnothing(b) || (T[k] = _ctm_rescale(b))
+        end
+        S = CTMVertexEnvironments(C, T, S1.PH, S1.PV, S.Lx, S.Ly)
+        F = cvm_freenergy(S, cλ)
+        abs(F - Fprev) < tol * max(1.0, abs(F)) && break
+        Fprev = F
+    end
+    return _ctm_setenv(cλ, S)
+end
+
 # ket bond index ⇒ the auxiliary index of `gen.value` on that edge
 function _aux_by_bond(ψ::TensorNetworkState, gen::GeneratingOperator)
     aux_of = Dict{Any, Any}()
@@ -440,10 +478,42 @@ end
 
 # Dense effective ring at `v`: `ring · opv` as a matrix from `ψᵥ`'s index set to its primed copy.
 function _dense_ring_operator(ring::Vector, opv, ψv, opts::CTMOptions)
-    E = _ctm_contract(vcat(ring, [opv]), opts)
     is = collect(inds(ψv))
-    A = TensorInterface.array(E, prime.(is)..., is...)
     n = prod(TensorInterface.dim.(is))
+    if any(Tensors.isgraded, is)
+        # GRADED (in particular fermionic) sites: the flattened operator array applied to the
+        # flattened site vector does NOT reproduce the tensor contraction — the graded product
+        # inserts parity signs that depend on leg order and duals (measured on hex(2,2) t–V: the
+        # flattened t†Nt was −0.125 against +0.161 from the contraction, and the gradient 300×
+        # off). Build the matrix in the site's dense-coefficient basis by APPLYING the ring to each
+        # allowed basis tensor and pairing with the bra of each other basis tensor through the
+        # backend's own contraction, so every sign is the category's. Quadratic form by
+        # construction: x†Mx = ⟨ring · T(x) · op · dag(prime(T(x)))⟩ for T = from_array.
+        elt = promote_type(scalartype(ψv), scalartype(opv), scalartype(first(ring)))
+        dims = Tuple(TensorInterface.dim.(is))
+        basis = Dict{Int, Any}()
+        for j in 1:n
+            e = zeros(elt, n); e[j] = one(elt)
+            t = try
+                TensorInterface.from_array(reshape(e, dims...), is...)
+            catch err
+                err isa InexactError || rethrow()
+                continue                              # a disallowed position: zero row and column
+            end
+            norm(t) > 0.5 && (basis[j] = t)
+        end
+        M = zeros(elt, n, n)
+        bras = Dict(i => TensorInterface.dag(TensorInterface.prime(t)) for (i, t) in basis)
+        for (j, tj) in basis
+            yj = _ctm_contract(vcat(ring, [tj, opv]), opts)     # on the primed legs
+            for (i, bi) in bras
+                M[i, j] = TensorInterface.scalar(yj * bi)
+            end
+        end
+        return M
+    end
+    E = _ctm_contract(vcat(ring, [opv]), opts)
+    A = TensorInterface.array(E, prime.(is)..., is...)
     return reshape(A, n, n)
 end
 
@@ -692,14 +762,22 @@ correction. `caches::Ref` warm-starts from a previous call's final environments 
 (`caches[] = nothing` for a cold start) and receives them on return, for chaining across processes.
 `aux_free = true` (default) converges the λ = 0 environment on the plain norm network and pads it
 onto the generating network (lever 3, see [`generating_cache`](@ref)): same F and N_eff, a fraction
-of the cost; the route never needs the ring energy, which that cache cannot give. Returns `(ψ, energies)` with the energy after
+of the cost; the route never needs the ring energy, which that cache cannot give (dense sites only;
+graded sites take the true λ = 0 environment). `frozen_pm = true` (with `projector = :cycle` only)
+builds the ±λ environments through the λ = 0 projectors by linear projector-free sweeps
+([`frozen_generating_cache`](@ref), the "G ≈ P" response): ≈ 1% off the re-converged gradient at
+χ = 32 on the 5×5, 7× cheaper, and free of the `:cycle` limit cycle. Returns `(ψ, energies)` with the energy after
 each accepted step, `energies[1]` the start.
 """
 function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdim::Integer, maxiter::Int = 20,
               projector::Symbol = :cut, λ::Union{Real, Nothing} = nothing, whiten_cutoff::Real = 1.0e-6,
               memory::Int = 8, step0::Real = 0.5, ls_max::Int = 4, ctm_kwargs = (;), verbose::Bool = true,
               gtol::Real = 1.0e-10, time_limit::Real = Inf, caches::Union{Nothing, Base.RefValue} = nothing,
-              aux_free::Bool = true)
+              aux_free::Bool = true, frozen_pm::Bool = false)
+    frozen_pm && projector !== :cycle && throw(ArgumentError("frozen_pm (G ≈ P) is only valid under projector = :cycle; under :cut the frozen response is wrong by O(1)"))
+    # The frozen ±λ rebuild is validated from the TRUE λ = 0 environment; from the aux-free padded
+    # one its block contraction left legs open (a 10-leg intermediate, out of memory).
+    frozen_pm && (aux_free = false)
     λ = something(λ, projector === :cycle ? 1.0e-6 : 1.0e-7)
     if projector === :cycle && !haskey(ctm_kwargs, :cycle_gapcut)
         ctm_kwargs = (; cycle_gapcut = 1.0e-4, ctm_kwargs...)
@@ -748,7 +826,11 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
         # The ±λ converges are independent: run them as two tasks when Julia has threads (the
         # sweep itself is threaded too; run BLAS single-threaded — measured 5×5 D = 3 χ = 48: the
         # pair 48 s sequential → 33 s concurrent at BLAS = 1, and BLAS threads bought nothing).
-        if Threads.nthreads() >= 2
+        if frozen_pm                       # G ≈ P: ±λ through the λ = 0 projectors, linear iteration
+            tp = Threads.@spawn frozen_generating_cache(ψ, gen, maxdim, λ, cache)
+            tm = Threads.@spawn frozen_generating_cache(ψ, gen, maxdim, -λ, cache)
+            cp, cm = fetch(tp), fetch(tm)
+        elseif Threads.nthreads() >= 2
             tp = Threads.@spawn generating_cache(ψ, gen, maxdim; λ, seed = cache, projector, ctm_kwargs...)
             tm = Threads.@spawn generating_cache(ψ, gen, maxdim; λ = -λ, seed = cache, projector, ctm_kwargs...)
             cp, cm = fetch(tp), fetch(tm)
