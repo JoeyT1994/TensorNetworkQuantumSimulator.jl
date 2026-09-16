@@ -571,7 +571,20 @@ end
         random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle, cycle_solver = :nonsense)
     @test_throws ArgumentError CTMEnvironmentCache(
         random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle, cycle_depth = 0)
+    @test_throws ArgumentError CTMEnvironmentCache(
+        random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle, cycle_tol = -1.0)
+    @test_throws ArgumentError CTMEnvironmentCache(
+        random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle, cycle_restarts = 0)
     @test TNQS.options(CTMEnvironmentCache(random_tensornetwork(Float64, g3; bond_dimension = 2), 4)).cycle_solver === :schur
+    # `:auto`: block on a dense double-layer state, cold on a single layer, explicit choice respected
+    ψ3 = random_tensornetworkstate(Float64, g3, siteinds("S=1/2", g3); bond_dimension = 2)
+    @test TNQS.options(CTMEnvironmentCache(ψ3, 4; projector = :cycle)).cycle_solver === :warm
+    @test TNQS.options(CTMEnvironmentCache(ψ3, 4; projector = :cycle, cycle_solver = :block)).cycle_solver === :block
+    @test TNQS.options(CTMEnvironmentCache(ψ3, 4; projector = :cycle, cycle_solver = :schur)).cycle_solver === :schur
+    @test TNQS.options(CTMEnvironmentCache(random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle)).cycle_solver === :schur
+    sg3 = siteinds("S=1/2", g3; symmetry = "Z2")
+    ψg3 = tensornetworkstate(ComplexF64, v -> iseven(sum(v)) ? "↑" : "↓", g3, sg3)
+    @test TNQS.options(CTMEnvironmentCache(ψg3, 4; projector = :cycle)).cycle_solver === :warm    # graded too
 
     # 1. Exact at lossless χ, real and complex, and identical to the cold solver's F.
     Random.seed!(31)
@@ -598,6 +611,28 @@ end
     @test get(TNQS.CTM_SVD_STATS, :cycle_block_warm, 0) == 25
     @test get(TNQS.CTM_SVD_STATS, :cycle_block_cold, 0) == 0
     @test isfinite(cvm_freenergy(c))
+
+    # 2b. `:warm` — the cold solve warm-started from last sweep's Schur basis: taken on every plaquette
+    #     from sweep 2, exact F, and the cold solver's floor (not `:block`'s 1e-9 one).
+    Random.seed!(34)
+    g6 = named_grid((6, 6))
+    ψ6 = random_tensornetworkstate(ComplexF64, g6, siteinds("S=1/2", g6); bond_dimension = 2)
+    lnZ6 = log(abs(real(norm_sqr(ψ6; alg = "exact"))))
+    cw = CTMEnvironmentCache(ψ6, 16; projector = :cycle, cycle_solver = :warm)
+    empty!(TNQS.CTM_SVD_STATS)
+    cw = update(cw; maxiter = 1, tolerance = 0.0)
+    @test get(TNQS.CTM_SVD_STATS, :cycle_warm_start, 0) == 0
+    @test get(TNQS.CTM_SVD_STATS, :cycle_warm_cold, 0) == 25
+    empty!(TNQS.CTM_SVD_STATS)
+    cw = update(cw; maxiter = 1, tolerance = 0.0)
+    # every plaquette warm except any whose west interface re-minted its index on sweep 1
+    @test get(TNQS.CTM_SVD_STATS, :cycle_warm_start, 0) >= 22
+    # the smaller warm Krylov space converges fewer Schur vectors per build while the environment is
+    # still moving (sweep 2 reads 1e-6 off), and catches up once it settles: exact by sweep 4
+    cw = update(cw; maxiter = 2, tolerance = 0.0)
+    @test abs(cvm_freenergy(cw) - lnZ6) < 1.0e-10
+    cs = update(CTMEnvironmentCache(ψ6, 16; projector = :cycle, cycle_solver = :schur); maxiter = 4, tolerance = 0.0)
+    @test abs(cvm_freenergy(cw) - cvm_freenergy(cs)) < 1.0e-10
 
     # 3. Observable exact at lossless χ on a state, through the `expect` path.
     Random.seed!(33)

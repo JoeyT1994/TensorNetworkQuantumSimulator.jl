@@ -519,12 +519,75 @@ application = one vector through all four corners):
 * **About 2× faster per sweep at χ=32**, even where the application COUNT is similar or higher: a
   block application is one wide contraction, a single-vector one is many thin ones. On small bonds
   (n ≤ χ) both fill the whole space and `:block` costs ~1.7× the applications for the same time.
-* K=2 suffices here (same accuracy as K=4, fewer applications) — the paper's K ~ 2–4.
+* K=2 suffices here (same accuracy as K=4, fewer applications, and more stable — see below) — the default.
 * 1–4 of 16 plaquettes per sweep on the truncated 5×5 still start cold: the plaquette declined the
   cycle last sweep (no bases stored) or its interface width changed. Correct, just not warm.
-* Not yet measured: whether the continuous basis removes the "constant kick" of the cold restart on
-  the 8×8 Ising plateau (open problem 1 below) — the natural next experiment — and the DMRG
-  incremental-refresh cost, which is where the warm start should pay most.
+
+### Follow-up measurements — *2026-09-16 (later)*
+
+**Open problem 1 revisited (8×8 Ising β=0.44, χ=16, single layer).** With today's cold solver the
+plateau is no longer an observable problem: the worst single-vertex MARGINAL change (what an
+observable sees) is 1e-13 from sweep 4 on; only the region-value wander (3e-3, the null-mode rotation
+`F` cancels) remains. So there was no cold-restart "kick" left for a warm start to remove. `:block`
+on this network is UNSTABLE: its Rayleigh–Ritz residual stays erratic (1e-6 one sweep, 1e-2 the
+next), the unconverged left/right Ritz magnitudes disagree, the 1e-3 consistency guard trims to a
+different rank each sweep (kept rank 166–187), interfaces re-mint, the warm start is lost, and
+marginals wander at 1e-5..1e-1 with `F` drifting to 9e-2 at K=4. The flat Ising cycle is far more
+non-normal than a PEPS norm's; a depth-2..4 block space warm-started from a moved environment does
+not converge on it, and the cold single-vector Arnoldi (krylovdim up to 4χ+8, KrylovKit restarts)
+does. **Do not use `:block` on single-layer networks.**
+
+**Double layer (what the DMRG needs), same diagnostics, `:block` K=2 without restarts:** 8×8 D=2
+χ=16 truncated, worst marginal at sweep 12: 4.5e-5 against the cold solver's 2.5e-5; 6×6 D=2 χ=8
+(severely truncated) 5.8e-4 against 7.2e-4; residuals ≤ 1e-8, kept rank stable to within a few
+modes. Same plateau levels within noise, at the ~2× per-sweep speed above.
+
+**Three variants tried on top and FALSIFIED, all measured on the lossless 6×6 D=2 χ=16 (which the
+plain warm block reproduces to 1e-14) and the two truncated double-layer cases:**
+
+| variant | result |
+|---|---|
+| block Krylov–Schur RESTARTS inside the sweep (converge `‖ΛV−VT‖/|λ₁|` to 1e-10, up to 6 restarts) | 2–3× the applications, no gain: the double-layer plateaus were equal or WORSE (8×8: 3.8e-4), and on Ising most plaquettes hit the cap unconverged anyway. Kept as an opt-in knob, `cycle_restarts` (default 1 = off). |
+| relaxing the residual tolerance to 1e-8 | the lossless 6×6 lost exactness (`F` off by 6e-4 at sweep 3): the oblique whitening amplifies any basis error, so a warm basis must be as tight as the cold one. Default back at 1e-10. |
+| warm-starting from ALL resolved Ritz vectors instead of the `kres` RETAINED ones | destructive even without restarts: kept rank 208 → 94 on sweep 2 of the lossless 6×6, `F` drifting to 1e-2, while the trimmed basis (random refill of the shortfall) stays exact. Reverted; the mechanism (extra half-converged columns on one side desynchronising the left/right magnitudes at the guard) is inferred, not proven. |
+
+**Hysteresis on the kept rank under `:block`** (`cycle_hysteresis`, never drop below last sweep's rank
+while the consistent prefix supports it) never fired in any of the measured cases (lossless 6×6, the
+two truncated double layers) and so changed nothing; a "keep last rank whenever it is inside the
+prefix" version tried before it locked a truncated 8×8 at rank 464 of 496 and made the marginals
+worse. Left on (inert where measured) as a guard against toggling.
+
+**Two practical limits of `:block` as it stands.** (1) Its per-sweep solve is not converged to
+machine precision (the outer sweep is the restart), so on a LOSSLESS network the worst-marginal
+change floors at ~1e-9 instead of the cold solver's 1e-14 — `F` and observables are exact, but
+`convergence = :marginal` with a tolerance below that floor will not certify; use `:worst_region` or
+`:free_energy`, or loosen the tolerance. (2) `cycle_depth = 4` was measured LESS stable than 2 on the
+truncated 8×8 D=2 χ=16 (kept rank 476–496 fluctuating, marginals 3e-2 against 4.5e-5 at K=2), so 2
+is the default.
+
+**`cycle_solver = :warm` — the version that wins (2026-09-16, evening).** Every failure of `:block`
+traced back to handing the rank guards Ritz pairs converged only as far as the outer sweep had
+reached. `:warm` keeps the cold Krylov–Schur solve (converged to 1e-16, deflation restarts and all)
+and changes only its START: a random combination of last sweep's Schur basis. A start inside a
+k-dimensional invariant subspace closes the Krylov space on it after k steps, so a settled
+environment resolves in ~k applications per side; KrylovKit's own restarts handle whatever moved.
+Krylov dimension 2k+8 on a warm start (k+8 restarted too often while the environment still moved and
+ran 1.4× SLOWER than cold on the 5×5 D=3 χ=32; 4k+8 gave the gain back).
+
+| case | `:schur` marg@12 / t per sweep | `:warm` | `:block` |
+|---|---|---|---|
+| 6×6 D=2 χ=16 lossless | 1.0e-14 / 0.58 s | **1.3e-14** / 0.59 s | 1.4e-9 / 0.32 s |
+| 8×8 D=2 χ=16 truncated | 2.5e-5 / 2.69 s | **2.4e-5** / 1.71 s | 4.5e-5 / 0.90 s |
+| 5×5 D=3 χ=32 truncated | 4.5e-3 / 3.18 s | **4.7e-3** / 2.78 s | 8.2e-3 / 1.55 s |
+
+Identical fixed point and floors to the cold solver in every case, never slower, up to 1.6× faster
+(timings from three concurrent processes, ±15%). `:block` is faster still but at the 1e-9 floor and
+with the instabilities above. **`:auto` therefore resolves to `:warm` on double-layer states**, graded included — the per-sector
+start is the stored basis contracted with a random flux-zero map onto the sector's charge leg, so
+no factorisation and none of the fresh-bond arrow traps; `:block` stays opt-in (dense only).
+
+* Not yet measured: the DMRG incremental-refresh cost, which is where the warm start should pay most,
+  and `:warm` on single-layer networks (the `:auto` rule keeps those cold).
 
 ## Open problems
 
