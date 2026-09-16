@@ -1155,8 +1155,29 @@ function _ctm_whiten(Acol, Brow, ins::Vector{<:Index}, U, S, V)
     return PA, PB, uA
 end
 
+# The rank a stored cyclic projector actually kept: its retained index is zero-padded to a uniform
+# width (see the note in `_ctm_cycle_projectors`), so count the non-zero slices of `P_A` along it.
+# `nothing` for no projector (boundary, first sweep, or a pairwise-cut projector without padding is
+# counted at its full width, which the hysteresis test then re-decides on the spectrum).
+function _ctm_kept_rank(pr)
+    (isnothing(pr) || length(pr) < 3) && return nothing
+    PA, w = pr[1], pr[3]
+    (PA isa AbstractTensor && w isa Index) || return nothing
+    n = 0
+    try
+        for k in 1:dim(w)
+            # `dag(w)`: on a graded backend the slice must carry the dual arrow to contract
+            norm(PA * onehot(scalartype(PA), dag(w) => k)) > 0 && (n += 1)
+        end
+    catch err
+        err isa InterruptException && rethrow()
+        return nothing                     # hysteresis is optional: no rank, no hysteresis
+    end
+    return n
+end
+
 function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOptions,
-                               seed::UInt)
+                               seed::UInt; prev_rank::Union{Nothing, Int} = nothing)
     any(isnothing, (ENW, ENE, ESE, ESW)) && return nothing
     As = (ESW, ESE, ENE, ENW)                    # A_l : bond l -> bond l+1  (W->S, S->E, E->N, N->W)
     ins = (collect(commoninds(ENW, ESW)), collect(commoninds(ESW, ESE)),
@@ -1372,6 +1393,7 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
         # conditions guard each other: a genuine spectral gap of ~1e4 with real modes below it fails
         # the tininess floor (the cycle spectrum is ~ the 4th power of a corner's, so modest corner
         # gaps make large cycle cliffs), and a smooth decay into tininess fails the cliff.
+        kmax_ok = kres                       # the converged, left/right-consistent prefix
         if opts.cycle_gapcut > 0
             fl = sqrt(eps(real(elt))) * aR[1]
             for j in 1:(kres - 1)
@@ -1379,6 +1401,25 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
                     kres = j
                     break
                 end
+            end
+        end
+        # HYSTERESIS on the kept rank (`prev_rank`, the rank this plaquette kept last sweep). The cliff
+        # decision is a threshold test on modes that sit AT the threshold once the state is nearly
+        # converged, and under the optimiser it toggled between two ranks sweep after sweep — F
+        # stationary at 1e-13, the worst vertex marginal alternating between 5e-6 and 6e-6 for 25
+        # sweeps (5×5 D = 3 χ = 32, 2026-09-13). Keep last sweep's rank whenever it is still a
+        # defensible cut: what lies below it is still small (within 100× of the tininess floor) and the
+        # drop there is still steep (within 100× of the cliff ratio). A spectrum that has genuinely
+        # moved fails one of the two and is re-decided. Never above the consistent prefix.
+        if prev_rank !== nothing && 1 <= prev_rank <= kmax_ok && prev_rank != kres && opts.cycle_gapcut > 0
+            fl = sqrt(eps(real(elt))) * aR[1]
+            below_ok = prev_rank >= length(aR) || aR[prev_rank + 1] <= 100 * fl
+            steep_ok = prev_rank >= length(aR) || aR[prev_rank + 1] <= min(1.0, 100 * opts.cycle_gapcut) * aR[prev_rank]
+            if below_ok && steep_ok
+                kres = prev_rank
+                _ctm_stat!(:cycle_hysteresis_kept)
+            else
+                _ctm_stat!(:cycle_hysteresis_redecided)
             end
         end
         # `degtol` back-off — the SAME semantics as the cut path: never split a near-degenerate cluster
@@ -1836,8 +1877,10 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
         cycs = Vector{Any}(nothing, length(plaq))
         Threads.@threads for i in eachindex(plaq)
             X, Y = plaq[i]
+            # last sweep's kept rank on this plaquette, read off its north interface projector
+            prev_rank = _ctm_kept_rank(_ctm_nn(S.PH, (:N, X - 1, Y)))
             cycs[i] = _ctm_cycle_projectors(E(:NW, X, Y), E(:NE, X, Y), E(:SE, X, Y), E(:SW, X, Y),
-                                            χ, opts, hash((X, Y)))
+                                            χ, opts, hash((X, Y)); prev_rank)
         end
         ncyc = ndec = 0
         for i in eachindex(plaq)

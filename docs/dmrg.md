@@ -895,3 +895,36 @@ optimiser converges to the D = 3 floor in eight iterations (unit L-BFGS steps fr
 last gains 1e-6 per step). The route is fully general in the Hamiltonian and lattice as claimed;
 what it now needs on this model is D ≥ 5, i.e. hour-long environment sets at the current engine
 cost — exactly the rank-r scaling that motivates the per-sector response solve.
+
+## The `:cycle` hysteresis attempt — stopped, hypothesis falsified — *2026-09-15*
+
+Hard-stopped after two hours. The hypothesis was that the limit cycle in the `:cycle` ±λ
+converges after optimiser steps (F stationary at 1e-13, worst vertex marginal alternating between
+~1e-6 and ~6e-6 indefinitely) is the kept RANK of a plaquette toggling at the `cycle_gapcut` cliff,
+and that hysteresis on that rank would remove it.
+
+**What was built.** `_ctm_cycle_projectors(…; prev_rank)` keeps last sweep's rank whenever the old
+boundary is still a defensible cut (what lies below it within 100× of the tininess floor and the
+drop within 100× of the cliff ratio); the sweep reads each plaquette's previous rank off its north
+projector (`_ctm_kept_rank`, counting the non-zero slices of the zero-padded retained index) and
+passes it in. Counters `:cycle_hysteresis_kept` / `:cycle_hysteresis_redecided` in `CTM_SVD_STATS`.
+Tests pass; the code stays, as a mild stabiliser that does what its comment says.
+
+**What the diagnostic showed** (`scratchpad/cycle_limit_diag.jl`: the state after two `:cycle`
+optimiser iterations on the 5×5 D = 3 χ = 32, +λ converge sweep by sweep, every plaquette's kept
+rank printed): the ranks are CONSTANT — 9 at the four boundary plaquettes, 32 = χ at the twelve
+interior ones — for all 14 sweeps, while the worst marginal change wanders 1e-7 … 6e-6 and F sits
+at 1e-13. Hysteresis fired 12 times in 14 sweeps (so a rank-toggle component existed and is now
+gone) and made no difference to the marginals. The flutter is therefore in the BASIS at fixed
+rank: the interior plaquettes keep the full χ = 32 out of interfaces wider than that (2·D² = 18 per
+bond, two bonds per corner interface), i.e. the over-parametrised regime the engine docs describe,
+where the trailing kept directions are near-degenerate and the Schur solve returns a slightly
+different subspace every sweep. `_ctm_align` aligns the basis WITHIN a subspace; nothing keeps the
+subspace itself continuous. Also visible: 8 of 16 plaquettes were declined at λ = 0 (fell back to the
+pairwise cut), so the run was not even a pure `:cycle` environment.
+
+**Conclusion.** Making `:cycle` usable in the optimiser loop needs subspace continuity across
+sweeps (align the retained invariant subspace to last sweep's, or fix the interior rank below χ
+from the spectrum), which is an engine project with its own falsified-idea history, not a
+half-day item. `:cut` remains the workhorse; the per-sector response solve stays gated. The
+hexagonal Heisenberg result stands on `:cut`.
