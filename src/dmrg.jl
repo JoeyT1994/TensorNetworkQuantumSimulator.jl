@@ -397,8 +397,10 @@ function frozen_generating_cache(ψ::TensorNetworkState, gen::GeneratingOperator
     cλ = _ctm_setenv(CTMEnvironmentCache(QuadraticForm(ψ, op), maxdim; projector = opts.projector,
                                          cycle_gapcut = opts.cycle_gapcut), S1)
     tbl = _ctm_factor_table(cλ)
-    S = S1; Fprev = NaN
-    for _ in 1:nsweeps
+    S = S1; Fprev = NaN; converged = false; nsw = 0
+    t0 = time()
+    for k in 1:nsweeps
+        nsw = k
         C = Dict{Tuple{Symbol, Int, Int}, Any}(); T = Dict{Tuple{Symbol, Int, Int}, Any}()
         for (k, _) in S.C
             b = _ctm_block(S, tbl, S1, (:C, k...), opts); isnothing(b) || (C[k] = _ctm_rescale(b))
@@ -408,9 +410,10 @@ function frozen_generating_cache(ψ::TensorNetworkState, gen::GeneratingOperator
         end
         S = CTMVertexEnvironments(C, T, S1.PH, S1.PV, S.Lx, S.Ly)
         F = cvm_freenergy(S, cλ)
-        abs(F - Fprev) < tol * max(1.0, abs(F)) && break
+        abs(F - Fprev) < tol * max(1.0, abs(F)) && (converged = true; break)
         Fprev = F
     end
+    converged || @warn "frozen_generating_cache: F not stationary to $tol after $nsweeps projector-free sweeps ($(round(time() - t0, digits = 1)) s)" maxlog = 20
     return _ctm_setenv(cλ, S)
 end
 
