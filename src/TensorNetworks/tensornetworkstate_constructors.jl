@@ -63,7 +63,7 @@ Returns a [`TensorNetworkState`](@ref) of bond dimension 2.
 function toriccode_groundstate(eltype::Type, n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n,n); periodic = true)))
     g = named_grid((n,n); periodic = true)
     tensors = Dictionary{vertextype(g), Any}()
-    es=  edges(g)
+    es=  collect(edges(g))
     e_dict = Dictionary(es, [new_index(2) for e in edges(g)])
     e_dict = merge(e_dict, Dictionary(reverse.(es), collect(values(e_dict))))
 
