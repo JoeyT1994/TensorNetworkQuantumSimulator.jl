@@ -977,3 +977,192 @@ environment; (ii) with the ±λ pair cheap, the λ = 0 `:cycle` re-converge afte
 made `:cycle` cheaper than `:cut`. Conclusion: G ≈ P is a statement about one gradient component
 at a stationary point, not about the descent direction along an optimisation; the frozen response
 stays as a diagnostic, and `:cycle` in the loop still needs the subspace-continuity work.
+
+## Spinless fermions on the hexagonal lattice (t–V) — *2026-09-15*
+
+`H = −t Σ_e (c†_i c_j + h.c.) + V Σ_e n_i n_j`, t = V = 1, on `named_hexagonal_lattice_graph(NX, NY)`,
+fZ2-graded `"Fermion"` sites (parity only), half filling from a charge-density-wave product state.
+`MODEL=tv NX NY T V` in `scratchpad/model.jl`; the simple-update start is `F_hop_nn` with
+(θ, ϕ) = (i·dτ·t, −i·dτ·V), complex graded tensors throughout. Two-site terms are the library's
+joint fermionic operators `"hopping"` and `"NN"`, so the summed edge term has operator-Schmidt rank
+3 and the auxiliary index dimension 4 with sectors (even, even, odd, odd) — the odd slots carry
+c† and c. Exact reference for hex(2,2) at half filling (8 particles, Jordan–Wigner Lanczos in the
+sorted-vertex ordering, `ed_tv.jl`): **E₀ = −8.479910071666449, −0.52999438 per site**.
+
+**The sign gate passed.** On the D = 2 simple-update state (hex(2,2), χ = 16, lossless) the
+generating-function machinery agrees with the exact contraction of the fermionic network: ring
+energy to 4e-15, FD-of-F energy to 8.7e-9 (the λ = 1e-7 roundoff). Jordan–Wigner strings never
+appear explicitly: the graded category carries them through the auxiliary index, the double-layer
+CTM blocks and the BP messages alike. Three small engine gaps had to be closed, all of the form
+"a lone graded index cannot be paired": the BP default message now starts the operator layer's
+auxiliary leg in its norm slot (`onehot`) instead of a three-leg `delta`; the norm-sector slice
+`_value_slice` contracts with the dual arrow; and a block that is its own interface gets its width-1
+bond by `onehot`, not `delta`. The aux-free λ = 0 environment is dense-only for now (the padding's
+arrow convention per block side is not established for graded auxiliary indices), so fermionic runs
+take the true λ = 0 environment.
+
+**A fourth gap, in the optimiser, and the one that mattered.** The energy was right and the
+optimiser still found no descent direction: the effective operators were built by flattening the
+ring operator into a matrix in the site tensor's dense-array basis and applying it to the flattened
+site vector, and the graded product does not commute with that flattening — the fermionic
+contraction inserts parity signs that depend on leg order and duals. Measured on one ring: the
+flattened t†Nt was −0.125 against +0.161 from the contraction, and the gradient 300× off. For
+graded sites `_dense_ring_operator` now builds the matrix by applying the ring to each allowed basis
+tensor and pairing with each other basis tensor's bra through the backend's own contraction
+(`M_ij = ⟨ring · T(e_j) · G · dag(prime(T(e_i)))⟩`), so every sign is the category's and
+`x†Mx` is the contraction by construction (ratio 1.0 to all digits). With it the ring gradient
+along a random allowed direction agrees with the finite difference of the exact energy to
+**2e-7** (`scratchpad/tv_grad_check.jl`). The dense path is untouched; bosonic Z2 grading, which
+has no signs, took the new path in the test suite and reproduces its previous numbers.
+
+**hex(2,2), D = 3, errors per site against E₀:**
+
+| stage | E/site | gap/site | note |
+|---|---|---|---|
+| simple update | −0.49499374 | 3.50e-2 | |
+| BP stage (χ = 1) | −0.49499374 | 3.50e-2 | did not move the state at all: every local update rejected or thrown (not diagnosed; the CTM stage is what matters here) |
+| CTM L-BFGS `:cut` χ = 32 | −0.49841451 | **3.158e-2** | 8 iterations (5 min; unit L-BFGS steps from it 2), then no downhill direction: the D = 3 floor. Exact contraction of the final state agrees with the optimiser's FD-of-F to 7e-10 per site |
+
+**hex(2,2), D = 4:** simple update and BP stage both at −0.52631232 per site (gap **3.68e-3**, a
+10× drop from D = 3 — the CDW-plus-fluctuations state needs D = 4), BP again inert. CTM stage:
+3.68e-3 → **2.05e-3** in two iterations (exact contraction agrees with the FD-of-F to 1e-8 per
+site), then no descent direction. The cost forced the compromise that stopped it: a graded D = 4
+environment set is ≈ 350 s at χ = 32 and ≈ 155 s at χ = 24 (6× the dense Heisenberg at the same D,
+χ), and the `:marginal` criterion plateaus at ~3e-7 for the fermionic network, so the runs had to
+take a 1e-8 tolerance and one trial per 10-minute process; with the rings that loose, the L-BFGS
+and Jacobi directions were rejected at iteration 3 (the same symptom as `:cycle` at 1e-7). The
+gradient itself is exact to 2e-7 where it can be checked; this is a convergence-budget limit, not a
+correctness one.
+
+**hex(3,3), D = 3 — the cost measurement for rank-3 fermionic terms.** 30 sites, 14 particles (the
+CDW start has 15 occupied sites on one sublattice; the fZ2 network needs an even count, so the last
+one is emptied), χ = 32, `:cut`, true λ = 0 environment (aux-free is dense-only). No exact reference
+at this size (C(30,14) ≈ 1.5e8 states; the Lanczos in `ed_tv.jl` is not built for it), so the
+energies are bMPS χ = 32 against the optimiser's FD-of-F:
+
+| stage | E/site (FD-of-F) | E/site (bMPS χ = 32) | note |
+|---|---|---|---|
+| simple update | −0.50794465656 | −0.50794465658 | start; the BP stage is inert for fermions (skipped) |
+| CTM L-BFGS it 2 | −0.50795093 | | two damped Jacobi steps, α = 1/32 then 1/64 |
+| it 4 | −0.51062238 | | first two L-BFGS unit steps: −2.7e-3 per site |
+| it 7 | **−0.51089053** | **−0.51089054** | it 8: L-BFGS and Jacobi directions both uphill in 3 trials each |
+
+Two things had to be learned on the way. The Jacobi step from this start is far too long: at
+`step0 = 1/8` the two trials rose by 0.062 and 0.0077 (total) with a negative slope of −0.02; the
+line search accepted only at 1/32 (`step0 = 0.03125`, 5 trials). Once one pair exists the variable
+metric takes over and unit steps drop the energy by 6.7e-2 total in one iteration. The stop at
+iteration 8 is the `:cut` floor, not a fermion effect: along the Jacobi direction the FD-of-F energy
+RISES linearly in α (2.2e-5, 4.8e-5, 1.1e-4 at α = 1/128, 1/64, 1/32) while the ring gradient
+reports a slope of −0.026, i.e. the truncated-χ rings' gradient is no longer consistent with the
+free energy at the level of the remaining gain (the same symptom the dense 5×5 shows at its floor).
+The new verbose line `trial k rejected: α, slope, E_trial − E` in `ctmrg_lbfgs` is what separates
+"step too long" (rise ∝ α², negative slope real) from "gradient inconsistent" (rise ∝ α).
+
+Cost: one graded energy evaluation (±λ pair, warm) is 52–70 s at hex(3,3) D = 3 χ = 32 with 6
+threads, an L-BFGS iteration 67–116 s; the whole descent −0.50794 → −0.51089 took 7 iterations and
+≈ 20 min of environment time across three 10-minute processes. For comparison the dense hexagonal
+Heisenberg on the same lattice at D = 3 converges an environment set in ≈ 22 s at χ = 48 with 8
+threads (heis section). The fermionic factor is the graded block
+bookkeeping in the contractions (many small blocks), not the auxiliary dimension (4 in both).
+D = 4 at this size is ≈ 350 s per evaluation (hex(2,2) measurement, and it grows with the width),
+so under the 10-minute cap it needs the single-evaluation-per-process mode (`MAXITER=1 LSMAX=1`).
+
+## hex(2,2) Heisenberg at D = 5 — *2026-09-15/16 overnight*
+
+Same pipeline, one iteration per 10-minute process. Per-site errors against E₀ = −0.48851761:
+
+| D | SU start | BP stage | CTM L-BFGS `:cut` | 
+|---|---|---|---|
+| 3 | 1.43e-2 | 1.43e-2 | 1.27e-2 (floor) |
+| 4 | 6.29e-3 | 6.15e-3 | 1.14e-3 (10 it, still descending) |
+| 5 | 3.47e-3 | 3.44e-3 | not run: the +λ environment alone did not converge inside 10 min at χ = 32 nor at χ = 24 (aux-widened interfaces 4·D² = 100 wide; the λ = 0 aux-free cache took 37 s) |
+
+The simple-update gaps halve per unit of D (1.4e-2 → 6.3e-3 → 3.4e-3); the CTM stage's gain over
+them grew from 11% at D = 3 to 5× at D = 4. D = 5 joins D = 5 TFIM as out of reach under the
+10-minute cap: the ±λ pair on 100-wide interfaces is the cost, exactly the rank-r term the
+response-solve idea was meant to remove. With hour-long processes it is a few environment sets per
+iteration and would run; nothing else is missing.
+
+## Full update with CTM environments — the baseline, timed like for like — *2026-09-16*
+
+The comparison the optimiser has to win: imaginary-time full update whose bond truncation is done
+against the same finite-CTMRG `:cut` norm environment (χ = 32), on the same problem (5×5 TFIM
+g = 3, D = 3), from the same start (the BP-optimised state `bpstate_L5_D3.jls`, gap 1.94e-5 per
+site), with the same thread count (4), the two runs concurrent on the same machine so contention is
+shared. Driver `examples/full_update_ctm_tfim.jl` (expects the scratchpad `model.jl` builder next to it); the library gained `region_ring(cache, vs)` (the 4C+4T ring
+of a vertex set's bounding box with the other box factors inserted — for two neighbours exactly the
+`envs` of `full_update`, and it pairs with `norm_factors(ψ, vs; op_strings)` for a region
+observable).
+
+**Full update, as implemented.** Second-order Trotter `e^{−dτ H}`: half-step one-site
+`exp(dτ g X/2)` layers (exact, no truncation) around the four edge-colour layers of `exp(dτ ZZ)`,
+each two-site gate applied by `full_update` (10 ALS sweeps, bond kept at D) in the ring of the two
+sites — the ring pre-contracted to ONE tensor with the 12 outgoing ket/bra legs (D¹² = 5e5 entries at
+D = 3), because `full_update` and the region contractions search an optimal contraction sequence
+over their whole tensor list and 14 tensors is too many. The environments are re-converged warm
+(`:marginal`, 1e-10) after every colour layer — six refreshes per Trotter step, not forty: the
+gates within a layer do not touch each other's rings. The bond index keeps its identity across the
+re-factorisation so the environments seed the next refresh. Energy along the way is the CTM ring
+energy `Σ_v −g⟨X⟩ + Σ_e −⟨ZZ⟩` at the cache's rings; it agrees with boundary MPS to 1e-10 per site
+at every checkpoint measured.
+
+**Cost per Trotter step (5×5, D = 3, χ = 32, 4 threads, contended):** ≈ 33 s wall, of which the six
+warm environment refreshes are ≈ 5 s and the forty full-update ALS solves ≈ 27 s. A cold
+environment set is 31 s, a warm one after a process restart 25–28 s (the contraction-sequence memo is
+per process). A 10-minute process fits 6–12 steps.
+
+**Trajectories (per-site gap vs exact −3.147427074503).** Full update at dτ = 0.02 for 30 steps,
+then dτ = 0.01 for 30 steps from that state, then dτ = 0.005 for 18 steps (8 threads for that last chunk, alone). L-BFGS:
+`dmrg(…; alg = "ctmrg_lbfgs", maxdim = 32, step0 = 0.125, memory = 8)`, 10 iterations, one process.
+
+| wall time (s, incl. cold start) | full update | L-BFGS |
+|---|---|---|
+| 120 | — (cold set 31 s, 2 steps) | cold set + start ≈ 120 s: 1.94e-5 |
+| 200 | dτ = 0.02, τ = 0.10: 7.7e-6 | it 4 (84 s of iterations): **2.71e-6** |
+| 240 | τ = 0.12: 6.9e-6 | it 6: 1.90e-6 |
+| 430 | τ = 0.24: 4.4e-6 | it 10: **1.75e-6** (process end) |
+| 1000 | dτ = 0.02 converged, τ = 0.6: 3.51e-6 (bMPS 3.505e-6) | |
+| 1400 | dτ = 0.01, τ = 0.12 more: 2.70e-6 | |
+| 1600 | dτ = 0.01, τ = 0.18: 2.67e-6, flattening | |
+| 2200 | dτ = 0.005, τ = 0.09 more: 2.73e-6, moving 3e-9 per step (bMPS 2.729e-6) | |
+
+**Reading.** To reach the 2.7e-6 gap the generating-function L-BFGS took ≈ 200 s of wall time
+including its cold environment set; full update took ≈ 1400 s — **7× longer** — and it gets there
+only after the Trotter step has been halved once. L-BFGS' first ten iterations (7 minutes) end at
+1.75e-6 and were still descending (the earlier χ = 48 run took the same state to 8.2e-7); the full
+update's dτ → 0 limit is its floor at this χ, since it minimises the per-gate fidelity
+at fixed environments, not the energy, and every finite dτ adds a Trotter offset ∝ dτ². Per unit of
+wall time the two spend it differently: L-BFGS is 90% environment sets (three per energy
+evaluation), full update is 85% local ALS solves in a fixed environment — so full update would gain
+from fewer ALS sweeps (3 instead of 10 is usual) or a cheaper two-site solve, at most 3×, which does
+not close the gap. The environment side is already cheaper for full update (six warm refreshes ≈ 5 s
+per step against 25–33 s per L-BFGS evaluation), which is the point: the optimiser's cost IS the
+±λ environment pair, and it wins anyway because each of its steps is a global energy descent with a
+variable metric, where a Trotter step is a local, fixed-environment, dτ-limited move.
+
+Not measured here: full update from the simple-update start (the L-BFGS pipeline goes through the
+BP stage first, 80 s, which full update could also use), and D = 4 (a D = 4 ring tensor has 4¹² =
+1.7e7 entries, 134 MB — the pre-contraction needs a two-tensor split there).
+
+## State of play — *end of the 2026-09-15/16 overnight*
+
+Branch `FixesV2DMRG`. Tests 85/85. What the night settled:
+
+1. **Fermions work at scale.** Spinless t–V on hex(2,2) (exact-checked: D3 3.16e-2, D4 2.05e-3 per
+   site) and hex(3,3) (30 sites: −0.50794 → −0.51089 per site in 7 iterations, bMPS-confirmed to
+   2e-9). The graded gradient is exact where checkable (2e-7 vs FD of the exact energy); the price
+   is 5–6× the dense cost per evaluation at equal D, χ, and a start step of 1/32 (not 1/8).
+2. **G ≈ P is not usable in the optimiser** (1% accurate once, stalls at iteration 2): negative verdict,
+   diagnostic kept.
+3. **`:cycle` rank hysteresis falsified**; the limit cycle is basis wander at fixed rank. Subspace
+   continuity across sweeps is the remaining engine idea.
+4. **Heisenberg D = 5 on hex(2,2)** is out of reach under the 10-minute cap (the +λ environment on
+   4·D² = 100-wide interfaces alone exceeds it).
+5. **Full update with the same CTM environments is 7× slower to a 2.7e-6 gap on the 5×5 D = 3 and
+   floors there**, where L-BFGS was at 1.75e-6 after ten iterations and reaches 8.2e-7 at χ = 48.
+   The user's two criteria (a like-for-like full-update baseline; wall time) are both answered in
+   the optimiser's favour at D = 3.
+
+Open, in order of value: hour-long processes (or a split evaluation) for D ≥ 4 fermions and D = 5
+spins; the D = 4 full-update baseline (needs a split ring tensor); subspace continuity for `:cycle`;
+the BP stage's inertness on fermionic and Heisenberg states.
