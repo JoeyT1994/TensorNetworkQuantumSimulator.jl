@@ -15,11 +15,19 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         # first. Eigenvalues below `regularization` are clamped to zero.
         me = project_hermitian(message(bp_cache, e), Tuple(edge_ind), Tuple(edge_ind_p))
         mer = project_hermitian(message(bp_cache, reverse(e)), Tuple(edge_ind), Tuple(edge_ind_p))
-        rootX, inv_rootX = sqrth_invsqrth_safe(
+        rootX = sqrth_safe(
             me, Tuple(edge_ind), Tuple(edge_ind_p);
             atol = regularization, rtol = 0,
         )
-        rootY, inv_rootY = sqrth_invsqrth_safe(
+        inv_rootX = invsqrth_safe(
+            me, Tuple(edge_ind), Tuple(edge_ind_p);
+            atol = regularization, rtol = 0,
+        )
+        rootY = sqrth_safe(
+            mer, Tuple(edge_ind), Tuple(edge_ind_p);
+            atol = regularization, rtol = 0,
+        )
+        inv_rootY = invsqrth_safe(
             mer, Tuple(edge_ind), Tuple(edge_ind_p);
             atol = regularization, rtol = 0,
         )
