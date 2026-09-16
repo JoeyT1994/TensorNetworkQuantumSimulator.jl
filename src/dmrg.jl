@@ -45,7 +45,8 @@ function _value_slice(t)
     # `dag`: on a graded (fermionic) backend the slice must carry the dual arrow to contract
     return t * TensorInterface.onehot(scalartype(t), TensorInterface.dag(only(aux)) => 1)
 end
-_value_sum(t) = sum(_value_slice(t))
+#Sum over the stored entries (graded storage does not define a whole-array `sum`)
+_value_sum(t) = sum(TensorInterface.data(_value_slice(t)))
 
 # BP normalises each message by the sum of ALL its entries; with the non-Hermitian `a > 0`
 # half-insertion slices that sum is complex and the whole message picks up a phase, which makes
@@ -61,7 +62,7 @@ end
 
 _ket_tensor(bpc::BeliefPropagationCache, v) = ket(network(bpc))[v]
 _bra_tensor(bpc::BeliefPropagationCache, v) = bra_tensor(network(bpc), v)
-_incoming_edges(bpc::BeliefPropagationCache, v) = NamedGraphs.GraphsExtensions.boundary_edges(bpc, [v]; dir = :in)
+_incoming_edges(bpc::BeliefPropagationCache, v) = NamedGraphs.boundary_edges(bpc, [v]; dir = :in)
 
 """
     bethe_energy(bpc::BeliefPropagationCache, gen::GeneratingOperator)
