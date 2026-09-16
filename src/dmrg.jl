@@ -778,7 +778,14 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
             yopt = copy(t)
             for j in 1:length(vals)               # lowest local eigenvector in the state's charge block
                 yj = W * vecs[:, j]; T <: Real && (yj = real(yj))
-                ty = TensorInterface.from_array(reshape(Vector{T}(yj), TensorInterface.dim.(is)...), is...)
+                # a graded `from_array` throws for a vector with real weight outside the state's
+                # block — that vector does not survive the projection either
+                ty = try
+                    TensorInterface.from_array(reshape(Vector{T}(yj), TensorInterface.dim.(is)...), is...)
+                catch err
+                    err isa InexactError || rethrow()
+                    continue
+                end
                 yb = Vector{T}(vec(TensorInterface.array(ty, is...)))
                 norm(yb) > 0.5 * norm(yj) || continue
                 yopt = yb / norm(yb) * norm(t); ph = dot(t, yopt); ph == 0 || (yopt *= sign(ph))

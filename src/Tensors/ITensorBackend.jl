@@ -318,7 +318,17 @@ function TensorInterface.from_array(A::AbstractArray, is::Index...)
     isv = collect(Index, is)
     B = reshape(copy(A), TensorInterface.dim.(isv)...)
     any(isgraded, isv) || return ITensor(B, Tuple(isv))
-    return TA.project(B, Tuple(isv), ())
+    try
+        return TA.project(B, Tuple(isv), ())
+    catch err
+        err isa InexactError || rethrow()
+        # Round-off leakage into disallowed blocks (measured 1e-11 relative on whitened local
+        # eigenvectors of a fermionic site) is zeroed and the projection retried; genuine weight
+        # outside the allowed blocks still throws.
+        tol = 1.0e-8 * maximum(abs, B)
+        B2 = map(b -> abs(b) < tol ? zero(b) : b, B)
+        return TA.project(B2, Tuple(isv), ())
+    end
 end
 
 function TensorInterface.random_tensor(rng::Random.AbstractRNG, elt::Type, is::AbstractVector{<:Index})
