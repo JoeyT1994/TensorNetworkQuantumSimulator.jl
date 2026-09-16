@@ -2405,7 +2405,13 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30,
             mprev = mnow
         end
         crit = Δ
-        isnothing(sd) || (crit = max(crit, sd^2))    # sd² ~ |ΔF|; `max(1,|F|)` below loosens by √|F|
+        # sd² ~ |ΔF|; `max(1,|F|)` below loosens by √|F|. Under `:marginal` the raw C/T distance is
+        # NOT folded in: the marginal distance is already a full-coverage, gauge-invariant
+        # stationarity signal, while `sd` is gauge-dependent and on a hard-truncated interface
+        # (hexagonal Heisenberg D = 4, ±λ interfaces 64 wide at χ = 48) sits at 1e-4–3e-3 for ever
+        # as the kept bases rotate — F at 1e-15 and marginals at 1e-9, and every converge ran to
+        # the sweep cap (measured 2026-09-15).
+        (isnothing(sd) || mg) || (crit = max(crit, sd^2))
         isnothing(wrd) || (crit = max(crit, wrd))
         isnothing(mgd) || (crit = max(crit, mgd))
         verbose && @info "CVM sweep $it: F = $F, |ΔF| = $Δ, state = $(something(sd, NaN)), " *
