@@ -29,7 +29,16 @@ function virtualinds(form::AbstractForm, edge::NamedEdge)
 end
 
 function default_message(form::AbstractForm, edge::AbstractEdge)
-    return adapt_like(form, delta(virtualinds(form, edge)))
+    # Identity between the ket and bra bonds. An operator layer with its own virtual legs (the
+    # generating operator's auxiliary index) starts in its first slot — the norm sector — rather
+    # than on a three-leg diagonal: on a graded backend a lone auxiliary leg cannot be paired by
+    # `delta` at all (fermionic sites, 2026-09-15), and the a > 0 slots are sourced by the vertex
+    # factors during the iteration anyway.
+    m = delta(vcat(virtualinds(ket(form), edge), bra_virtualinds(form, edge)))
+    for a in virtualinds(operator(form), edge)
+        m = m * TensorInterface.onehot(Float64, a => 1)
+    end
+    return adapt_like(form, m)
 end
 
 function bp_factors(form::AbstractForm, verts::Vector)

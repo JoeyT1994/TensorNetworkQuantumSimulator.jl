@@ -42,7 +42,8 @@ end
 function _value_slice(t)
     aux = filter(i -> occursin("aux", string(TensorInterface.tags(i))), collect(TensorInterface.inds(t)))
     isempty(aux) && return t
-    return t * TensorInterface.onehot(scalartype(t), only(aux) => 1)
+    # `dag`: on a graded (fermionic) backend the slice must carry the dual arrow to contract
+    return t * TensorInterface.onehot(scalartype(t), TensorInterface.dag(only(aux)) => 1)
 end
 _value_sum(t) = sum(_value_slice(t))
 
@@ -349,6 +350,10 @@ another cache's environments (same state indices); `projector` and the remaining
 function generating_cache(ψ::TensorNetworkState, gen::GeneratingOperator, maxdim::Integer; λ::Real = 0,
                           seed = nothing, projector::Symbol = :cycle, convergence::Symbol = :marginal,
                           maxiter::Integer = 100, tolerance::Real = 1.0e-12, aux_free::Bool = false, verbose::Bool = false, kwargs...)
+    # Graded (fermionic) auxiliary indices: the padding's arrow convention per block side is not
+    # established, so the aux-free route is dense-only for now and graded caches take the true λ = 0
+    # environment.
+    aux_free = aux_free && !any(e -> Tensors.isgraded(only(virtualinds(gen.value, e))), edges(ψ))
     if iszero(λ) && aux_free
         # LEVER 3. At λ = 0 the a > 0 slots of every bond carry zero weight (the src end of each
         # edge factor is λ·Aₐ), so the free energy and the norm ring N_eff of the generating

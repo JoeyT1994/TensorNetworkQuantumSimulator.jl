@@ -382,7 +382,10 @@ function _ctm_tri_factor(B, ins::Vector{<:Index})
     rest = uniqueinds(B, ins)
     if isempty(rest)
         b = new_index(B, 1; tags = "Link,qr")
-        return B * adapt_like(B, delta(scalartype(B), b))
+        # a one on the width-1 bond; `onehot`, not `delta`: a graded `delta` needs paired indices
+        # and this single leg has none (hit on fermionic sites through the generating operator's
+        # graded auxiliary index, 2026-09-15)
+        return B * adapt_like(B, onehot(scalartype(B), b => 1))
     end
     return last(qr(B, rest))
 end
