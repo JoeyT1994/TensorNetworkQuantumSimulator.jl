@@ -840,3 +840,58 @@ plaquette's previous kept rank into the cyclic problem and keep it unless the sp
 an engine change in code whose history (docs/ctmrg_status.md) is full of falsified rank rules, so
 half a day with an uncertain outcome. It is the gate to both `:cycle` in the loop and the
 per-sector linear response solve. Not started; the decision is the user's.
+
+## Track 1: Heisenberg on the open hexagonal lattice — *2026-09-15*
+
+First model beyond the TFIM. `H = J Σ_e S·S = (J/4) Σ_e (XX + YY + ZZ)`, J = 1, on
+`named_hexagonal_lattice_graph(NX, NY)` (open; vertices are grid positions with holes, degrees 2
+and 3; hex(2,2) = 16 sites on a 6×3 box, hex(3,3) = 30 sites on 8×4). What this exercises that the
+TFIM did not: an edge term of operator-Schmidt rank 3 (auxiliary index of dimension 4, so the ±λ
+interfaces are 4·D² wide against 2·D² before), a grid with unoccupied positions in the CTM engine,
+and a three-colour gate schedule. Drivers now take `MODEL=heis NX NY J` through
+`scratchpad/model.jl`; the simple-update start is imaginary-time `Rxxyyzz` (θ = −i·dτ·J/2) from a
+Néel product state, real tensors throughout. Exact reference for hex(2,2): Lanczos in the Sz = 0
+sector (dimension 12870), **E₀ = −7.816281762810088, −0.48851761 per site** (`ed_heis.jl`, 6 s).
+
+**Correctness.** The optimiser's FD-of-F start energy on hex(2,2) matched the exact contraction of
+the BP state to 3e-9, and its final D = 3 energy matched the exact contraction of the final state to
+2e-8. So the rank-3 auxiliary index and the holed grid contract correctly through the generating
+network, the λ = 0 aux-free padding included.
+
+**hex(2,2), errors per site against E₀:**
+
+| D | SU start | BP stage (χ = 1) | CTM L-BFGS `:cut` χ = 48 | iterations, time |
+|---|---|---|---|---|
+| 3 | 1.433e-2 | 1.434e-2 | **1.269e-2** (converged: Δ < 2e-8, then no downhill direction) | 13 it, 3.1 min |
+| 4 | 6.29e-3 | 6.15e-3 | **1.137e-3** (exact contraction agrees with FD-of-F to 2e-8; still descending 2%/it) | 10 it, ≈ 20 min of environment sets |
+
+Two things differ from the TFIM. (1) The BP stage does nothing for the true energy here (it lowers
+the Bethe energy, which is 4% off, and leaves the exact energy where simple update put it, or 6e-5
+worse at D = 3); the χ = 1 environment is too poor for the Heisenberg antiferromagnet, whose loop
+corrections are not small at D = 3–4. (2) The gap is 1e-2, not 1e-6: at D = 3 and 4 the ansatz, not
+the optimiser, is the limit — the CTM stage converges to the D = 3 variational floor in three
+minutes and cannot go further. Heisenberg on the honeycomb needs D ≥ 5–6 for 1e-3; that is the next
+run and it is a matter of environment cost only.
+
+**Cost, and an engine fix it forced.** An environment set at hex(2,2) D = 3 χ = 48 is ≈ 3 s at
+6 threads (16 sites, 6×3 box); a unit L-BFGS step is 3–4 s. At D = 4 the ±λ interfaces are
+4·D² = 64 wide against χ = 48, and every converge after a step ran to the 40-sweep cap (40–130 s)
+with F at 1e-15 and the marginals at 1e-9: the binding term was the raw C/T state distance the
+`:cut` criterion folds in, sitting at 1e-4–3e-3 for ever as the hard-truncated bases rotate. Under
+the `:marginal` criterion that gauge-dependent term is redundant (the marginal distance is the
+full-coverage stationarity signal), so `update` no longer folds it in for `:marginal`. The same
+term is what made the 5×5 D = 4 environment sets cost 250 s. At hex(3,3) (30 sites, 8×4 box) D = 3 χ = 48 an environment set is ≈ 22 s at 8 threads and a unit L-BFGS step 23 s — 7× the 5×5 TFIM D = 3 cost per site, the price of the rank-3 edge term (4·D² interfaces) on a lattice with more, longer boundaries.
+
+**hex(3,3), 30 sites, D = 3 (no exact reference; energies per site by boundary MPS at χ = 32):**
+
+| stage | E/site | Δ vs SU |
+|---|---|---|
+| simple update | −0.48920388 | |
+| BP stage (4 sweeps, 45 s) | −0.48924359 | −4.0e-5 |
+| CTM L-BFGS `:cut` χ = 48, 8 iterations (6 min) | **−0.48988930** (bMPS χ = 32: −0.48988930, agreeing with the FD-of-F estimate to 2e-9) | −6.9e-4 |
+
+Same shape as hex(2,2): the BP stage moves the true energy by 4e-5, the CTM stage by 7e-4, and the
+optimiser converges to the D = 3 floor in eight iterations (unit L-BFGS steps from iteration 4, the
+last gains 1e-6 per step). The route is fully general in the Hamiltonian and lattice as claimed;
+what it now needs on this model is D ≥ 5, i.e. hour-long environment sets at the current engine
+cost — exactly the rank-r scaling that motivates the per-sector response solve.
