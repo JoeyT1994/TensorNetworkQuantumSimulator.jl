@@ -1,7 +1,6 @@
 using NamedGraphs.PartitionedGraphs: PartitionedGraph, quotient_graph, quotientvertices, 
     QuotientEdge, quotientedges, quotientedge, QuotientVertex, unpartitioned_graph, QuotientEdges
-using NamedGraphs: add_edges!, NamedDiGraph
-using NamedGraphs.GraphsExtensions: directed_graph, undirected_graph, forest_cover_edge_sequence, all_edges
+using NamedGraphs: add_edges!, forest_cover_edge_sequence, all_edges
 using SplitApplyCombine: group
 
 #TODO: Make this show() nicely.
@@ -178,7 +177,7 @@ end
 #`all_edges` enumerates directed edges; the quotient graph is undirected, so convert it
 #before wrapping. Calling `all_edges` directly on the undirected quotient silently yielded
 #an empty collection and skipped constructor-time boundary-MPS message initialization.
-all_quotientedges(graph) = QuotientEdges(all_edges(directed_graph(quotient_graph(graph))))
+all_quotientedges(graph) = QuotientEdges(collect(all_edges(quotient_graph(graph))))
 all_quotientedges(bmps_cache::BoundaryMPSCache) = all_quotientedges(supergraph(bmps_cache))
 
 #Initialise all the interpartition message tensors
@@ -249,7 +248,7 @@ end
 
 function partition_graph(bmps_cache::BoundaryMPSCache, partition::QuotientVertex)
     vs = vertices(supergraph(bmps_cache), partition)
-    es = filter(e -> src(e) ∈ vs && dst(e) ∈ vs, edges(supergraph(bmps_cache)))
+    es = filter(e -> src(e) ∈ vs && dst(e) ∈ vs, collect(edges(supergraph(bmps_cache))))
     g = NamedGraph(vs)
     add_edges!(g, es)
     return g
@@ -569,7 +568,7 @@ end
 
 function delete_partition_messages!(bmps_cache::BoundaryMPSCache, partition::QuotientVertex)
     g = partition_graph(bmps_cache, partition)
-    es = edges(g)
+    es = collect(edges(g))
     es = vcat(es, reverse.(es))
     return deletemessages!(bmps_cache, filter(e -> e ∈ keys(messages(bmps_cache)), es))
 end

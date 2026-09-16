@@ -61,7 +61,10 @@ end
 
 space(i::Index) = IB.space(i)
 isgraded(i::Index) = space(i) isa Union{GA.GradedOneTo, GA.SectorOneTo}
-isgraded(t::AbstractTensor) = IB.unnamed(t) isa GA.AbstractGradedArray
+# GradedArrays 0.16 has no common abstract supertype for graded storage: an ITensor over graded
+# indices holds a `GradedArray`, while matricized factors are `FusedGradedMatrix`/`Vector`.
+const GradedStorage = Union{GA.GradedArray, GA.AbstractFusedGradedArray}
+isgraded(t::AbstractTensor) = IB.unnamed(t) isa GradedStorage
 isgraded(x) = false
 isdual(i::Index) = TA.isdual(i)
 
@@ -192,16 +195,23 @@ function TensorInterface.data(t::AbstractTensor)
     isgraded(t) || return vec(A)
     return _storedvec(A)
 end
-function _storedvec(A::GA.AbstractGradedArray)
-    return reduce(vcat, (vec(collect(view(A, I))) for I in GA.eachblockstoredindex(A)); init = eltype(A)[])
+# GradedArrays 0.16 disables block and scalar indexing by default; the block-wise storage walks
+# below opt in for their extent (a copy of each stored block, not a performance path).
+_with_block_access(f) = GA.with_block_indexing(() -> GA.with_scalar_indexing(f))
+function _storedvec(A::GradedStorage)
+    return _with_block_access() do
+        reduce(vcat, (vec(Array(view(A, I))) for I in GA.eachblockstoredindex(A)); init = eltype(A)[])
+    end
 end
 # In-place scaling of the storage (the `data` vector of a graded tensor is a copy, so `rmul!` on
 # it would be lost): dense arrays directly, graded ones block by block.
 function TensorInterface.scale!(t::AbstractTensor, c::Number)
     A = IB.unnamed(t)
     if isgraded(t)
-        for I in GA.eachblockstoredindex(A)
-            view(A, I) .*= c
+        GA.with_block_indexing() do
+            for I in GA.eachblockstoredindex(A)
+                view(A, I) .*= c
+            end
         end
     elseif A isa Diagonal
         A.diag .*= c
@@ -231,8 +241,13 @@ TensorInterface.sim(t::AbstractTensor) = sim(t)
 # leg against its conjugate gives the supertrace θ = −1 on odd fermion parity, so the bra carries
 # the compensating twist there and closed bra–ket networks evaluate to the Hilbert inner product
 # (checked: `norm_sqr` of an odd-parity product state is +1, in any contraction order).
+# `conj` of an ITensor dualises its axes. GradedArrays 0.16's matrix-level fused storage
+# (`FusedGradedMatrix`, and the `FusedGradedDiagonal` factor of an SVD/eigen) stores non-dual axes
+# only, so its broadcast cannot allocate the conjugate; the tensor-level `GradedArray` wrap of the
+# same storage can (see `_densify_array`).
+_conj(t::AbstractTensor) = conj(_densify(t))
 function TensorInterface.dag(t::AbstractTensor)
-    c = conj(t)
+    c = _conj(t)
     isgraded(t) || return c
     dims = Tuple(k for (k, i) in enumerate(inds(t)) if isdual(i) && occursin("Charge", _tagstring(i)))
     isempty(dims) || GA.twist!(IB.unnamed(c), dims)
@@ -252,7 +267,7 @@ Base.imag(t::AbstractTensor) = ndims(t) == 0 ? imag(t[]) : ITensor(imag(IB.unnam
 # network; the adjoint of an isometry is NOT that (its bond leg is dual) — hence this verb.
 # Bosonic sectors: no twists, so `dag(t, cod) == dag(t)`.
 function TensorInterface.dag(t::AbstractTensor, cod)
-    c = conj(t)
+    c = _conj(t)
     isgraded(t) || return c
     cv = _indvec(cod)
     dims = Tuple(k for (k, i) in enumerate(inds(t)) if (any(==(i), cv) ? isdual(i) : !isdual(i)))
@@ -349,7 +364,8 @@ function TensorInterface.charge_sectors(is::AbstractVector{<:Index})
     any(isgraded, is) || return Index[Index(1, "Charge")]
     fused = length(is) == 1 ? GA.tensor_product(space(only(is))) :
         reduce(GA.tensor_product, (space(i) for i in is))
-    return Index[Index(GA.gradedrange([GA.dual(c) => 1]), "Charge") for c in GA.sectors(fused)]
+    # GradedArrays 0.16 keeps sector labels non-dual and carries the arrow on the range
+    return Index[Index(TA.dual(GA.gradedrange([c => 1])), "Charge") for c in GA.sectors(fused)]
 end
 
 # Basis state / projector onto a basis state of one site. Graded sites: the vector is
@@ -374,6 +390,10 @@ function _vector_tensor(data::AbstractVector, i::Index)
     isgraded(i) || return ITensor(data, (i,))
     p = TA.tryproject(data, (i,), ())
     p === nothing || return p
+    # GradedArrays 0.16 derives the auxiliary charge with the leg's arrow applied and cannot build the
+    # aux range from a dual leg, so a dual index is handled through its ket copy: project onto
+    # `dual(i)` and conjugate, which dualises both the leg (back to `i`) and the aux charge leg.
+    isdual(i) && return conj(_vector_tensor(conj(data), TA.dual(i)))
     q = TA.tryproject_aux(data, (i,), ())
     q === nothing && error("state: vector has no consistent charge on $(i)")
     aux = last(inds(q))
@@ -439,7 +459,9 @@ function TensorInterface.combiner(is::AbstractVector{<:Index}; tags = "CMB,Link"
         c = IB.named(fused, IB.IndexName(; tags = _totags(String(tags))))
         c2 = sim(c)
         I2 = IB.id(elt, (c,), (c2,))                       # (c, dual c2)
-        I2 = ITensor(GA.FusedGradedMatrix(IB.unnamed(I2)), Tuple(inds(I2)))
+        # `unmatricize` splits a matrix-level fused matrix; `id` returns tensor-level storage on
+        # GradedArrays 0.16, so hand it the stored matricized form.
+        I2 = ITensor(TA.matricize(IB.unnamed(_densify(I2))), Tuple(inds(I2)))
         return TA.unmatricize(I2, c => (c,), inds(I2)[2] => Tuple(is))
     end
     D = prod(TensorInterface.dim.(is))
@@ -645,8 +667,10 @@ function TensorInterface.map_diag!(f::Function, out::AbstractTensor, t::Abstract
     A = IB.unnamed(t)
     O = IB.unnamed(out)
     if isgraded(t)
-        for k in 1:minimum(size(O))
-            O[k, k] = f(A[k, k])
+        GA.with_scalar_indexing() do
+            for k in 1:minimum(size(O))
+                O[k, k] = f(A[k, k])
+            end
         end
     elseif O isa Diagonal && A isa Diagonal       # factorization output: work on the stored diagonal
         O.diag .= f.(A.diag)
@@ -672,7 +696,7 @@ function Adapt.adapt_structure(to::Type{<:AbstractArray}, t::AbstractTensor)
     B = adapt(to, A)
     return B === A ? t : ITensor(B, Tuple(inds(t)))
 end
-Adapt.adapt_structure(::Type{<:GA.AbstractGradedArray}, t::AbstractTensor) = t
+Adapt.adapt_structure(::Type{<:GradedStorage}, t::AbstractTensor) = t
 Adapt.adapt_structure(to, t::AbstractTensor) = ITensor(adapt(to, IB.unnamed(t)), Tuple(inds(t)))
 
 # ── Factorizations (MatrixAlgebraKit through ITensorBase's named wrappers) ───────────────
@@ -723,10 +747,10 @@ MAK.findtruncated_svd(values::AbstractVector, st::RankGapTruncation) = MAK.findt
 # Graded spectra arrive as one vector per sector; decide on the merged list (each entry weighted
 # once — abelian sectors have dimension 1) and hand back per-sector kept positions.
 function MAK.findtruncated(v::GA.FusedGradedVector, st::RankGapTruncation)
-    entries = [(abs(val), i, j) for (i, b) in enumerate(v.blocks) for (j, val) in enumerate(b)]
+    entries = [(abs(val), i, j) for (i, b) in enumerate(GA.sectordata(v)) for (j, val) in enumerate(b)]
     sort!(entries; by = first, rev = true)
     k = _rankgap_count([e[1] for e in entries], st)
-    kept = [Int[] for _ in v.blocks]
+    kept = [Int[] for _ in GA.sectordata(v)]
     for (_, i, j) in entries[1:k]
         push!(kept[i], j)
     end
@@ -763,7 +787,13 @@ end
 # `Diagonal{<:CuArray}` is a host array — so `S * V` on device data mixed host and device storage.
 # Densify the (small, k×k) diagonal on the same device as its data; every downstream diagonal op
 # then sees ordinary dense storage.
-_densify(t::AbstractTensor) = (A = IB.unnamed(t); A isa Diagonal ? ITensor(_densify_array(A), Tuple(inds(t))) : t)
+# Graded factorizations return a `FusedGradedDiagonal`; densify it likewise (see `_conj`).
+_densify(t::AbstractTensor) = ITensor(_densify_array(IB.unnamed(t)), Tuple(inds(t)))
+_densify_array(A::GA.FusedGradedDiagonal) = _densify_array(GA.FusedGradedMatrix(A))
+# A bare fused matrix (matricized storage) as a `{1,1}` `GradedArray` sharing its buffer: the form
+# every other graded tensor holds, and the one whose `conj`/broadcast allocate correctly.
+_densify_array(A::GA.AbstractFusedGradedMatrix) = GA.GradedArray(A)
+_densify_array(A::AbstractArray) = A
 function _densify_array(D::Diagonal)
     n = length(D.diag)
     M = similar(D.diag, n, n)
@@ -771,7 +801,7 @@ function _densify_array(D::Diagonal)
     view(M, LinearAlgebra.diagind(M)) .= D.diag
     return M
 end
-_diagvals(S::AbstractTensor) = (A = IB.unnamed(S); isgraded(S) ? [A[k, k] for k in 1:minimum(size(A))] : A isa Diagonal ? Array(A.diag) : Array(view(A, LinearAlgebra.diagind(A))))
+_diagvals(S::AbstractTensor) = (A = IB.unnamed(S); isgraded(S) ? GA.with_scalar_indexing(() -> [A[k, k] for k in 1:minimum(size(A))]) : A isa Diagonal ? Array(A.diag) : Array(view(A, LinearAlgebra.diagind(A))))
 # Retag the two legs of the central matrix (and the matching bond legs of U / Vh).
 function _relabel_bond(t::AbstractTensor, old::Index, tags::AbstractString)
     new = IB.named(space(_ascarried(t, old)), IB.IndexName(; tags = _totags(tags), plev = IB.plev(old)))
@@ -872,15 +902,18 @@ function LinearAlgebra.eigen(t::AbstractTensor, linds, rinds; ishermitian::Bool 
     ishermitian || error("eigen: only ishermitian = true is implemented")
     lv = _ascarried(t, _indvec(linds)); rv = _ascarried(t, _indvec(rinds))
     t = _hermitian_part(t, lv, rv)
-    if isgraded(t) && length(lv) == 1 && length(rv) == 1 && findfirst(==(lv[1]), inds(t)) == 2
-        # Fermionic sign trap: matricising a 2-leg tensor with the SECOND stored leg as codomain
-        # transposes the two legs, and a transposition of two odd legs carries the fermionic sign, so
-        # the odd-parity block comes back negated — a positive-definite message reads as having
-        # negative eigenvalues (measured: block eigenvalues +0.087, +0.297, `eigh_full` returned
-        # −0.087, −0.297) and every `sqrt` downstream fails. Decompose in stored order (codomain =
-        # first leg) and map the result onto the requested labelling: the eigenvector tensor is
-        # `conj(V)` named onto `rinds`, the eigenvalue matrix keeps its arrows. Verified: `Ul·D·dag(U)`
-        # reproduces M in M's own orientation and `ψ·√M·dag(√M⁻¹) = ψ` to 1e-16.
+    if isgraded(t) && length(lv) == 1 && length(rv) == 1 && IB.plev(lv[1]) > IB.plev(rv[1])
+        # Fermionic sign trap: a Hermitian ket/bra pair `M[u, u′] = Σ ψ ψ†` is positive as the map
+        # u′ → u (codomain = the ket leg). Read with the bra leg as codomain it is the supertranspose,
+        # whose odd-parity block carries the fermionic sign and comes back negated (measured on a
+        # 2×2 fermionic BP message: +0.181 as `eigh_full(M, (u,), (u′,))`, −0.181 as
+        # `eigh_full(M, (u′,), (u,))`) and every `sqrt` downstream fails. GradedArrays 0.16 makes
+        # this depend only on the requested codomain, never on the stored leg order (0.15 tied it to
+        # the stored order, which this branch used to key on). So when the caller asks for the
+        # primed (bra) leg as codomain, decompose with the ket leg as codomain instead and map the
+        # result onto the requested labelling: the eigenvector tensor is `conj(V)` named onto
+        # `rinds`, the eigenvalue matrix keeps its arrows, so `Ul·D·dag(U)` reproduces M in M's own
+        # orientation.
         D, V = MAK.eigh_full(t, Tuple(rv), Tuple(lv))
         D = _densify(D)
         d1, d2 = inds(D)
@@ -1284,17 +1317,30 @@ end
 # The BP message gauge freedom is PER SECTOR: a unit-modulus per-sector phase (the fermionic parity
 # sign is one instance) gives an equally valid fixed point. Select the PSD representative by
 # normalising each diagonal block's trace to positive real.
+# The representative is fixed on the MAP `bra → ket` (codomain = the unprimed ket leg), the
+# orientation `eigen` decomposes in: on GradedArrays 0.16 a stored block and the corresponding
+# block of that map can differ by the fermionic sign of the leg bend (measured on a product-state
+# BP message: stored odd block +1, map eigenvalue −1), so the phases are read off and applied to
+# the matricized map, not to the stored blocks.
 function psd_gauge(t::AbstractTensor)
     (isgraded(t) && ndims(t) == 2) || return t
-    A = copy(IB.unnamed(t))
-    for I in GA.eachblockstoredindex(A)
-        b = view(A, I)
+    i1, i2 = inds(t)
+    kdim = IB.plev(i1) <= IB.plev(i2) ? 1 : 2
+    ket, bra = inds(t)[kdim], inds(t)[3 - kdim]
+    u = IB.unnamed(t)
+    m = copy(TA.matricizeperm(u, (kdim,), (3 - kdim,)))   # the map bra → ket; `copy`: it may view `u`
+    m isa GA.FusedGradedMatrix || error("psd_gauge: expected matricized fused storage, got $(typeof(m))")
+    for b in GA.sectordata(m)                      # per coupled sector, a view into the buffer
         n = min(size(b)...)
         n == 0 && continue
-        z = sum(b[k, k] for k in 1:n)
+        z = LinearAlgebra.tr(Array(b)[1:n, 1:n])
         iszero(z) || (b .*= conj(z) / abs(z))
     end
-    return ITensor(A, Tuple(inds(t)))
+    # `unmatricize` takes domain axes codomain-facing (un-dualised) and dualises them in the result
+    cod, dom = (axes(u)[kdim],), (axes(u)[3 - kdim],)
+    u2 = TA.unmatricize(m, cod, map(TA.dual, dom))   # back to (ket, bra) tensor storage
+    axes(u2) == (cod..., dom...) || error("psd_gauge: unmatricize changed the axes: $(axes(u2)) vs $((cod..., dom...))")
+    return ITensor(u2, (ket, bra))
 end
 
 # Charge spectrum reachable by one message site: the convolution of its legs' carried sector
@@ -1356,7 +1402,7 @@ end
 # the leg-class twist rules against an exact MPS fit; direction-independent, an involution, and
 # the same recipe the TensorKit backend used). Trivial for bosonic sectors.
 function fit_adjoint(t::AbstractTensor, metric_legs)
-    c = conj(t)
+    c = _conj(t)
     isgraded(t) || return c
     mv = _indvec(metric_legs)
     dims = Tuple(k for (k, i) in enumerate(inds(t)) if !isdual(i) && any(==(i), mv))
