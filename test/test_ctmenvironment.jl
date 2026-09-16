@@ -531,7 +531,7 @@ end
     e2 = TNQS.sweep_vertex_environments(c4, e1)
     @test !isnothing(TNQS._ctm_statedist(e2, e1))       # index-stable from sweep 2: a distance exists
     kC = first(k for (k, v) in e2.C if !isnothing(v))
-    e2b = TNQS.CTMVertexEnvironments(copy(e2.C), e2.T, e2.PH, e2.PV, e2.Lx, e2.Ly)
+    e2b = TNQS.CTMVertexEnvironments(copy(e2.C), e2.T, e2.PH, e2.PV, e2.CYC, e2.Lx, e2.Ly)
     iC = first(inds(e2.C[kC]))
     e2b.C[kC] = replaceind(e2.C[kC], iC, sim(iC))
     @test isnothing(TNQS._ctm_statedist(e2b, e1))       # one re-indexed block => no distance
@@ -560,6 +560,52 @@ end
                               ("Z", [vhh]))) - exhh)
         @test err < bound
     end
+end
+
+@testset "Cycle solver: warm-started block Krylov (cycle_solver = :block)" begin
+    # `:block` (Woolls et al., MP-BP §V.D) keeps each plaquette's Schur bases from the previous sweep
+    # and solves the cycle in a depth-K block Krylov space, the outer sweep acting as the restart;
+    # `:schur` (the default) is the cold single-vector solve. Same fixed point, same consumers.
+    g3 = named_grid((3, 3))
+    @test_throws ArgumentError CTMEnvironmentCache(
+        random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle, cycle_solver = :nonsense)
+    @test_throws ArgumentError CTMEnvironmentCache(
+        random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle, cycle_depth = 0)
+    @test TNQS.options(CTMEnvironmentCache(random_tensornetwork(Float64, g3; bond_dimension = 2), 4)).cycle_solver === :schur
+
+    # 1. Exact at lossless χ, real and complex, and identical to the cold solver's F.
+    Random.seed!(31)
+    for elt in (Float64, ComplexF64)
+        tn = random_tensornetwork(elt, named_grid((4, 4)); bond_dimension = 2)
+        lnZ = log(abs(contract(tn; alg = "exact")))
+        Fs = [cvm_freenergy(update(CTMEnvironmentCache(tn, 40; projector = :cycle, cycle_solver = s)))
+              for s in (:schur, :block)]
+        @test abs(Fs[2] - lnZ) < 1.0e-12
+        @test abs(Fs[2] - Fs[1]) < 1.0e-12
+    end
+
+    # 2. The warm start is actually taken: sweep 1 has no bases and falls back to the cold solve on
+    #    every plaquette, sweep 2 runs warm on every plaquette.
+    Random.seed!(32)
+    tn6 = random_tensornetwork(Float64, named_grid((6, 6)); bond_dimension = 2)
+    c = CTMEnvironmentCache(tn6, 16; projector = :cycle, cycle_solver = :block)
+    empty!(TNQS.CTM_SVD_STATS)
+    c = update(c; maxiter = 1, tolerance = 0.0)
+    @test get(TNQS.CTM_SVD_STATS, :cycle_block_warm, 0) == 0
+    @test get(TNQS.CTM_SVD_STATS, :cycle_block_cold, 0) == 25
+    empty!(TNQS.CTM_SVD_STATS)
+    c = update(c; maxiter = 1, tolerance = 0.0)
+    @test get(TNQS.CTM_SVD_STATS, :cycle_block_warm, 0) == 25
+    @test get(TNQS.CTM_SVD_STATS, :cycle_block_cold, 0) == 0
+    @test isfinite(cvm_freenergy(c))
+
+    # 3. Observable exact at lossless χ on a state, through the `expect` path.
+    Random.seed!(33)
+    g4 = named_grid((4, 4))
+    ψ = random_tensornetworkstate(ComplexF64, g4, siteinds("S=1/2", g4); bond_dimension = 2)
+    ex = real(only(expect(ψ, ("Z", [(2, 2)]); alg = "exact")))
+    cb = update(CTMEnvironmentCache(ψ, 16; projector = :cycle, cycle_solver = :block); convergence = :worst_region)
+    @test abs(real(only(expect(cb, ("Z", [(2, 2)]); alg = "ctmrg"))) - ex) < 1.0e-10
 end
 
 @testset "CVM on graded (Z2-symmetric) tensors" begin

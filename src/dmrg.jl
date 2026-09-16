@@ -409,7 +409,7 @@ function frozen_generating_cache(ψ::TensorNetworkState, gen::GeneratingOperator
         for (k, _) in S.T
             b = _ctm_block(S, tbl, S1, (:T, k...), opts); isnothing(b) || (T[k] = _ctm_rescale(b))
         end
-        S = CTMVertexEnvironments(C, T, S1.PH, S1.PV, S.Lx, S.Ly)
+        S = CTMVertexEnvironments(C, T, S1.PH, S1.PV, S1.CYC, S.Lx, S.Ly)
         F = cvm_freenergy(S, cλ)
         abs(F - Fprev) < tol * max(1.0, abs(F)) && (converged = true; break)
         Fprev = F
@@ -451,7 +451,7 @@ end
 # projector tuples `(P_A, P_B, w, …)` (indices and non-tensors pass through).
 function _map_env(env::CTMVertexEnvironments, f)
     mapd(d) = Dict(k => (v isa Tuple ? Tuple(f(x) for x in v) : f(v)) for (k, v) in d)
-    return CTMVertexEnvironments(mapd(env.C), mapd(env.T), mapd(env.PH), mapd(env.PV), env.Lx, env.Ly)
+    return CTMVertexEnvironments(mapd(env.C), mapd(env.T), mapd(env.PH), mapd(env.PV), mapd(env.CYC), env.Lx, env.Ly)
 end
 
 """

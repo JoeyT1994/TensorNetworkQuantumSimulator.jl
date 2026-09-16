@@ -33,7 +33,7 @@
 # See docs/ctmrg_status.md for the current numbers and the open problems;
 # docs/finite_ctmrg_design.md for the derivations and the full record of what was tried.
 
-using LinearAlgebra: norm, dot, qr, svd, diag
+using LinearAlgebra: norm, dot, qr, svd, diag, schur, ordschur
 using Random: Xoshiro
 using KrylovKit: schursolve, Arnoldi
 
@@ -57,6 +57,8 @@ governs, referenced below.
 | `projector` | `:cut` | which interface projector to derive: `:cut` (optimal rank-χ truncation of one bipartition) or `:cycle` (four-corner cycle, which makes `F` stationary). See "Choosing a projector" below. |
 | `cycle_rankcut` | `0.0` | ⚠️ **`:cycle` only.** Relative cutoff on the four-corner cycle spectrum: retained modes with `abs(λ) ≤ cycle_rankcut · abs(λ_max)` are dropped. Guards the OVER-parametrised regime (χ above the state's rank), where the surplus near-null modes are arbitrary and wander sweep to sweep. `0` disables — deliberately the default: a fixed MAGNITUDE cutoff that fixes over-parametrised cases breaks higher-entanglement ones (measured 2026-08-19: 1e-10 repairs 5×5 nl=3 but degrades 4×4 nl=4 from 1e-15 to 7.6e-11, and no smaller value threads the needle — junk and real weight OVERLAP in magnitude across cases). `cycle_gapcut` below is the gap-based rule that does thread it. Distinct from `qr_cutoff`, which cuts the biorthogonal OVERLAP. |
 | `cycle_gapcut` | `0.0` | ⚠️ **`:cycle` only.** Noise-cliff rank cut: truncate the trailing spectral block below the first cliff that is BOTH steep (`abs(λ_{j+1}) ≤ cycle_gapcut · abs(λ_j)`) and genuinely tiny (`abs(λ_{j+1}) ≤ √eps · abs(λ_1)`). `0` disables — **the default since 2026-09-09.** It was `1e-4` (motivated 2026-08-21 by an over-parametrised 5×5 whose retained noise was drawn differently left and right); the left/right spectral-consistency guard introduced at the same time handles that case on its own, and with that guard plus the degenerate-partner restarts an A/B over lossless, under-truncated and over-parametrised cases (dense 4×4 D=2 χ=8/16, random 4×4 χ=32, random 5×5 χ=8/16, TFIM 5×5 χ=8/16/32) found the cut never helping and hurting three times: it removes deep-but-real directions — the √eps floor is generous because a cycle eigenvalue is the FOURTH power of a corner's, so a 4e-9 cycle mode is a ~1e-2 corner mode. Measured: the lossless dense 4×4 observable 2.4e-7 → 1.7e-15, χ=8 2.3e-7 → 9e-9, random 5×5 χ=8 2.3e-4 → 1.5e-5, everything else bit-identical. Keep it as a knob for a case the guard demonstrably misses. |
+| `cycle_solver` | `:schur` | ⚠️ **`:cycle` only.** How each plaquette's dominant invariant subspace is found. `:schur`: a cold single-vector KrylovKit `schursolve` per plaquette per sweep, converged to 1e-16, with deflation restarts for degenerate partners — the cost is flat across sweeps. `:block`: a block Krylov space of depth `cycle_depth` warm-started from the previous sweep's Schur bases (Woolls et al., MP-BP §V.D), Rayleigh–Ritz on the compressed problem, the outer sweep acting as the restart — the cost per sweep shrinks as the environment converges and degenerate partners are seen at once. Falls back to `:schur` on the first sweep, on any plaquette whose west interface changed identity, and on graded data. See `_ctm_block_krylov`. |
+| `cycle_depth` | `4` | `cycle_solver = :block` only. Krylov depth `K`: the block space is `{V, ΛV, …, Λ^K V}` with `V` the previous sweep's rank-χ basis, so a warm plaquette costs about `(K+1)·χ` cycle applications per side. |
 | `svd` | `:auto` | **`:cut` only.** How the truncated SVD behind each interface projector is computed. `:dense` is the dense route — thin QR of each enlarged corner and a FULL SVD of their `n × n` overlap, `n = χ·D²` on a double layer, costing `O(n³) = O(χ³D⁶)` per interface although only `χ` triplets are used. `:subspace` is matrix-free — block subspace iteration on the enlarged corners themselves, warm-started from the previous sweep's projector (see `_ctm_subspace_svd`), costing `O(n²χ) = O(χ³D⁴)` per interface, the boundary-MPS scaling. `:auto` (default) picks `:subspace` on dense tensors whenever the block is large enough for it to win (see `_ctm_use_subspace`) and `:dense` otherwise — including on graded (symmetric) tensors, where a cold start cannot yet allocate its block across sectors; force `:subspace` there explicitly. |
 | `svd_oversample` | `16` | `:subspace` only. Extra block columns beyond `χ`. The retained `χ`-dimensional subspace converges like `(σ_{χ+p+1}/σ_χ)²` per iteration, so oversampling buys convergence on slowly decaying spectra; each column costs one more `n²` GEMM per application. |
 | `svd_maxiter` | `10` | `:subspace` only. Cap on block iterations per projector; the route bails out to the dense SVD as soon as the residual decay predicts the cap will not suffice (see `_ctm_subspace_svd`). Warm-started interfaces typically exit after 1–3; a cold start needs more, and a cap of 6 measured too tight for the first sweeps on a 9×9 D=3 PEPS at χ=48. |
@@ -145,6 +147,9 @@ Base.@kwdef struct CTMOptions
     # is the FOURTH power of their single-corner weight (dense 4×4 D=2 at the lossless χ = 16:
     # observable 2.4e-7 with the cut, 1.7e-15 without). See the options table.
     cycle_gapcut::Float64 = 0.0
+    # Solver for the cycle's dominant invariant subspace — see the options table and `_ctm_block_krylov`.
+    cycle_solver::Symbol = :schur
+    cycle_depth::Int = 4
     # Truncated-SVD route for the `:cut` projector — see the table above and `_ctm_subspace_svd`.
     svd::Symbol = :auto
     svd_oversample::Int = 16
@@ -153,10 +158,13 @@ Base.@kwdef struct CTMOptions
     svd_min::Int = 64
 
     function CTMOptions(gauge, degtol, qr_cutoff, optimal_max,
-                        projector, cycle_rankcut, cycle_gapcut,
+                        projector, cycle_rankcut, cycle_gapcut, cycle_solver, cycle_depth,
                         svd, svd_oversample, svd_maxiter, svd_tol, svd_min)
         projector in (:cut, :cycle) || throw(ArgumentError(
             "projector must be :cut or :cycle, got $(repr(projector))"))
+        cycle_solver in (:schur, :block) || throw(ArgumentError(
+            "cycle_solver must be :schur or :block, got $(repr(cycle_solver))"))
+        cycle_depth >= 1 || throw(ArgumentError("cycle_depth must be ≥ 1, got $cycle_depth"))
         0 <= cycle_gapcut < 1 || throw(ArgumentError(
             "cycle_gapcut is a relative gap ratio and must lie in [0, 1), got $cycle_gapcut"))
         svd in (:auto, :dense, :subspace) || throw(ArgumentError(
@@ -165,7 +173,7 @@ Base.@kwdef struct CTMOptions
         svd_maxiter >= 1 || throw(ArgumentError("svd_maxiter must be ≥ 1, got $svd_maxiter"))
         svd_tol >= 0 || throw(ArgumentError("svd_tol must be ≥ 0, got $svd_tol"))
         return new(gauge, degtol, qr_cutoff, optimal_max, projector, cycle_rankcut, cycle_gapcut,
-                   svd, svd_oversample, svd_maxiter, svd_tol, svd_min)
+                   cycle_solver, cycle_depth, svd, svd_oversample, svd_maxiter, svd_tol, svd_min)
     end
 end
 
@@ -719,6 +727,9 @@ struct CTMVertexEnvironments
     T::Dict{Tuple{Symbol, Int, Int}, Any}
     PH::Dict{Tuple{Symbol, Int, Int}, Any}
     PV::Dict{Tuple{Symbol, Int, Int}, Any}
+    # `cycle_solver = :block`: each plaquette's (right, left) orthonormal Schur bases on its west bond
+    # from the sweep that produced this environment, keyed `(X, Y)` — the warm start of the next sweep.
+    CYC::Dict{Tuple{Int, Int}, Any}
     Lx::Int
     Ly::Int
 end
@@ -962,7 +973,7 @@ function vertex_environments(cache::CTMEnvironmentCache)
                 _ctm_pAdag(PH, (:S, x - 1, y)), _ctm_pA(PH, (:S, x, y))))
         end
     end
-    return CTMVertexEnvironments(C, T, PH, PV, Lx, Ly)
+    return CTMVertexEnvironments(C, T, PH, PV, Dict{Tuple{Int, Int}, Any}(), Lx, Ly)
 end
 
 # Biorthogonal (two-sided) projector pair for the interface shared by two complementary
@@ -1179,8 +1190,107 @@ function _ctm_kept_rank(pr)
     return n
 end
 
+# --- warm-started block Krylov solve (`cycle_solver = :block`) --------------------------
+#
+# The cold `schursolve` path rebuilds each plaquette's invariant subspace from one random vector
+# every sweep, converged to 1e-16 — the same price on sweep 30 as on sweep 1, and (measured) 30–80
+# cycle applications per plaquette per sweep on small lattices, at least 8χ+16 on large bonds.
+# Woolls et al. (MP-BP, §V.D) instead keep the previous sweep's rank-χ basis `V` and build the block
+# Krylov space {V, ΛV, …, Λ^K V} with K ≈ 3–4, solving the compressed Rayleigh–Ritz problem; the
+# outer CTMRG sweep is the restart, so the per-sweep cost falls as the environment converges, and a
+# block start sees every copy of a degenerate eigenvalue at once (no deflation restarts needed).
+#
+# `f` is the (scaled) cycle action, `V0` the previous basis on `legs` — its bond is the one leg not
+# in `legs` — widened with random columns to `k` if it kept fewer. The blocks are orthonormalised by
+# two passes of block Gram–Schmidt (`gram`, the Hilbert inner product) and a QR; the m×m matrix
+# `Q† f Q` is Schur-factored on the host, its Schur vectors ordered by |λ|, and the leading `k`
+# define the basis (a conjugate pair of a real Schur form is never split at the cut — the cold path's
+# degtol rule). Returns the columns as individual vectors on `legs` plus the dim-1 slot leg `c`, their
+# Ritz values, and all-`true` flags: the outer sweep converges the subspace, a per-sweep gate would
+# only decline the warm start. Returns `nothing` when the space is too small to retain anything.
+# Dense data only: on graded storage the small Schur problem would have to be solved per sector.
+function _ctm_block_krylov(f, V0, k::Integer, K::Integer, legs::Vector{<:Index}, c::Index, rng, elt, like)
+    n = prod(dim.(legs))
+    k = min(Int(k), n)
+    k >= 1 || return nothing
+    b0 = only(uniqueinds(V0, legs))
+    V = V0
+    if dim(b0) < k                                # the previous sweep kept fewer: widen at random
+        z = new_index(like, k - dim(b0); tags = "Link,cyc")
+        extra = adapt_like(like, random_tensor(rng, elt, vcat(legs, [z])))
+        V = directsum(V => b0, extra => z; tags = "Link,cyc")
+    end
+    Q = _ctm_orthbasis(V, legs)                   # (legs…, bond), orthonormal columns
+    blocks = Any[Q]                               # the orthonormal blocks Q_j …
+    images = Any[]                                # … and their images f(Q_j), bond identity shared
+    total = dim(only(uniqueinds(Q, legs)))
+    apply(B) = (W = f(B); _ctm_stat!(:cycle_matvec, dim(only(uniqueinds(B, legs))) - 1); W)   # one application per column (`f` counted one)
+    for _ in 1:K
+        B = blocks[end]
+        bB = only(uniqueinds(B, legs))
+        total + dim(bB) > n && break              # the space is full: no room for another block
+        push!(images, apply(B))
+        W = replaceind(images[end], bB, sim(bB))
+        for _ in 1:2, P in blocks                 # block Gram–Schmidt, twice
+            W = W - P * gram(P, W, legs)
+        end
+        nW = norm(W)
+        (isfinite(nW) && nW > 0) || break
+        Qn = _ctm_orthbasis(W, legs)
+        push!(blocks, Qn)
+        total += dim(only(uniqueinds(Qn, legs)))
+    end
+    length(images) < length(blocks) && push!(images, apply(blocks[end]))
+    # Q and f(Q) as one direct sum each, columns in the same block order (the images keep their
+    # blocks' bond identities, so the two sums line up column for column).
+    stack(ts) = foldl((a, b) -> directsum(a => only(uniqueinds(a, legs)), b => only(uniqueinds(b, legs)); tags = "Link,cyc"), ts)
+    Qall = stack(blocks)
+    Wq = stack(images)
+    bQ = only(uniqueinds(Qall, legs))
+    bQ2 = only(uniqueinds(Wq, legs))
+    if bQ2 == bQ                                  # a single block: the image still carries Q's bond
+        bQ2 = sim(bQ)
+        Wq = replaceind(Wq, bQ, bQ2)
+    end
+    Hm = array(gram(Qall, Wq, legs), bQ, bQ2)     # Rayleigh–Ritz matrix Q† f Q, m × m on the host
+    all(isfinite, Hm) || return nothing
+    m = size(Hm, 1)
+    F = schur(Hm)
+    order = sortperm(abs.(F.values); rev = true)
+    kk = min(k, m)
+    if eltype(Hm) <: Real && kk < m               # never split a conjugate pair of a real Schur form
+        λa, λb = F.values[order[kk]], F.values[order[kk + 1]]
+        (!iszero(imag(λa)) && isapprox(λa, conj(λb); rtol = 1.0e-8)) && (kk -= 1)
+    end
+    kk >= 1 || return nothing
+    sel = falses(m)
+    sel[order[1:kk]] .= true
+    F = ordschur(F, sel)
+    Z = F.Z[:, 1:kk]
+    bnew = new_index(like, kk; tags = "Link,cyc")
+    Vk = Qall * adapt_like(like, from_array(Z, bQ, bnew))          # (legs…, bnew)
+    vecs = Any[(Vk * onehot(elt, dag(bnew) => j)) * onehot(elt, c => 1) for j in 1:kk]
+    vals = Any[F.values[j] for j in 1:kk]
+    return vecs, vals, trues(kk)
+end
+
+# A stored warm-start basis (`V` on `oldlegs` plus one bond) brought onto this sweep's `legs`. An
+# interface that re-minted its index since (a rank change, a failed alignment) is relabelled by
+# position when the dimensions still agree: the basis is only a START, so a relabelled one is as
+# legitimate as any other and merely converges from farther away. `nothing` when it cannot be used.
+function _ctm_warm_basis(V, oldlegs, legs::Vector{<:Index})
+    (V isa AbstractTensor && oldlegs isa AbstractVector && length(oldlegs) == length(legs)) || return nothing
+    length(inds(V)) == length(legs) + 1 || return nothing
+    if !issetequal(_ctm_legs_of(V, legs), legs)
+        all(dim(a) == dim(b) for (a, b) in zip(oldlegs, legs)) || return nothing
+        all(∈(inds(V)), oldlegs) || return nothing
+        V = replaceinds(V, collect(Index, oldlegs), legs)
+    end
+    return length(uniqueinds(V, legs)) == 1 ? V : nothing
+end
+
 function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOptions,
-                               seed::UInt; prev_rank::Union{Nothing, Int} = nothing)
+                               seed::UInt; prev_rank::Union{Nothing, Int} = nothing, warm = nothing)
     any(isnothing, (ENW, ENE, ESE, ESW)) && return nothing
     As = (ESW, ESE, ENE, ENW)                    # A_l : bond l -> bond l+1  (W->S, S->E, E->N, N->W)
     ins = (collect(commoninds(ENW, ESW)), collect(commoninds(ESW, ESE)),
@@ -1329,6 +1439,21 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
     # re-solve at the full request only the sectors the merge SATURATED — those whose every returned
     # mode was retained, so more might have made the cut. Two passes at most; the retained spectrum is
     # then identical to the full-request one.
+    # Warm block start (`cycle_solver = :block`): needs the previous bases on exactly this plaquette's
+    # current west legs (an interface that re-minted its index is a cold start this sweep) and dense
+    # data (one sector). Anything else runs the cold `schursolve` below.
+    warmR = warmL = nothing
+    if opts.cycle_solver === :block && warm !== nothing && length(warm) == 4
+        warmR = _ctm_warm_basis(warm[1], warm[3], wR)
+        warmL = _ctm_warm_basis(warm[2], warm[4], wL)
+    end
+    blockok = opts.cycle_solver === :block && length(starts) == 1 && !Tensors.isgraded(ENW) &&
+        !isnothing(warmR) && !isnothing(warmL)
+    if opts.cycle_solver === :block && !blockok        # why this plaquette starts cold
+        _ctm_stat!(:cycle_block_cold)
+        _ctm_stat!(warm === nothing ? :cycle_block_cold_nobases :
+                   (isnothing(warmR) || isnothing(warmL)) ? :cycle_block_cold_legs : :cycle_block_cold_graded)
+    end
     ns = [length(data(xR)) for (_, xR, _) in starts]
     ntot = sum(ns)
     over = max(2, cld(kcyc, 4))
@@ -1343,6 +1468,19 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
             for (si, (c, xR, xL)) in enumerate(starts)
                 solved[si] == reqs[si] && continue
                 k = reqs[si]
+                if blockok
+                    rR = _ctm_block_krylov(fwd, warmR, k, opts.cycle_depth, wR, c, rng, elt, ENW)
+                    rL = isnothing(rR) ? nothing :
+                        _ctm_block_krylov(bwd, warmL, k, opts.cycle_depth, wL, dag(c), rng, elt, ENW)
+                    if !isnothing(rL)
+                        _ctm_stat!(:cycle_block_warm)
+                        vecsR[si], valsRs[si], oksRs[si] = rR
+                        vecsL[si], valsLs[si], oksLs[si] = rL
+                        solved[si] = k
+                        continue
+                    end
+                    _ctm_stat!(:cycle_block_cold); _ctm_stat!(:cycle_block_cold_failed)
+                end
                 alg = arnoldi(k, ns[si])
                 vecsR[si], valsRs[si], oksRs[si] = _ctm_cycle_schur(fwd, xR, k, alg)
                 vecsL[si], valsLs[si], oksLs[si] = _ctm_cycle_schur(bwd, xL, k, alg)
@@ -1529,7 +1667,9 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
         end
         out[l] = (a, b, w, ins[l])
     end
-    return (W = out[1], S = out[2], E = out[3], N = out[4])
+    # `bases`: the west-bond Schur bases (right, left) and the legs they live on — the next sweep's
+    # warm start under `:block` (see `_ctm_warm_basis`)
+    return (W = out[1], S = out[2], E = out[3], N = out[4], bases = (VR[1], VL[1], wR, wL))
 end
 
 
@@ -1831,6 +1971,7 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
     T = Dict{Tuple{Symbol, Int, Int}, Any}()
     PH = Dict{Tuple{Symbol, Int, Int}, Any}()
     PV = Dict{Tuple{Symbol, Int, Int}, Any}()
+    CYC = Dict{Tuple{Int, Int}, Any}()
     # Every enlarged corner depends on the PREVIOUS state `S` only, so all 4·(Lx−1)·(Ly−1) of them
     # are built up front in parallel (Julia threads; run BLAS single-threaded — the blocks are
     # small, BLAS threads measured no gain, and OpenBLAS is not safe under Julia threads with its
@@ -1882,8 +2023,10 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
             X, Y = plaq[i]
             # last sweep's kept rank on this plaquette, read off its north interface projector
             prev_rank = _ctm_kept_rank(_ctm_nn(S.PH, (:N, X - 1, Y)))
+            # last sweep's Schur bases on this plaquette's west bond (`cycle_solver = :block` only)
+            warm = opts.cycle_solver === :block ? _ctm_nn(S.CYC, (X, Y)) : nothing
             cycs[i] = _ctm_cycle_projectors(E(:NW, X, Y), E(:NE, X, Y), E(:SE, X, Y), E(:SW, X, Y),
-                                            χ, opts, hash((X, Y)); prev_rank)
+                                            χ, opts, hash((X, Y)); prev_rank, warm)
         end
         ncyc = ndec = 0
         for i in eachindex(plaq)
@@ -1893,6 +2036,7 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
                 continue
             end
             ncyc += 1
+            CYC[(X, Y)] = cyc.bases
             for (fam, key) in ((cyc.N, (:N, X - 1, Y)), (cyc.S, (:S, X - 1, Y)),
                                (cyc.W, (:W, X, Y - 1)), (cyc.E, (:E, X, Y - 1)))
                 cyc_pairs[key] = ((fam[1], fam[2], fam[3]), fam[4])
@@ -2012,7 +2156,7 @@ function sweep_vertex_environments(cache::CTMEnvironmentCache, S::CTMVertexEnvir
     for i in eachindex(twork)
         T[twork[i][1]] = tres[i]
     end
-    return CTMVertexEnvironments(C, T, PH, PV, Lx, Ly)
+    return CTMVertexEnvironments(C, T, PH, PV, CYC, Lx, Ly)
 end
 
 """

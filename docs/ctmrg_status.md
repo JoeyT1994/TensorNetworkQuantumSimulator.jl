@@ -490,6 +490,42 @@ and pass `gauge_state`/`convergence = :environment`, which the current construct
 
 ---
 
+## Warm-started block Krylov cycle solver (`cycle_solver = :block`) — *2026-09-16*
+
+The cold `:cycle` solve (`cycle_solver = :schur`, still the default) rebuilds each plaquette's
+invariant subspace from one random vector every sweep with KrylovKit's `schursolve` to `tol = 1e-16`,
+plus deflation restarts for degenerate partners. Its cost is flat across sweeps — the same on sweep
+30 as on sweep 1. Woolls et al. (MP-BP, §V.D) instead keep the previous sweep's rank-χ basis and
+solve in a block Krylov space `{V, ΛV, …, Λ^K V}` of depth K ≈ 2–4 with the outer sweep as the
+restart. `:block` implements that (`_ctm_block_krylov`): the plaquette's (right, left) Schur bases on
+its west bond are stored in `CTMVertexEnvironments.CYC` and reused, widened at random if the
+previous rank was smaller, relabelled onto re-minted legs when the dimensions agree; the compressed
+Rayleigh–Ritz matrix `Q† Λ Q` is Schur-factored on the host and its dominant Schur vectors define the
+basis. Everything downstream (left/right consistency prefix, cliff cut, hysteresis, `_ctm_biorth`,
+padding) is unchanged. Sweep 1, graded data and any plaquette without usable bases run the cold path
+(`CTM_SVD_STATS[:cycle_block_cold_*]` says which).
+
+**Measured** (random PEPS norms, `convergence = :marginal`, 6 fixed sweeps, per warm sweep; a cycle
+application = one vector through all four corners):
+
+| case | `:schur` applications / time | `:block` K=4 | `:block` K=2 |
+|---|---|---|---|
+| 6×6 D=2 χ=16 (lossless) | ~715 / 0.6 s | ~1420 / 0.5 s | — |
+| 5×5 D=3 χ=32 (truncated) | ~1000–1240 / 3–4 s | ~1200–1800 / 1.7 s | ~1000–1250 / 1.2–1.5 s |
+| 4×4 D=2 χ=16 (lossless) | ~168 / 0.13 s | 285 / 0.13 s | — |
+
+* **Same fixed point.** Lossless 4×4 and 6×6: `F` agrees with `:schur` to 1.4e-14 and with the
+  exact `ln Z` to 1e-12; `⟨Z⟩` exact to 2e-16 through the `expect` path (tests).
+* **About 2× faster per sweep at χ=32**, even where the application COUNT is similar or higher: a
+  block application is one wide contraction, a single-vector one is many thin ones. On small bonds
+  (n ≤ χ) both fill the whole space and `:block` costs ~1.7× the applications for the same time.
+* K=2 suffices here (same accuracy as K=4, fewer applications) — the paper's K ~ 2–4.
+* 1–4 of 16 plaquettes per sweep on the truncated 5×5 still start cold: the plaquette declined the
+  cycle last sweep (no bases stored) or its interface width changed. Correct, just not warm.
+* Not yet measured: whether the continuous basis removes the "constant kick" of the cold restart on
+  the 8×8 Ising plateau (open problem 1 below) — the natural next experiment — and the DMRG
+  incremental-refresh cost, which is where the warm start should pay most.
+
 ## Open problems
 
 Ranked by how much they should worry you.
