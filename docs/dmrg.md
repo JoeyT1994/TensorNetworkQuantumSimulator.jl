@@ -1330,6 +1330,32 @@ Open, found on the way: `update(bpc; tolerance = …)` on a state whose site ten
 `Charge` legs (charged product states) throws a `NameMismatch` in the message-difference alignment
 (the default message has the Charge legs, the updated one has not) — use `maxiter` alone until fixed.
 
+**`fU1xU1` (fixed N↑, N↓) — two more defects, both about the root Charge leg.** A charged graded
+product state routes its total charge to ONE dangling dim-1 "Charge" leg on a root vertex
+(kernel_hooks.jl); under `fZ2` a six-electron state has trivial total parity and no such leg, which is
+why the hexagon ran under `fZ2` and failed under `fU1xU1`:
+
+1. `bra_tensor(::QuadraticForm)` was `dag(prime(ket))`, leaving the bra's copy of the Charge leg
+   primed and dangling, where `norm_factors` pairs it with the ket's (`unprime_charge_legs`). In a loopy
+   network the BP messages then carry the leg round both ways and meet at a vertex holding the same
+   index twice: "Contracted axes do not match" on the (−3,−3) leg. The quadratic form's bra (and the
+   basis bras of `_dense_bp_operators` / `_dense_ring_operator`) now pair it.
+2. `ψ[v] = t` on a `TensorNetworkState` re-derives the site indices from the tensor's unique indices,
+   so after the CTM optimiser wrote a root tensor the Charge leg became a second "site" index and every
+   later `expect` failed with "Collection has multiple elements". The optimiser's writes now go through
+   `setindex_preserve!` (the BP stage already did).
+
+Both gradings now agree at D = 2 on the hexagon (−13.6202 after three L-BFGS steps, same digits), and
+test_dmrg.jl / test_ctmenvironment.jl pass after the bra change (90/90, 247/247).
+
+**Is the D = 4 result a wrong minimum?** `fZ2`, D = 4: SU −15.3576 → BP −15.3712 → CTM L-BFGS
+−15.38191176 (ED −15.66871; 1.8% gap), the optimiser stationary to 1e-7. From a five-times-longer
+imaginary-time start (τ = 10 instead of 2) the same energy to 1e-8, so it is the D = 4 floor of this
+ansatz on the 6-ring, not a start-dependent basin. (A ring of d = 4 sites at D = 4 holds 16 states per
+bipartition; the half-filled singlet needs more.) `fU1xU1` at D = 4 (N↑ = N↓ = 3 enforced) converges
+to the same −15.38191176 in 8 iterations — so number fluctuations cost nothing here and the two
+gradings agree to 1e-8 along the whole pipeline (SU, BP, every L-BFGS step). The remaining gap is D.
+
 **GC crash.** The smoke test's REPL run segfaulted inside the garbage collector's mark phase (heap
 corruption reported earlier by an allocation in TensorKit's sector-structure cache). Not a bug on our
 side that we could find: the optimiser's gradient sub-steps at χ = 64 each pass under `--check-bounds=yes`

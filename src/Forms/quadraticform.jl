@@ -10,7 +10,13 @@ ket(qf::QuadraticForm) = qf.ket
 operator(qf::QuadraticForm) = qf.operator
 #No whole-network `bra`: the dual is taken lazily per vertex/edge below, and there is no
 #`prime`/`dag` for a TensorNetworkState to build one with.
-bra_tensor(qf::QuadraticForm, v) = dag(prime(ket(qf)[v]))
+# Dangling "Charge" legs (the root vertex of a charged graded state, see `charged` product states in
+# kernel_hooks.jl) pair bra–ket directly, as `norm_factors` does: left primed on the bra they dangle
+# in every region contraction, the messages of a loopy network carry them around and two messages
+# meeting at a vertex both hold the same leg (measured: BP on the spinful fU1xU1 hexagon failed with
+# "Contracted axes do not match" on the (−3,−3) root Charge leg; fZ2 was spared only because a
+# six-electron state has trivial total parity and no Charge leg).
+bra_tensor(qf::QuadraticForm, v) = unprime_charge_legs(dag(prime(ket(qf)[v])), ket(qf)[v])
 bra_virtualinds(qf::QuadraticForm, edge::NamedEdge) = dag.(prime.(virtualinds(ket(qf), edge)))
 
 Base.copy(qf::QuadraticForm) = QuadraticForm(copy(qf.ket), copy(qf.operator))

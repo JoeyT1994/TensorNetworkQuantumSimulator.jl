@@ -289,7 +289,8 @@ function _dense_bp_operators(bpc::BeliefPropagationCache, gen::GeneratingOperato
         norm(t) > 0.5 && (basis[j] = t)
     end
     seq = contraction_sequence(vcat([ψv, G0], ms); alg = "optimal")
-    bras = Dict(i => TensorInterface.dag(TensorInterface.prime(t)) for (i, t) in basis)
+    # dangling Charge legs pair bra–ket, as `bra_tensor(::QuadraticForm)` and `norm_factors` do
+    bras = Dict(i => unprime_charge_legs(TensorInterface.dag(TensorInterface.prime(t)), t) for (i, t) in basis)
     N = zeros(elt, n, n); H = zeros(elt, n, n)
     for (j, tj) in basis
         yN = contract(vcat([tj, G0], ms); sequence = seq)                 # on the primed legs
@@ -623,7 +624,8 @@ function _dense_ring_operator(ring::Vector, opv, ψv, opts::CTMOptions)
             norm(t) > 0.5 && (basis[j] = t)
         end
         M = zeros(elt, n, n)
-        bras = Dict(i => TensorInterface.dag(TensorInterface.prime(t)) for (i, t) in basis)
+        # dangling Charge legs pair bra–ket, as `bra_tensor(::QuadraticForm)` and `norm_factors` do
+    bras = Dict(i => unprime_charge_legs(TensorInterface.dag(TensorInterface.prime(t)), t) for (i, t) in basis)
         for (j, tj) in basis
             yj = _ctm_contract(vcat(ring, [tj, opv]), opts)     # on the primed legs
             for (i, bi) in bras
@@ -699,7 +701,7 @@ function optimize_vertex!(ψ::TensorNetworkState, v, N::AbstractMatrix, H::Abstr
         val = vals[j]
         norm(ψnew) > 0.5 && break
     end
-    ψ[v] = ψnew / norm(ψnew)
+    setindex_preserve!(ψ, ψnew / norm(ψnew), v)   # keeps explicit site indices (dangling Charge legs)
     return real(val)
 end
 
@@ -808,7 +810,7 @@ function dmrg(::Algorithm"ctmrg", ψ::TensorNetworkState, H::Vector; maxdim::Int
             old = Dict(v => ψ[v] for v in group)
             function try_group(damp)
                 for (v, t) in old
-                    ψ[v] = t
+                    setindex_preserve!(ψ, t, v)
                 end
                 for v in group
                     N, Heff = effective_operators(cache, cp, cm, gen, v, λ)
@@ -832,7 +834,7 @@ function dmrg(::Algorithm"ctmrg", ψ::TensorNetworkState, H::Vector; maxdim::Int
             if uphill(E_new)
                 nreject += 1
                 for (v, t) in old
-                    ψ[v] = t
+                    setindex_preserve!(ψ, t, v)
                 end
                 verbose && println("sweep $sweep: rejected update of $(length(group) == 1 ? "vertex $(only(group))" : "$(length(group)) vertices") (E would rise to $E_new from $E)")
             else
@@ -937,7 +939,9 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
         ψn = copy(ψ)
         for v in vs
             is = indsof[v]
-            ψn[v] = TensorInterface.from_array(reshape(Vector{T}(x[v]), TensorInterface.dim.(is)...), is...)
+            # `setindex_preserve!`: a plain `ψn[v] = …` re-derives the site indices from the tensor
+            # and classifies a dangling Charge leg (charged graded states) as a second site index
+            setindex_preserve!(ψn, TensorInterface.from_array(reshape(Vector{T}(x[v]), TensorInterface.dim.(is)...), is...), v)
         end
         return ψn
     end
