@@ -315,6 +315,22 @@ See the [examples/](examples/) directory for complete worked examples:
 
 We encourage users to read the literature listed below and explore the [tests](test/) and [source code](src/) to learn how the package works in detail.
 
+### Running the tests (development loop)
+
+The test files are independent and `test/runtests.jl` runs them in **parallel worker processes**: the
+full suite is about 65 minutes serial and about 16 minutes as its longest single file. Two environment
+variables control the loop:
+
+```bash
+# skip the PrecompileTools workload (package precompile ~20 s instead of ~150 s after a source edit)
+TNQS_SKIP_PRECOMPILE_WORKLOAD=1 julia --project=. -e 'using Pkg; Pkg.test()'
+# a subset of files (basenames without `test_`/`.jl`), and an explicit worker count (0 or 1 = serial)
+TNQS_TEST_FILES=ctmenvironment,dmrg TNQS_TEST_WORKERS=2 julia --project=. test/runtests.jl
+```
+
+`TNQS_TENSOR_TEST_PARTS=dense,bp` narrows `test_tensors.jl` further. The default worker count is one
+per file, capped at the machine's threads ÷ 4 and at 6; CI machines with few cores run serially.
+
 ### Heisenberg Picture
 
 You can also work directly in the Heisenberg picture, representing a many-body operator as a TNS with two indices per site.

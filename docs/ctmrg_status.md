@@ -582,9 +582,16 @@ ran 1.4× SLOWER than cold on the 5×5 D=3 χ=32; 4k+8 gave the gain back).
 
 Identical fixed point and floors to the cold solver in every case, never slower, up to 1.6× faster
 (timings from three concurrent processes, ±15%). `:block` is faster still but at the 1e-9 floor and
-with the instabilities above. **`:auto` therefore resolves to `:warm` on double-layer states**, graded included — the per-sector
-start is the stored basis contracted with a random flux-zero map onto the sector's charge leg, so
-no factorisation and none of the fresh-bond arrow traps; `:block` stays opt-in (dense only).
+with the instabilities above. **But `:warm` is opt-in, not the default (2026-09-17).** Two further measurements: (1) on the GPU
+path test (4×4 D=3 χ=16, `:marginal` to 1e-8) host and device trajectories under `:warm` ended 5e-6
+apart where the cold solve agrees to 1e-10 — the warm result carries history, and in an
+under-truncated regime that is trajectory sensitivity; (2) its early sweeps read ~1e-6 off where the
+cold solve is already exact (fewer Schur vectors converge per 2k+8 build while the environment
+moves). Graded `:warm` was tried and withdrawn: the kept index's sector multiplicities shift between
+sweeps at fixed total dimension (10/14 → 11/13 on a 5×5 fZ2), which invalidates the stored basis
+(a crash there, a 6e-7 marginal floor on a 3×3). `:auto` resolves to `:schur`; use `:warm` on a
+SETTLED environment — the DMRG incremental refresh is exactly that — and `:block` for speed where
+a 1e-9 floor is acceptable.
 
 * Not yet measured: the DMRG incremental-refresh cost, which is where the warm start should pay most,
   and `:warm` on single-layer networks (the `:auto` rule keeps those cold).

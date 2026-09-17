@@ -57,7 +57,7 @@ governs, referenced below.
 | `projector` | `:cut` | which interface projector to derive: `:cut` (optimal rank-χ truncation of one bipartition) or `:cycle` (four-corner cycle, which makes `F` stationary). See "Choosing a projector" below. |
 | `cycle_rankcut` | `0.0` | ⚠️ **`:cycle` only.** Relative cutoff on the four-corner cycle spectrum: retained modes with `abs(λ) ≤ cycle_rankcut · abs(λ_max)` are dropped. Guards the OVER-parametrised regime (χ above the state's rank), where the surplus near-null modes are arbitrary and wander sweep to sweep. `0` disables — deliberately the default: a fixed MAGNITUDE cutoff that fixes over-parametrised cases breaks higher-entanglement ones (measured 2026-08-19: 1e-10 repairs 5×5 nl=3 but degrades 4×4 nl=4 from 1e-15 to 7.6e-11, and no smaller value threads the needle — junk and real weight OVERLAP in magnitude across cases). `cycle_gapcut` below is the gap-based rule that does thread it. Distinct from `qr_cutoff`, which cuts the biorthogonal OVERLAP. |
 | `cycle_gapcut` | `0.0` | ⚠️ **`:cycle` only.** Noise-cliff rank cut: truncate the trailing spectral block below the first cliff that is BOTH steep (`abs(λ_{j+1}) ≤ cycle_gapcut · abs(λ_j)`) and genuinely tiny (`abs(λ_{j+1}) ≤ √eps · abs(λ_1)`). `0` disables — **the default since 2026-09-09.** It was `1e-4` (motivated 2026-08-21 by an over-parametrised 5×5 whose retained noise was drawn differently left and right); the left/right spectral-consistency guard introduced at the same time handles that case on its own, and with that guard plus the degenerate-partner restarts an A/B over lossless, under-truncated and over-parametrised cases (dense 4×4 D=2 χ=8/16, random 4×4 χ=32, random 5×5 χ=8/16, TFIM 5×5 χ=8/16/32) found the cut never helping and hurting three times: it removes deep-but-real directions — the √eps floor is generous because a cycle eigenvalue is the FOURTH power of a corner's, so a 4e-9 cycle mode is a ~1e-2 corner mode. Measured: the lossless dense 4×4 observable 2.4e-7 → 1.7e-15, χ=8 2.3e-7 → 9e-9, random 5×5 χ=8 2.3e-4 → 1.5e-5, everything else bit-identical. Keep it as a knob for a case the guard demonstrably misses. |
-| `cycle_solver` | `:auto` | ⚠️ **`:cycle` only.** How each plaquette's dominant invariant subspace is found. `:auto` (default) resolves at construction to `:warm` for a `TensorNetworkState` (dense or graded) — the double-layer norm — and to `:schur` for single-layer networks. `:warm`: the `:schur` solve started from a random combination of last sweep's Schur basis, with a 2χ+8 Krylov space — a start inside a k-dimensional invariant subspace closes the Krylov space on it after k steps, so a settled environment resolves in ~k applications per side; KrylovKit's restarts handle whatever moved. Same converged pairs, same guards, same fixed point and 1e-14 floors as `:schur` (measured), never slower, up to 1.6× faster per sweep. `:schur`: a cold single-vector KrylovKit `schursolve` per plaquette per sweep, converged to 1e-16, with deflation restarts for degenerate partners — the cost is flat across sweeps. `:block`: a block Krylov space of depth `cycle_depth` warm-started from the previous sweep's Schur bases (Woolls et al., MP-BP §V.D), Rayleigh–Ritz on the compressed problem, the outer sweep acting as the restart — the cost per sweep shrinks as the environment converges and degenerate partners are seen at once. Falls back to `:schur` on the first sweep, on any plaquette whose west interface changed identity, and on graded data. See `_ctm_block_krylov`. |
+| `cycle_solver` | `:auto` | ⚠️ **`:cycle` only.** How each plaquette's dominant invariant subspace is found. `:auto` (default) resolves at construction to `:schur`. `:warm`: the `:schur` solve started from a random combination of last sweep's Schur basis, with a 2χ+8 Krylov space — a start inside a k-dimensional invariant subspace closes the Krylov space on it after k steps, so a settled environment resolves in ~k applications per side; KrylovKit's restarts handle whatever moved. Same converged pairs, same guards, same fixed point and 1e-14 floors as `:schur` on dense double-layer norms (measured), never slower, up to 1.6× faster per sweep — but history-dependent: host/device trajectories on one state diverged at 5e-6 after `:marginal` convergence (cold: 1e-10) and early sweeps read ~1e-6 off where cold is exact, so use it on a SETTLED environment (incremental refresh), not as a cold-start default. Dense only: on graded states the kept index's sector multiplicities can shift between sweeps at fixed total dimension, which invalidates the stored basis (measured: a crash on a 5×5 fZ2 and a 6e-7 marginal floor on a 3×3), so graded plaquettes start cold. `:schur`: a cold single-vector KrylovKit `schursolve` per plaquette per sweep, converged to 1e-16, with deflation restarts for degenerate partners — the cost is flat across sweeps. `:block`: a block Krylov space of depth `cycle_depth` warm-started from the previous sweep's Schur bases (Woolls et al., MP-BP §V.D), Rayleigh–Ritz on the compressed problem, the outer sweep acting as the restart — the cost per sweep shrinks as the environment converges and degenerate partners are seen at once. Falls back to `:schur` on the first sweep, on any plaquette whose west interface changed identity, and on graded data. See `_ctm_block_krylov`. |
 | `cycle_depth` | `2` | `cycle_solver = :block` only. Krylov depth `K`: the block space is `{V, ΛV, …, Λ^K V}` with `V` the previous sweep's rank-χ basis, so a warm plaquette costs about `(K+1)·χ` cycle applications per side. `2` measured as accurate as `4` on double-layer norms and more stable (K=4 let the kept rank fluctuate on a truncated 8×8). |
 | `cycle_tol` | `1e-10` | `cycle_solver = :block` only. Relative residual `‖ΛV − VT‖/|λ₁|` of the retained invariant subspace below which a plaquette's block solve stops; above it the solve RESTARTS from the Ritz basis (block Krylov–Schur), up to `cycle_restarts` times. The rank guards downstream assume converged left/right pairs, so an unconverged warm solve would trim the rank differently every sweep. |
 | `cycle_restarts` | `1` | `cycle_solver = :block` only. Cap on those restarts per plaquette per sweep; `1` = no restarts (the default). ⚠️ Restarting was measured HARMFUL as implemented (lossless 6×6 marginals 1e-9 → 5e-3, 2–5× the applications; see docs/ctmrg_status.md) — the outer sweep is the restart, as in the paper. Left as a knob for further work only. `CTM_SVD_STATS[:cycle_block_unconverged]` counts the solves that ended above `cycle_tol`. |
@@ -244,12 +244,16 @@ options(cache::CTMEnvironmentCache) = cache.options
 function CTMEnvironmentCache(net, maxdim::Integer; kwargs...)
     opts = CTMOptions(; kwargs...)
     vs = collect(vertices(graph(net)))
-    # `cycle_solver = :auto`: the warm-started Krylov–Schur solve on a double-layer norm (dense or
-    # graded) — the case it was measured on and the one the DMRG needs — and the cold solve on
-    # single-layer networks (unmeasured there). Resolved once, here, so `options(cache)` says what ran.
+    # `cycle_solver = :auto` resolves to the cold `:schur` solve. `:warm` was measured to converge to the
+    # same fixed point on dense double-layer norms up to 1.6× faster, but its per-sweep result carries
+    # history — host and device trajectories on the same state diverged at 5e-6 after `:marginal`
+    # convergence where the cold solve agreed to 1e-10, and the early sweeps sit ~1e-6 off where the
+    # cold solve is already exact — so it is opt-in: the right choice for a SETTLED environment (a DMRG
+    # incremental refresh), not the default for a cold `update`. Resolved once, here, so
+    # `options(cache)` says what ran.
     if opts.cycle_solver === :auto
         kw = (; (f => getfield(opts, f) for f in fieldnames(CTMOptions))...)
-        opts = CTMOptions(; merge(kw, (; cycle_solver = net isa TensorNetworkState ? :warm : :schur))...)
+        opts = CTMOptions(; merge(kw, (; cycle_solver = :schur))...)
     end
     all(v -> (v isa Tuple || v isa CartesianIndex) && length(v) == 2, vs) ||
         error("CTMEnvironmentCache requires a 2D grid network (vertices as (x, y)).")
@@ -1319,11 +1323,15 @@ function _ctm_warm_basis(V, oldlegs, legs::Vector{<:Index})
     (V isa AbstractTensor && oldlegs isa AbstractVector && length(oldlegs) == length(legs)) || return nothing
     length(inds(V)) == length(legs) + 1 || return nothing
     if !issetequal(_ctm_legs_of(V, legs), legs)
-        all(dim(a) == dim(b) for (a, b) in zip(oldlegs, legs)) || return nothing
+        # same dimension AND same arrow (a graded contraction rejects a flipped arrow outright)
+        all(dim(a) == dim(b) && Tensors.isdual(a) == Tensors.isdual(b) for (a, b) in zip(oldlegs, legs)) || return nothing
         all(∈(inds(V)), oldlegs) || return nothing
         V = replaceinds(V, collect(Index, oldlegs), legs)
     end
-    return length(uniqueinds(V, legs)) == 1 ? V : nothing
+    length(uniqueinds(V, legs)) == 1 || return nothing
+    # the arrows V carries on `legs` must be the ones the corners carry this sweep
+    all(Tensors.isdual(l) == Tensors.isdual(only(filter(==(l), collect(inds(V))))) for l in legs) || return nothing
+    return V
 end
 
 function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOptions,
@@ -1362,11 +1370,11 @@ function _ctm_cycle_projectors(ENW, ENE, ESE, ESW, maxdim::Integer, opts::CTMOpt
     # subspace closes the Krylov space on exactly that subspace after k steps, so on an environment
     # that barely moved the solve resolves in ~k applications per side instead of 4k+8, and
     # KrylovKit's own restarts pick up whatever did move — the converged-pairs contract every guard
-    # downstream relies on is untouched. Graded data too: the stored basis is stacked over sectors
-    # along its bond, and contracting it with a random flux-zero map `bond → c` keeps exactly the
-    # columns of sector `c`, already carrying the charge leg the per-sector solve starts from (a
-    # sector the previous sweep did not retain gives zero and starts cold).
-    warmvec = opts.cycle_solver === :warm && !isnothing(warmR) && !isnothing(warmL)
+    # downstream relies on is untouched. DENSE data only: on graded states the kept index's sector
+    # multiplicities shift between sweeps at fixed total dimension (measured: 10/14 → 11/13 on a 5×5
+    # fZ2), so a stored basis cannot be relabelled onto the new legs — the per-sector contraction
+    # below (`bond → c` flux-zero map) is kept for when the bases are made sector-aware.
+    warmvec = opts.cycle_solver === :warm && !Tensors.isgraded(ENW) && !isnothing(warmR) && !isnothing(warmL)
     if opts.cycle_solver === :warm
         _ctm_stat!(warmvec ? :cycle_warm_start : :cycle_warm_cold)
     end

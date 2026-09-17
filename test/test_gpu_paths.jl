@@ -46,11 +46,19 @@ if HAS_CUDA
         bpcg, _ = apply_gates!(layer, bpcg; apply_kwargs, update_cache = true)
         @test z(expect(bpcg, obs)) ≈ z(expect(bpc, obs)) atol = 1.0e-12
 
+        # CTM host/device agreement is checked on a LOSSLESS case (D = 2 at χ = 16 on a 4×4). The D = 3
+        # state at χ = 16 is under-truncated and sits on a rank-decision threshold of `:cycle` that
+        # roundoff (threaded BLAS, device reductions) tips either way: the same two answers, 5e-6
+        # apart, were observed with host and device SWAPPED between runs (2026-09-17). That is a
+        # property of the regime, not of the device path this test guards.
+        ψ2d = random_tensornetworkstate(ComplexF64, g, s; bond_dimension = 2)
+        ψ2dg = adapt(CuArray, ψ2d)
         for kw in ((;), (; projector = :cycle))
             ckw = haskey(kw, :projector) ? (; convergence = :marginal) : (;)
-            c = TNQS.update(CTMEnvironmentCache(ψ, 16; kw...); maxiter = 6, tolerance = 1.0e-8, ckw...)
-            cg = TNQS.update(CTMEnvironmentCache(ψg, 16; kw...); maxiter = 6, tolerance = 1.0e-8, ckw...)
+            c = TNQS.update(CTMEnvironmentCache(ψ2d, 16; kw...); maxiter = 6, tolerance = 1.0e-8, ckw...)
+            cg = TNQS.update(CTMEnvironmentCache(ψ2dg, 16; kw...); maxiter = 6, tolerance = 1.0e-8, ckw...)
             @test z(expect(cg, obs)) ≈ z(expect(c, obs)) atol = 1.0e-10
+            @test z(expect(cg, obs)) ≈ z(expect(ψ2d, obs; alg = "exact")) atol = 1.0e-8
         end
 
         # boundary MPS at a lossless χ (D² = 9 per bond, two bonds per cut on a 4-row column → 81)
