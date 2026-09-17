@@ -1203,3 +1203,29 @@ at χ = 32 on this problem. What would change that is a converge that terminates
 the observable-relevant part of the environment (the marginals it does reach in 3–4 sweeps on a
 settled state) rather than on the flutter — or the fully stationary projector the flutter is a
 symptom of.
+
+## One-sided λ: tested and rejected — *2026-09-16 (night)*
+
+The idea: replace the central difference of the ±λ environments by a forward difference against
+the λ = 0 environment we already have, saving one of the three sets per evaluation. Measured on
+the 5×5 D = 3 χ = 32 BP state (`scratchpad/onesided_test.jl`, `evalsplit.jl`):
+
+* **Energy.** `F` of the aux-free (padded) λ = 0 cache equals the true λ = 0 `F` to 7e-15 — the
+  Möbius weights of the regions containing any one block sum to zero, so `F` is invariant under the
+  per-block rescaling — so `(F(+λ) − F(0))/λ` is legitimate. But its O(λ) bias is −5.3e-7 per site at
+  λ = 1e-7 (F″ ≈ 270), and shrinking λ runs into F's 1e-13 roundoff: the optimum near λ ≈ 3e-8 leaves
+  ≈ 1.5e-7 per site of bias plus noise, 10× the central difference's 2e-8. Unusable at the gaps
+  we chase (1e-6…1e-7).
+* **Gradient.** The forward-difference `H_eff = (R(+λ)·(G₀+λ∂G) − c·R(0)·G₀)/λ` (with `c` matching
+  `t†Nt`, whose error is a harmless multiple of `N`) is correct against the TRUE λ = 0 ring (3e-5 to
+  8e-5 relative to central) and wrong by 5–10× against the padded aux-free ring: the padded
+  environment truncates the plain norm network, the ±λ ones the generating network with its
+  half-insertion slots inside χ, so the two rings differ at O(ε) and the division by λ amplifies that.
+  Consistent with why the aux-free cache is a better SEED and not a substitute.
+* **Cost.** A warm evaluation on this problem at 8 threads: aux-free λ = 0 1.6 s, true λ = 0 6.3 s,
+  +λ alone 7.3 s, −λ alone 7.2 s, ±λ concurrent 13.0 s (the sweeps are already threaded, so running
+  the pair concurrently buys 10%, not 2×). Current evaluation ≈ 14.6 s; one-sided with the true
+  λ = 0 ≈ 13.6 s. **A 7% saving for a 10× worse energy. Rejected.**
+
+The structural cost is therefore the two generating-network converges themselves, not their
+number: what would cut it is a cheaper converge (device, or a response solve), not fewer of them.
