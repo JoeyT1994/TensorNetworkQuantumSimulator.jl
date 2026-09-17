@@ -211,5 +211,50 @@ end
         @test energy(ψg1, H; alg = "exact") ≈ last(Esg) atol = 5.0e-8   # FD-of-F roundoff, see the dense sweep
         @test TNQS.Tensors.isgraded(ψg1[(2, 2)])
     end
+
+    @testset "fermionic (spinful fZ2) BP DMRG: exact on a tree" begin
+        # Spinful Hubbard on a 3-site path. A tree, so the response is exact after one sweep and the
+        # one-site update must reach the exact ground energy at lossless D. Guards the three graded
+        # defects fixed 2026-09-17 (docs/dmrg.md): the aux-slice arrow in `_norm_roots`, the flattened
+        # local solve, and the layout-dependent message-normalisation functional — with the middle
+        # vertex's outgoing responses (the propagated term) exercised.
+        t, U, μ = 1.0, 4.0, 2.0
+        g = named_grid((3, 1)); vs = collect(vertices(g))
+        s = siteinds("Electron", g; symmetry = "fZ2")
+        H = Any[]
+        for e in edges(g); push!(H, ("hopping", (src(e), dst(e)), -t)); end
+        for v in vs; push!(H, ("NupNdn", [v], U)); push!(H, ("N", [v], -μ)); end
+        # exact reference from the backend's own local Fock matrices (mode basis |0⟩,|↑⟩,|↓⟩,|↑↓⟩,
+        # site 1 slowest; the two-site hopping matrix carries the intra-site parity string), in the
+        # N = 3 sector the half-filled start lives in
+        FB = TNQS.Tensors
+        hop = FB._f4_hop(FB._F4_AUP) + FB._f4_hop(FB._F4_ADN)
+        nn = FB._F4_NUP * FB._F4_NDN; ntot = FB._F4_NUP + FB._F4_NDN; I4 = Matrix{ComplexF64}(I, 4, 4)
+        Hm = -t * (kron(hop, I4) + kron(I4, hop)) + sum(U * kron([k == j ? nn : I4 for k in 1:3]...) - μ * kron([k == j ? ntot : I4 for k in 1:3]...) for j in 1:3)
+        nsite = [0, 1, 1, 2]
+        keep = [i for i in 1:64 if sum(nsite[d + 1] for d in digits(i - 1; base = 4, pad = 3)) == 3]
+        E_ed = minimum(real(eigvals(Hermitian(Hm[keep, keep]))))
+        # imaginary-time simple-update start from the alternating ↑↓ product state
+        ψ = tensornetworkstate(ComplexF64, v -> isodd(findfirst(==(v), vs)) ? "Up" : "Dn", g, s)
+        dτ = 0.05
+        layer = Any[("F_hop", (src(e), dst(e)), im * t * dτ) for e in edges(g)]
+        append!(layer, ("F_int", [v], -im * U * dτ) for v in vs)
+        append!(layer, ("F_phase", [v], im * μ * dτ) for v in vs)
+        bpc = BeliefPropagationCache(ψ)
+        for _ in 1:10
+            bpc, _ = apply_gates(layer, bpc; apply_kwargs = (; maxdim = 4, cutoff = 1.0e-14))
+        end
+        ψ = TNQS.network(bpc)
+        gen = generating_operator(H, ψ)
+        gbpc = generating_cache(ψ, gen; maxiter = 100)
+        @test real(bethe_energy(gbpc, gen)) ≈ energy(ψ, H; alg = "exact") atol = 1.0e-9   # tree: Bethe = exact
+        hist = Float64[]
+        TNQS.message_response(gbpc, gen; maxiter = 5, history = hist)
+        @test hist[2] < 1.0e-12                                                           # exact after one sweep
+        ψ1, Es = dmrg(ψ, H; alg = "bp", nsweeps = 2, verbose = false)
+        @test all(diff(Es) .< 1.0e-9)                                                       # every update accepted, monotone
+        @test last(Es) ≈ E_ed atol = 1.0e-8
+        @test energy(ψ1, H; alg = "exact") ≈ E_ed atol = 1.0e-8
+    end
 end
 end

@@ -45,8 +45,20 @@ function _value_slice(t)
     # `dag`: on a graded (fermionic) backend the slice must carry the dual arrow to contract
     return t * TensorInterface.onehot(scalartype(t), TensorInterface.dag(only(aux)) => 1)
 end
-#Sum over the stored entries (graded storage does not define a whole-array `sum`)
-_value_sum(t) = sum(TensorInterface.data(_value_slice(t)))
+# Entry sum of the norm-sector slice, read off the dense array in a FIXED leg order. The stored-block
+# sum (`sum(data(t))`) is not a function of the tensor on graded data: the fermionic signs inside the
+# stored representation depend on the leg order and codomain split the contraction happened to
+# produce — measured on a spinful fZ2 path: one and the same message (equal to 1e-17 as a tensor,
+# under `-`, and under every closed contraction) read entry sums of −0.466 and 1.000 from two factor
+# orders. BP itself only needs SOME positive scale per message, but the response linearisation
+# needs one linear functional shared by `m` and `dF̃`, and `_hermitian_gauge!` must normalise with
+# that same functional. Dense tensors: the plain entry sum, unchanged.
+function _value_sum(t)
+    sl = _value_slice(t)
+    Tensors.isgraded(sl) || return sum(TensorInterface.data(sl))
+    is = sort!(collect(TensorInterface.inds(sl)); by = string)
+    return sum(TensorInterface.array(sl, is...))
+end
 
 # BP normalises each message by the sum of ALL its entries; with the non-Hermitian `a > 0`
 # half-insertion slices that sum is complex and the whole message picks up a phase, which makes
@@ -188,7 +200,10 @@ function _norm_roots(bpc::BeliefPropagationCache, v; cutoff = nothing)
     for e in _incoming_edges(bpc, v)
         m = message(bpc, e)
         aux = filter(i -> occursin("aux", string(TensorInterface.tags(i))), collect(TensorInterface.inds(m)))
-        M = isempty(aux) ? m : m * TensorInterface.onehot(scalartype(m), only(aux) => 1)
+        # `dag`: on a graded (fermionic) backend the slice must carry the dual arrow to contract
+        # (without it every fermionic vertex update threw an ArgumentError that the acceptance
+        # loop swallowed — the "inert BP stage" on fermions, docs/dmrg.md)
+        M = isempty(aux) ? m : m * TensorInterface.onehot(scalartype(m), TensorInterface.dag(only(aux)) => 1)
         # `cutoff` is RELATIVE to the message scale (the PSD root's own cutoff is absolute on the
         # eigenvalues). A bond direction the state barely uses has a message eigenvalue down at
         # 1e-11 of the largest; keeping it puts the update into a direction where H_eff is noise —
@@ -212,6 +227,18 @@ messages are NOT updated here. Returns the local eigenvalue.
 function optimize_vertex!(bpc::BeliefPropagationCache, gen::GeneratingOperator, dX, v;
                           tol::Real = 1.0e-10, krylovdim::Int = 12, maxiter::Int = 20, sqrt_cutoff = nothing,
                           damping::Real = 0)
+    ψv = _ket_tensor(bpc, v)
+    if any(Tensors.isgraded, TensorInterface.inds(ψv))
+        # GRADED (fermionic) sites: the matrix-free route below flattens the site tensor to a dense
+        # vector and applies the effective maps through `array`/`from_array`, but the flattened
+        # inner product is NOT the network contraction — the graded product inserts parity signs
+        # that depend on leg order and duals (see `_dense_ring_operator`). Measured on a 3-site
+        # spinful Hubbard path (a tree, where the one-site update is exact): the Lanczos step
+        # RAISED the Bethe energy from −7.1606 to −6.9572, and two of three vertices threw. Build
+        # the dense operators in the site's allowed basis through the backend's own contraction
+        # instead, and solve the small generalised eigenproblem densely.
+        return _optimize_vertex_graded!(bpc, gen, dX, v; whiten_cutoff = something(sqrt_cutoff, 1.0e-6), damping)
+    end
     N, H = effective_operators(bpc, gen, dX, v)
     roots, iroots = _norm_roots(bpc, v; cutoff = sqrt_cutoff)
     ψv = _ket_tensor(bpc, v)
@@ -236,6 +263,95 @@ function optimize_vertex!(bpc::BeliefPropagationCache, gen::GeneratingOperator, 
     ψnew = _apply_bond_maps(unflat(x), iroots)
     setindex_preserve!(ket(network(bpc)), ψnew, v)
     return real(vals[1])
+end
+
+# Dense `N_eff` and `H_eff` at `v` in the site tensor's dense-coefficient basis, every matrix
+# element a closed backend contraction (`⟨basisᵢ| · |basisⱼ⟩` through `dag(prime(·))`), so the
+# category's parity signs are the contraction's own. Site dimension × bond dimensions is small at
+# χ = 1 (d·D^z), so the quadratic cost in the basis size is not a concern here.
+function _dense_bp_operators(bpc::BeliefPropagationCache, gen::GeneratingOperator, dX, v)
+    inc = _incoming_edges(bpc, v)
+    ms = [message(bpc, e) for e in inc]
+    G0, dG = gen.value[v], gen.derivative[v]
+    ψv = _ket_tensor(bpc, v)
+    is = collect(TensorInterface.inds(ψv))
+    dims = Tuple(TensorInterface.dim.(is)); n = prod(dims)
+    elt = promote_type(scalartype(ψv), scalartype(G0), scalartype(first(ms)))
+    basis = Dict{Int, Any}()
+    for j in 1:n
+        e = zeros(elt, n); e[j] = one(elt)
+        t = try
+            TensorInterface.from_array(reshape(e, dims...), is...)
+        catch err
+            err isa InexactError || rethrow()
+            continue                                  # a symmetry-disallowed position
+        end
+        norm(t) > 0.5 && (basis[j] = t)
+    end
+    seq = contraction_sequence(vcat([ψv, G0], ms); alg = "optimal")
+    bras = Dict(i => TensorInterface.dag(TensorInterface.prime(t)) for (i, t) in basis)
+    N = zeros(elt, n, n); H = zeros(elt, n, n)
+    for (j, tj) in basis
+        yN = contract(vcat([tj, G0], ms); sequence = seq)                 # on the primed legs
+        yH = contract(vcat([tj, dG], ms); sequence = seq)
+        for (k, e) in enumerate(inc)
+            ms2 = copy(ms); ms2[k] = dX[e]
+            yH = yH + contract(vcat([tj, G0], ms2); sequence = seq)
+        end
+        for (i, bi) in bras
+            N[i, j] = TensorInterface.scalar(yN * bi)
+            H[i, j] = TensorInterface.scalar(yH * bi)
+        end
+    end
+    return (N + N') / 2, (H + H') / 2
+end
+
+# The graded one-site update: dense generalised eigenproblem `H x = E N x` in the allowed basis,
+# whitened by `N` (directions below `whiten_cutoff · S_max` dropped), the lowest eigenvector that
+# survives the projection onto the state's charge block, normalised to `⟨ψᵥ|N_eff|ψᵥ⟩ = 1` like the
+# dense route. Returns the local eigenvalue.
+function _optimize_vertex_graded!(bpc::BeliefPropagationCache, gen::GeneratingOperator, dX, v;
+                                  whiten_cutoff::Real = 1.0e-6, damping::Real = 0)
+    N, H = _dense_bp_operators(bpc, gen, dX, v)
+    ψv = _ket_tensor(bpc, v)
+    is = collect(TensorInterface.inds(ψv))
+    T = scalartype(ψv)
+    x0 = vec(TensorInterface.array(ψv, is...))
+    # The basis construction (contract the region onto `t_j`, then close with the bra) differs
+    # from the one-shot closed region contraction by a fermionic sign that is GLOBAL per vertex
+    # (measured on a spinful 3-site path: `x'Nx / closed(x)` exactly +1 or −1 for random allowed
+    # x, the same value at every x of a vertex), and the closed region scalar itself carries the
+    # sign of the message gauge (BP normalises by the entry sum, which is negative on some
+    # fermionic messages). Both signs multiply N and H alike, so the generalised eigenproblem is
+    # invariant: fix N positive at the current state, which the whitening needs.
+    σ = sign(real(dot(x0, N * x0)))
+    iszero(σ) && (σ = one(σ))
+    N = σ .* N; H = σ .* H
+    S, U = eigen(Hermitian(N))
+    keep = S .> whiten_cutoff * maximum(S)
+    W = U[:, keep] * Diagonal(S[keep] .^ -0.5)
+    vals, vecs = eigen(Hermitian(W' * H * W))
+    local ψnew, val
+    for j in 1:length(vals)
+        x = W * vecs[:, j]
+        T <: Real && (x = real(x))
+        if !iszero(damping)
+            s = dot(x0, x); x = (1 - damping) * (s == 0 ? x : x * sign(s)) + damping * x0
+        end
+        x = x / sqrt(real(dot(x, N * x)))
+        t = try
+            TensorInterface.from_array(reshape(Vector{T}(x), TensorInterface.dim.(is)...), is...)
+        catch err
+            err isa InexactError || rethrow()
+            nothing                                   # weight outside the state's charge block
+        end
+        (t === nothing || norm(t) < 0.5) && continue
+        ψnew = t; val = vals[j]
+        break
+    end
+    @isdefined(ψnew) || error("optimize_vertex!: no eigenvector of the local problem lies in the state's charge block at $v")
+    setindex_preserve!(ket(network(bpc)), ψnew, v)
+    return real(val)
 end
 
 """
@@ -293,7 +409,7 @@ function _dmrg_bp(ψ::TensorNetworkState, H::Vector; nsweeps::Int = 5, bp_kwargs
             catch err
                 err isa InterruptException && rethrow()
                 bpc = old; nreject += 1; dX = nothing
-                verbose && println("sweep $sweep, vertex $v: rejected ($(typeof(err)))")
+                verbose && println("sweep $sweep, vertex $v: rejected ($(sprint(showerror, err)))")
             end
             push!(energies, E)
         end

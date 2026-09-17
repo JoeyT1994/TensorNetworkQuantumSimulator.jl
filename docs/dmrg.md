@@ -1285,3 +1285,56 @@ threads, contended) before the 10-minute process cap killed the invocation ahead
 cold environment set plus three iterations is the whole budget. Rerun with `MAXITER=4 BUDGET=180` (or alone
 at 8 threads) so each process ends on a checkpoint; then D = 5 for the D-trend and boundary MPS at χ = 64
 for the true energy.
+
+## Spinful Hubbard smoke test; the fermionic BP stage was broken, not inert — *2026-09-17*
+
+`examples/hubbard_hex_smoke.jl`: spinful Hubbard (t = 1, U = 4, half filling) on one hexagon (6
+`"Electron"` sites on a 3×2 box, `fZ2`) through SU → BP DMRG → CTM L-BFGS, every stage against the exact
+contraction and a sparse Jordan–Wigner ED. The CTM side was right first time: the rank-4 spinful
+hopping gives auxiliary dimension 5, and at χ = 16 (lossless here) the ring energy, F and the FD-of-F
+energy match the exact contraction to 2e-15 / 4e-9. The BP stage rejected every vertex update, which
+is what "the BP stage is inert for fermions" (above) actually was: an `ArgumentError` per vertex,
+swallowed by the acceptance loop's try/catch. Three defects, found on a 3-site spinful path (a tree,
+where the one-site update and the response are exact) and fixed in `src/dmrg.jl`:
+
+1. `_norm_roots` built the auxiliary-index slice with the wrong arrow (`onehot(aux => 1)` instead of
+   `onehot(dag(aux) => 1)`); every fermionic update threw. (The optimiser's own path never used it.)
+2. The matrix-free local solve flattens the site tensor and applies the effective maps through
+   `array`/`from_array`; on graded sites the flattened inner product is not the network contraction
+   (the same trap `_dense_ring_operator` documents). Measured: the Lanczos step RAISED the Bethe energy
+   from −7.1606 to −6.9572. Graded sites now build dense `N_eff`, `H_eff` in the site's allowed basis
+   through closed backend contractions (`_dense_bp_operators`, `_optimize_vertex_graded!`). The basis
+   construction differs from the one-shot closed contraction by a fermionic sign that is GLOBAL per
+   vertex (`x'Nx / closed(x)` exactly ±1, the same for every random x at a vertex) and the closed region
+   scalar itself carries the sign of the message gauge, so `N` is fixed positive at the current state
+   (both signs multiply N and H alike; the generalised eigenproblem is invariant).
+3. **The message-normalisation functional was not a function of the tensor.** BP normalises a message
+   by `sum(data(m))` (the stored-block entry sum) and the Hermitian gauge by the norm-sector version
+   `_value_sum`. On graded data the fermionic signs inside the stored representation depend on the
+   leg order / codomain split the contraction happened to produce: one and the same message (equal to
+   1e-17 as a tensor, under `-`, and under every closed contraction) read entry sums of −0.466 and 1.000
+   from two factor orders. BP itself only needs some positive scale per message, but the response
+   linearisation `dm = (dF̃ − m Σ dF̃)/Σ F̃` needs ONE linear functional shared by `m` and `dF̃`: with the
+   layout-dependent one the responses INTO the middle vertex were exact (source term only) while those
+   OUT of it were off by 2× and 11× against a finite difference of the shifted fixed point, and on the
+   hexagon the Gauss–Seidel response never converged (relative change pinned at 1.13). `_value_sum` now
+   reads the entry sum off the dense array in a fixed leg order (dense tensors unchanged).
+
+After the three fixes, on the 3-site path: response exact after one sweep (history `[1.0, 0.0]`), BP
+DMRG monotone and at the ED energy −7.2360679775 to 1e-15 after three updates, every update accepted.
+On the hexagon: response converges in four sweeps (change 8.5e-12), twelve of twelve updates accepted,
+exact contraction −13.5655 → −13.6199 in two sweeps (ED −15.6687; D = 2). `dmrg(bp)` now prints the
+error message of a rejected update under `verbose`.
+
+Open, found on the way: `update(bpc; tolerance = …)` on a state whose site tensors carry dangling
+`Charge` legs (charged product states) throws a `NameMismatch` in the message-difference alignment
+(the default message has the Charge legs, the updated one has not) — use `maxiter` alone until fixed.
+
+**GC crash.** The smoke test's REPL run segfaulted inside the garbage collector's mark phase (heap
+corruption reported earlier by an allocation in TensorKit's sector-structure cache). Not a bug on our
+side that we could find: the optimiser's gradient sub-steps at χ = 64 each pass under `--check-bounds=yes`
+with a full GC after every step, and the script itself passes at default flags. It is a Julia
+1.12.1 runtime problem: the same reproducer (`scratchpad/segv_repro.jl`, single thread,
+`--check-bounds=yes`) crashed 2 of 4 fresh 1.12.1 processes ("GC error (probable corruption)" /
+SIGSEGV) and 0 of 3 on Julia 1.12.7 (installed alongside via `juliaup add 1.12.7`). Recommendation: run
+on 1.12.7 (same Manifest; one-off recompile of the stack).
