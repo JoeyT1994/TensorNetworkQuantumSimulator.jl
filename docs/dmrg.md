@@ -1229,3 +1229,59 @@ the 5×5 D = 3 χ = 32 BP state (`scratchpad/onesided_test.jl`, `evalsplit.jl`):
 
 The structural cost is therefore the two generating-network converges themselves, not their
 number: what would cut it is a cheaper converge (device, or a response solve), not fewer of them.
+
+## Spinful Hubbard on the hexagonal lattice — *2026-09-17*
+
+`H = −t Σ_e Σ_σ (c†_iσ c_jσ + h.c.) + U Σ_v n_v↑ n_v↓ − (U/2) Σ_v (n_v↑ + n_v↓)`, t = 1, U = 4, on the
+open `named_hexagonal_lattice_graph(NX, NY)`, fZ2-graded `"Electron"` sites (d = 4). The μ = U/2
+term is the particle-hole symmetric form: the network conserves only parity, and on a bipartite
+lattice this μ makes half filling the grand-canonical minimum, so a parity-only state cannot lower
+its energy by leaving the half-filled sector. Start: Néel product state (Up on one sublattice, Dn on
+the other; N = nsites, even parity), imaginary-time simple update with the library's `F_hop(θ)`
+(both spins), `F_int(θ)` and `F_phase(θ)` gates in a second-order Trotter layer, dτ 0.2 → 0.02.
+`MODEL=hub NX NY T U` in `scratchpad/model.jl`; the two-site term is the library's joint spinful
+`"hopping"` (operator-Schmidt rank 4: auxiliary dimension 5, one even norm slot and four odd), the
+one-site terms `"NupNdn"` and `"N"`. Exact references by Lanczos in the N↑ = N↓ = N/2 sector
+(`ed_hub.jl`, two bit strings, Jordan–Wigner sign per species):
+
+| lattice | sites | E₀ (U = 4) | per site |
+|---|---|---|---|
+| hex(1,1) | 6 | −15.66870617887296 | −2.61145103 |
+| hex(1,2) | 10 | −26.381696842612968 | −2.63816968 |
+| hex(1,2), U = 8 | 10 | −43.57553501196761 | −4.35755350 |
+
+**Sign gate (hex(1,1), D = 2, χ = 64 lossless):** FD-of-F energy = exact contraction to 7e-9 (the
+λ = 1e-7 roundoff), dense ring operator `x†Nx` = tensor contraction to 1e-16 at the λ = 0 and +λ
+rings, ring gradient along a random allowed direction = FD of the exact energy to 5.7e-7. Nothing in
+the engine needed changing for d = 4: the graded operator construction from the t–V work carries
+the spinful case.
+
+**hex(1,2), 10 sites, per-site gaps against E₀ (energies confirmed by exact contraction to 1e-8):**
+
+| D | SU start | CTM L-BFGS `:cut` χ = 32 | iterations | s per evaluation (4 threads) |
+|---|---|---|---|---|
+| 3 | 0.1520 | **0.15193** | 6, then no descent direction | 2–3 |
+| 3, χ = 64 (lossless) | | 0.15193 (same to 1e-8) | 8 | 3 |
+| 4 | 0.0455 | **0.04459** | 11 | 12 |
+| 5 | 0.0361 | **0.03331** (FD-of-F; not yet exact-confirmed) | 9, still descending ~1e-5 per iteration | 60–78 |
+
+Three things this settles:
+
+1. **The D-floor is genuine, not an environment artefact.** D = 3 at lossless χ = 64 reproduces the
+   χ = 32 energy to 1e-8, and the optimiser ends on a stationary point (line search fails in every
+   direction with gains below 1e-9), so 0.152 per site IS a local optimum of the D = 3 manifold.
+2. **The landscape has several minima.** Truncating the optimised D = 4 state to D = 3 (BP truncation,
+   −2.3968 per site) and optimising from there at lossless χ converges to a DIFFERENT stationary
+   point, −2.40982, worse than the simple-update basin's −2.48624. The Néel-derived simple update is
+   the better start here; a global claim about the D = 3 optimum cannot be made from either.
+3. **d = 4 sites need D well beyond 4.** 0.152 → 0.045 → ≤ 0.033 per site for D = 3 → 4 → 5 is the
+   expected slow convergence of a spinful fermionic PEPS (iPEPS Hubbard work uses D ≈ 8–16); the
+   optimiser converges in 6–11 iterations at every D, i.e. the cost is entirely the environment
+   sets, which grow as the (5·D²)-wide interfaces are truncated to χ.
+
+**hex(2,2), 16 sites, D = 4 (no exact reference: the half-filled sector has 1.7e8 states).** Simple
+update −2.62241 per site; three L-BFGS iterations took it to −2.62306 (evaluations 69–86 s at χ = 32, 4
+threads, contended) before the 10-minute process cap killed the invocation ahead of its checkpoint — the
+cold environment set plus three iterations is the whole budget. Rerun with `MAXITER=4 BUDGET=180` (or alone
+at 8 threads) so each process ends on a checkpoint; then D = 5 for the D-trend and boundary MPS at χ = 64
+for the true energy.
