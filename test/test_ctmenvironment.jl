@@ -575,17 +575,17 @@ end
         random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle, cycle_tol = -1.0)
     @test_throws ArgumentError CTMEnvironmentCache(
         random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle, cycle_restarts = 0)
-    @test TNQS.options(CTMEnvironmentCache(random_tensornetwork(Float64, g3; bond_dimension = 2), 4)).cycle_solver === :schur
+    @test TNQS.options(CTMEnvironmentCache(random_tensornetwork(Float64, g3; bond_dimension = 2), 4)).cycle_solver === :warm    # :auto → :warm
     # `:auto`: block on a dense double-layer state, cold on a single layer, explicit choice respected
     ψ3 = random_tensornetworkstate(Float64, g3, siteinds("S=1/2", g3); bond_dimension = 2)
-    @test TNQS.options(CTMEnvironmentCache(ψ3, 4; projector = :cycle)).cycle_solver === :schur    # :auto → cold
+    @test TNQS.options(CTMEnvironmentCache(ψ3, 4; projector = :cycle)).cycle_solver === :warm     # :auto → warm on a dense state
     @test TNQS.options(CTMEnvironmentCache(ψ3, 4; projector = :cycle, cycle_solver = :warm)).cycle_solver === :warm
     @test TNQS.options(CTMEnvironmentCache(ψ3, 4; projector = :cycle, cycle_solver = :block)).cycle_solver === :block
     @test TNQS.options(CTMEnvironmentCache(ψ3, 4; projector = :cycle, cycle_solver = :schur)).cycle_solver === :schur
-    @test TNQS.options(CTMEnvironmentCache(random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle)).cycle_solver === :schur
+    @test TNQS.options(CTMEnvironmentCache(random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle)).cycle_solver === :warm
     sg3 = siteinds("S=1/2", g3; symmetry = "Z2")
     ψg3 = tensornetworkstate(ComplexF64, v -> iseven(sum(v)) ? "↑" : "↓", g3, sg3)
-    @test TNQS.options(CTMEnvironmentCache(ψg3, 4; projector = :cycle)).cycle_solver === :schur
+    @test TNQS.options(CTMEnvironmentCache(ψg3, 4; projector = :cycle)).cycle_solver === :warm    # graded too
 
     # 1. Exact at lossless χ, real and complex, and identical to the cold solver's F.
     Random.seed!(31)
