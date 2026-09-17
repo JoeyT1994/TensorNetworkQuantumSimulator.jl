@@ -1166,3 +1166,40 @@ Branch `FixesV2DMRG`. Tests 85/85. What the night settled:
 Open, in order of value: hour-long processes (or a split evaluation) for D ≥ 4 fermions and D = 5
 spins; the D = 4 full-update baseline (needs a split ring tensor); subspace continuity for `:cycle`;
 the BP stage's inertness on fermionic and Heisenberg states.
+
+## After the package port: `:cycle` with the warm-started solver in the optimiser — *2026-09-16 (evening)*
+
+The branch took the FixesV2 merge (NamedGraphs 0.14, ITensorBase 0.14, TensorAlgebra 0.20,
+GradedArrays 0.16) and two `:cycle` commits (`f8ee668`, `f524221`) that give the cyclic projector a
+warm-started Krylov–Schur solve (`cycle_solver = :auto → :warm` on states). DMRG tests 85/85 on the
+merged code. Pre-port serialized states do not deserialize afterwards (two renamed types); every dense
+state and checkpoint was dumped to plain arrays in an old-package environment and rebuilt (bMPS energy
+identical to 1e-12; the procedure is in the scratchpad's `dump_states.jl` / `portable.jl`). The
+graded fermionic states were not converted — the simple-update starts rebuild in 80 s, the hex(3,3)
+optimised checkpoint is lost (its numbers are above).
+
+**Does subspace continuity unblock `:cycle` in `ctmrg_lbfgs`?** The stall was: after two steps the
+±λ converges enter a limit cycle, the 10-sweep cap leaves a non-descent gradient at iteration 3.
+Same run as before (5×5 D = 3 χ = 32 from `bpstate_L5_D3.jls`, `step0 = 1/8`, 8 threads, alone):
+
+| iteration | `:cycle` + `:warm` gap | s / it | `:cut` gap (4 threads, contended) | s / it |
+|---|---|---|---|---|
+| 1 | 8.26e-6 | 32 | 9.72e-6 | 20 |
+| 2 | 3.74e-6 | 77 | 5.20e-6 | 17 |
+| 4 | 2.75e-6 | 80 | 2.71e-6 | 16 |
+| 5 | 2.65e-6 | 523 (L-BFGS direction rejected ×3, Jacobi at 1/16) | 2.16e-6 | 16 |
+| 8 | 2.51e-6 | 88 | 1.81e-6 (it 9) | 18–52 |
+| 10 | **1.71e-6** | 89 | **1.75e-6** | 69 |
+
+It no longer stalls: ten accepted iterations, all but one unit L-BFGS steps, and at iteration 10 the
+energy equals `:cut`'s. But every ±λ converge still ends at the 10-sweep cap with the worst marginal
+change at 1e-6…1e-4 while |ΔF| sits at 1e-13 — the flutter is not removed by the warm start (it is
+the null-mode basis wander at fixed rank, as diagnosed), and the one rejected direction (iteration 5,
+rise ∝ α² with γ = 1.3e-5) is a pair polluted by a gradient from a 1.7e-4-flutter converge. Cost per
+iteration 80–90 s against 17–20 s for `:cut`, i.e. the cap × the per-sweep cost, unchanged. So
+`:cut` stays the default: `:cycle` is now a usable alternative that reaches the same energy at 4–5×
+the time, and its promised advantage (the ε² energy and the more consistent gradient) is not visible
+at χ = 32 on this problem. What would change that is a converge that terminates on stationarity of
+the observable-relevant part of the environment (the marginals it does reach in 3–4 sweeps on a
+settled state) rather than on the flutter — or the fully stationary projector the flutter is a
+symptom of.
