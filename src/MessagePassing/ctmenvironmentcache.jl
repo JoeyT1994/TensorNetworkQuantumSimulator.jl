@@ -219,6 +219,10 @@ struct CTMEnvironmentCache{V, N, E}
     # entry. Shared by every cache `_ctm_setenv` derives from this one, so the memory persists
     # across the sweeps of one `update`. See `sweep_vertex_environments`.
     route::Dict{Tuple{Symbol, Int, Int}, Tuple{Int, Int}}
+    # The CVM free energy of `environments`, computed on first request (`cvm_freenergy(cache)`) and
+    # kept: the generating-function DMRG reads it once per ±λ cache, and an `update` that has just
+    # computed it hands it over here. A fresh slot per `_ctm_setenv` (new environments, new F).
+    freenergy::Base.RefValue{Any}
 end
 
 network(cache::CTMEnvironmentCache) = cache.network
@@ -282,13 +286,13 @@ function CTMEnvironmentCache(net, maxdim::Integer; kwargs...)
     end
     Lx = maximum(first.(keys(grid))); Ly = maximum(last.(keys(grid)))
     return CTMEnvironmentCache(net, grid, coords, (Lx, Ly), Int(maxdim), nothing, opts,
-                               Dict{Tuple{Symbol, Int, Int}, Tuple{Int, Int}}())
+                               Dict{Tuple{Symbol, Int, Int}, Tuple{Int, Int}}(), Ref{Any}(nothing))
 end
 
 # Same network/grid/maxdim/options (and route memo), different CVM environments.
 _ctm_setenv(cache::CTMEnvironmentCache, env) =
     CTMEnvironmentCache(cache.network, cache.grid, cache.coords, cache.dims, cache.maxdim, env,
-                        cache.options, cache.route)
+                        cache.options, cache.route, Ref{Any}(nothing))
 
 # --- the move --------------------------------------------------------------------
 # `opts.degtol` — relative cutoff gap below which the truncation is judged to split a
@@ -2435,7 +2439,13 @@ greedy single pass ([`vertex_environments`](@ref)), whose one-sided cuts are 3�
 on purpose, and without the warning, use the two-argument form:
 `cvm_freenergy(vertex_environments(cache), cache)`.
 """
-cvm_freenergy(cache::CTMEnvironmentCache) = cvm_freenergy(_ctm_env_checked(cache), cache)
+function cvm_freenergy(cache::CTMEnvironmentCache)
+    # the greedy fallback of an un-updated cache keeps its warning on every call (not memoised)
+    isnothing(environments(cache)) && return cvm_freenergy(_ctm_env_checked(cache), cache)
+    r = cache.freenergy
+    r[] === nothing && (r[] = cvm_freenergy(environments(cache), cache))
+    return r[]
+end
 
 # One pass over the region grid returning BOTH the Möbius free energy and the raw per-region ln Z
 # values, so the convergence test can watch the WORST region's change (see `update`) at no extra
@@ -2446,12 +2456,17 @@ cvm_freenergy(cache::CTMEnvironmentCache) = cvm_freenergy(_ctm_env_checked(cache
 function _ctm_region_terms(env::CTMVertexEnvironments, cache::CTMEnvironmentCache)
     RT = _ctm_real_eltype(cache)        # keep the network's working precision (Float32 stays Float32)
     Lx, Ly = env.Lx, env.Ly
-    vals = RT[]
+    pts = [(cx, cy) for cx in 1.0:0.5:Lx for cy in 1.0:0.5:Ly]
+    # The regions are independent closed contractions: evaluated on Julia threads (1.8× on the 5×5
+    # at 8 threads), then Möbius-summed SERIALLY in the fixed region order, so `F` is bit-identical
+    # to the serial loop whatever the thread count.
+    vals = Vector{RT}(undef, length(pts))
+    Threads.@threads for i in eachindex(pts)
+        vals[i] = convert(RT, region_lnZ(env, cache, pts[i]...))
+    end
     F = zero(RT)
-    for cx in 1.0:0.5:Lx, cy in 1.0:0.5:Ly
-        z = convert(RT, region_lnZ(env, cache, cx, cy))
-        push!(vals, z)
-        F += convert(RT, _ctm_region_desc(cx, cy)[2]) * z
+    for i in eachindex(pts)
+        F += convert(RT, _ctm_region_desc(pts[i]...)[2]) * vals[i]
     end
     return F, vals
 end
@@ -2702,11 +2717,22 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30, convergence::
     mg = convergence === :marginal
     local vprev
     mprev = mg ? _ctm_vertex_marginals(env, cache) : nothing
+    # Under `:marginal` the free energy is NOT part of the stopping signal: in every converge traced
+    # for the generating-function DMRG (dense and graded; 4×4, 5×5, 6×6, hex) `|ΔF|` sat at ~1e-14
+    # from sweep 2 while the worst marginal change stayed 4–6 orders above it and decided the stop,
+    # and a stationary set of normalised vertex rings leaves no region of `F` free to move. Skipping
+    # it saves ~11% of every sweep (a pass over all regions). It is computed for `verbose` only, and
+    # otherwise on first request through the cache's memo (`cvm_freenergy(cache)`).
+    Fk = !mg || verbose            # track F in this update?
     F = if wr
         f, vprev = _ctm_region_terms(env, cache); f
-    else
+    elseif Fk
         cvm_freenergy(env, cache)
+    else
+        NaN
     end
+    # the tolerance stays relative to |F| as before; untracked, |F| is read ONCE here for that scale
+    Fscale = isnan(F) ? abs(cvm_freenergy(env, cache)) : abs(F)
     converged, Δ, crit = false, Inf, Inf
     sd = nothing                       # `:cut` state distance — reported in the warning
     wrd = nothing                      # worst region's |Δ lnZ| — reported in the warning
@@ -2718,17 +2744,20 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30, convergence::
             Fnew, vnow = _ctm_region_terms(env, cache)
             wrd = maximum(abs.(vnow .- vprev))
             vprev = vnow
-        else
+        elseif Fk
             Fnew = cvm_freenergy(env, cache)
+        else
+            Fnew = NaN
         end
         Δ = abs(Fnew - F); F = Fnew
-        !cyc && opts.gauge && (sd = _ctm_statedist(env, prev))
+        # the raw state distance is not part of the `:marginal` signal either (see below)
+        !cyc && opts.gauge && !mg && (sd = _ctm_statedist(env, prev))
         if mg
             mnow = _ctm_vertex_marginals(env, cache)
             mgd = _ctm_marginal_distance(mnow, mprev)
             mprev = mnow
         end
-        crit = Δ
+        crit = mg ? zero(Δ) : Δ
         # sd² ~ |ΔF|; `max(1,|F|)` below loosens by √|F|. Under `:marginal` the raw C/T distance is
         # NOT folded in: the marginal distance is already a full-coverage, gauge-invariant
         # stationarity signal, while `sd` is gauge-dependent and on a hard-truncated interface
@@ -2745,7 +2774,8 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30, convergence::
         # full-coverage `_ctm_statedist`, unless worst-region (full-coverage by construction, every
         # region is always computable) stands in.
         certified = it >= 2 && (mg ? !isnothing(mgd) : (wr || cyc || !opts.gauge || !isnothing(sd)))
-        if certified && crit ≤ tolerance * max(one(crit), abs(F))
+        isnan(F) || (Fscale = abs(F))
+        if certified && crit ≤ tolerance * max(one(crit), Fscale)
             converged = true
             verbose && @info "CVM sweep converged after $it sweeps."
             break
@@ -2756,8 +2786,10 @@ function update(cache::CTMEnvironmentCache; maxiter::Integer = 30, convergence::
         mg && (extra *= ", worst marginal change = $(something(mgd, NaN))")
         cyc || (extra *= ", state distance = $(something(sd, NaN))")
         msg = "CVM sweep did not converge to tolerance $tolerance after $maxiter sweeps " *
-              "(final |ΔF| = $Δ$extra; binding criterion = $crit)."
+              "(final |ΔF| = $(isnan(Δ) ? "not tracked" : Δ)$extra; binding criterion = $crit)."
         verbose ? println(msg) : @warn(msg)
     end
-    return _ctm_setenv(cache, env)
+    out = _ctm_setenv(cache, env)
+    isnan(F) || (out.freenergy[] = F)          # the F of these environments, when it was computed
+    return out
 end

@@ -274,36 +274,19 @@ function _dense_bp_operators(bpc::BeliefPropagationCache, gen::GeneratingOperato
     ms = [message(bpc, e) for e in inc]
     G0, dG = gen.value[v], gen.derivative[v]
     ψv = _ket_tensor(bpc, v)
-    is = collect(TensorInterface.inds(ψv))
-    dims = Tuple(TensorInterface.dim.(is)); n = prod(dims)
     elt = promote_type(scalartype(ψv), scalartype(G0), scalartype(first(ms)))
-    basis = Dict{Int, Any}()
-    for j in 1:n
-        e = zeros(elt, n); e[j] = one(elt)
-        t = try
-            TensorInterface.from_array(reshape(e, dims...), is...)
-        catch err
-            err isa InexactError || rethrow()
-            continue                                  # a symmetry-disallowed position
-        end
-        norm(t) > 0.5 && (basis[j] = t)
+    # The environment·operator tensors once (on the primed and unprimed ket legs), then the dense
+    # matrices by the per-index signs of `_graded_operator_matrix` — it used to contract the messages
+    # with every allowed basis tensor and pair n² graded tensors.
+    netcon(ts) = length(ts) == 1 ? only(ts) : contract(ts; sequence = contraction_sequence(ts; alg = "optimal"))
+    EN = netcon(vcat([G0], ms))
+    EH = netcon(vcat([dG], ms))
+    for (k, e) in enumerate(inc)
+        ms2 = copy(ms); ms2[k] = dX[e]
+        EH = EH + netcon(vcat([G0], ms2))
     end
-    seq = contraction_sequence(vcat([ψv, G0], ms); alg = "optimal")
-    # dangling Charge legs pair bra–ket, as `bra_tensor(::QuadraticForm)` and `norm_factors` do
-    bras = Dict(i => unprime_charge_legs(TensorInterface.dag(TensorInterface.prime(t)), t) for (i, t) in basis)
-    N = zeros(elt, n, n); H = zeros(elt, n, n)
-    for (j, tj) in basis
-        yN = contract(vcat([tj, G0], ms); sequence = seq)                 # on the primed legs
-        yH = contract(vcat([tj, dG], ms); sequence = seq)
-        for (k, e) in enumerate(inc)
-            ms2 = copy(ms); ms2[k] = dX[e]
-            yH = yH + contract(vcat([tj, G0], ms2); sequence = seq)
-        end
-        for (i, bi) in bras
-            N[i, j] = TensorInterface.scalar(yN * bi)
-            H[i, j] = TensorInterface.scalar(yH * bi)
-        end
-    end
+    N = _graded_operator_matrix(EN, ψv, elt)
+    H = _graded_operator_matrix(EH, ψv, elt)
     return (N + N') / 2, (H + H') / 2
 end
 
@@ -597,6 +580,105 @@ function bethe_energy(cache::CTMEnvironmentCache, gen::GeneratingOperator; windo
     return E
 end
 
+# ── Graded effective operators: one contraction and per-index signs ──────────────────────────
+#
+# On a graded site the dense-coefficient matrix of a quadratic form `x ↦ ⟨E · T(x) · b(x)⟩` — `E`
+# the environment·operator tensor on (primed ket legs, ket legs), `T = from_array` on the site's
+# indices, `b(x) = dag(prime(T(x)))` with any dangling Charge leg paired — is
+#
+#     M_ij = ⟨E · t_j · b_i⟩ = σ_i · τ_j · A_ij,     A = array(E, primed legs…, legs…)
+#
+# for unit basis tensors t_j: the pairing with b_i reads entry i of `E · t_j` up to a sign σ_i, and
+# `E · t_j` is column j of `A` up to a sign τ_j. Both signs come from the category's braiding and
+# depend only on the vertex's indices (a basis tensor has the site's definite total charge, so the
+# parity cross terms collapse to per-index factors), never on `E`. So they are computed ONCE per
+# index set — σ from the unit tensors, τ from a random probe with `E`'s legs, on which every column
+# is nonzero — and cached; afterwards a graded effective operator costs one ring contraction, as on
+# dense sites. The probe also CHECKS the factorised form (|σ|, |τ| = 1 and every probe column equal
+# to τ_j·A[:, j]); an index set that fails the check keeps the exact per-column form
+# M[:, j] = σ ⊙ array(E · t_j) (still one ring contraction). Measured on the Hubbard hexagon (fZ2,
+# d = 4, D = 4, χ = 32): identical to the old per-basis-tensor construction to 5.6e-16, 36× faster.
+struct _GradedSigns
+    rows::Vector{Any}          # primed copies of the non-Charge indices: E's output legs
+    cols::Vector{Any}          # the non-Charge indices of the site tensor: E's input legs
+    Ly::Vector{Any}            # the legs of E · t_j (primed, Charge legs unprimed), in `inds` order
+    n::Int
+    basis::Dict{Int, Any}      # allowed position => unit basis tensor
+    σ::Vector{ComplexF64}
+    τ::Vector{ComplexF64}
+    separable::Bool
+end
+const _GRADED_SIGNS = Dict{Any, _GradedSigns}()
+const _GRADED_SIGNS_LOCK = ReentrantLock()
+_ischarge(i) = occursin("Charge", string(TensorInterface.tags(i)))
+
+function _graded_signs(ψv, E)
+    key = Tuple(TensorInterface.inds(ψv))
+    S = lock(() -> get(_GRADED_SIGNS, key, nothing), _GRADED_SIGNS_LOCK)
+    S === nothing || return S
+    is = collect(TensorInterface.inds(ψv))
+    dims = Tuple(TensorInterface.dim.(is)); n = prod(dims)
+    unit(j) = (e = zeros(ComplexF64, n); e[j] = 1; reshape(e, dims...))
+    basis = Dict{Int, Any}()
+    for j in 1:n
+        t = try
+            TensorInterface.from_array(unit(j), is...)
+        catch err
+            err isa InexactError || rethrow()
+            continue                                  # a symmetry-disallowed position
+        end
+        norm(t) > 0.5 && (basis[j] = t)
+    end
+    Ly = Any[_ischarge(i) ? i : TensorInterface.prime(i) for i in is]
+    rows = Any[TensorInterface.prime(i) for i in is if !_ischarge(i)]
+    cols = Any[i for i in is if !_ischarge(i)]
+    σ = zeros(ComplexF64, n)
+    for (i, t) in basis
+        # dangling Charge legs pair bra–ket, as `bra_tensor(::QuadraticForm)` and `norm_factors` do
+        b = unprime_charge_legs(TensorInterface.dag(TensorInterface.prime(t)), t)
+        σ[i] = TensorInterface.scalar(TensorInterface.from_array(unit(i), Ly...) * b)
+    end
+    τ = zeros(ComplexF64, n)
+    separable = all(i -> isapprox(abs(σ[i]), 1; atol = 1.0e-10), keys(basis))
+    try
+        probe = TensorInterface.random_tensor(Xoshiro(0x7a51), ComplexF64, collect(TensorInterface.inds(E)))
+        P = reshape(TensorInterface.array(probe, rows..., cols...), n, n)
+        for (j, tj) in basis
+            y = vec(TensorInterface.array(probe * tj, Ly...))
+            a = P[:, j]; na = real(dot(a, a))
+            if na > 0
+                τ[j] = dot(a, y) / na
+                separable &= isapprox(abs(τ[j]), 1; atol = 1.0e-10) && norm(y - τ[j] .* a) <= 1.0e-12 * norm(y)
+            else
+                separable &= iszero(norm(y))
+            end
+        end
+    catch err
+        err isa InterruptException && rethrow()
+        separable = false                             # unexpected leg structure: exact per-column form
+    end
+    S = _GradedSigns(rows, cols, Ly, n, basis, σ, τ, separable)
+    lock(_GRADED_SIGNS_LOCK) do
+        length(_GRADED_SIGNS) > 4096 && empty!(_GRADED_SIGNS)    # bounded: one entry per index set
+        _GRADED_SIGNS[key] = S
+    end
+    return S
+end
+
+# The dense matrix of the graded quadratic form of `E` at the site tensor `ψv` (see above).
+function _graded_operator_matrix(E, ψv, elt)
+    S = _graded_signs(ψv, E)
+    if S.separable
+        A = reshape(TensorInterface.array(E, S.rows..., S.cols...), S.n, S.n)
+        return Matrix{elt}(S.σ .* A .* transpose(S.τ))     # σ, τ vanish off the allowed positions
+    end
+    M = zeros(elt, S.n, S.n)
+    for (j, tj) in S.basis
+        M[:, j] = S.σ .* vec(TensorInterface.array(E * tj, S.Ly...))
+    end
+    return M
+end
+
 # Dense effective ring at `v`: `ring · opv` as a matrix from `ψᵥ`'s index set to its primed copy.
 function _dense_ring_operator(ring::Vector, opv, ψv, opts::CTMOptions)
     is = collect(inds(ψv))
@@ -604,35 +686,14 @@ function _dense_ring_operator(ring::Vector, opv, ψv, opts::CTMOptions)
     if any(Tensors.isgraded, is)
         # GRADED (in particular fermionic) sites: the flattened operator array applied to the
         # flattened site vector does NOT reproduce the tensor contraction — the graded product
-        # inserts parity signs that depend on leg order and duals (measured on hex(2,2) t–V: the
-        # flattened t†Nt was −0.125 against +0.161 from the contraction, and the gradient 300×
-        # off). Build the matrix in the site's dense-coefficient basis by APPLYING the ring to each
-        # allowed basis tensor and pairing with the bra of each other basis tensor through the
-        # backend's own contraction, so every sign is the category's. Quadratic form by
-        # construction: x†Mx = ⟨ring · T(x) · op · dag(prime(T(x)))⟩ for T = from_array.
+        # inserts parity signs (measured on hex(2,2) t–V: flattened t†Nt −0.125 against +0.161).
+        # The matrix of the quadratic form x†Mx = ⟨ring · T(x) · op · dag(prime(T(x)))⟩ is instead
+        # `σ ⊙ A ⊙ τᵀ`: `A` the flattened ring·op (ONE ring contraction, as on dense sites) and σ, τ
+        # per-index signs fixed by the vertex's indices alone — see `_graded_operator_matrix`.
+        # (It used to contract the whole ring once per allowed basis tensor: 36× slower on the
+        # Hubbard hexagon at D = 4, with identical matrices to 5.6e-16.)
         elt = promote_type(scalartype(ψv), scalartype(opv), scalartype(first(ring)))
-        dims = Tuple(TensorInterface.dim.(is))
-        basis = Dict{Int, Any}()
-        for j in 1:n
-            e = zeros(elt, n); e[j] = one(elt)
-            t = try
-                TensorInterface.from_array(reshape(e, dims...), is...)
-            catch err
-                err isa InexactError || rethrow()
-                continue                              # a disallowed position: zero row and column
-            end
-            norm(t) > 0.5 && (basis[j] = t)
-        end
-        M = zeros(elt, n, n)
-        # dangling Charge legs pair bra–ket, as `bra_tensor(::QuadraticForm)` and `norm_factors` do
-    bras = Dict(i => unprime_charge_legs(TensorInterface.dag(TensorInterface.prime(t)), t) for (i, t) in basis)
-        for (j, tj) in basis
-            yj = _ctm_contract(vcat(ring, [tj, opv]), opts)     # on the primed legs
-            for (i, bi) in bras
-                M[i, j] = TensorInterface.scalar(yj * bi)
-            end
-        end
-        return M
+        return _graded_operator_matrix(_ctm_contract(vcat(ring, [opv]), opts), ψv, elt)
     end
     E = _ctm_contract(vcat(ring, [opv]), opts)
     A = TensorInterface.array(E, prime.(is)..., is...)
@@ -878,6 +939,11 @@ not a descent direction or whose line search fails, uses the Jacobi direction `t
 the local one-site optimum at every vertex — a unit step is the `refresh = :sweep` update, and
 `step0 = 0.5` is the damping that measured stable. Every step is an Armijo backtracking line search
 on the FD-of-F energy (each trial one environment set, `ls_max` trials), so no step goes uphill.
+A trial's ±λ caches are first swept in lockstep `energy_sweeps` times (default 2): a trial whose
+energy is then clearly above the Armijo line is rejected without the rest of the converge, which
+only the gradient at an accepted point needs (`energy_sweeps < 2` converges every trial fully).
+`λ` defaults to 1e-6 for both projectors (the measured optimum of truncation λ² against roundoff
+1/λ for the FD-of-F energy).
 No iteration starts after `time_limit` seconds (counted after the initial environment set).
 `memory = 0` is the Jacobi (damped `:sweep`) update with a line search and no quasi-Newton
 correction. `caches::Ref` warm-starts from a previous call's final environments and L-BFGS pairs
@@ -895,12 +961,17 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
               projector::Symbol = :cut, λ::Union{Real, Nothing} = nothing, whiten_cutoff::Real = 1.0e-6,
               memory::Int = 8, step0::Real = 0.5, ls_max::Int = 4, ctm_kwargs = (;), verbose::Bool = true,
               gtol::Real = 1.0e-10, time_limit::Real = Inf, caches::Union{Nothing, Base.RefValue} = nothing,
-              aux_free::Bool = true, frozen_pm::Bool = false, max_rotation::Real = 0.5)
+              aux_free::Bool = true, frozen_pm::Bool = false, max_rotation::Real = 0.5, energy_sweeps::Int = 2)
     frozen_pm && projector !== :cycle && throw(ArgumentError("frozen_pm (G ≈ P) is only valid under projector = :cycle; under :cut the frozen response is wrong by O(1)"))
     # The frozen ±λ rebuild is validated from the TRUE λ = 0 environment; from the aux-free padded
     # one its block contraction left legs open (a 10-leg intermediate, out of memory).
     frozen_pm && (aux_free = false)
-    λ = something(λ, projector === :cycle ? 1.0e-6 : 1.0e-7)
+    # Finite-difference step, both projectors: the FD-of-F energy's truncation error grows as
+    # a·λ² (a ≈ 13 per site on the 5×5 TFIM D = 3, ≈ 9 on the Hubbard hexagon D = 4) and its
+    # roundoff as 1/λ (F is a sum of region logs at ~1e-15); measured per-site energy error
+    # 3.7e-9 at λ = 1e-7 and ≈ 1.5e-10 at 1e-6, gradient ≈ 1.5e-6 relative at both. At 1e-7 the
+    # last 5×5 iterations moved the energy by the size of its noise (docs/dmrg.md, audit).
+    λ = something(λ, 1.0e-6)
     if projector === :cycle && !haskey(ctm_kwargs, :cycle_gapcut)
         ctm_kwargs = (; cycle_gapcut = 1.0e-4, ctm_kwargs...)
     end
@@ -963,6 +1034,48 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
             cm = generating_cache(ψ, gen, maxdim; λ = -λ, seed = cache, projector, ctm_kwargs...)
         end
         return (cache, cp, cm), (cvm_freenergy(cp) - cvm_freenergy(cm)) / (2λ)
+    end
+    # One line-search trial. The FD energy of a trial state is at its noise floor after 1–2
+    # LOCKSTEP sweeps of the ±λ caches from the trial's λ = 0 seed, while the gradient needs the full
+    # converge — L sweeps on an L-wide lattice, because the FD divides ring changes by λ (measured on
+    # the 5×5: energy converged at sweep 1–2, gradient 4e-2 off at sweep 3 and 4e-7 at sweep 4). Only
+    # an accepted trial needs its gradient, so the ±λ caches are swept together `energy_sweeps` times
+    # and the trial is REJECTED on the spot when its energy lies above the Armijo line by at least
+    # 10× its change over the last sweep; otherwise the converge continues from the lockstep state
+    # to full tolerance and the caller decides on the converged energy. Returns (envs, E, early).
+    function trial_environments(ψ, seed, threshold)
+        (frozen_pm || energy_sweeps < 2) && return (environments(ψ, seed)..., false)
+        cache = generating_cache(ψ, gen, maxdim; seed, projector, aux_free, ctm_kwargs...)
+        optkw = (; (k => v for (k, v) in pairs(ctm_kwargs) if !(k in (:maxiter, :tolerance, :convergence, :verbose)))...)
+        # (`.environments`, not `environments(…)`: the local closure of that name shadows the accessor)
+        mk(l) = _ctm_setenv(CTMEnvironmentCache(QuadraticForm(ψ, _shifted_operator(gen, l)), maxdim; projector, optkw...),
+                            cache.environments)
+        cp, cm = mk(λ), mk(-λ)
+        tp, tm = _ctm_factor_table(cp), _ctm_factor_table(cm)
+        envp, envm = cp.environments, cm.environments
+        E = NaN; Eprev = NaN
+        for _ in 1:energy_sweeps
+            if Threads.nthreads() >= 2
+                a = Threads.@spawn sweep_vertex_environments(cp, envp, tp)
+                b = Threads.@spawn sweep_vertex_environments(cm, envm, tm)
+                envp, envm = fetch(a), fetch(b)
+            else
+                envp = sweep_vertex_environments(cp, envp, tp); envm = sweep_vertex_environments(cm, envm, tm)
+            end
+            Eprev = E
+            E = (cvm_freenergy(envp, cp) - cvm_freenergy(envm, cm)) / (2λ)
+        end
+        cp, cm = _ctm_setenv(cp, envp), _ctm_setenv(cm, envm)
+        E > threshold && abs(E - Eprev) <= 0.1 * (E - threshold) && return ((cache, cp, cm), E, true)
+        if Threads.nthreads() >= 2
+            a = Threads.@spawn generating_cache(ψ, gen, maxdim; λ, seed = cp, projector, ctm_kwargs...)
+            b = Threads.@spawn generating_cache(ψ, gen, maxdim; λ = -λ, seed = cm, projector, ctm_kwargs...)
+            cp, cm = fetch(a), fetch(b)
+        else
+            cp = generating_cache(ψ, gen, maxdim; λ, seed = cp, projector, ctm_kwargs...)
+            cm = generating_cache(ψ, gen, maxdim; λ = -λ, seed = cm, projector, ctm_kwargs...)
+        end
+        return (cache, cp, cm), (cvm_freenergy(cp) - cvm_freenergy(cm)) / (2λ), false
     end
     # Gradient, block preconditioner (N_eff⁻¹ on the whitened subspace, scaled by t†N t / 2 so it is
     # dimensionless per vertex) and the Jacobi direction at every vertex from one environment set.
@@ -1029,9 +1142,10 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
                 xn[v] = xn[v] ./ norm(xn[v])
             end
             ψn = withx(ψ, xn)
-            envsn, En = environments(ψn, envs[1])
-            En <= E + 1.0e-4 * α * slope && return (true, α, k, xn, ψn, envsn, En)
-            verbose && (println("    trial $k rejected: α = $α, slope d·g = $slope, E_trial − E = $(En - E)"); flush(stdout))
+            threshold = E + 1.0e-4 * α * slope                    # the Armijo line
+            envsn, En, early = trial_environments(ψn, envs[1], threshold)
+            !early && En <= threshold && return (true, α, k, xn, ψn, envsn, En)
+            verbose && (println("    trial $k rejected$(early ? " after $energy_sweeps lockstep sweeps" : ""): α = $α, slope d·g = $slope, E_trial − E = $(En - E)"); flush(stdout))
             α /= 2
         end
         return (false, α, ls_max, xn, ψn, envsn, En)
