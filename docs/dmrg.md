@@ -1461,3 +1461,126 @@ Measured at 8 threads, BLAS at 1, warm (JIT excluded unless stated), `:cut`, χ 
 iteration); the SVD route and tolerance (identical convergence); more ±λ concurrency (threads
 already saturated); the contraction-sequence cache (no misses after warm-up); seeding from the base
 ±λ on dense states; the one-sided λ (rejected earlier).
+
+## Audit items 1, 2, 3 and 5 implemented, and benchmarked against exact energies — *2026-09-23*
+
+Commits `72c4042` (the four items) and `73fa6de` (a closure bug the benchmarks exposed).
+
+**What changed.**
+1. *Graded effective operators by per-index signs* (`_graded_operator_matrix`, used by
+   `_dense_ring_operator` and `_dense_bp_operators`): one environment·operator contraction per
+   operator, flattened, times row and column signs σ, τ that depend only on the vertex's indices —
+   σ from the unit tensors against their bras, τ from a random probe with the operator's legs,
+   cached per index set and checked on the probe (a set that fails would keep an exact per-column
+   form; none did). Identical to the per-basis construction to 5.6e-16 (ring operators) and
+   2.8e-16 (BP operators) on every vertex of the Hubbard hex(1,2) D = 4 state; 2 ms against 430 ms
+   per operator after a one-off sign build of 10–30 ms per vertex.
+2. *λ = 1e-6* for `ctmrg_lbfgs` (both projectors). The graded scan matched the dense one:
+   truncation ≈ 9λ² per site, roundoff 3e-9 per site at 1e-7 and 3e-10 at 1e-6.
+3. *Early exit for rejected trials*: a trial's ±λ caches are swept in lockstep for
+   `energy_sweeps = 2` sweeps; a trial whose energy is then above the Armijo line by ≥ 10× its last
+   change is rejected without the rest of the converge.
+5. *Free-energy bookkeeping under `:marginal`*: no per-sweep F or state distance (|F| read once for
+   the tolerance scale), a memo slot on the cache, the region loop threaded and summed in order
+   (bit-identical: the `:warm`/`:schur` comparison below reproduced F to every digit).
+
+**A bug on the way, and a guard.** `trial_environments` is a closure inside `ctmrg_lbfgs`, and its
+local `E` rebound the optimiser's current energy (the trap the gradient closure already documents):
+after early-rejected trials the Jacobi fallback took its Armijo line from the rejected energy and
+accepted uphill steps (+4.6e-7 and +1.7e-6 on the 5×5 continuation). Renamed, and the main loop now
+errors on any accepted step that is not below the current energy — Armijo guarantees it.
+
+**Tests.** test_dmrg.jl 90/90; test_ctmenvironment.jl 246/247 in four chunks (each under the 10-minute
+cap). The failure (`:warm` vs `:schur` converged F 3.3e-6 apart on the 6×6 χ = 16 random state)
+reproduces bit-identically on the code before these changes; it belongs to the `:warm` default.
+
+### TFIM 5×5, g = 3 (exact −3.147427074503 per site), χ = 32, from the BP-stage states
+
+Like for like with the run after the scale-projection fix (same start, 4 threads, 10 iterations):
+
+| | before | after |
+|---|---|---|
+| wall time (incl. cold start) | 315.8 s | 298.3 s |
+| gap per site at iteration 10 | 1.711e-6 | 1.673e-6 |
+| iteration with one evaluation | 15.3–16.7 s | 14.5–15.3 s |
+| iteration with one rejected trial | ≈ 30 s | 20.1–20.6 s |
+
+Every rejection was decided after 2 lockstep sweeps (the smallest margin 1.1e-7 in total energy).
+
+D = 3 to its floor (8 threads): 9.68e-6 after the first step → 1.58e-6 at iteration 16 (486 s, 13 s
+per single-evaluation iteration, 32 early rejections, 1 full), then no descent direction in 8 trials —
+the `:cut` χ = 32 floor (the earlier χ = 48 run went to 8.2e-7).
+
+D = 4 (8 threads; staged, since a cold start plus a 450 s iteration budget overran the 10-minute cap and
+lost the invocation — λ = 0 cache 43 s, ±λ 125 s each): 1.32e-6 at the BP stage → 8.9e-7, 6.7e-7,
+6.4e-7, 5.6e-7 → **5.50e-7** at iteration 5 (boundary MPS χ = 32 confirms 5.503e-7), then no descent
+direction in 8 trials — the χ = 32 floor at D = 4 (the χ = 48 run of 2026-09-13 reached 1.55e-7).
+80 s per single-evaluation iteration; rejected trials, all decided after 2 lockstep sweeps, cost
+≈ 30–40 s each instead of a full ≈ 80 s evaluation.
+
+### Spinful Hubbard, U = 4, t = 1, half filling (μ = U/2), fZ2, χ = 32, SU → BP stage → CTM L-BFGS
+
+Exact references (two-bit-string Lanczos, `scratchpad/ed_hub.jl`, lowest over the sectors near half
+filling): hex(1,2) 10 sites −26.381696842613 (−2.638169684261 per site, N↑ = N↓ = 5); 3×3 square
+−23.778020228946 (−2.642002247661 per site, N↑ = 5, N↓ = 4, a doublet with 4, 5).
+
+Like for like on hex(1,2) D = 4 (same SU start, 4 threads, the settings of the 2026-09-16 run):
+
+| | old code | new code |
+|---|---|---|
+| iteration with one evaluation | 11.8–12.0 s | 4.3–4.9 s |
+| iteration with 4–5 trials | 21.6–26.3 s | 11.7–17.4 s |
+| energy after 11–12 iterations | −2.5935758270 | −2.5935758255 |
+| first iteration of a resumed process | 77 s | 103 s |
+
+SU → BP stage → CTM L-BFGS, per-site gap against the exact energy (final states confirmed by exact
+contraction; the optimiser's FD energy agrees with it to ≤ 3.4e-10 per site in every case):
+
+| case | SU | BP stage | CTM L-BFGS | iterations | s per single-evaluation iteration |
+|---|---|---|---|---|---|
+| hex(1,2) D = 3 | 0.15195 | 0.15195 | **0.15193** | 13, then no descent | 0.5 |
+| hex(1,2) D = 4 | 0.04541 | 0.04547 | **0.04459** | 7, then no descent | 3.8–4.2 |
+| hex(1,2) D = 5 | 0.03613 | 0.03628 | **0.03331** | 23, still descending ~1e-7/it | 28–30 |
+| 3×3 square D = 3 (charged root) | 0.09810 | 0.09798 | **0.09565** | 20, then no descent | 6 (late) – 157 (early, see below) |
+| 3×3 square D = 4 (charged root)* | 0.03311 | 0.03291 | **0.02732** | 13, then no descent | 38 |
+
+\* run with a 1e-10 tolerance and a 40-sweep cap per converge (the settings of the 2026-09-16 Hubbard
+runs), after the D = 3 run showed the 1e-12 tolerance running converges to the 100-sweep cap.
+
+The D = 3 and D = 4 hexagon values reproduce the stationary points found with the old code (0.15193,
+0.04459); D = 5 passes the old code's 9-iteration value (0.03331) and keeps creeping down. On the 3×3
+square the CTM stage takes D = 4 from 0.0331 (SU) to 0.0273 per site, a 17% reduction, where D = 3 only
+moves 0.0981 → 0.0957: as on the hexagon, D = 3 is too small for spinful fermions to be worth
+optimising, and the D-trend (0.096 → 0.027 on the square, 0.152 → 0.045 → 0.033 on the hexagon) is the
+expected slow convergence of a d = 4 PEPS. The BP stage
+now runs on fermions (the other session's fix), 0.7–2.5 s per sweep after a one-off ~150 s JIT, but
+it optimises the Bethe energy and leaves the true energy where it was (±1e-4) — the CTM stage does
+all the work, as on the hexagonal Heisenberg model.
+
+Timing notes. The early 3×3 iterations took 150–250 s because their ±λ converges ran to the
+100-sweep cap: after a large step the graded marginal change floors at 2e-11 – 5e-10, above the
+1e-12 tolerance, while the gradient needs ring changes only ≪ λ (≈ 1e-9 at λ = 1e-6); late iterations
+converged normally in 6 s. A tolerance tied to λ (the audit's untaken item) would have cut those
+iterations 10–20×. On the square lattice every graded interface is χ·D²·5 = 1440 wide and takes the
+dense SVD, so its cold start did not fit one 10-minute process: it was run staged (λ = 0 cache, +λ,
+−λ, each its own process — 122 s, 265 s, 266 s). And for small fermionic systems the per-process JIT
+(≈ 100–150 s on the first iteration or the cold start of every process) now exceeds the whole
+optimisation: hex(1,2) D = 4 converged in ~31 s of iterations inside a 317 s process — the
+precompile workload (audit item 6) is now the largest lever there.
+
+**Reading.** The four items do what the audit measured. The graded operator build (item 1) was the
+dominant cost of a fermionic iteration and is gone: 2.6× per Hubbard iteration like for like, 0.5 s /
+4 s / 30 s per iteration on hex(1,2) at D = 3 / 4 / 5. λ = 1e-6 (item 2) is free and the energies agree
+with exact contraction to ≤ 3.4e-10 per site. The early exit (item 3) decided every rejection it saw
+after 2 sweeps and cut a rejected trial to ≈ 1/3 of an evaluation; it matters most near a floor,
+where most trials are rejected. The F bookkeeping (item 5) is the ~5–10% on dense evaluations. None of
+it moves a floor: the optimised energies are the same stationary points as before (hex D = 3, D = 4)
+or slightly lower (5×5 D = 3 at iteration 10, hex D = 5).
+
+What now limits the method, in order: (a) the χ = 32 floors on the 5×5 (1.6e-6 at D = 3, 5.5e-7 at
+D = 4; χ = 48 goes further) — the `:cut` gradient inconsistency, cured only by χ; (b) for small fermionic
+systems the per-process JIT, which is now larger than the optimisation itself (audit item 6,
+precompile workload); (c) the `:marginal` tolerance, which on graded networks can run converges to the
+sweep cap after large steps (tie it to λ); (d) on the square lattice the graded interfaces, 1440–2560
+wide and always on the dense SVD route (a warm-started graded subspace route would cut it); (e) the
+L-sweep propagation of warm converges (audit item 4).
