@@ -1364,3 +1364,29 @@ with a full GC after every step, and the script itself passes at default flags. 
 `--check-bounds=yes`) crashed 2 of 4 fresh 1.12.1 processes ("GC error (probable corruption)" /
 SIGSEGV) and 0 of 3 on Julia 1.12.7 (installed alongside via `juliaup add 1.12.7`). Recommendation: run
 on 1.12.7 (same Manifest; one-off recompile of the stack).
+
+## Line search: project the scale direction out of every step — *2026-09-22*
+
+The Hubbard hexagon smoke test (`examples/hubbard_hex_smoke.jl`, D = 2, lossless χ) showed a trial
+sequence whose energy ROSE faster as the step shrank (+1.0e-3, +1.9e-3, +6.0e-2 at α = 1, ½, ¼).
+The optimiser was exact on every trial (FD-of-F = exact contraction to ≤ 1.4e-8); the exact energy
+along that direction really had a spike near α ≈ 0.2. Cause: the L-BFGS direction was almost
+entirely a rescaling of every site tensor, d_v ≈ −4.4 x_v plus a 3–5% sideways part. The energy is
+invariant under rescaling any tensor, so its Hessian is flat along each x_v and the curvature pairs
+leave that component undetermined. With the per-vertex renormalisation of the trial tensors the
+effective sideways step is α/(1 + α·x_v·d_v/|x_v|²): a pole at α ≈ 0.23 (each tensor passes through
+~0.6% of its norm) and, beyond it, a step BACKWARDS (−0.29× the intended step at α = 1).
+
+Fix (`ctmrg_lbfgs`, line search entry): every direction has its component along each x_v projected
+out — the slope d·g is unchanged because g ⟂ x_v (t†(H − εN)t = 0) — and the first trial is capped
+so no tensor rotates by more than `max_rotation = 0.5` (|α d_v|/|x_v|; never triggered in the runs
+below). Measured:
+
+| run | before | after |
+|---|---|---|
+| Hubbard hexagon D=2, 10 iterations | −13.6202992818, 14 evaluations, one non-monotone search | −13.6202992862, 19 evaluations, rejected trials now shrink with α (3.1e-3 → 3.5e-4 → accept) |
+| 5×5 TFIM D=3 χ=32 from `bpstate_L5_D3.jls`, 10 iterations | gap 1.754e-6 per site, 18 evaluations | gap **1.711e-6**, **13 evaluations** |
+
+On the hexagon the pole had been acting as accidental damping; without it unit L-BFGS steps
+overshoot by ~4× there and the search backs off to ¼ — the curvature scale γ is the next thing to
+look at. Tests 90/90.

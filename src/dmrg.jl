@@ -888,14 +888,14 @@ of the cost; the route never needs the ring energy, which that cache cannot give
 graded sites take the true λ = 0 environment). `frozen_pm = true` (with `projector = :cycle` only)
 builds the ±λ environments through the λ = 0 projectors by linear projector-free sweeps
 ([`frozen_generating_cache`](@ref), the "G ≈ P" response): ≈ 1% off the re-converged gradient at
-χ = 32 on the 5×5, 7× cheaper, and free of the `:cycle` limit cycle. Returns `(ψ, energies)` with the energy after
+χ = 32 on the 5×5, 7× cheaper, and free of the `:cycle` limit cycle. Every search direction has its per-vertex component along the current tensor projected out (the energy is scale-invariant per tensor, so that component only reparametrises the path, and with renormalisation it puts a pole in it), and the first trial rotates no tensor by more than `max_rotation` (|α d_v| / |x_v|). Returns `(ψ, energies)` with the energy after
 each accepted step, `energies[1]` the start.
 """
 function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdim::Integer, maxiter::Int = 20,
               projector::Symbol = :cut, λ::Union{Real, Nothing} = nothing, whiten_cutoff::Real = 1.0e-6,
               memory::Int = 8, step0::Real = 0.5, ls_max::Int = 4, ctm_kwargs = (;), verbose::Bool = true,
               gtol::Real = 1.0e-10, time_limit::Real = Inf, caches::Union{Nothing, Base.RefValue} = nothing,
-              aux_free::Bool = true, frozen_pm::Bool = false)
+              aux_free::Bool = true, frozen_pm::Bool = false, max_rotation::Real = 0.5)
     frozen_pm && projector !== :cycle && throw(ArgumentError("frozen_pm (G ≈ P) is only valid under projector = :cycle; under :cut the frozen response is wrong by O(1)"))
     # The frozen ±λ rebuild is validated from the TRUE λ = 0 environment; from the aux-free padded
     # one its block contraction left legs open (a 10-leg intermediate, out of memory).
@@ -1007,6 +1007,19 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
     # Armijo backtracking along d from x; returns (accepted, α, trials, xn, ψn, envsn, En).
     function linesearch(x, ψ, envs, E, d, slope, α)
         local xn, ψn, envsn, En
+        # The energy is invariant under rescaling any one tensor, so its Hessian is flat along each
+        # x_v and the curvature pairs say nothing there: the two-loop recursion can leave a large
+        # component of d along x_v (measured −4.4·x_v on the Hubbard hexagon). With the per-vertex
+        # renormalisation below, the trial path then passes each tensor through ~zero near
+        # α = −1/(x_v·d_v/|x_v|²) — a pole in the energy — and beyond it steps BACKWARDS. Project
+        # that component out (the slope d·g is unchanged: g ⟂ x_v, because t†(H − εN)t = 0).
+        d = Dict(v => d[v] .- (real(dot(x[v], d[v])) / real(dot(x[v], x[v]))) .* x[v] for v in vs)
+        # and cap the per-vertex rotation of the first trial at `max_rotation` (|α d_v| / |x_v|)
+        rmax = maximum(norm(d[v]) / norm(x[v]) for v in vs)
+        if α * rmax > max_rotation
+            verbose && println("    step capped: α $α → $(max_rotation / rmax) (max |d_v|/|x_v| = $rmax)")
+            α = max_rotation / rmax
+        end
         for k in 1:ls_max
             xn = _vaxpy(α, d, x)
             # The energy is invariant under rescaling any tensor, so renormalise to unit norm here:
