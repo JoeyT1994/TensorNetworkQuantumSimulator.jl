@@ -1053,7 +1053,12 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
         cp, cm = mk(λ), mk(-λ)
         tp, tm = _ctm_factor_table(cp), _ctm_factor_table(cm)
         envp, envm = cp.environments, cm.environments
-        E = NaN; Eprev = NaN
+        # ⚠️ NOT `E`: a closure ASSIGNING a name of the enclosing function writes that variable, and `E`
+        # is the optimiser's current energy — an early-rejected trial overwrote it, and the Jacobi
+        # fallback then took its Armijo line from the rejected energy and accepted uphill steps
+        # (measured on the 5×5 continuation before the rename). `local` makes the intent explicit.
+        local Etr = NaN
+        local Etr_prev = NaN
         for _ in 1:energy_sweeps
             if Threads.nthreads() >= 2
                 a = Threads.@spawn sweep_vertex_environments(cp, envp, tp)
@@ -1062,11 +1067,11 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
             else
                 envp = sweep_vertex_environments(cp, envp, tp); envm = sweep_vertex_environments(cm, envm, tm)
             end
-            Eprev = E
-            E = (cvm_freenergy(envp, cp) - cvm_freenergy(envm, cm)) / (2λ)
+            Etr_prev = Etr
+            Etr = (cvm_freenergy(envp, cp) - cvm_freenergy(envm, cm)) / (2λ)
         end
         cp, cm = _ctm_setenv(cp, envp), _ctm_setenv(cm, envm)
-        E > threshold && abs(E - Eprev) <= 0.1 * (E - threshold) && return ((cache, cp, cm), E, true)
+        Etr > threshold && abs(Etr - Etr_prev) <= 0.1 * (Etr - threshold) && return ((cache, cp, cm), Etr, true)
         if Threads.nthreads() >= 2
             a = Threads.@spawn generating_cache(ψ, gen, maxdim; λ, seed = cp, projector, ctm_kwargs...)
             b = Threads.@spawn generating_cache(ψ, gen, maxdim; λ = -λ, seed = cm, projector, ctm_kwargs...)
@@ -1209,6 +1214,9 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
             verbose && println("lbfgs it $it: line search failed ($nls trials, $kind), stopping at E = $E")
             break
         end
+        # Armijo makes every accepted step strictly downhill; anything else is corrupted bookkeeping
+        # (a closure once overwrote `E` and the Jacobi fallback accepted uphill steps) — fail loudly.
+        En < E || error("ctmrg_lbfgs: accepted an uphill step at iteration $it (E = $E → $En, $kind, α = $α)")
         gn, Pn, jacn = gradient(envsn, xn)
         s = _vaxpy(-1.0, x, xn); y = _vaxpy(-1.0, g, gn); sy = _vdot(s, y)
         verbose && println("  pair: s·y = $sy, |s| = $(sqrt(_vdot(s, s))), |y| = $(sqrt(_vdot(y, y))), s·g_new = $(_vdot(s, gn)), s·g_old = $(_vdot(s, g))")
