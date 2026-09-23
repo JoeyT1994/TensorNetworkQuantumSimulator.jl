@@ -1390,3 +1390,74 @@ below). Measured:
 On the hexagon the pole had been acting as accidental damping; without it unit L-BFGS steps
 overshoot by ~4× there and the search backs off to ¼ — the curvature scale γ is the next thing to
 look at. Tests 90/90.
+
+## Audit of the CTM DMRG path: where the time goes and what to change — *2026-09-22*
+
+Measured at 8 threads, BLAS at 1, warm (JIT excluded unless stated), `:cut`, χ = 32. Scripts:
+`scratchpad/audit_{profile,lockstep,seed,svd,graded_op,dense_grad,lambda}.jl`. No library change.
+
+**Cost structure of one L-BFGS iteration (one energy evaluation + gradient):**
+
+| piece | 5×5 TFIM D = 3 (dense) | Hubbard hex(1,2) D = 4 (graded) |
+|---|---|---|
+| λ = 0 converge (seed only) | aux-free, 1.0–1.5 s | true, ≈ 1.2 s (4 × 0.3 s) |
+| each ±λ converge | 5 sweeps × 1.23 s + F 6 × 0.14 s + marginals 0.34 s ≈ 7.4 s | 4 sweeps × 0.3–0.45 s ≈ 1.5 s |
+| ±λ pair (concurrent) | 13–14.5 s (concurrency buys ~10%: the sweep already saturates 8 threads) | ≈ 3 s |
+| gradient build | 0.66 s serial (0.55 s threaded) | **7.7 s** (0.9 s per graded ring operator, 4 per vertex) |
+| sweep split | enlarged corners 44%, projectors 39%, rebuilds 16% | — |
+| first iteration of a resumed process | +60–66 s JIT (77 vs 17 s, 134 vs 73 s, 153 vs 88 s in the logs) | same |
+
+**Findings, ranked (gain × confidence):**
+
+1. **Graded effective operators by sign vectors — 36× on the operator build, exact.**
+   `_dense_ring_operator` on graded sites contracts the whole ring once per allowed basis tensor
+   (~128 at d = 4, D = 4) and pairs n² graded tensors. The same matrix is `M = σ ⊙ A ⊙ τᵀ` with `A`
+   the flattened ring·operator (ONE ring contraction, as on dense sites) and σ, τ per-index ±1
+   vectors that depend only on the vertex's indices (computable once per run). Measured on
+   hex(1,2) D = 4: max |M − M_old|/|M| = 5.6e-16 on every vertex and both operators; 7.93 s → 0.22 s.
+   The graded iteration drops from ~12 s to ~5 s. `_dense_bp_operators` (graded BP stage) has the
+   same pattern. Charged root vertices (dangling Charge leg) need the per-application form.
+2. **λ = 1e-6 instead of 1e-7 under `:cut` — 10–25× smaller energy error, free.** On the 5×5, E(λ)
+   follows 13·λ² per site above λ = 3e-6 and roundoff/λ below 3e-7: E error per site ≈ 3.7e-9 at
+   λ = 1e-7, ≈ 1.5e-10 at λ = 1e-6; gradient error ≈ 1.5e-6 relative at both. It matters: the last
+   iterations of the 5×5 L-BFGS moved the total energy by ~9e-8, the size of the λ = 1e-7 noise, so
+   late Armijo decisions were being taken inside the noise. Check the graded case before changing
+   the default.
+3. **Early exit for rejected line-search trials.** In lockstep from a common seed the FD energy is
+   at its noise floor after 1–2 sweeps, while the gradient needs the full converge (5×5: gradient
+   error 4e-2 at sweep 3, 4e-7 at sweep 4; the FD divides ring changes by λ, so rings must settle
+   well below λ). Only accepted trials need the gradient: sweep ±λ for 2 sweeps, take the Armijo
+   decision, and continue to full tolerance only on acceptance. Saves (L−2)/L of every rejected
+   trial (60% on the 5×5, ~75% on hex(3,3)); 3 of 13 evaluations were rejected on the 5×5, 9 of 19 on
+   the Hubbard hexagon. Accuracy-neutral.
+4. **A warm converge costs L sweeps — propagation, not convergence rate.** Measured 4 / 5 / 6
+   sweeps on 4×4 / 5×5 / 6×6 (4 on the 4×3 hex box), the final drop to 1e-13 landing exactly at
+   sweep L; identical with the dense SVD route and with svd_tol 1e-13, so not the inner solve. The
+   sweep builds every corner from the previous sweep's corners (Jacobi), so a change moves one
+   lattice level per sweep. An ordered (directional / Gauss–Seidel) sweep would carry it across in
+   one pass: ~2× at L = 5–6 and growing with L. Largest ceiling; an engine redesign (gauge
+   alignment, warm starts and threading granularity all change), so prototype first.
+5. **Free-energy bookkeeping under `:marginal` — ~10% dense.** `update` evaluates F every sweep
+   (serial, 0.14 s on the 5×5 = 11% of a sweep) although the marginal criterion was binding in
+   every trace; the driver then recomputes F for both ±λ caches. Evaluate F once at the end,
+   thread its region loop (bit-identical, 1.8×) and hand it back with the cache.
+6. **Precompile workload for the DMRG path.** `precompile.jl` covers CTM on norm networks and
+   graded `expect`, not `generating_operator` / `ctmrg_lbfgs` / `effective_operators`; each resumed
+   10-minute process pays 60–66 s of JIT (~10% of the process). Gain unverified until measured.
+7. **Graded: skip the λ = 0 converge.** Seeding the trial's ±λ caches from the base point's ±λ
+   caches needs the same 4 sweeps and reproduces E to 1.9e-9 per site and the gradient to 2.7e-8;
+   the λ = 0 cache is only a seed. Saves ~1.2 s of ~4 s. No gain on dense (aux-free λ = 0 is cheap;
+   5 sweeps either way).
+8. **Line search: interpolate instead of halving.** After the scale-projection fix the hexagon's
+   unit steps overshoot ~4× and the search walks 1 → ½ → ¼; a quadratic step from E(0), slope and
+   E(α) lands there in one trial.
+9. **Memory hazard in the `:marginal` witness (computed, not measured).** For a QuadraticForm the
+   marginal is the whole open ring, (D²·a)^deg entries per vertex, and `update` holds two sets:
+   5×5 TFIM D = 5 ≈ 2.5 GB, square Heisenberg D = 4 ≈ 6.7 GB. A fixed random sketch of each ring
+   (the open legs are the state's own bonds, so it is gauge-free) would keep the witness at a few
+   hundred numbers.
+
+**Checked and not worth doing:** threading the dense gradient build (0.66 → 0.55 s of a 16 s
+iteration); the SVD route and tolerance (identical convergence); more ±λ concurrency (threads
+already saturated); the contraction-sequence cache (no misses after warm-up); seeding from the base
+±λ on dense states; the one-sided λ (rejected earlier).
