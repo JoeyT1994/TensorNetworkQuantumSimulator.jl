@@ -1584,3 +1584,119 @@ precompile workload); (c) the `:marginal` tolerance, which on graded networks ca
 sweep cap after large steps (tie it to λ); (d) on the square lattice the graded interfaces, 1440–2560
 wide and always on the dense SVD route (a warm-started graded subspace route would cut it); (e) the
 L-sweep propagation of warm converges (audit item 4).
+
+## The (μ, ν) response solve: energy and rings without the widened seam — *2026-09-23*
+
+The ±λ pair costs `(r+1)³` norm-network converges because every seam of `⟨ψ|G(±λ)|ψ⟩` is `(r+1)·D²`
+wide (`r` the operator-Schmidt rank of the edge terms). `src/response.jl` replaces it by a linear
+solve on the norm environment. Split every edge term's coupling between its ends,
+
+    L_e(μ) = 1⊗|0⟩ + μ Σₐ Aₐ⊗|a⟩,   R_e(ν) = 1⊗|0⟩ + ν Σₐ Bₐ⊗|a⟩,   on-site 1 + μν h_v,
+
+so `Z(μ, ν) = Z(λ = μν)` exactly and `E = ∂μ∂ν F|₀`. Every tensor of the CTM sweep becomes a
+polynomial in `(μ, ν)` truncated to bidegree `(1, 1)` (`PolyT`: four coefficients), the `(0,0)`
+coefficient is the norm sweep, and the `(1,1)` coefficient of the fixed point is `d²X/dμdν`. One
+evaluation is the norm converge plus a linear fixed-point iteration whose sweep costs a fixed
+multiple of a norm sweep (the number of coefficient products, ~n² for n factors) — independent of `r`.
+The energy is `F^{μν} = Σ_regions w_r [z^{μν}/z⁰ − z^μ z^ν/(z⁰)²]` (the `z^μ, z^ν` vanish: a lone
+half-insertion closes against `|0⟩`); the rings give `N_eff = (ring·G)⁰`, `H_eff = (ring·G)^{μν}`.
+
+**The seam projector, and why the cut pair cannot be used.** The first attempt kept the engine's
+biorthogonal pair as a polynomial (Kato/Daleckii–Krein perturbation of the top-χ spectral projector
+of `O⁰O⁰†`, Neumann pseudo-inverse). Its polynomial algebra was validated piece by piece (projector
+polynomial, `pcontract`, on-site-only Hamiltonians exact at every ring), and on the 3×3 TFIM at
+lossless χ = 16 the total `F^{μν}` came out exact — but every ring away from the centre vertex was
+wrong at order μν (gradient at (1,1): 0.7210 against 0.7822 exact; region (1,1): −0.0617 against
+−0.1145). The total was only right by Möbius cancellation. A finite-(μ, ν) reference that keeps
+ALL non-null seam directions (rank 16, `RESP_FINITE_RANK`) was exact everywhere, the same reference
+at the norm rank (4) reproduced the polynomial's wrong rings to 1e-5. Diagnosis: a corner's open
+half-insertions (excited auxiliary leg on its FREE legs, partner outside) are O(μ) rows of the seam
+operator with O(μ²) eigenvalues; sandwiched between its corners the cut pair gives `Π_U·O`, the
+row space truncated to the top-χ spectral space, which never contains them — and forcing them in
+needs a `1/μ` gain in the pseudo-inverse, which is not a polynomial (`C_new` would carry a
+true-degree-0 component in a degree-1 channel). This is intrinsic to biorthogonal seams, not a bug.
+
+So the seams are compressed with a constant ISOMETRY `V` on the seam legs (`P_A = V`, `P_B = V†`):
+nothing is inverted, the corners' free legs are untouched, every coefficient stays a true polynomial.
+`V` is sector-split with two budgets — `χ` directions from the eigenvectors of
+`Ba⁰†Ba⁰ + Bb⁰Bb⁰†` (both corners' norm content) and `χ1` from the leading right-singular vectors of
+the first- and second-order coefficients of both corners (unit-normalised per block, projected off
+the norm directions). Lossless it is exact; truncated, the norm part is a corner-isometry CTMRG,
+weaker per χ than the cut — the price of an analytic response.
+
+**Measured, 3×3 TFIM D = 2, χ = 16 (lossless), from the padded `:cut` norm environment.**
+
+| | total E − exact | worst region z^{μν}/z⁰ − exact | worst ring gradient − exact |
+|---|---|---|---|
+| cut pair as polynomial (Kato) | 8e-12 | 6.7e-2 | 6.1e-2 |
+| isometry, χ1 = 16 | 7e-15 (every sweep, from sweep 1) | 5.0e-3 | 3.3e-3 |
+| isometry, χ1 = 128 (covers the excited content) | 8e-15 | 3e-15 | 7e-9 (finite-difference noise) |
+
+The base environment is not a fixed point of the isometric sweep, yet `F⁰` and `E` are stationary
+from the first sweep at this size.
+
+**In the optimiser.** `dmrg(…; alg = "ctmrg_lbfgs", response = true, χ1)` takes energy and rings from
+the response solve. 3×3 TFIM D = 2, χ = 16, χ1 = 32, six L-BFGS iterations from the same random
+state: the trajectory is identical to the ±λ route to 1e-8 at every iteration, and the reported
+final energy matches the exact contraction to 3e-10 (the ±λ FD-of-F to 7e-10). A regression test
+covers the off-centre ring gradient and the optimiser step (test/test_dmrg.jl).
+
+**Fermions (step 2).** The aux-free padding is now graded: `_aux_by_bond` maps each ket bond copy to
+the auxiliary copy carried by the operator tensor at the SAME vertex (source `α`, sink `dag(α)`),
+keyed with the arrow because index equality ignores duality, and `_strip_aux` contracts with the
+dual slot. `response_operator` builds the graded edge factors by `directsum` onto gen's exact
+auxiliary indices, and the seam isometry has a tensor-level graded path (`_resp_projector_graded`:
+Gram tensors with the map adjoint, truncated `svd`, `directsum` of the two budgets). Measured on a
+2×3 spinless free-fermion square (D = 2 simple-update state, fZ2 and fU1): padded F equals the true
+λ = 0 F to 2e-15, and the response energy equals the exact contraction to 1e-15 at every budget
+tried (χ = 64/64, 8/8, 8/16 — lossless at this size), two sweeps.
+
+**Cost, and the second design.** The first version padded every tensor with all its |0⟩
+auxiliary legs. Measured on the 5×5 D = 3 at χ = 32, one energy + rings evaluation, the ±λ pair
+against it: TFIM (r = 1) 293 s against 531 s, Heisenberg (r = 3) 1580 s against 2816 s — the response
+sweep scaled with r exactly like the pair (5.3× from r = 1 to r = 3), because the (r+1)-dimensional
+auxiliary legs sat on every bond of every tensor. So the algebra was rewritten so that no tensor
+carries an auxiliary leg it does not need: `c00` has none, a first-order coefficient is a LIST of
+terms each holding exactly one open half-insertion (an auxiliary leg on a still-open bond, or an
+excited seam bond it was compressed into), `c11` has none. Two structural rules replace the |0⟩
+slots: a term dies when its bond's ket leg is contracted without its partner (`_finalize`, at the
+end of every product chain — mid-fold the half-insertion may not have met its bond legs yet), and a
+pair of half-insertions enters `c11` only if it closes. The seam isometries are then one per SECTOR
+of the seam — the terms' seam-leg signature: the norm signature (χ norm directions + χ1 response
+directions), an auxiliary leg on a seam bond, or an excited link — each onto its own bond, with a
+registry of excited bonds ⇒ their norm bond so that a term carrying both sectors of one seam dies.
+The polynomial product is folded pairwise along the base tensors' contraction sequence, and after
+`nfree` sweeps the isometries are frozen (relabelled onto the new links) so the iteration is a fixed
+linear map. Two bugs found on the way, both by checking V V† t = t on one seam: the sector isometry
+admitted junk columns when a sector's projected residual was numerically zero (threshold relative to
+the residual's own top value; now relative to the unprojected content), and the bond-open rule ran
+mid-fold.
+
+**Speed (2026-09-24).** Three findings from a phase-timed 5×5 D = 3 χ = 32 sweep. (i) The
+excited-link sectors accumulated: every seam minted a new excited bond per sector, terms with
+different bonds never merged and the sector count grew each sweep — now every excited sector of a
+seam maps into ONE shared excited bond (`_sector_tensors`), and the term count is flat (336 on the
+5×5). (ii) 192 s of a 240 s sweep were enlarged-corner products, of which the norm contraction is
+20 ms per corner: a term carrying an excited link multiplied by a neighbour's norm block that carries
+the norm link of the same seam does not contract that link and forms an outer product, which the
+family rule then discards — `_dead_with` skips those products before forming them: 165 s → 29.5 s
+per sweep, energies bit-identical. (iii) The enlarged-corner, corner, edge and projector phases are
+threaded like the engine's sweep (registry writes deferred to a serial step). Per polynomial sweep
+now: edges 13 s, projectors ~3 s, enlarged 4 s, at 8 threads; a norm sweep is 1.4 s. On the 4×4 D = 3
+the whole response solve takes 22 s (χ = 12) and 49 s (χ = 24) against 76 s and 250 s before, where
+the engine's ±λ pair takes 21 s at χ = 12. The 5×5 cost table (TFIM r = 1, Heisenberg r = 3) is
+being measured with this code and goes here.
+
+**Accuracy on the same 4×4 D = 3 random TFIM state, error of E against the exact contraction
+(final code).**
+
+| χ (= χ1) | engine ±λ pair | response solve | response, no response budget (χ1 = 0) |
+|---|---|---|---|
+| 12 | 1.39e-2 | 3.4e-2 (was 6e-4 with unsketched sectors) | 1.5e-2 |
+| 24 | 1.6e-3 | 2.8e-4 | |
+| 36 | 2.8e-4 | 2.4e-3 (earlier code) | |
+
+At hard truncation (χ = 12) the result is sensitive to which response directions the sector
+isometry selects (6e-4 before the row-space sketch, 3.4e-2 with it): the response route is not
+monotone in χ and its truncated regime needs a principled direction weighting, which is the open
+item. At χ = 24 it is 5× more accurate than the pair, and its cost no longer depends on r.

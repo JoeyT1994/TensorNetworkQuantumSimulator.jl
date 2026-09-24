@@ -451,10 +451,6 @@ another cache's environments (same state indices); `projector` and the remaining
 function generating_cache(ψ::TensorNetworkState, gen::GeneratingOperator, maxdim::Integer; λ::Real = 0,
                           seed = nothing, projector::Symbol = :cycle, convergence::Symbol = :marginal,
                           maxiter::Integer = 100, tolerance::Real = 1.0e-12, aux_free::Bool = false, verbose::Bool = false, kwargs...)
-    # Graded (fermionic) auxiliary indices: the padding's arrow convention per block side is not
-    # established, so the aux-free route is dense-only for now and graded caches take the true λ = 0
-    # environment.
-    aux_free = aux_free && !any(e -> Tensors.isgraded(only(virtualinds(gen.value, e))), edges(ψ))
     if iszero(λ) && aux_free
         # LEVER 3. At λ = 0 the a > 0 slots of every bond carry zero weight (the src end of each
         # edge factor is λ·Aₐ), so the free energy and the norm ring N_eff of the generating
@@ -518,24 +514,37 @@ function frozen_generating_cache(ψ::TensorNetworkState, gen::GeneratingOperator
     return _ctm_setenv(cλ, S)
 end
 
-# ket bond index ⇒ the auxiliary index of `gen.value` on that edge
+# ket bond index ⇒ the auxiliary index of `gen.value` on that edge, THE COPY carried by the operator
+# tensor at the vertex whose ket tensor carries that bond copy. A block that absorbed vertex `u` has
+# `u`'s copies of its outgoing bond and auxiliary legs as its free legs; on a graded backend the
+# two ends of an edge carry dual copies (source `α`, sink `dag(α)` — `_graded_edge_factors`), so
+# the padding must mint the copy that contracts with the neighbour's.
 function _aux_by_bond(ψ::TensorNetworkState, gen::GeneratingOperator)
     aux_of = Dict{Any, Any}()
     for e in edges(ψ)
-        a = only(virtualinds(gen.value, e))
-        for b in virtualinds(ψ, e)
-            aux_of[b] = a
+        as = virtualinds(gen.value, e)
+        isempty(as) && continue                  # an edge without terms carries no auxiliary index
+        a = only(as)
+        for v in (src(e), dst(e))
+            av = only(filter(i -> i == a, collect(TensorInterface.inds(gen.value[v]))))
+            for b in virtualinds(ψ, e)
+                bv = filter(i -> i == b, collect(TensorInterface.inds(ψ[v])))
+                isempty(bv) && continue
+                aux_of[_auxkey(only(bv))] = av       # keyed with the arrow: `==` ignores duality
+            end
         end
     end
     return aux_of
 end
+_auxkey(i) = (i, Tensors.isdual(i))
 # Pad a norm-network block onto the generating network: onehot(aux ⇒ 1) for every ket bond leg it
-# carries. Strip the inverse: contract every aux leg with onehot(aux ⇒ 1) (a projection onto the
-# norm slot for a true λ = 0 block, the exact inverse for a padded one).
+# carries. Strip the inverse: contract every aux leg with onehot(dag(aux) ⇒ 1) (a projection onto
+# the norm slot for a true λ = 0 block, the exact inverse for a padded one; `dag` is the identity
+# on dense indices and the contracting arrow on graded ones).
 function _pad_aux(t, aux_of)
     (t === nothing || !(t isa AbstractTensor)) && return t
     for i in collect(TensorInterface.inds(t))
-        haskey(aux_of, i) && (t = t * TensorInterface.onehot(real(scalartype(t)), aux_of[i] => 1))
+        haskey(aux_of, _auxkey(i)) && (t = t * TensorInterface.onehot(real(scalartype(t)), aux_of[_auxkey(i)] => 1))
     end
     return t
 end
@@ -543,7 +552,7 @@ function _strip_aux(t, aux_of)
     (t === nothing || !(t isa AbstractTensor)) && return t
     auxs = Set(values(aux_of))
     for i in collect(TensorInterface.inds(t))
-        i in auxs && (t = t * TensorInterface.onehot(real(scalartype(t)), i => 1))
+        i in auxs && (t = t * TensorInterface.onehot(real(scalartype(t)), TensorInterface.dag(i) => 1))
     end
     return t
 end
@@ -951,7 +960,10 @@ correction. `caches::Ref` warm-starts from a previous call's final environments 
 `aux_free = true` (default) converges the λ = 0 environment on the plain norm network and pads it
 onto the generating network (lever 3, see [`generating_cache`](@ref)): same F and N_eff, a fraction
 of the cost; the route never needs the ring energy, which that cache cannot give (dense sites only;
-graded sites take the true λ = 0 environment). `frozen_pm = true` (with `projector = :cycle` only)
+graded sites take the true λ = 0 environment). `response = true` replaces the ±λ pair by the
+(μ, ν) response solve of `src/response.jl` (energy `∂μ∂νF`, rings from the polynomial environment;
+`χ1` the seam budget of the response directions, `response_kwargs` to `response_solve`): one norm
+converge plus a linear polynomial iteration, no `(r+1)`-widened seam. `frozen_pm = true` (with `projector = :cycle` only)
 builds the ±λ environments through the λ = 0 projectors by linear projector-free sweeps
 ([`frozen_generating_cache`](@ref), the "G ≈ P" response): ≈ 1% off the re-converged gradient at
 χ = 32 on the 5×5, 7× cheaper, and free of the `:cycle` limit cycle. Every search direction has its per-vertex component along the current tensor projected out (the energy is scale-invariant per tensor, so that component only reparametrises the path, and with renormalisation it puts a pole in it), and the first trial rotates no tensor by more than `max_rotation` (|α d_v| / |x_v|). Returns `(ψ, energies)` with the energy after
@@ -961,8 +973,14 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
               projector::Symbol = :cut, λ::Union{Real, Nothing} = nothing, whiten_cutoff::Real = 1.0e-6,
               memory::Int = 8, step0::Real = 0.5, ls_max::Int = 4, ctm_kwargs = (;), verbose::Bool = true,
               gtol::Real = 1.0e-10, time_limit::Real = Inf, caches::Union{Nothing, Base.RefValue} = nothing,
-              aux_free::Bool = true, frozen_pm::Bool = false, max_rotation::Real = 0.5, energy_sweeps::Int = 2)
+              aux_free::Bool = true, frozen_pm::Bool = false, max_rotation::Real = 0.5, energy_sweeps::Int = 2,
+              response::Bool = false, χ1::Integer = maxdim, response_kwargs = (;))
     frozen_pm && projector !== :cycle && throw(ArgumentError("frozen_pm (G ≈ P) is only valid under projector = :cycle; under :cut the frozen response is wrong by O(1)"))
+    # `response = true`: energy and rings from the (μ,ν) response solve (src/response.jl) on the
+    # aux-free norm environment instead of the ±λ pair — no widened seam, one norm converge plus a
+    # linear polynomial iteration per evaluation. `χ1` is the seam budget of the response
+    # directions; `response_kwargs` go to `response_solve` (`maxsweeps`, `tol`, `verbose`).
+    response && (frozen_pm || !aux_free) && throw(ArgumentError("response = true needs aux_free = true and frozen_pm = false"))
     # The frozen ±λ rebuild is validated from the TRUE λ = 0 environment; from the aux-free padded
     # one its block contraction left legs open (a 10-leg intermediate, out of memory).
     frozen_pm && (aux_free = false)
@@ -1002,6 +1020,7 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
     # `:cycle` vs ~40 s warm on the 5×5 D = 3).
     seed0 = caches === nothing ? nothing : caches[]
     gen = seed0 !== nothing && haskey(seed0, :gen) ? seed0.gen : generating_operator(H, ψ)
+    Gs = response ? response_operator(H, ψ, gen) : nothing
     vs = collect(vertices(ψ))
     T = scalartype(ψ[first(vs)])
     indsof = Dict(v => collect(inds(ψ[v])) for v in vs)
@@ -1018,6 +1037,10 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
     end
     function environments(ψ, seed)
         cache = generating_cache(ψ, gen, maxdim; seed, projector, aux_free, ctm_kwargs...)
+        if response
+            R = response_solve(cache, ψ, Gs; χ1, response_kwargs...)
+            return (cache, R, nothing), R.energy
+        end
         # The ±λ converges are independent: run them as two tasks when Julia has threads (the
         # sweep itself is threaded too; run BLAS single-threaded — measured 5×5 D = 3 χ = 48: the
         # pair 48 s sequential → 33 s concurrent at BLAS = 1, and BLAS threads bought nothing).
@@ -1044,7 +1067,7 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
     # 10× its change over the last sweep; otherwise the converge continues from the lockstep state
     # to full tolerance and the caller decides on the converged energy. Returns (envs, E, early).
     function trial_environments(ψ, seed, threshold)
-        (frozen_pm || energy_sweeps < 2) && return (environments(ψ, seed)..., false)
+        (response || frozen_pm || energy_sweeps < 2) && return (environments(ψ, seed)..., false)
         cache = generating_cache(ψ, gen, maxdim; seed, projector, aux_free, ctm_kwargs...)
         optkw = (; (k => v for (k, v) in pairs(ctm_kwargs) if !(k in (:maxiter, :tolerance, :convergence, :verbose)))...)
         # (`.environments`, not `environments(…)`: the local closure of that name shadows the accessor)
@@ -1089,8 +1112,9 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
         # (distinct names from the outer `g, P, jac`: a closure assigning an enclosing-scope name
         # writes THAT variable, which silently zeroed every curvature pair)
         gd = Dict{eltype(vs), Vector{T}}(); Pd = Dict{eltype(vs), Matrix{T}}(); jd = Dict{eltype(vs), Vector{T}}()
+        rings = response ? response_effective_operators(cp) : nothing      # all vertices, threaded
         for v in vs
-            N, Hm = effective_operators(cache, cp, cm, gen, v, λ)
+            N, Hm = response ? rings[v] : effective_operators(cache, cp, cm, gen, v, λ)
             t = x[v]; is = indsof[v]
             nrm = real(dot(t, N * t)); ε = real(dot(t, Hm * t)) / nrm
             gv = 2 .* ((Hm - ε * N) * t) ./ nrm
@@ -1160,7 +1184,12 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
     # them outright — one environment set saved per invocation; otherwise seed from them.
     same_state = seed0 !== nothing && haskey(seed0, :envs) &&
                  all(norm(ψ[v] - ket(network(seed0.envs[1]))[v]) ≤ 1.0e-13 * norm(ψ[v]) for v in vs)
-    envs, E = if same_state && seed0.envs[2] !== nothing
+    envs, E = if same_state && seed0.envs[2] isa ResponseResult && response
+        seed0.envs, seed0.envs[2].energy
+    elseif same_state && response         # a ±λ (or bare) hand-over: run the response solve on its cache
+        R0 = response_solve(seed0.envs[1], ψ, Gs; χ1, response_kwargs...)
+        (seed0.envs[1], R0, nothing), R0.energy
+    elseif same_state && seed0.envs[2] !== nothing && !(seed0.envs[2] isa ResponseResult)
         seed0.envs, (cvm_freenergy(seed0.envs[2]) - cvm_freenergy(seed0.envs[3])) / (2λ)
     elseif same_state                     # only the λ = 0 cache handed over: add the ±λ pair
         cache0 = seed0.envs[1]

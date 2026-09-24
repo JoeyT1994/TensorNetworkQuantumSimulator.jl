@@ -39,6 +39,7 @@ include("truncate.jl")
 include("rdm.jl")
 include("kernel_hooks.jl")
 include("dmrg.jl")
+include("response.jl")
 
 
 export

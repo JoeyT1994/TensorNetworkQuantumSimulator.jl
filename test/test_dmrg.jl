@@ -174,6 +174,28 @@ end
         # (5e-8: the FD of F at λ = 1e-7 carries ~1e-15 / 1e-7 of roundoff; measured 1.6e-8 here)
         @test last(E2) ≈ energy(ψ2, H; alg = "exact") atol = 5.0e-8
         @test last(E2) > ed_ground_energy(g, H) - 1.0e-8
+        # the (μ,ν) response solve (src/response.jl): at lossless budgets the energy ∂μ∂νF and the
+        # ring gradient at an OFF-CENTRE vertex are exact (the cut pair got the centre only)
+        let
+            R = TNQS.response_solve(ψ, H, 16; χ1 = 128, gen, maxsweeps = 5, tol = 1.0e-12)
+            @test R.energy ≈ Eex atol = 1.0e-10
+            v = (1, 1)
+            N, Hf = TNQS.response_effective_operators(R, v)
+            is = collect(TI.inds(ψ[v]))
+            x = vec(TI.array(ψ[v], is...))
+            δ = TI.random_tensor(Float64, is...); δ = δ / norm(δ); d = vec(TI.array(δ, is...))
+            Z = x' * N * x; Ev = (x' * Hf * x) / Z
+            grad = 2 * (d' * (Hf * x - Ev * N * x)) / Z
+            h = 1.0e-4
+            ψp = copy(ψ); ψp[v] = ψ[v] + h * δ
+            ψm = copy(ψ); ψm[v] = ψ[v] - h * δ
+            fd = (energy(ψp, H; alg = "exact") - energy(ψm, H; alg = "exact")) / (2h)
+            @test grad ≈ fd rtol = 1.0e-5
+            # and it drives the optimiser: same descent, energy exact (no finite-difference noise)
+            ψ3, E3 = dmrg(ψ, H; alg = "ctmrg_lbfgs", maxdim = 16, maxiter = 2, verbose = false, response = true, χ1 = 32)
+            @test length(E3) == 3 && all(diff(E3) .< 0)
+            @test last(E3) ≈ energy(ψ3, H; alg = "exact") atol = 1.0e-9
+        end
     end
 
     @testset "Z2-symmetric (graded) generating operator and sweep" begin
