@@ -1,0 +1,13 @@
+#DISBATCH PREFIX export JULIA_NUM_THREADS=8 CIRC_N=20 CIRC_GATESET=sycamore CIRC_PROJECTORS=cut,cycle CIRC_MAXITER=80 CIRC_SEED=1; 
+export CIRC_DEPTHS=12 CIRC_CHIS=32; /mnt/home/jtindall/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia --startup-file=no --project=. examples/circuit_ctmrg.jl > examples/slurm/out/circ_d12_chi32.out 2>&1
+export CIRC_DEPTHS=12 CIRC_CHIS=64; /mnt/home/jtindall/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia --startup-file=no --project=. examples/circuit_ctmrg.jl > examples/slurm/out/circ_d12_chi64.out 2>&1
+export CIRC_DEPTHS=12 CIRC_CHIS=128; /mnt/home/jtindall/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia --startup-file=no --project=. examples/circuit_ctmrg.jl > examples/slurm/out/circ_d12_chi128.out 2>&1
+export CIRC_DEPTHS=16 CIRC_CHIS=32; /mnt/home/jtindall/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia --startup-file=no --project=. examples/circuit_ctmrg.jl > examples/slurm/out/circ_d16_chi32.out 2>&1
+export CIRC_DEPTHS=16 CIRC_CHIS=64; /mnt/home/jtindall/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia --startup-file=no --project=. examples/circuit_ctmrg.jl > examples/slurm/out/circ_d16_chi64.out 2>&1
+export CIRC_DEPTHS=16 CIRC_CHIS=128; /mnt/home/jtindall/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia --startup-file=no --project=. examples/circuit_ctmrg.jl > examples/slurm/out/circ_d16_chi128.out 2>&1
+export CIRC_DEPTHS=20 CIRC_CHIS=32; /mnt/home/jtindall/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia --startup-file=no --project=. examples/circuit_ctmrg.jl > examples/slurm/out/circ_d20_chi32.out 2>&1
+export CIRC_DEPTHS=20 CIRC_CHIS=64; /mnt/home/jtindall/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia --startup-file=no --project=. examples/circuit_ctmrg.jl > examples/slurm/out/circ_d20_chi64.out 2>&1
+export CIRC_DEPTHS=20 CIRC_CHIS=128; /mnt/home/jtindall/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia --startup-file=no --project=. examples/circuit_ctmrg.jl > examples/slurm/out/circ_d20_chi128.out 2>&1
+export CIRC_DEPTHS=24 CIRC_CHIS=32; /mnt/home/jtindall/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia --startup-file=no --project=. examples/circuit_ctmrg.jl > examples/slurm/out/circ_d24_chi32.out 2>&1
+export CIRC_DEPTHS=24 CIRC_CHIS=64; /mnt/home/jtindall/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia --startup-file=no --project=. examples/circuit_ctmrg.jl > examples/slurm/out/circ_d24_chi64.out 2>&1
+export CIRC_DEPTHS=24 CIRC_CHIS=128; /mnt/home/jtindall/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia --startup-file=no --project=. examples/circuit_ctmrg.jl > examples/slurm/out/circ_d24_chi128.out 2>&1
