@@ -304,9 +304,10 @@ end
 # narrowing: without this the non-convergence warning fires once per rank.
 reports_convergence(bpc::BeliefPropagationCacheMPI) = iszero(MPI.Comm_rank(communicator(bpc)))
 
-# The scratch buffer is read only within a sweep, so releasing it here frees the memory for
-# `apply_gate!`'s SVD. Every copy of the cache shares it, so the release reaches the caller's too.
+# Released on entry, where `apply_gate!` has left it a whole factor wide for blocks that need a
+# sixteenth of one, and on exit to free that memory for the next SVD. Copies of the cache share it.
 function update(alg::Algorithm"bp", bp_cache::BeliefPropagationCacheMPI)
+    release_message_scratch!(bp_cache)
     bp_cache = @invoke update(alg::Algorithm"bp", bp_cache::AbstractBeliefPropagationCache)
     return release_message_scratch!(bp_cache)
 end
