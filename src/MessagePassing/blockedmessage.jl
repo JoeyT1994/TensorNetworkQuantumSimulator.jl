@@ -169,30 +169,36 @@ end
 # bra (`conj(ket)` on the ket's own array), `sites === nothing` means the layers share their site
 # indices, `op === nothing` means they are joined directly. Dispatch is on the network type because
 # a single-layer `TensorNetwork` shows one virtual index per edge just like a norm network.
-_blocked_layers(::AbstractTensorNetwork, v, edge) = nothing
+_blocked_layers(bp_cache, ::AbstractTensorNetwork, v, edge) = nothing
 
-function _blocked_layers(tns::TensorNetworkState, v, edge)
-    les = virtualinds(tns, edge)
+# The edge's own message names its legs, which works whether or not its far end is on this rank.
+function _blocked_layers(bp_cache, tns::TensorNetworkState, v, edge)
+    K = tns[v]
+    m = message(bp_cache, edge)
+    m isa ITensor || return nothing
+    les = commoninds(m, K)
     length(les) == 1 || return nothing
     le = only(les)
-    return (; ket = tns[v], bra = nothing, le_ket = le, le_bra = prime(dag(le)),
+    return (; ket = K, bra = nothing, le_ket = le, le_bra = prime(dag(le)),
         sites = nothing, op = nothing)
 end
 
 # A `QuadraticForm`'s bra is `dag(prime(ket))`, so it takes the derived route and needs no copy --
 # which is what makes `⟨O|V|O⟩` cost the same as `‖O‖²`.
-_blocked_layers(qf::QuadraticForm, v, edge) = _blocked_form_layers(qf, v, edge, nothing)
+_blocked_layers(bp_cache, qf::QuadraticForm, v, edge) =
+    _blocked_form_layers(bp_cache, qf, v, edge, nothing)
 
-_blocked_layers(form::AbstractForm, v, edge) =
-    _blocked_form_layers(form, v, edge, bra_tensor(form, v))
+_blocked_layers(bp_cache, form::AbstractForm, v, edge) =
+    _blocked_form_layers(bp_cache, form, v, edge, bra_tensor(form, v))
 
-function _blocked_form_layers(form, v, edge, bra)
-    lek, leb = virtualinds(ket(form), edge), bra_virtualinds(form, edge)
-    (length(lek) == 1 && length(leb) == 1) || return nothing
-    # An operator with its own bond on this edge is a third layer, and the message is not rank 2.
-    isempty(virtualinds(operator(form), edge)) || return nothing
-
+function _blocked_form_layers(bp_cache, form, v, edge, bra)
     K, op = ket(form)[v], operator(form)[v]
+    m = message(bp_cache, edge)
+    m isa ITensor || return nothing
+    # An operator bond on this edge would be a second leg beside the bra's, a third layer.
+    lek, leb = commoninds(m, K), uniqueinds(m, K)
+    (length(lek) == 1 && length(leb) == 1) || return nothing
+
     sites = collect(commoninds(K, op))
     pairing = _operator_site_pairing(op, sites)
     isnothing(pairing) && return nothing
@@ -254,7 +260,7 @@ _to_eltype(::Type{T}, x::AbstractArray) where {T} = eltype(x) === T ? x : conver
 # because `vertex_scalar` wants the same contraction and has to know whether it ran.
 function _blocked_message(alg::Algorithm"blocked", bp_cache::AbstractBeliefPropagationCache, edge)
     v = src(edge)
-    layers = _blocked_layers(network(bp_cache), v, edge)
+    layers = _blocked_layers(bp_cache, network(bp_cache), v, edge)
     isnothing(layers) && return nothing
     K, B, le, le_bra = layers.ket, layers.bra, layers.le_ket, layers.le_bra
 

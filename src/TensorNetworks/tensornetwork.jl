@@ -60,7 +60,12 @@ function add_tensor!(tn::TensorNetwork, tensor::ITensor, v)
 end
 
 function default_message(tn::TensorNetwork, edge::NamedEdge)
-    return adapt_like(tn, denseblocks(delta(virtualinds(tn, edge))))
+    return default_message(tn, edge, virtualinds(tn, edge))
+end
+
+# `linds` explicit, for a partitioned network deriving them across a cut. See `factor_inds`.
+function default_message(tn::TensorNetwork, ::NamedEdge, linds)
+    return adapt_like(tn, denseblocks(delta(collect(linds))))
 end
 
 function bp_factors(tn::TensorNetwork, vertex)

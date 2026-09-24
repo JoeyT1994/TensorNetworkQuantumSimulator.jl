@@ -8,6 +8,7 @@ operator(qf::QuadraticForm) = qf.operator
 bra(qf::QuadraticForm) = prime(dag(ket(qf)))
 bra_tensor(qf::QuadraticForm, v) = dag(prime(ket(qf)[v]))
 bra_virtualinds(qf::QuadraticForm, edge::NamedEdge) = dag.(prime.(virtualinds(ket(qf), edge)))
+bra_factor_inds(qf::QuadraticForm, v) = dag.(prime.(factor_inds(ket(qf), v)))
 
 Base.copy(qf::QuadraticForm) = QuadraticForm(copy(qf.ket), copy(qf.operator))
 

@@ -24,7 +24,7 @@ include("utils.jl")
 
 include("Apply/apply_gates.jl")
 include("Apply/simple_update.jl")
-include("Apply/blocked_gate.jl")
+include("Apply/simple_update_dense.jl")
 include("Apply/full_update.jl")
 include("Apply/gate_definitions.jl")
 include("expect.jl")
@@ -65,15 +65,8 @@ export
     BeliefPropagationCacheMPI,
     apply_gates_mpi,
     inner_mpi,
-    partitionfunction_mpi,
-    gpu_direct_mpi,
-    gpu_direct_mpi!,
-    blocked_gates,
-    blocked_gates!,
     free_scratch_buffer!,
     message_arena_stats,
-    qr_block_limit,
-    qr_block_limit!,
     rescale!,
     message,
     network,
