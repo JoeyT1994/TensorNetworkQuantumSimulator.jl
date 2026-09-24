@@ -8,9 +8,9 @@ _as_eltype(::Type{T}, x::AbstractArray) where {T} = eltype(x) === T ? x : conver
 _slot(flat::AbstractArray, dims) =
     reshape(prod(dims) == length(flat) ? flat : view(flat, 1:prod(dims)), dims)
 
-function _scratch_slot(own::AbstractArray, allocator, n::Integer = length(own))
+function _scratch_slot(own::AbstractArray, allocator)
     ttype = TO.tensoradd_type(eltype(own), own, ((1,), ()), false)
-    return TO.tensoralloc(ttype, (n,), Val(true), allocator)
+    return TO.tensoralloc(ttype, (length(own),), Val(true), allocator)
 end
 
 function _step!(dst, A, pA, B, pB, pAB, backend, allocator)
@@ -78,23 +78,26 @@ function qr_forward!(own, scratch, A, perm, matrices, backend, allocator)
         inplace ? in_scratch : nothing
 end
 
+# The inverse environments act on legs `Q` shares with the result, so they are absorbed into `Q`
+# within the `own`/`scratch` slots; a grown bond then needs one fresh buffer rather than two.
 function qr_backward!(own, scratch, Q, Rp, inv_matrices, q_in_scratch, backend, allocator)
-    m = length(inv_matrices)
-    udims = (size(Q)[1:(end - 1)]..., size(Rp)[2:end]...)
-    n = prod(udims)
-    if n <= min(length(own), length(scratch))
-        a, b, to_a = own, scratch, isnothing(q_in_scratch) ? iseven(m) : q_in_scratch
-    else
-        a, b, to_a = similar(own, n), _scratch_slot(own, allocator, n), isodd(m + 1)
-    end
-    cur = bond_into!(_slot(to_a ? a : b, udims), Q, Rp, backend, allocator)
-    to_a = !to_a
+    qdims = size(Q)
+    to_own = isnothing(q_in_scratch) ? iseven(length(inv_matrices)) : q_in_scratch
+    cur = Q
     for k in eachindex(inv_matrices)
-        dst = _slot(to_a ? a : b, udims)
+        dst = _slot(to_own ? own : scratch, qdims)
         absorb_into!(dst, cur, inv_matrices[k], k, true, backend, allocator)
-        cur, to_a = dst, !to_a
+        cur, to_own = dst, !to_own
     end
-    return cur
+    udims = (qdims[1:(end - 1)]..., size(Rp)[2:end]...)
+    n = prod(udims)
+    if n > length(own)
+        # `cur` ends in `scratch` or is a separate `Q`, never in `own`, so `own` is freed before the
+        # grown tensor is allocated and a growth step holds only the old scratch and the new tensor.
+        free_scratch_buffer!(own)
+        own = similar(scratch, n)
+    end
+    return bond_into!(_slot(own, udims), cur, Rp, backend, allocator)
 end
 
 const DENSE_SVD_KWARGS = (:maxdim, :mindim, :cutoff, :alg)
