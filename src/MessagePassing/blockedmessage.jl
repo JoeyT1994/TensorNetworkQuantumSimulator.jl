@@ -165,22 +165,18 @@ function _blocked_blocksize(ke::Integer, slabbytes::Integer)
     return clamp(max(default_blocked_blocksize(ke), floor_b), 1, ke)
 end
 
-function _outgoing_virtualinds(bp_cache, tn, edge, ket_tensor)
-    has_vertex(tn, dst(edge)) && return virtualinds(tn, edge)
-    m = message(bp_cache, edge)
-    m isa ITensor || return Index[]
-    return commoninds(m, ket_tensor)
-end
-
 # Which two layers close at a vertex, or `nothing` to fall back. `bra === nothing` is the derived
 # bra (`conj(ket)` on the ket's own array), `sites === nothing` means the layers share their site
 # indices, `op === nothing` means they are joined directly. Dispatch is on the network type because
 # a single-layer `TensorNetwork` shows one virtual index per edge just like a norm network.
 _blocked_layers(bp_cache, ::AbstractTensorNetwork, v, edge) = nothing
 
+# The edge's own message names its legs, which works whether or not its far end is on this rank.
 function _blocked_layers(bp_cache, tns::TensorNetworkState, v, edge)
     K = tns[v]
-    les = _outgoing_virtualinds(bp_cache, tns, edge, K)
+    m = message(bp_cache, edge)
+    m isa ITensor || return nothing
+    les = commoninds(m, K)
     length(les) == 1 || return nothing
     le = only(les)
     return (; ket = K, bra = nothing, le_ket = le, le_bra = prime(dag(le)),
@@ -196,13 +192,13 @@ _blocked_layers(bp_cache, form::AbstractForm, v, edge) =
     _blocked_form_layers(bp_cache, form, v, edge, bra_tensor(form, v))
 
 function _blocked_form_layers(bp_cache, form, v, edge, bra)
-    has_vertex(ket(form), dst(edge)) || return nothing
-    lek, leb = virtualinds(ket(form), edge), bra_virtualinds(form, edge)
-    (length(lek) == 1 && length(leb) == 1) || return nothing
-    # An operator with its own bond on this edge is a third layer, and the message is not rank 2.
-    isempty(virtualinds(operator(form), edge)) || return nothing
-
     K, op = ket(form)[v], operator(form)[v]
+    m = message(bp_cache, edge)
+    m isa ITensor || return nothing
+    # An operator bond on this edge would be a second leg beside the bra's, a third layer.
+    lek, leb = commoninds(m, K), uniqueinds(m, K)
+    (length(lek) == 1 && length(leb) == 1) || return nothing
+
     sites = collect(commoninds(K, op))
     pairing = _operator_site_pairing(op, sites)
     isnothing(pairing) && return nothing

@@ -451,6 +451,23 @@ function check_apply(case, ψ_reference, local_ψ)
     )
     check(isapprox(ip, ip_serial; rtol = 1.0e-6), "inner_mpi = $ip vs serial $ip_serial")
 
+    # A form's cut-edge message used to fall back to "contract", which agrees with "blocked" and so
+    # hid behind the scalar check; `_blocked_message` returns `nothing` exactly when it declines.
+    blocked = (; bp_update_kwargs..., message_update_alg = ITensors.Algorithm("blocked"))
+    qf_bpc = BeliefPropagationCache(TNQS.QuadraticForm(network(mpi_bpc)))
+    TNQS._seed_default_messages!(qf_bpc)
+    qf_bpc = TNQS.BeliefPropagationCacheMPI(qf_bpc, g, case.ranks; comm = COMM)
+    qf_bpc = update(qf_bpc; blocked...)
+    for e in keys(qf_bpc.edges_to_send)
+        m = TNQS._blocked_message(ITensors.Algorithm("blocked"), qf_bpc, e)
+        check(!isnothing(m), "blocked kernel declined the QuadraticForm message on cut edge $e")
+    end
+    z = TNQS.partitionfunction(qf_bpc)
+    z_serial = TNQS.partitionfunction(
+        update(BeliefPropagationCache(TNQS.QuadraticForm(network(serial))); blocked...)
+    )
+    check(isapprox(z, z_serial; rtol = 1.0e-6), "QuadraticForm Z = $z vs serial $z_serial")
+
     return mpi_bpc
 end
 
