@@ -1700,3 +1700,24 @@ At hard truncation (χ = 12) the result is sensitive to which response direction
 isometry selects (6e-4 before the row-space sketch, 3.4e-2 with it): the response route is not
 monotone in χ and its truncated regime needs a principled direction weighting, which is the open
 item. At χ = 24 it is 5× more accurate than the pair, and its cost no longer depends on r.
+
+**Where the response route stands (2026-09-25), and the decision.** With the frozen refresh keyed by
+the interface below (the earlier relabelling fell back on every interface) the solve converges to
+1e-13 in six sweeps: 143 s on the 5×5 D = 3 χ = 32 at 8 threads, against the ±λ pair's 106–148 s at
+r = 1 and 940 s at r = 3. It is exact at lossless χ for dense and fermionic states. But in the
+TRUNCATED regime it is not reliable: the sector isometries pick their χ1 directions from the
+coefficients they are truncating, and the free-sweep energy wanders by 1e-2 at χ = 12 and 5e-3 at
+χ = 24 on the 4×4 D = 3 state; freezing after n sweeps lands on an arbitrary snapshot (measured for
+n = 3, 6, 10, 15: errors 4e-2 to 8e-3 with no trend). A third design — the engine's cut pair on the
+norm legs with the auxiliary leg passing through — is stable but truncates the excited content to
+the norm's kept rank (rings wrong by 0.1–0.5 even at lossless norm rank; the attempt is kept in the
+session notes). The ±λ pair works because it weights norm and excited content against each other
+at a physical scale λ inside one consistent CTMRG; the response route has no such scale. A hybrid
+that truncates both jointly at a fixed weight — the ±λ engine's kept space with the polynomial
+bookkeeping removing the (r+1)⁴ padding — is the likely endpoint and is not done. Decision: the
+±λ pair stays the production route for the DMRG stage; the response solve is the exact,
+r-independent tool at lossless χ and for small fermionic systems, `response = true`.
+
+Measured at demo scale, for planning: 6×6 D = 4 χ = 48 TFIM, ComplexF64 state, 8 threads — norm
+converge 200 s, ±λ pair 4900 s per evaluation. A real state is ~4× cheaper; the GPU timing of the
+same run failed at the device stage (segfault after the CPU part) and is open.

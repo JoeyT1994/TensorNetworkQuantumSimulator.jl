@@ -981,6 +981,13 @@ function dmrg(::Algorithm"ctmrg_lbfgs", ψ::TensorNetworkState, H::Vector; maxdi
     # linear polynomial iteration per evaluation. `χ1` is the seam budget of the response
     # directions; `response_kwargs` go to `response_solve` (`maxsweeps`, `tol`, `verbose`).
     response && (frozen_pm || !aux_free) && throw(ArgumentError("response = true needs aux_free = true and frozen_pm = false"))
+    # Under the response route the `:cut` norm converge is only the SEED of the isometric base phase
+    # (`response_solve` re-converges F⁰ to 1e-12 itself), so it need not chase the 1e-12 marginal
+    # criterion (measured on a 4×4: 100 sweeps to the cap at a 1.6e-9 marginal floor).
+    if response
+        haskey(ctm_kwargs, :tolerance) || (ctm_kwargs = (; tolerance = 1.0e-8, ctm_kwargs...))
+        haskey(ctm_kwargs, :maxiter) || (ctm_kwargs = (; maxiter = 25, ctm_kwargs...))
+    end
     # The frozen ±λ rebuild is validated from the TRUE λ = 0 environment; from the aux-free padded
     # one its block contraction left legs open (a 10-leg intermediate, out of memory).
     frozen_pm && (aux_free = false)

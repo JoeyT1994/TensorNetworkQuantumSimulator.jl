@@ -529,24 +529,30 @@ function papply(p::Union{PolyT, Nothing}, P, side::Int)
                            p.c11 === nothing ? nothing : p.c11 * PA))
 end
 
-# The frozen bundle moved onto this sweep's seam legs: every link leg of a sector (tag "resp") is
-# stale and is replaced through `relabel` (old bond ⇒ new bond, filled by the lower interfaces of
-# the chain this sweep — `_ctm_each_interface` walks each chain from the lattice edge inward); the
-# output bonds are re-minted, registered and recorded. `nothing` when a stale leg is unknown (the
-# caller re-derives the bundle).
-function _resp_refresh(P, Ba::PolyT, relabel)
+# The frozen bundle of an interface moved onto this sweep's seam legs. The one link leg among its
+# seam legs is the bond the interface BELOW it in the chain produced last sweep; this sweep's
+# enlarged corners carry that lower interface's CURRENT output bond instead (its norm bond for the
+# norm sector, its excited bond for an excited sector), so the swap is read off the lower bundle
+# `Plow` — no minting on the input side. The output bonds are re-minted so a block never carries the
+# same index twice. `nothing` when the legs do not line up (the caller re-derives). Measured 5×5
+# D = 3 χ = 32: the previous relabelling fell back on every interface (528 of 528) and the solve ran
+# to the 40-sweep cap; with this one, no fallbacks and 1e-13 after two frozen sweeps.
+function _resp_refresh(P, Ba::PolyT, Plow)
     islink(i) = occursin("resp", string(TensorInterface.tags(i)))
     swap(t, o, nw) = (k = findfirst(i -> i == o, collect(TensorInterface.inds(t)));
                       k === nothing ? t : TensorInterface.replaceind(t, collect(TensorInterface.inds(t))[k], nw))
+    lowA = Plow === nothing ? nothing : Plow.sectors[Plow.iA][4]
+    lowE = Plow === nothing ? nothing : (k = findfirst(sec -> _isexc(sec[4]), Plow.sectors); k === nothing ? nothing : Plow.sectors[k][4])
     newsecs = Any[]
-    wA = nothing
     minted = Any[]                                        # old output bond ⇒ new (shared bonds once)
+    wA = nothing
     for (k, (sig, PA, PB, w)) in enumerate(P.sectors)
         nsig = Index[]
         for i in sig
             if islink(i)
-                nw = _lookup(relabel, i); nw === nothing && return nothing
-                c = _copy_on(Ba, nw); c === nothing && return nothing     # Ba's copy of the new link
+                nw = _isexc(i) ? lowE : lowA
+                nw === nothing && return nothing
+                c = _copy_on(Ba, nw); c === nothing && return nothing     # Ba's copy of the current link
                 PA = swap(PA, i, TensorInterface.dag(c)); PB = swap(PB, i, c)
                 push!(nsig, c)
             else
@@ -555,7 +561,7 @@ function _resp_refresh(P, Ba::PolyT, relabel)
         end
         j = findfirst(m -> m[1] == w, minted)
         wn = j === nothing ? Tensors._fresh_like(w, k == P.iA ? "Link,resp" : "Link,resp,exc") : minted[j][2]
-        j === nothing && (push!(minted, (w, wn)); _register!(relabel, w, wn))
+        j === nothing && push!(minted, (w, wn))
         PA = swap(PA, w, wn); PB = swap(PB, w, TensorInterface.dag(wn))
         k == P.iA && (wA = wn)
         push!(newsecs, (nsig, PA, PB, wn))
@@ -595,16 +601,16 @@ function _resp_sweep(S::RespEnv, tbl, χ::Integer, opts::CTMOptions; χ1::Intege
     _prof!(:enlarged, time() - t0); t0 = time()
     E(sym, x, y) = get(enl, (sym, x, y), nothing)
     PH = Dict{Tuple{Symbol, Int, Int}, Any}(); PV = Dict{Tuple{Symbol, Int, Int}, Any}()
-    relabel = Dict{UInt64, Any}()                         # old link ⇒ new link, this sweep (frozen mode)
     if frozen !== nothing
-        # frozen: the chain order matters (a lower interface's relabel feeds the one above) — serial
+        # frozen: every interface is relabelled from its own and the lower interface's stored bundle
         _ctm_each_interface(Lx, Ly) do isH, key, below, ca, cb
             Ba = E(ca...); Bb = E(cb...)
             (Ba === nothing || Bb === nothing) && return nothing
             ins = collect(commoninds(Ba.c00, Bb.c00))
-            old = _rnn(isH ? frozen[1] : frozen[2], key)
-            pr = old === nothing ? nothing : _resp_refresh(old, Ba, relabel)
-            pr === nothing && (pr = _resp_projector(Ba, Bb, ins, χ, opts; χ1))
+            dold = isH ? frozen[1] : frozen[2]
+            old = _rnn(dold, key)
+            pr = old === nothing ? nothing : _resp_refresh(old, Ba, _rnn(dold, below))
+            pr === nothing && (_prof!(:refresh_fallback, 1.0); pr = _resp_projector(Ba, Bb, ins, χ, opts; χ1))
             pr === nothing || ((isH ? PH : PV)[key] = pr)
             return nothing
         end
