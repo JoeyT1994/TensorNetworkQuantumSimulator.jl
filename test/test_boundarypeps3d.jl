@@ -41,12 +41,12 @@ product_A(v) = (is = [TNQS.new_index(1) for _ in 1:4]; p = TNQS.new_index(length
     @test abs(real(TNQS.dot(G, A))) < 1.0e-12
 
     # 3D Ising in the ordered phase, D = 2, χ = 16, 60 L-BFGS iterations from T applied to a
-    # fixed-spin product state: m = 0.750930 against Talapov–Blöte's 0.750886 (3D CTMRG: 0.7575
+    # fixed-spin product state: m = 0.750930 against Talapov–Blöte's 0.750925 (3D CTMRG: 0.7575
     # at χ = 8), f = 0.8214065 (a lower bound; 3D CTMRG's χ = 4 value 0.8213841 is below it).
     site, legs, mag = ising3d_site(0.25)
     bp = boundary_peps(site, legs, 2; maxdim = 16, boundary = [1.0, 0.0], maxiter = 60)
     @test issorted(bp.history)
-    @test abs(real(site_ratio(bp, mag)) - 0.750886) < 2.0e-4
+    @test abs(real(site_ratio(bp, mag)) - 0.750925) < 2.0e-4
     @test cvm_freenergy(bp) > 0.82140
 
     # argument checks

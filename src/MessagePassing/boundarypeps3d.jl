@@ -114,6 +114,29 @@ function _bp_initial(site, legs, al, D, b, noise, rng)
     return t
 end
 
+# A previous boundary tensor on legs `old` carried onto legs `new`: equal bond dimension is a
+# relabelling; a larger one zero-pads every virtual leg and adds relative `noise` (the padded
+# directions would otherwise have no gradient); a smaller one keeps the leading components.
+function _bp_embed(t, old, new, noise, rng)
+    Din, D = dim(old[1]), dim(new[1])
+    Din == D && return (s = replaceinds(t, collect(old), collect(new)); s / norm(s))
+    elt = scalartype(t)
+    M = zeros(elt, Din, D)
+    for j in 1:min(Din, D)
+        M[j, j] = 1
+    end
+    for d in 1:4
+        t = t * from_array(M, old[d], new[d])
+    end
+    t = replaceind(t, old[5], new[5])
+    t = t / norm(t)
+    if D > Din && noise > 0
+        t = t + noise * random_tensor(rng, elt, collect(new)) / sqrt(prod(dim.(collect(new))))
+        t = t / norm(t)
+    end
+    return t
+end
+
 """
     boundary_peps(site, legs, D; maxdim, init = nothing, boundary = nothing, symmetrize = true,
                   maxiter = 200, gtol = 1e-7, memory = 10, max_step = 0.2, ctm_tolerance = 1e-10,
@@ -125,10 +148,11 @@ Variational boundary PEPS for the translation-invariant cubic network of `site` 
 dimension `D`, both terms contracted by [`InfiniteCTM2D`](@ref) at `maxdim`. For a symmetric T
 (e.g. [`ising3d_site`](@ref)'s) `f` is a variational lower bound on ln κ₃D.
 
-* `init` — a `BoundaryPEPS` (e.g. at a nearby coupling) or a tensor on legs of the right
-  dimensions to start from; otherwise T applied to the product state `boundary` on z⁻ (ones by
-  default; a fixed-spin vector selects a symmetry-broken phase), embedded at bond dimension `D`
-  with relative `noise`.
+* `init` — a `BoundaryPEPS` to start from (a nearby coupling, whose environments warm-start too
+  when χ and D match; or a smaller D, zero-padded with relative `noise`), or a tensor on legs of
+  the right dimensions; otherwise T applied to the product state `boundary` on z⁻ (ones by default;
+  a fixed-spin vector selects a symmetry-broken phase), embedded at bond dimension `D` with
+  relative `noise`.
 * `symmetrize` — keep A and the gradient C4v-symmetric in the virtual legs; requires an invariant
   site.
 * Stops when the tangent gradient norm (for normalised A) is below `gtol`, or after `maxiter`
@@ -154,8 +178,8 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
            ctm_maxiter = Int(ctm_maxiter), ctm_kwargs = kwargs)
     rng = Xoshiro(seed)
     A = if init isa BoundaryPEPS
-        t = replaceinds(init.A, collect(init.Alegs), collect(al))   # needs equal dimensions
-        t / norm(t)
+        dim(init.Alegs[5]) == dim(al[5]) || throw(ArgumentError("init's physical dimension differs from the site's z legs"))
+        _bp_embed(init.A, init.Alegs, al, noise, rng)
     elseif !isnothing(init)
         length(inds(init)) == 5 || throw(ArgumentError("init must be a BoundaryPEPS or a 5-leg tensor"))
         t = replaceinds(init, collect(inds(init)), collect(al))
@@ -164,9 +188,11 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
         _bp_initial(site, legs, al, D, boundary, D > dim(legs[1]) ? noise : 0.0, rng)
     end
     symmetrize && (A = _bp_symmetrize(A, al[1:4]); A = A / norm(A))
-    init_n = init isa BoundaryPEPS ? init.normenv : nothing
-    init_s = init isa BoundaryPEPS ? init.openv : nothing
-    (init_n isa InfiniteCTM2D && init_n.maxdim == maxdim) || (init_n = nothing; init_s = nothing)
+    # the environments warm-start too when they fit (same χ and bond dimension)
+    reuse = init isa BoundaryPEPS && init.normenv isa InfiniteCTM2D && init.normenv.maxdim == maxdim &&
+            dim(init.Alegs[1]) == D
+    init_n = reuse ? init.normenv : nothing
+    init_s = reuse ? init.openv : nothing
 
     # minimise F = −f on the unit sphere
     tangent(g, x) = g - (real(dot(x, g)) / real(dot(x, x))) * x
