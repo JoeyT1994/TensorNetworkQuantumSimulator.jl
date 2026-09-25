@@ -77,6 +77,26 @@ end
         @test abs(TNQS.scalar(E * da) / z - fd) < tol
     end
 
+    # The split (matrix-free) pair against the dense pair on a boundary-PEPS sandwich (3D Ising
+    # layer, D = 2, χ = 16, interface n = 128 — at the subspace gate): the same fixed point.
+    # Measured 2026-09-25: Δ ln κ 7e-16, Δm 2e-15, ‖ΔE‖/‖E‖ 2e-15, 13 iterations both ways.
+    let
+        site3, legs3, mag3 = ising3d_site(0.23)
+        al = Tuple(TNQS.new_index(2) for _ in 1:5); bl = Tuple(TNQS.new_index(2) for _ in 1:4)
+        A = TNQS._bp_initial(site3, legs3, al, 2, [1.0, 0.0], 0.05, Xoshiro(1))
+        A = TNQS._bp_symmetrize(A, al[1:4]); A = A / TNQS.norm(A)
+        sl, slegs = TNQS._bp_sandwich_layers(A, al, bl, site3, legs3)
+        empty!(TNQS.CTM_SVD_STATS)
+        split = update(InfiniteCTM2D(sl, slegs, 16); tolerance = 1.0e-10, maxiter = 400)
+        @test get(TNQS.CTM_SVD_STATS, :i2_split, 0) > 0
+        dense = update(InfiniteCTM2D(sl, slegs, 16; svd = :dense); tolerance = 1.0e-10, maxiter = 400)
+        @test abs(cvm_freenergy(split) - cvm_freenergy(dense)) < 1.0e-12
+        imp = Any[sl[1], mag3, sl[3]]
+        @test abs(site_ratio(split, imp) - site_ratio(dense, imp)) < 1.0e-10
+        Es, zs = site_environment(split, 1); Ed, zd = site_environment(dense, 1)
+        @test TNQS.norm(Es / zs - Ed / zd) < 1.0e-10 * TNQS.norm(Ed / zd)
+    end
+
     # argument checks
     site, legs, _ = ising2d_site(0.3)
     @test_throws ArgumentError InfiniteCTM2D(site, legs, 4; pair = :nonsense)

@@ -74,6 +74,34 @@ Three design points, each measured:
 * **`init` warm starts.** They save only the logarithm of the starting distance, because
   convergence is linear. That matters for the small steps late in an optimisation.
 
+### Split pairs: the projector without the enlarged quadrant (2026-09-25)
+
+The dense pair contracts each enlarged quadrant (old quadrant, two half-lines, the site's layers)
+into an n×n matrix, n = χ·Π(raw dims) = χ·2D² for the sandwich, and factorises it: O(χ³D⁶). From
+D = 4 that was the whole step (D = 5, χ = 50: 11 s per projector, 1.2 s for both corners). The
+split pair (`_i2_pair_split`) gets the truncated SVD from the dense engine's warm-started subspace
+iteration, applying each quadrant to a block of k′ = χ + 16 vectors as its FACTOR LIST: one netcon
+per application, which absorbs the layers into the block one at a time. The quadrant and its
+layer-fused legs never exist. It is the split CTMRG of Naumann et al. (2024) and Xu, Lin & Zhang
+(2025), obtained from the contraction-order search rather than written by hand, so it works for
+any number of layers. It is the default (`svd = :auto`); `svd = :dense` restores the old pair.
+Graded data, the size gate and a subspace bail-out (flat spectrum) fall back to the dense pair.
+
+Converged sandwich environments of the same D, χ state, 3D Ising β = 0.23, 8 threads:
+
+| D, χ | n | dense step | split step | speedup | Δf, Δm, ‖ΔE‖/‖E‖ |
+|---|---|---|---|---|---|
+| 2, 16 | 128 | 0.024 s | 0.041 s | 0.6× | ≤ 2e-15 |
+| 3, 24 | 432 | 0.18 s | 0.13 s | 1.4× | ≤ 4e-15 |
+| 4, 48 | 1536 | 6.8 s | 3.0 s | 2.2× | ≤ 4e-15 |
+| 5, 50 | 2500 | 28.8 s | 7.1 s | 4.1× | ≤ 2e-15 |
+
+Same iteration counts (13) both ways. One quadrant application costs ~χ³D⁴ (0.006 s at D = 3,
+χ = 24; 0.26–0.33 s at D = 5, χ = 50), and a warm pair takes about nine of them (two subspace
+iterations, the warm-start block, the whitening). At D = 5 the step splits into 4 pairs of 2.8 s
+each and 8 block growths of ~0.45 s each, run on threads; two site environments cost 1.0 s and
+ln κ 0.5 s, so the gradient is not the bottleneck.
+
 ## Validation of the boundary PEPS
 
 | check | result |
@@ -84,7 +112,35 @@ Three design points, each measured:
 
 ## 3D Ising
 
-RESULTS PENDING
+`examples/ising3d_boundary_peps_benchmark.jl`: a scan from β = 0.40 down to 0.20, each point
+warm-started from the previous one, gradient tolerance 1e-6, CTMRG tolerance 1e-9, L-BFGS capped
+at 150 iterations. Reference: the Talapov–Blöte fit to Monte Carlo (β_c = 0.2216544), used only in
+its validated range β ≤ 0.305. Error in m:
+
+| β | D = 2, χ = 16 | D = 3, χ = 24 |
+|---|---|---|
+| 0.30 | 2.0e-5 | 2.0e-5 |
+| 0.28 | 2.3e-6 | 1.8e-6 |
+| 0.25 | 4.5e-6 | 4.2e-6 |
+| 0.24 | 4.9e-5 | 6.6e-5 * |
+| 0.235 | 1.4e-4 | 4.6e-5 * |
+| 0.23 | 5.9e-4 | 8.3e-5 * |
+| 0.2275 | 1.5e-3 | 8.7e-5 * |
+| 0.225 | 4.6e-3 | 1.9e-4 * |
+| 0.2235 | 1.2e-2 | 4.4e-3 *† |
+| 0.2217 | m = 0.234 against 0.105 | |
+
+\* The iteration cap was hit, with |g| between 4e-6 and 3e-5. † Cold start (the scan was
+interrupted and restarted from the fixed-spin seed): |g| = 1.9e-4 at the cap.
+
+* D = 2 loses its magnetisation between β = 0.220 and 0.221. Vanderstraeten, Vanhecke &
+  Verstraete (PRE 98, 042145, 2018) fit T_c = 4.525222 at D = 2 (β = 0.22098), inside that bracket;
+  their D = 3 and 4 fits give 4.5118 and 4.51195 against the Monte Carlo 4.511523.
+* At β = 0.35 and 0.40 D = 2 and D = 3 agree to 1e-7. The low-temperature series through u¹² is
+  6e-4 off at β = 0.35 (its u¹³ term), so it is not a reference there.
+* f is a lower bound, and D = 3 lies above D = 2 wherever the two differ.
+* Near β_c the optimiser, not the contraction, is the limit: D = 3 needed more than 150
+  iterations from β = 0.24 down, as Vanderstraeten et al. found for D = 4.
 
 ## Costs
 

@@ -317,6 +317,73 @@ function _i2_seed_state(ic::InfiniteCTM2D, χ::Int)
     return _I2State(χ, B, Dict{NTuple{2, Int}, Any}(), leg)
 end
 
+# --- the SPLIT pair: matrix-free, never forming an enlarged quadrant ----------------------------
+#
+# The dense pair contracts each enlarged quadrant — the old quadrant, its two half-lines and the
+# site's layers — into one n×n matrix (n = χ·Π raw dims, χ·2D² for a boundary-PEPS sandwich) and
+# factorises it: O(n³) = O(χ³D⁶) per pair, which is the whole cost of a step from D = 4 up
+# (measured 0.48 s of the 0.56 s pair at D = 4, χ = 32). Here the pair's truncated SVD comes from
+# the subspace iteration of the dense engine (`_ctm_subspace_svd`), with the quadrant applied to a
+# block of k′ = χ + oversample vectors AS ITS FACTOR LIST: one netcon per application, which absorbs
+# the layers into the block one at a time, so the enlarged quadrant and its layer-fused legs never
+# exist. That is the "split CTMRG" of Naumann et al. (2024) and Xu, Lin & Zhang (2025) — ket and
+# bra layers kept apart through the projector computation — obtained from netcon rather than hand
+# written, so it applies unchanged to any number of layers.
+#
+#   O = L · H   over the interface legs (L the low quadrant, H the high one; rows = L's rest legs)
+#   apply(X)   = L (H X)            applyadj(Q) = H̄ (L̄ Q)      (dense: the map adjoint is conj)
+#   P_A = H V̄ S^{-1/2}  (consumed by the LOW side),  P_B = S^{-1/2} Ū L   — as `_ctm_whiten`
+#
+# Warm start from the previous step's pair (`X₀ = H̄ P̄_B`), so near the fixed point one iteration
+# suffices. Dense data only; graded data, a declined gate and a subspace bail-out (flat spectrum)
+# take the dense route.
+_i2_conjlist(L) = AbstractTensor[scalartype(t) <: Real ? t : conj(t) for t in L]
+_i2_apply(L, X, opts::CTMOptions) = _ctm_contract(vcat(AbstractTensor[t for t in L], AbstractTensor[X]), opts)
+
+function _i2_pair_split(Ll, Lh, ins::Vector{<:Index}, prev, maxdim::Int, opts::CTMOptions, seed::UInt)
+    (any(_ctm_isgraded, Ll) || any(_ctm_isgraded, Lh)) && return missing
+    rows = Index[i for i in _c3_open(Ll) if !(i in ins)]
+    cols = Index[i for i in _c3_open(Lh) if !(i in ins)]
+    (isempty(rows) || isempty(cols)) && return missing
+    k = min(maxdim, dim(rows), dim(cols), dim(ins))
+    kp = min(k + opts.svd_oversample, dim(rows), dim(cols))
+    _ctm_use_subspace(opts, Ll, dim(rows), dim(cols), dim(ins), kp) || return missing
+    cLl = _i2_conjlist(Ll); cLh = _i2_conjlist(Lh)
+    apply(X) = _i2_apply(Ll, _i2_apply(Lh, X, opts), opts)
+    applyadj(Q) = _i2_apply(cLh, _i2_apply(cLl, Q, opts), opts)
+    ref = first(Lh)
+    elt = promote_type(map(scalartype, Ll)..., map(scalartype, Lh)...)
+    X0 = nothing
+    if !isnothing(prev) && length(prev) >= 3
+        PBo, wo = prev[2], prev[3]
+        issetequal(collect(inds(PBo)), vcat(collect(ins), [wo])) && (X0 = _i2_apply(cLh, dag(PBo, [wo]), opts))
+    end
+    nrand = isnothing(X0) ? kp : max(0, kp - dim(only(uniqueinds(X0, cols))))
+    if nrand > 0
+        R = adapt_like(ref, _ctm_random_block(Xoshiro(seed), elt, cols, nrand))
+        X0 = isnothing(X0) ? R :
+            directsum(X0 => only(uniqueinds(X0, cols)), R => only(uniqueinds(R, cols)); tags = "Link,blk")
+    end
+    F = try
+        _ctm_subspace_svd(apply, applyadj, rows, cols, X0, k, _ctm_trunc(maxdim, opts), opts;
+                          warm = !isnothing(prev) && nrand < kp)
+    catch err
+        err isa InterruptException && rethrow()
+        nothing
+    end
+    isnothing(F) && (_ctm_stat!(:i2_split_bail); return nothing)
+    U, S, V = F
+    isk = map_diag(x -> inv(sqrt(x)), S)
+    u, v = inds(S)
+    PA = _i2_apply(Lh, dag(V, [v]), opts) * dag(isk, [u])             # (ins…, u)
+    PB = _i2_apply(Ll, dag(U, [u]), opts) * dag(isk, [u])             # (v, ins…)
+    uA = only(uniqueinds(PA, ins))
+    PB = replaceind(PB, only(uniqueinds(PB, ins)), dag(uA))
+    all(isfinite, (norm(PA), norm(PB))) || (_ctm_stat!(:i2_split_bail); return nothing)
+    _ctm_stat!(:i2_split)
+    return PA, PB, uA
+end
+
 # The pair of line interface `F` from the enlarged quadrants on either side, aligned to `prev`.
 function _i2_pair(F::NTuple{4, Int}, Bv, tbl, prev, VX, opts::CTMOptions, χ::Int, isometric::Bool)
     Ll = _c2_enlarged(Bv, tbl, _c2_side_block(F, -1))
@@ -325,6 +392,10 @@ function _i2_pair(F::NTuple{4, Int}, Bv, tbl, prev, VX, opts::CTMOptions, χ::In
     ol = _c3_open(Ll); oh = _c3_open(Lh)
     ins = Index[i for i in ol if i in oh]
     isempty(ins) && return nothing
+    if !isometric && opts.svd !== :dense
+        pr = _i2_pair_split(Ll, Lh, ins, prev, χ, opts, hash(F))
+        pr isa Tuple && return _c3_finish(pr, ins, only(VX[F]), prev, opts)
+    end
     Ac = _ctm_rescale(_ctm_contract(Ll, opts))
     Bc = _ctm_rescale(_ctm_contract(Lh, opts))
     pr = isometric ? _c3_isometric(Ac, Bc, ins, χ, opts) : _ctm_twosided_projector_qr(Ac, Bc, ins, χ, opts)
