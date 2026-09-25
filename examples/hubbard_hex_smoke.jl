@@ -12,20 +12,20 @@ using LinearAlgebra, SparseArrays, Random, Printf
 
 # ── parameters ───────────────────────────────────────────────────────────────────────────
 const SYMMETRY   = "fZ2"          # "fZ2" (parity) or "fU1xU1" (N↑ and N↓ conserved)
-const D          = 2              # bond dimension
+const D          = 8              # bond dimension
 const t, U       = 1.0, 4.0
 const μ          = U / 2          # half filling (particle–hole symmetric point)
 const SU_DTAU    = 0.01           # simple update: imaginary-time step
 const SU_STEPS   = 200             # simple update: number of second-order-ish Trotter layers
-const BP_SWEEPS  = 2              # BP DMRG sweeps
+const BP_SWEEPS  = 10              # BP DMRG sweeps
 const CHI        = 64             # CTMRG interface dimension
 const CHI_CHECK  = (16, 64)       # χ values at which the ring / FD-of-F energies are checked
-const LBFGS_ITER = 3              # CTMRG L-BFGS iterations
+const LBFGS_ITER = 10              # CTMRG L-BFGS iterations
 const STEP0      = 1 / 16         # first (Jacobi) step; spinless fermions needed 1/32 rather than 1/8
 const SEED       = 1
 
 Random.seed!(SEED)
-g = named_hexagonal_lattice_graph(1, 1)             # one hexagon: 6 sites, grid positions on a 3×2 box
+g = named_hexagonal_lattice_graph(1,1)             # one hexagon: 6 sites, grid positions on a 3×2 box
 @assert nv(g) == 6
 vs = collect(vertices(g))
 s = siteinds("Electron", g; symmetry = SYMMETRY)
