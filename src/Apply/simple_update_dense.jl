@@ -13,14 +13,27 @@ function _scratch_slot(own::AbstractArray, allocator)
     return TO.tensoralloc(ttype, (length(own),), Val(true), allocator)
 end
 
+# cuTENSOR 2.7 rejects some operations on more than 2^31 elements whose last extent has no small
+# factor (e.g. 983), so outputs are written in blocks along their last axis that stay below that.
+function _blocks(dst)
+    n = size(dst, ndims(dst))
+    return Iterators.partition(1:n, max(1, typemax(Int32) ÷ (length(dst) ÷ n)))
+end
+
 function _step!(dst, A, pA, B, pB, pAB, backend, allocator)
-    cp = TO.allocator_checkpoint!(allocator)
-    try
-        TO.tensorcontract!(
-            dst, A, pA, false, B, pB, false, pAB, TO.One(), TO.Zero(), backend, allocator
-        )
-    finally
-        TO.allocator_reset!(allocator, cp)
+    n, na, j = ndims(dst), length(pA[1]), TO.linearize(pAB)[ndims(dst)]
+    for cols in _blocks(dst)
+        a = j <= na ? selectdim(A, pA[1][j], cols) : A
+        b = j <= na ? B : selectdim(B, pB[2][j - na], cols)
+        cp = TO.allocator_checkpoint!(allocator)
+        try
+            TO.tensorcontract!(
+                selectdim(dst, n, cols), a, pA, false, b, pB, false, pAB,
+                TO.One(), TO.Zero(), backend, allocator
+            )
+        finally
+            TO.allocator_reset!(allocator, cp)
+        end
     end
     return dst
 end
@@ -57,9 +70,15 @@ end
 function qr_forward!(own, scratch, A, perm, matrices, backend, allocator)
     tdims = ntuple(i -> size(A, perm[i]), ndims(A))
     cur = _slot(scratch, tdims)
+    n = ndims(A)
     cp = TO.allocator_checkpoint!(allocator)
     try
-        TO.tensoradd!(cur, A, (perm, ()), false, TO.One(), TO.Zero(), backend, allocator)
+        for cols in _blocks(cur)
+            TO.tensoradd!(
+                selectdim(cur, n, cols), selectdim(A, perm[n], cols), (perm, ()), false,
+                TO.One(), TO.Zero(), backend, allocator
+            )
+        end
     finally
         TO.allocator_reset!(allocator, cp)
     end
