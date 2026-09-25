@@ -18,7 +18,11 @@ cvm_freenergy(c)                        # ≈ ln Z
 
 site, legs, mag = ising3d_site(0.25)    # cubic Ising, J = (1, 1, 1)
 ic = update(InfiniteCTM3D(site, legs, 4; boundary = [1.0, 0.0]))
-cvm_freenergy(ic), site_ratio(ic, mag)  # ln κ per site, ⟨σ⟩
+cvm_freenergy(ic), site_ratio(ic, mag)  # ln κ per site, ⟨σ⟩ — both exact contractions, χ ≲ 5
+
+# larger χ: converge on the blocks, read observables through the edge region (~χ⁸)
+ic8 = update(InfiniteCTM3D(site, legs, 8; boundary = [1.0, 0.0]); convergence = :blocks, tolerance = 1e-8)
+site_ratio(ic8, mag; method = :edge)
 ```
 
 ## Geometry
@@ -165,10 +169,41 @@ themselves do not have this problem: plane pairs are ~O(χ⁷), block rebuilds s
 regions cheap. In the finite engine the boundary blocks are thin, which is why 4×4×4 at χ = 4 was
 cheap; a bulk vertex of a larger box hits the same wall.
 
-So larger χ in 3D needs either an APPROXIMATE shell contraction, or estimators that avoid the
-full shell: e.g. a single-site observable from the cube region with one octant regrown to expose
-its corner site (the site's outer bonds then pass through that octant's face projectors; cost of
-one block rebuild, ~χ⁷), or thermodynamic integration of a bond energy.
+So larger χ in 3D needs either an APPROXIMATE shell contraction, or estimators that avoid the full
+shell. For single-site observables the second works — `site_ratio(ic, impurity; method = :edge)`:
+
+### Cheap single-site observables: through LINE interfaces, never plane ones — *2026-09-24*
+
+Measured on decoupled 2D layers (Jz = 0, K = 0.5, fixed-spin seed) against Yang's exact
+spontaneous magnetisation (1 − sinh⁻⁴2K)^(1/8) = 0.91131938:
+
+| χ | `:shell` (vertex shell) | octant regrown (removed) | `:edge` (edge region, half-line regrown) |
+|---|---|---|---|
+| 2 | 2.0e-4 | 4.0e-3 | 2.0e-4 |
+| 4 | 2.9e-6 | 3.9e-3 | 3.2e-6 |
+| 6 | unaffordable | 3.9e-3 | **4.3e-9** |
+| 8 | unaffordable | 3.9e-3 | — |
+
+* **Regrowing an OCTANT** to expose its corner site (~χ⁷) put the site's three outer bonds through
+  the octant's PLANE projectors, and sat 3.9e-3 off at every χ from 2 to 8. A quarter-plane of
+  bonds is an area-law object — here literally a product over infinitely many layers — that no
+  fixed χ holds. Removed.
+* **Regrowing a HALF-LINE** inside the 18-block edge region across an axis keeps the site's bond
+  along that axis raw and sends its four transverse bonds through LINE projectors — 1D
+  interfaces, compressed as well as the 2D engine's. It tracks the shell estimator where both run
+  and converges exponentially beyond; the edge region costs ~χ⁸ (2^24 entries at χ = 8).
+
+The same lesson applies to anything read off the 3D environment: keep the quantity's own bonds
+on half-line blocks.
+
+For CONVERGENCE at larger χ, `update(ic; convergence = :blocks)` watches the largest phase-free
+change of any block (their kept indices are fixed and aligned, so they compare directly) and
+never contracts a vertex region.
+
+Iteration cost (infinite engine, single-threaded, 3D Ising): χ = 6 1.1 s (12 plane pairs 0.52 s,
+12 line pairs 0.15 s, 26 blocks 0.41 s); χ = 8 8.0 s (4.6 / 1.1 / 2.3 s) — the χ⁷ of the plane
+pairs. The pairs, blocks and regions of an iteration are independent and run on Julia threads
+(single-threaded BLAS, as in 2D).
 
 ## Costs and limits
 
@@ -191,8 +226,10 @@ the lattice size.
 
 ## Open problems
 
-1. **The vertex-region ceiling (χ ≈ 5 for exact F and shell observables).** See above; the
-   most important one for "large χ".
+1. **The vertex-region ceiling (χ ≈ 5 for the exact Möbius F).** Single-site observables have a
+   way round it (`:edge`); the free energy per site does not yet — an approximate shell
+   contraction, or thermodynamic integration of a bond energy read through line interfaces, are
+   the candidates.
 2. **`:cycle` in 3D.** The cut-closed cube converges but to a worse F than `:cut`, and is not
    better on the corner/centre observable. Whether a joint cube solve (all 12 interfaces at once,
    as the 2D ring does for 4) would change that is untested; its cost is ~12× a sweep.

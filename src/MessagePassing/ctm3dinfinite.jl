@@ -318,43 +318,50 @@ function cvm_freenergy(ic::InfiniteCTM3D)
 end
 
 """
-    site_ratio(ic::InfiniteCTM3D, impurity; method = :shell)
+    site_ratio(ic::InfiniteCTM3D, impurity; method = :shell, axis = 1)
 
 `⟨impurity⟩ / ⟨site⟩` for a site tensor `impurity` with an observable inserted (same six legs) —
 the single-site expectation value, e.g. the magnetisation for [`ising3d_site`](@ref)'s tensors.
 
-* `:shell` — through the vertex's full 26-block environment shell. The most faithful estimator,
-  but an exact shell contraction needs ~χ¹⁰–χ¹² memory (docs/ctmrg3d.md): χ ≲ 5.
-* `:octant` — the site at the corner of an octant REGROWN from its eight pieces (the site, three
-  half-lines, three quarter-planes, the old octant) with the current pairs on its three faces,
-  closed by the cube's seven other octants. Costs one block rebuild, ~χ⁷, so it works at any χ
-  the iteration does; its outer three bonds pass through the face projectors, so it sees a
-  truncation the shell estimator does not.
+* `:shell` — through the vertex's full 26-block environment shell: every bond of the site ends
+  on a half-line block, untruncated. The most faithful estimator, but its exact contraction
+  needs ~χ¹⁰–χ¹² memory (docs/ctmrg3d.md): χ ≲ 5.
+* `:edge` — the 18-block edge region across `axis`, with the half-line on its low side REGROWN
+  from the old half-line and the site, the current LINE pairs on its four side faces. The site's
+  bond along `axis` stays raw, its four transverse bonds pass through line projectors — 1D
+  interfaces, compressed as well as the 2D engine's — so it tracks the shell estimator while the
+  contraction is only ~χ⁸. (Regrowing an OCTANT instead, ~χ⁷, puts the site's bonds through PLANE
+  projectors: measured on decoupled 2D layers against Yang's exact magnetisation it sat 3.9e-3 off
+  at every χ from 2 to 8 — a quarter-plane of bonds is an area-law object that χ cannot hold —
+  while the shell estimator was 2.9e-6 off at χ = 4.)
 """
-function site_ratio(ic::InfiniteCTM3D, impurity; method::Symbol = :shell)
+function site_ratio(ic::InfiniteCTM3D, impurity; method::Symbol = :shell, axis::Integer = 1)
     isnothing(ic.state) && error("InfiniteCTM3D has not been `update`d.")
-    method in (:shell, :octant) || throw(ArgumentError("method must be :shell or :octant, got $(repr(method))"))
+    method in (:shell, :edge) || throw(ArgumentError("method must be :shell or :edge, got $(repr(method))"))
+    1 <= axis <= 3 || throw(ArgumentError("axis must be 1, 2 or 3, got $axis"))
     st = ic.state
     VX, tbl, Bv, Pv, _ = _i3_virtual(st, ic.site, ic.legs)
+    env = CTM3DEnvironments(Bv, Dict{NTuple{6, Int}, Any}(), VX, st.chi, Dict{NTuple{6, Int}, Any}())
     imp = _i3_place_site(impurity, ic.legs, _I3_V, VX)
     if method === :shell
-        env = CTM3DEnvironments(Bv, Dict{NTuple{6, Int}, Any}(), VX, st.chi, Dict{NTuple{6, Int}, Any}())
         sh = _c3_region_blocks(env, Float64.(_I3_V))
         z0 = scalar(_c3_contract_region(vcat(sh, tbl[_I3_V]), ic.options))
         z1 = scalar(_c3_contract_region(vcat(sh, imp), ic.options))
         return z1 / z0
     end
-    # the (−,−,−) octant of cube (4,4,4) has the centre vertex (3,3,3) at its corner
-    cube = (4, 4, 4)
-    σ0 = (-1, -1, -1)
-    okey(σ) = (σ[1], σ[2], σ[3], cube[1], cube[2], cube[3])
-    face(σ, a) = (a, cube[a] - 1, σ[_C3_TR[a][1]], cube[_C3_TR[a][1]], σ[_C3_TR[a][2]], cube[_C3_TR[a][2]])
-    others = AbstractTensor[Bv[okey(σ)] for σ in ((s1, s2, s3) for s1 in (-1, 1) for s2 in (-1, 1) for s3 in (-1, 1)) if σ != σ0]
-    rest = _c3_contract_region(others, ic.options)                    # the seven octants, three faces open
-    projs = Any[_c3_side_proj(Pv[face(σ0, a)], :low) for a in 1:3]
-    list = _c3_enlarged(Bv, tbl, okey(σ0))
+    # the edge region across `axis` at the centre, its low half-line {x_axis < 4} ending on (3,3,3)
+    c = [3.0, 3.0, 3.0]; c[axis] = 3.5
+    s = [0, 0, 0]; s[axis] = -1
+    p = [3, 3, 3]; p[axis] = 4
+    tkey = (s[1], s[2], s[3], p[1], p[2], p[3])
+    others = AbstractTensor[t for t in _c3_region_blocks(env, Tuple(c)) if t !== Bv[tkey]]
+    length(others) == 17 || error("3D iCTM: the edge region should keep 17 blocks, got $(length(others))")
+    rest = _c3_contract_region(others, ic.options)
+    list = _c3_enlarged(Bv, tbl, tkey)                     # the old half-line and the site
+    projs = Any[_c3_side_proj(Pv[F], side) for (F, side) in _c3_faces(tkey, _I3_L) if !_c3_israw(F)]
+    length(projs) == 4 || error("3D iCTM: a half-line should have four projected faces, got $(length(projs))")
     site_pos = findfirst(t -> t === only(tbl[_I3_V]), list)
-    isnothing(site_pos) && error("3D iCTM: the regrown octant does not contain the centre site")
+    isnothing(site_pos) && error("3D iCTM: the regrown half-line does not contain the centre site")
     grown(site) = (l = copy(list); l[site_pos] = site; _ctm_contract(vcat(l, projs), ic.options))
     z0 = scalar(grown(only(tbl[_I3_V])) * rest)
     z1 = scalar(grown(only(imp)) * rest)

@@ -54,5 +54,16 @@ end
     # the argument checks
     @test_throws ArgumentError InfiniteCTM3D(site, legs, 2; plane_rest = :exact, projector = :cycle)
     @test_throws ArgumentError InfiniteCTM3D(site, legs[1:5], 2)
+
+    # Spontaneous magnetisation of decoupled 2D layers from a fixed-spin seed against Yang's exact
+    # (1 − sinh⁻⁴2K)^(1/8), K = 0.5. Measured 2026-09-24 at χ = 4: shell estimator 2.9e-6 off,
+    # edge estimator 3.2e-6 (and 4.3e-9 at χ = 6, where the shell is unaffordable).
+    Kc = 0.5
+    site, legs, mag = ising3d_site(Kc; J = (1.0, 1.0, 0.0))
+    ic = update(InfiniteCTM3D(site, legs, 4; boundary = [1.0, 0.0]); maxiter = 60, tolerance = 1.0e-11)
+    myang = (1 - sinh(2Kc)^-4)^(1 / 8)
+    @test abs(real(site_ratio(ic, mag)) - myang) < 3.0e-5
+    @test abs(real(site_ratio(ic, mag; method = :edge)) - myang) < 3.0e-5
+    @test_throws ArgumentError site_ratio(ic, mag; method = :octant)
 end
 end
