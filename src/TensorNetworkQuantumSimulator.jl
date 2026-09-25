@@ -22,6 +22,7 @@ include("MessagePassing/ctmenvironmentcache.jl")
 include("MessagePassing/ctm3denvironmentcache.jl")
 include("MessagePassing/ctm3dinfinite.jl")
 include("MessagePassing/ctm2dinfinite.jl")
+include("MessagePassing/boundarypeps3d.jl")
 include("MessagePassing/loopcorrection.jl")
 include("graph_ops.jl")
 include("utils.jl")
@@ -99,6 +100,8 @@ export
     InfiniteCTM2D,
     ising2d_site,
     site_environment,
+    boundary_peps,
+    BoundaryPEPS,
     CTMOptions,
     cvm_freenergy,
     marginal_inconsistency,
