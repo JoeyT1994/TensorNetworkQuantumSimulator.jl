@@ -82,6 +82,7 @@ Keyword arguments, beyond the [`CTMOptions`](@ref) ones that apply (`projector`,
 |---|---|---|
 | `seed_maxdim` | `2` | χ of the uncompressed seed sweeps that fill the blocks from an empty state |
 | `plane_rest` | `:compress` | `:compress`: an octant's two other faces are compressed by the previous sweep's pairs when a plane pair is derived (χ² × χ³D blocks); `:exact`: kept open ((χ³D)² × χ³D — small χ only, and `:cut` only) |
+| `pair` | `:biorth` | `:biorth`: the 2D engine's biorthogonal `:cut` pair; `:isometric`: an orthogonal projector from both sides' interface Gram matrices, the same pair wherever the two sides are mirror images and immune to the side-asymmetric instability of the infinite iteration (`_c3_isometric`) |
 
 `projector = :cycle` derives every PLANE interface from its cube environment (see the source
 notes); LINE interfaces use `:cut` under either option. Dense networks only.
@@ -96,6 +97,7 @@ struct CTM3DEnvironmentCache{V, N, E}
     options::CTMOptions
     seed_maxdim::Int
     plane_rest::Symbol
+    pair::Symbol                       # :biorth or :isometric, see `_c3_isometric`
     freenergy::Base.RefValue{Any}
 end
 
@@ -117,7 +119,7 @@ environments(cache::CTM3DEnvironmentCache) = cache.environments
 options(cache::CTM3DEnvironmentCache) = cache.options
 
 function CTM3DEnvironmentCache(net, maxdim::Integer; seed_maxdim::Integer = 2,
-                               plane_rest::Symbol = :compress, kwargs...)
+                               plane_rest::Symbol = :compress, pair::Symbol = :biorth, kwargs...)
     opts = CTMOptions(; kwargs...)
     maxdim >= 1 || throw(ArgumentError("maxdim must be ≥ 1, got $maxdim"))
     seed_maxdim >= 1 || throw(ArgumentError("seed_maxdim must be ≥ 1, got $seed_maxdim"))
@@ -126,6 +128,7 @@ function CTM3DEnvironmentCache(net, maxdim::Integer; seed_maxdim::Integer = 2,
     (plane_rest === :exact && opts.projector === :cycle) && throw(ArgumentError(
         "projector = :cycle closes each cube with the previous sweep's pairs, so it needs " *
         "plane_rest = :compress"))
+    pair in (:biorth, :isometric) || throw(ArgumentError("pair must be :biorth or :isometric, got $(repr(pair))"))
     vs = collect(vertices(graph(net)))
     all(v -> (v isa Tuple || v isa CartesianIndex) && length(v) == 3, vs) ||
         error("CTM3DEnvironmentCache requires a 3D grid network (vertices as (x, y, z)).")
@@ -144,12 +147,12 @@ function CTM3DEnvironmentCache(net, maxdim::Integer; seed_maxdim::Integer = 2,
     all(>=(2), dims) || error("CTM3DEnvironmentCache: the grid must span at least 2 sites along " *
         "every axis, got $dims; a single layer is a 2D grid (use its (x, y) vertices).")
     return CTM3DEnvironmentCache(net, grid, coords, dims, Int(maxdim), nothing, opts,
-                                 Int(seed_maxdim), plane_rest, Ref{Any}(nothing))
+                                 Int(seed_maxdim), plane_rest, pair, Ref{Any}(nothing))
 end
 
 _c3_setenv(cache::CTM3DEnvironmentCache, env) =
     CTM3DEnvironmentCache(cache.network, cache.grid, cache.coords, cache.dims, cache.maxdim, env,
-                          cache.options, cache.seed_maxdim, cache.plane_rest, Ref{Any}(nothing))
+                          cache.options, cache.seed_maxdim, cache.plane_rest, cache.pair, Ref{Any}(nothing))
 
 # --- geometry --------------------------------------------------------------------------
 
@@ -380,7 +383,7 @@ end
 # `:cut` pair for interface `F` from the two enlarged blocks on either side, their plane rest faces
 # compressed by `pairs` (the previous sweep's `:cut` pairs) and the result aligned to `pairs[F]`.
 function _c3_pair_cut(F::NTuple{6, Int}, S::CTM3DEnvironments, tbl, L, opts::CTMOptions, compress::Bool,
-                      pairs = S.Q)
+                      pairs = S.Q; isometric::Bool = false)
     lowk = _c3_side_block(F, -1); highk = _c3_side_block(F, 1)
     Ll = _c3_enlarged(S.B, tbl, lowk); Lh = _c3_enlarged(S.B, tbl, highk)
     (isempty(Ll) || isempty(Lh)) && return nothing
@@ -391,9 +394,28 @@ function _c3_pair_cut(F::NTuple{6, Int}, S::CTM3DEnvironments, tbl, L, opts::CTM
     # the compressors' magnitudes (see `_c3_finish`)
     Ac = _ctm_rescale(_ctm_contract(vcat(Ll, compress ? _c3_compressors(lowk, F, pairs, ol, L) : Any[]), opts))
     Bc = _ctm_rescale(_ctm_contract(vcat(Lh, compress ? _c3_compressors(highk, F, pairs, oh, L) : Any[]), opts))
-    pr = _ctm_twosided_projector_qr(Ac, Bc, ins, dim(S.W[F]), opts)
+    pr = isometric ? _c3_isometric(Ac, Bc, ins, dim(S.W[F]), opts) :
+        _ctm_twosided_projector_qr(Ac, Bc, ins, dim(S.W[F]), opts)
     isnothing(pr) && return nothing
     return _c3_finish(pr, ins, S.W[F], get(pairs, F, nothing), opts)
+end
+
+# The ORTHOGONAL pair from both sides at once: `P` the dominant eigenvectors of `Ac†Ac + Bc†Bc` on
+# the interface legs (the right singular vectors of the two triangular factors stacked), `P_A = P`,
+# `P_B = P†`, so `Π = P P†`. Where the two sides are mirror images — every interface of a
+# reflection-symmetric lattice at its fixed point — this IS the biorthogonal pair (`R_A = R_B` makes
+# `P_A` an isometry and `P_B = P_Aᵀ`), so the fixed point is the same one; what differs is the
+# iteration. A perturbation that makes the two sides differ changes `Ac†Ac + Bc†Bc` only at second
+# order, while the biorthogonal pair turns it into `P_A ≠ P_Bᵀ` at first order and feeds it back.
+function _c3_isometric(Ac, Bc, ins::Vector{<:Index}, maxdim::Integer, opts::CTMOptions)
+    RA = _ctm_tri_factor(Ac, ins); RB = _ctm_tri_factor(Bc, ins)
+    bA = only(uniqueinds(RA, ins)); bB = only(uniqueinds(RB, ins))
+    Rs = directsum(RA => bA, RB => bB; tags = "Link,c3s")
+    b = only(uniqueinds(Rs, ins))
+    _, _, V = svd(Rs, [b]; trunc = _ctm_trunc(maxdim, opts))
+    v = only(uniqueinds(V, ins))                         # V = P† in the seam's bilinear convention
+    PA = scalartype(V) <: Real ? V : conj(V)
+    return (PA, replaceind(V, v, dag(v)), v)
 end
 
 # `:cycle` pair for a plane interface from its two open octants `Ac`, `Bc` (other faces compressed)
@@ -514,7 +536,7 @@ function _c3_sweep(cache::CTM3DEnvironmentCache, S::CTM3DEnvironments, tbl, χ::
     Q = Dict{NTuple{6, Int}, Any}()                     # this sweep's `:cut` pairs
     lk = ReentrantLock()
     _ctm_foreach(eachindex(Fs)) do i
-        pr = _c3_pair_cut(Fs[i], S, tbl, L, opts, !exact, S.Q)
+        pr = _c3_pair_cut(Fs[i], S, tbl, L, opts, !exact, S.Q; isometric = cache.pair === :isometric)
         isnothing(pr) || lock(() -> (Q[Fs[i]] = pr), lk)
     end
     P = Q

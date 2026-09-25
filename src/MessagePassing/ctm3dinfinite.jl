@@ -70,7 +70,7 @@ end
 
 """
     InfiniteCTM3D(site, legs, maxdim; projector = :cut, seed_maxdim = 2, boundary = nothing,
-                  plane_rest = :compress, kwargs...)
+                  plane_rest = :compress, pair = :isometric, kwargs...)
 
 Infinite 3D CTMRG environment of the translation-invariant cubic network built from one `site`
 tensor with six legs `legs = (x⁻, x⁺, y⁻, y⁺, z⁻, z⁺)`: every site's `x⁺` leg is contracted with its
@@ -80,7 +80,13 @@ tensor with six legs `legs = (x⁻, x⁺, y⁻, y⁺, z⁻, z⁺)`: every site's
 
 `boundary` is the seed's vector on a half-line's vertex leg (default all ones: free spins at
 infinity); pass a fixed-spin vector (e.g. `[1, 0]` for Ising) to select a symmetry-broken phase.
-Other keywords as for [`CTM3DEnvironmentCache`](@ref).
+
+`pair = :isometric` (the default here) derives every interface's projector as an orthogonal
+projector from both sides at once. On a lattice whose two sides of an interface are mirror images
+it has the same fixed point as the finite engine's default `:biorth`, but `:biorth` iterates to
+it unstably: a perturbation that makes an interface's two sides differ grows ×1.5 per iteration
+(3D Ising β = 0.25, every χ from 2 to 6), from roundoff at the first iteration to garbage after
+~100 (docs/ctmrg3d.md). Other keywords as for [`CTM3DEnvironmentCache`](@ref).
 """
 struct InfiniteCTM3D
     site::Any
@@ -89,6 +95,7 @@ struct InfiniteCTM3D
     options::CTMOptions
     seed_maxdim::Int
     plane_rest::Symbol
+    pair::Symbol                   # :isometric or :biorth, see `_c3_isometric`
     boundary::Any
     state::Any                     # `nothing`, or an `_I3State`
     lnkappa::Base.RefValue{Any}
@@ -103,6 +110,7 @@ struct _I3State
 end
 
 function InfiniteCTM3D(site, legs, maxdim::Integer; seed_maxdim::Integer = 2, plane_rest::Symbol = :compress,
+                       pair::Symbol = :isometric,
                        boundary = nothing, kwargs...)
     opts = CTMOptions(; kwargs...)
     maxdim >= 1 || throw(ArgumentError("maxdim must be ≥ 1, got $maxdim"))
@@ -111,6 +119,7 @@ function InfiniteCTM3D(site, legs, maxdim::Integer; seed_maxdim::Integer = 2, pl
         "plane_rest must be :compress or :exact, got $(repr(plane_rest))"))
     (plane_rest === :exact && opts.projector === :cycle) && throw(ArgumentError(
         "projector = :cycle closes the cube with :cut pairs of compressed octants, so it needs plane_rest = :compress"))
+    pair in (:isometric, :biorth) || throw(ArgumentError("pair must be :isometric or :biorth, got $(repr(pair))"))
     length(legs) == 6 || throw(ArgumentError("legs must be the six legs (x⁻, x⁺, y⁻, y⁺, z⁻, z⁺)"))
     issetequal(collect(inds(site)), collect(legs)) || throw(ArgumentError(
         "the site tensor's indices must be exactly the six given legs"))
@@ -118,12 +127,12 @@ function InfiniteCTM3D(site, legs, maxdim::Integer; seed_maxdim::Integer = 2, pl
         dim(legs[2a - 1]) == dim(legs[2a]) || throw(ArgumentError(
             "legs along axis $a have different dimensions $(dim(legs[2a - 1])) and $(dim(legs[2a]))"))
     end
-    return InfiniteCTM3D(site, Tuple(legs), Int(maxdim), opts, Int(seed_maxdim), plane_rest, boundary,
+    return InfiniteCTM3D(site, Tuple(legs), Int(maxdim), opts, Int(seed_maxdim), plane_rest, pair, boundary,
                          nothing, Ref{Any}(nothing))
 end
 
 _i3_setstate(ic::InfiniteCTM3D, st) = InfiniteCTM3D(ic.site, ic.legs, ic.maxdim, ic.options, ic.seed_maxdim,
-                                                    ic.plane_rest, ic.boundary, st, Ref{Any}(nothing))
+                                                    ic.plane_rest, ic.pair, ic.boundary, st, Ref{Any}(nothing))
 options(ic::InfiniteCTM3D) = ic.options
 
 _i3_rawdim(legs, a::Int) = dim(legs[2a - 1])
@@ -232,7 +241,7 @@ function _i3_step(ic::InfiniteCTM3D, st::_I3State, exact::Bool)
     Qn = Dict{NTuple{6, Int}, Any}()
     lk = ReentrantLock()
     _ctm_foreach(eachindex(reps)) do i
-        pr = _c3_pair_cut(reps[i][2], Sv, tbl, Lv, opts, !exact, Qv)
+        pr = _c3_pair_cut(reps[i][2], Sv, tbl, Lv, opts, !exact, Qv; isometric = ic.pair === :isometric)
         isnothing(pr) || lock(() -> (Qn[reps[i][2]] = pr), lk)
     end
     Pn = Qn
@@ -370,13 +379,17 @@ end
 
 # Largest change of any block between two states, immune to a block's overall phase; blocks are
 # norm-1 and their kept indices fixed and Procrustes-aligned, so they compare directly. The
-# convergence signal where ln κ is unaffordable (χ ≳ 5).
+# convergence signal where ln κ is unaffordable (χ ≳ 5). Formed as the difference itself: the
+# equivalent `sqrt(2 − 2|⟨a,b⟩|)` cannot resolve changes below ~1.5e-8 in double precision.
 function _i3_blockdist(a::_I3State, b::_I3State)
     worst = 0.0
     for (s, ta) in a.B
         tb = b.B[s]
-        ov = min(abs(dot(ta, tb)) / (norm(ta) * norm(tb)), 1.0)
-        worst = max(worst, sqrt(max(0.0, 2 - 2ov)))
+        na, nb = norm(ta), norm(tb)
+        (na > 0 && nb > 0) || continue
+        ov = dot(ta, tb)
+        ph = iszero(ov) ? one(ov) : conj(ov) / abs(ov)   # the phase that brings b closest to a
+        worst = max(worst, norm(ta / na - tb * (ph / nb)))
     end
     return worst
 end

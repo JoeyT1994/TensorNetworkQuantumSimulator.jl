@@ -144,7 +144,107 @@ beat `:cut` here.
 * **1D chain** (only Jx, K = 0.4): ln κ = ln 2cosh K to 2e-16 at χ = 2.
 * **Decoupled 2D layers** (Jz = 0, K = 0.3) against Onsager: |Δ ln κ| = 1.05e-6 at χ = 2 and
   1.3e-10 at χ = 4, `:cut` and `:cycle` identical (the z bonds are rank one).
-* χ = 8 ran out of memory in ln κ — see the next section.
+* χ = 8 ran out of memory in ln κ — see "THE CEILING" below.
+
+## The infinite iteration: stability, and what its fixed point is worth — *2026-09-25*
+
+### A side-asymmetric instability, and the isometric pair
+
+**Symptom.** 3D Ising (J = 1), fixed-spin seed, `:cut`: at β = 0.25 every χ from 2 to 6 converged
+and then blew up. At χ = 2, m = 0.75805743 and ln κ to 1e-10 by iteration 20, unchanged at 80,
+m = 0.6465 at 100 and −1.81 at 150. β = 0.15 held for 200 iterations. The first 3D Ising scan
+(χ = 4: m = −0.36 at β = 0.215 from a + seed, ln κ 0.03 off at 0.22) read states in the middle
+of this.
+
+**Diagnosis.**
+
+* Invisible to anything symmetric. From iteration 25 to 65, m and all 24 interface spectra held
+  to 1e-16 while the largest block change grew ×8 every 5 iterations (2e-8 → 1e-4). Only the
+  plane pairs and the E and C blocks moved; the line pairs and T blocks stayed put until
+  precision went.
+* Not gauge drift. Every Procrustes alignment succeeded and the pairs stayed perfectly
+  conditioned (κ(P_A) = 1.00). Replacing Procrustes by the pair's own sign-matched singular
+  basis left the growth rate unchanged, and added glitches where two singular values nearly
+  cross, so Procrustes stays.
+* A mirror mode. The octant C(+,+,+) stayed exactly symmetric under permutations of its own axes.
+  But it and its mirror image C(−,+,+) (sorted entry magnitudes) drifted apart ×1.52 per
+  iteration from round-off at iteration 5: 3e-16, 2e-15, 1.7e-14, …, 5e-10 at 40, 1e-3 at 75. The
+  mode was there from the start, hidden under the converging symmetric modes.
+
+The biorthogonal pair amplifies exactly this kind of perturbation, one that makes an interface's
+two sides differ. It builds `P_A` from the high side's triangular factor and `P_B` from the low
+side's, so a side difference becomes `P_A ≠ P_Bᵀ` at first order and feeds into both sides' next
+blocks.
+
+**Fix: `pair = :isometric`** (the `InfiniteCTM3D` default):
+
+* **Construction.** `P` is the dominant eigenvectors of `Ac†Ac + Bc†Bc` on the interface legs
+  (the right singular vectors of the two triangular factors stacked), with `P_A = P`,
+  `P_B = P†`.
+* **Why it has the same fixed point.** At a mirror-symmetric fixed point `R_A = R_B`, so the
+  biorthogonal pair *is* this isometry (hence κ(P_A) = 1.00 above).
+* **Why it is stable.** A perturbation that is antisymmetric between the two sides changes
+  `Ac†Ac + Bc†Bc` only at second order.
+
+Measured results:
+
+* **β = 0.25, χ = 2:** converges to the same m = 0.7580574315 and holds it through iteration
+  150; the mirror octants agree to 2e-16 throughout.
+* **β = 0.25, χ = 4 and 6:** converge smoothly.
+* **β = 0.15, χ = 4:** ln κ = 0.72853629 with either pair.
+
+The finite engine keeps `:biorth` as its default: its boxes are not mirror-symmetric at every
+interface, and its sweeps settle within ~15.
+
+### Two things that are not references
+
+* **`plane_rest = :exact` in the infinite engine.** Open rest faces expose the two octants' full
+  entanglement across a quarter-plane that grows every iteration. The spectrum flattens without
+  bound: at β = 0.15, χ = 4, iteration 40, the discarded weight is 5e-3 and s₅/s₄ = 0.88, against
+  1e-5 compressed. ln κ drifts with it, 5e-4 below the compressed value at iteration 40 and still
+  falling. In the infinite system the compression is what makes a fixed point exist.
+* **A χ that splits a near-degenerate pair.** The plane spectrum at β = 0.15 is
+  (1, 0.052, 0.043, 0.043, 0.0025, …). χ = 3 cuts through the pair and lands 4.5e-5 away from
+  both χ = 2 and χ = 4 (ln κ 0.72853461 / 0.72857951 / 0.72853630). Choose χ at a gap in the
+  spectrum.
+
+### What the fixed point is worth: 3D Ising
+
+Isometric pairs, fixed-spin seed, iterated until the largest block change is ≤ 1e-9 or 400
+iterations have run; m is read by the edge estimator (below). The Talapov–Blöte fit to Monte Carlo is
+m = t^0.32694 (1.69190 − 0.34358 t^0.50842 − 0.42572 t), with t = 1 − β_c/β and β_c = 0.2216544:
+
+| β | χ = 2 | χ = 4 | χ = 6 | Talapov–Blöte |
+|---|---|---|---|---|
+| 0.20 | 0 | 0 † | | 0 |
+| 0.21 | 0.2953 ‡ | † | | 0 |
+| 0.215 | 0.3996 | † | | 0 |
+| 0.22 | 0.4807 | 0.4074 | | 0 |
+| 0.2217 | 0.5050 | 0.4488 | | 0.1052 |
+| 0.225 | 0.5485 | 0.5150 | | 0.4156 |
+| 0.23 | 0.6057 | 0.6019 | | 0.5454 |
+| 0.24 | 0.6944 | 0.6936 | | 0.6758 |
+| 0.25 | 0.7581 | 0.7579 | 0.7577 | 0.7509 |
+
+† No stable fixed point. The plane pair problem collapses to rank 4 with an exact doublet
+(spectrum 1, 0.2226, 0.2226, 0.0496, 4e-9), the blocks rotate by a constant 4–6% per iteration,
+and m flows smoothly from +0.06 through zero to −0.36 (β = 0.215). The (non-physical) negative
+values of the pre-fix scan were this too.
+
+‡ 400 iterations, still moving at 5e-6.
+
+What the table shows:
+
+* **The finite-χ transition is mean-field-like and hot.** At χ = 2, m ∝ (β − β_c)^½ fits m(0.21),
+  m(0.215) and m(0.22) with β_c(2) = 0.2039 ± 0.0001, a transition 8% hotter than the true one.
+  χ = 4's transition lies in 0.215–0.22, where its iteration has no stable fixed point.
+* **Deep in the ordered phase the bias barely moves with χ.** At β = 0.25 the fixed point is 0.9%
+  high at χ = 2, 4 and 6 (0.75806, 0.75788, 0.75769): −1.8e-4 per step of 2 in χ. That is the
+  construction, not convergence. One χ-dimensional index per quarter-plane of bonds, fed back
+  through the rest compression, is a mean-field-like treatment of a 2D boundary.
+* **Convergence is slow.** χ = 2 needs 26–135 iterations away from its transition. At χ = 4, 400
+  iterations leave 2e-6 to 9e-4 of block change at β ≥ 0.22, although m is steady to ~1e-7 at
+  β = 0.25 by iteration 150.
 
 ## THE CEILING: exact vertex regions cost ~χ¹⁰–χ¹²
 
@@ -216,10 +316,10 @@ Scaling (dense, single layer, bond dimension D):
 * **Plane pairs** — an enlarged octant with two faces compressed has χ⁵D entries and costs
   ~O(χ⁷D) to form; the `:cut` QR or `:cycle`'s `b aᵀ` another O(χ⁷D).
 * **Memory** — ~26·L³ blocks, E and T of χ⁴ and χ⁴D entries: ~2 GB per state at L = 6, χ = 16.
-* **Region contractions (F, observables)** — a vertex region is a closed shell of 26 blocks, a
-  SPHERE, whose balanced separators cut ~8 legs: an exact contraction needs ~χ⁸ memory. This, not
-  the sweep, is the ceiling on χ for the CVM free energy (χ ≈ 10). Cube regions (8 octants) are
-  only ~χ⁴.
+* **Region contractions (F, observables)** — a vertex region is a closed shell of 26 blocks, and
+  its exact contraction needs ~χ¹⁰–χ¹² memory (THE CEILING above; the ~χ⁸ once estimated from an
+  8-leg equator does not survive the belt). This, not the sweep, caps the exact CVM free energy at
+  χ ≈ 5. Edge regions cost ~χ⁸, face ~χ⁶, cube ~χ⁴.
 
 The infinite engine removes the L³: one iteration derives 24 pairs and grows 26 blocks, whatever
 the lattice size.
@@ -232,6 +332,20 @@ the lattice size.
    the candidates.
 2. **`:cycle` in 3D.** The cut-closed cube converges but to a worse F than `:cut`, and is not
    better on the corner/centre observable. Whether a joint cube solve (all 12 interfaces at once,
-   as the 2D ring does for 4) would change that is untested; its cost is ~12× a sweep.
+   as the 2D ring does for 4) would change that is untested; its cost is ~12× a sweep. Its plane
+   pairs are biorthogonal, so in the infinite engine the side-asymmetric instability presumably
+   applies to them too (untested).
 3. Observables through a single shell are 3 orders less accurate than F at χ = 4.
 4. Dense data only; the double layer (3D PEPS norms) and graded tensors are untested.
+5. **The infinite fixed point is biased, and χ barely helps.** For 3D Ising: m is 0.9% high at
+   β = 0.25 for χ = 2–6, and the transition is mean-field-like and 8% hot at χ = 2. At χ = 4 there
+   is no stable fixed point just below its own transition. A single χ-index per quarter-plane of
+   bonds cannot hold a 2D boundary.
+
+   For the thermodynamic limit near criticality, the natural next construction is a
+   **boundary iPEPS**: the 3D network's layer transfer operator acting on a 2D PEPS boundary
+   state of bond dimension D_b, with every expectation value contracted by the existing 2D
+   CTMRG. The boundary then carries a 2D tensor network instead of one index.
+6. **Convergence speed.** Even where it converges, the infinite iteration contracts at only
+   ~0.9–0.95 per iteration away from criticality (χ = 4: ~150 iterations to steady m). An
+   accelerated fixed-point solve (Anderson/DIIS on the aligned blocks) is the obvious candidate.

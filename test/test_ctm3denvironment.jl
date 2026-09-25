@@ -65,5 +65,26 @@ end
     @test abs(real(site_ratio(ic, mag)) - myang) < 3.0e-5
     @test abs(real(site_ratio(ic, mag; method = :edge)) - myang) < 3.0e-5
     @test_throws ArgumentError site_ratio(ic, mag; method = :octant)
+
+    # The side-asymmetric instability (docs/ctmrg3d.md): under the biorthogonal pair a perturbation
+    # that makes an interface's two sides differ grows ×1.5 per iteration from roundoff, and the
+    # 3D Ising state at β = 0.25, χ = 2 — converged by iteration ~20 — was garbage (m = −1.8) by
+    # 150. The isometric pair (the default) holds the same fixed point: 40 and 140 iterations past
+    # `update` must agree, and the biorthogonal pair read early must agree with them.
+    site, legs, mag = ising3d_site(0.25)
+    ic = update(InfiniteCTM3D(site, legs, 2; boundary = [1.0, 0.0]); maxiter = 30)
+    m_at(st) = real(site_ratio(TNQS._i3_setstate(ic, st), mag))
+    st = ic.state
+    for _ in 1:40
+        st = TNQS._i3_step(ic, st, false)
+    end
+    m60 = m_at(st)
+    for _ in 1:100
+        st = TNQS._i3_step(ic, st, false)
+    end
+    @test abs(m_at(st) - m60) < 1.0e-10
+    bi = update(InfiniteCTM3D(site, legs, 2; boundary = [1.0, 0.0], pair = :biorth); maxiter = 30)
+    @test abs(real(site_ratio(bi, mag)) - m60) < 1.0e-8
+    @test_throws ArgumentError InfiniteCTM3D(site, legs, 2; pair = :nonsense)
 end
 end
