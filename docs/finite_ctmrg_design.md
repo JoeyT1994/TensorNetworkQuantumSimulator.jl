@@ -1168,7 +1168,8 @@ Three reasons this mattered:
 are valid for any network of the same geometry, and sharing it across caches is the point. The
 gate's verdict (`length(ts) ≤ optimal_max`) is now part of its key, so two caches with different
 `optimal_max` cannot trade sequences and each end up with whichever optimiser happened to run
-first. It remains not thread-safe.
+first. It remains not thread-safe. *(Since 2026-09-13 it is guarded by `CTM_GLOBAL_LOCK` and the
+sweep is threaded — see "Threads" under Performance in `ctmrg_status.md`.)*
 
 ### The greedy fallback warns
 

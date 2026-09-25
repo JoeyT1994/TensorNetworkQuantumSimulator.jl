@@ -135,6 +135,27 @@ First use of a new tensor shape costs 5–14× steady state (contraction-sequenc
 after ~3 calls and shared across caches — a warmup cost, not an algorithmic one. Always time each
 configuration twice and report the second.
 
+**Threads** — *2026-09-13, ported from FixesV2DMRG 2026-09-24.* A sweep's work items are
+independent given the previous state — the enlarged corners, the `:cut` projector derivations (the
+warm start is transported from the PREVIOUS sweep's projectors), the `:cycle` plaquettes, the corner
+and edge rebuilds — and so are the regions of `F` and the vertex rings of the `:marginal` signal;
+all of them run on Julia threads (`_ctm_foreach`), with the shared dictionaries, the route memo, the
+contraction-sequence memo and `CTM_SVD_STATS` under locks. `F` is Möbius-summed serially in a fixed
+order, so it is bit-identical across thread counts. **Only with single-threaded BLAS:** OpenBLAS with
+its own pool under Julia threads crashed in `cblas_xerbla`, while BLAS threads bought nothing on
+these blocks (a converge took 24 s at one BLAS thread, 23.5 s at four); with several BLAS threads
+the engine runs its loops serially and says so once. So: `julia -t 8` and
+`LinearAlgebra.BLAS.set_num_threads(1)`. Measured on FixesV2DMRG's networks for a 5×5 D=3 TFIM
+state (the ket–bra norm with the DMRG's operator layer between), `:cut` at χ=48:
+
+| | serial | 8 threads |
+|---|---|---|
+| block rebuild (`sweep_vertex_environments`) | 6.4 s | 3.2 s |
+| one sweep of `update(...; convergence = :marginal)` | 6.5–8 s | 2.6–3.6 s |
+
+At χ=32 a `:cycle` sweep with the plaquette pass still serial measured 3.5× a `:cut` sweep; with it
+threaded, ≈ 4 s against 1.5 s at 8 threads.
+
 ---
 
 ## GPU / CUDA compatibility — *added 2026-08-19*
@@ -489,6 +510,147 @@ Not addressed: the untracked `examples/ctm_ising9x9_energy.jl` and
 and pass `gauge_state`/`convergence = :environment`, which the current constructors reject.
 
 ---
+
+## Warm-started cycle solvers (`cycle_solver = :warm`, `:block`) — *2026-09-16/17*
+
+> **Outcome:** `:warm` (the cold solve started from last sweep's Schur basis) is the default since
+> 2026-09-17 — `:auto` resolves to it on every network — at the cold solve's fixed point and floors
+> and up to 1.6× faster per sweep; `:block` stays opt-in. The section is the record in the order it
+> was measured.
+
+The cold `:cycle` solve (`cycle_solver = :schur`, the default until `:warm` replaced it) rebuilds each plaquette's
+invariant subspace from one random vector every sweep with KrylovKit's `schursolve` to `tol = 1e-16`,
+plus deflation restarts for degenerate partners. Its cost is flat across sweeps — the same on sweep
+30 as on sweep 1. Woolls et al. (MP-BP, §V.D) instead keep the previous sweep's rank-χ basis and
+solve in a block Krylov space `{V, ΛV, …, Λ^K V}` of depth K ≈ 2–4 with the outer sweep as the
+restart. `:block` implements that (`_ctm_block_krylov`): the plaquette's (right, left) Schur bases on
+its west bond are stored in `CTMVertexEnvironments.CYC` and reused, widened at random if the
+previous rank was smaller, relabelled onto re-minted legs when the dimensions agree; the compressed
+Rayleigh–Ritz matrix `Q† Λ Q` is Schur-factored on the host and its dominant Schur vectors define the
+basis. Everything downstream (left/right consistency prefix, cliff cut, hysteresis, `_ctm_biorth`,
+padding) is unchanged. Sweep 1, graded data and any plaquette without usable bases run the cold path
+(`CTM_SVD_STATS[:cycle_block_cold_*]` says which).
+
+**Measured** (random PEPS norms, `convergence = :marginal`, 6 fixed sweeps, per warm sweep; a cycle
+application = one vector through all four corners):
+
+| case | `:schur` applications / time | `:block` K=4 | `:block` K=2 |
+|---|---|---|---|
+| 6×6 D=2 χ=16 (lossless) | ~715 / 0.6 s | ~1420 / 0.5 s | — |
+| 5×5 D=3 χ=32 (truncated) | ~1000–1240 / 3–4 s | ~1200–1800 / 1.7 s | ~1000–1250 / 1.2–1.5 s |
+| 4×4 D=2 χ=16 (lossless) | ~168 / 0.13 s | 285 / 0.13 s | — |
+
+* **Same fixed point.** Lossless 4×4 and 6×6: `F` agrees with `:schur` to 1.4e-14 and with the
+  exact `ln Z` to 1e-12; `⟨Z⟩` exact to 2e-16 through the `expect` path (tests).
+* **About 2× faster per sweep at χ=32**, even where the application COUNT is similar or higher: a
+  block application is one wide contraction, a single-vector one is many thin ones. On small bonds
+  (n ≤ χ) both fill the whole space and `:block` costs ~1.7× the applications for the same time.
+* K=2 suffices here (same accuracy as K=4, fewer applications, and more stable — see below) — the default.
+* 1–4 of 16 plaquettes per sweep on the truncated 5×5 still start cold: the plaquette declined the
+  cycle last sweep (no bases stored) or its interface width changed. Correct, just not warm.
+
+### Follow-up measurements — *2026-09-16 (later)*
+
+**Open problem 1 revisited (8×8 Ising β=0.44, χ=16, single layer).** With today's cold solver the
+plateau is no longer an observable problem: the worst single-vertex MARGINAL change (what an
+observable sees) is 1e-13 from sweep 4 on; only the region-value wander (3e-3, the null-mode rotation
+`F` cancels) remains. So there was no cold-restart "kick" left for a warm start to remove. `:block`
+on this network is UNSTABLE: its Rayleigh–Ritz residual stays erratic (1e-6 one sweep, 1e-2 the
+next), the unconverged left/right Ritz magnitudes disagree, the 1e-3 consistency guard trims to a
+different rank each sweep (kept rank 166–187), interfaces re-mint, the warm start is lost, and
+marginals wander at 1e-5..1e-1 with `F` drifting to 9e-2 at K=4. The flat Ising cycle is far more
+non-normal than a PEPS norm's; a depth-2..4 block space warm-started from a moved environment does
+not converge on it, and the cold single-vector Arnoldi (krylovdim up to 4χ+8, KrylovKit restarts)
+does. **Do not use `:block` on single-layer networks.**
+
+**Double layer (PEPS norms), same diagnostics, `:block` K=2 without restarts:** 8×8 D=2
+χ=16 truncated, worst marginal at sweep 12: 4.5e-5 against the cold solver's 2.5e-5; 6×6 D=2 χ=8
+(severely truncated) 5.8e-4 against 7.2e-4; residuals ≤ 1e-8, kept rank stable to within a few
+modes. Same plateau levels within noise, at the ~2× per-sweep speed above.
+
+**Three variants tried on top and FALSIFIED, all measured on the lossless 6×6 D=2 χ=16 (which the
+plain warm block reproduces to 1e-14) and the two truncated double-layer cases:**
+
+| variant | result |
+|---|---|
+| block Krylov–Schur RESTARTS inside the sweep (converge `‖ΛV−VT‖/|λ₁|` to 1e-10, up to 6 restarts) | 2–3× the applications, no gain: the double-layer plateaus were equal or WORSE (8×8: 3.8e-4), and on Ising most plaquettes hit the cap unconverged anyway. Kept as an opt-in knob, `cycle_restarts` (default 1 = off). |
+| relaxing the residual tolerance to 1e-8 | the lossless 6×6 lost exactness (`F` off by 6e-4 at sweep 3): the oblique whitening amplifies any basis error, so a warm basis must be as tight as the cold one. Default back at 1e-10. |
+| warm-starting from ALL resolved Ritz vectors instead of the `kres` RETAINED ones | destructive even without restarts: kept rank 208 → 94 on sweep 2 of the lossless 6×6, `F` drifting to 1e-2, while the trimmed basis (random refill of the shortfall) stays exact. Reverted; the mechanism (extra half-converged columns on one side desynchronising the left/right magnitudes at the guard) is inferred, not proven. |
+
+**Hysteresis on the kept rank under `:block`** (`cycle_hysteresis`, never drop below last sweep's rank
+while the consistent prefix supports it) never fired in any of the measured cases (lossless 6×6, the
+two truncated double layers) and so changed nothing; a "keep last rank whenever it is inside the
+prefix" version tried before it locked a truncated 8×8 at rank 464 of 496 and made the marginals
+worse. Left on (inert where measured) as a guard against toggling.
+
+**Two practical limits of `:block` as it stands.** (1) Its per-sweep solve is not converged to
+machine precision (the outer sweep is the restart), so on a LOSSLESS network the worst-marginal
+change floors at ~1e-9 instead of the cold solver's 1e-14 — `F` and observables are exact, but
+`convergence = :marginal` with a tolerance below that floor will not certify; use `:worst_region` or
+`:free_energy`, or loosen the tolerance. (2) `cycle_depth = 4` was measured LESS stable than 2 on the
+truncated 8×8 D=2 χ=16 (kept rank 476–496 fluctuating, marginals 3e-2 against 4.5e-5 at K=2), so 2
+is the default.
+
+**`cycle_solver = :warm` — the version that wins (2026-09-16, evening).** Every failure of `:block`
+traced back to handing the rank guards Ritz pairs converged only as far as the outer sweep had
+reached. `:warm` keeps the cold Krylov–Schur solve (converged to 1e-16, deflation restarts and all)
+and changes only its START: a random combination of last sweep's Schur basis. A start inside a
+k-dimensional invariant subspace closes the Krylov space on it after k steps, so a settled
+environment resolves in ~k applications per side; KrylovKit's own restarts handle whatever moved.
+Krylov dimension 2k+8 on a warm start (k+8 restarted too often while the environment still moved and
+ran 1.4× SLOWER than cold on the 5×5 D=3 χ=32; 4k+8 gave the gain back).
+
+| case | `:schur` marg@12 / t per sweep | `:warm` | `:block` |
+|---|---|---|---|
+| 6×6 D=2 χ=16 lossless | 1.0e-14 / 0.58 s | **1.3e-14** / 0.59 s | 1.4e-9 / 0.32 s |
+| 8×8 D=2 χ=16 truncated | 2.5e-5 / 2.69 s | **2.4e-5** / 1.71 s | 4.5e-5 / 0.90 s |
+| 5×5 D=3 χ=32 truncated | 4.5e-3 / 3.18 s | **4.7e-3** / 2.78 s | 8.2e-3 / 1.55 s |
+
+Identical fixed point and floors to the cold solver in every case, never slower, up to 1.6× faster
+(timings from three concurrent processes, ±15%). `:block` is faster still but at the 1e-9 floor and
+with the instabilities above. **`:warm` is the default everywhere (2026-09-17, final).** Two detours on the way, both recorded:
+a host/device 5e-6 discrepancy first blamed on `:warm` reproduced with the COLD solve on that case
+(host and device swapped between runs), so it is the under-truncated regime on a rank-decision
+threshold, not the solver; and the first graded `:warm` crashed because a stored basis was relabelled
+onto legs whose sector multiplicities had shifted (10/14 → 11/13 on a 5×5 fZ2) — the compatibility
+check now compares the graded SPACE, and such a plaquette starts cold. Measured after the fix, one
+session:
+
+| case | `:schur` | `:warm` |
+|---|---|---|
+| 3×3 fZ2 χ=16 lossless | ⟨N⟩ exact to 1e-16, 3.5 s/sweep | ⟨N⟩ exact to 1e-16, F identical, 0.61 s/sweep |
+| 3×3 fU1 χ=16 lossless | exact, marginal floor 1e-15, 4.3 s/sweep | exact, 2e-15, 1.3 s/sweep |
+| 5×5 fZ2 χ=24 | marginals 2.3e-9, 26.5 s/sweep | identical marginals and F, 19.8 s/sweep |
+| 8×8 Ising β=0.44 χ=16 (single layer) | floor 3e-13, 0.57 s/sweep | floor 1e-13, 0.36 s/sweep |
+
+Open oddity: on the 3×3 fZ2 the marginal-CHANGE signal floors at 6e-7 under `:warm` while F and the
+observable are exact to machine precision; not seen on fU1 or the 5×5 fZ2. `:block` stays opt-in for
+speed where a 1e-9 floor is acceptable.
+
+* Not yet measured: the cost of an incremental refresh (re-converging after a small change of the
+  state), which is where the warm start should pay most.
+
+**Re-checked while porting to FixesV2 (2026-09-24), `convergence = :marginal`, `maxiter = 40`.**
+"Same fixed point" holds where the truncated map HAS one fixed point, and only a converged run can
+show it:
+
+* **Converging truncated cases agree to roundoff.** Shallow-circuit states (two Rz/Rxx/Rzz layers,
+  fast-decaying spectra): 4×4 D=2 χ=4/8, 4×4 D=3 χ=8 (⟨Z⟩ 3.9e-4 off exact), 5×5 D=2 χ=4/12,
+  6×6 D=2 χ=8 — `:warm` and `:schur` both certify and agree to ≤ 6e-14 in `F` (the 4×4 D=3 run
+  sweep for sweep, marginal changes equal to ~9 digits; it is now the test's comparison case).
+  Random 4×4 χ=8/12 (seed 34) and 5×5 χ=12 (seed 35) likewise.
+* **Two fixed points.** Random 4×4 D=2 χ=8, seed 35: both certify, 3e-5 apart. `:schur` settles in 7
+  sweeps at `F − ln Z` = 9.9e-5 (⟨Z⟩ errors 2.7e-4, 3.7e-4, 6.4e-4 on three sites); `:warm` wanders
+  for 25 sweeps and settles at 6.3e-5 (2.4e-4, 6.1e-5, 2.4e-4), where `:block` lands in 4. The
+  truncated map has two fixed points, and the warm one is not the worse.
+* **No fixed point.** Random 6×6 D=2 at χ=16 (seed 34; the centre cut needs 4³ = 64) never converges
+  under EITHER solver — worst marginal change 1.5–2 for 60 sweeps, `F` jumping by ~9 every few tens
+  of sweeps, and ⟨Z⟩ read after 10, 20, … sweeps anywhere between the correct −0.200892297548 (both
+  solvers pass through it, bMPS(64) −0.2008965) and ±5e5. Open problem 1 below, more violently than
+  its table suggests; `update` warns throughout. The ported test compared the two solvers there
+  (under `:worst_region`, 30 sweeps, at 1e-8) and passed or failed by where each run happened to be
+  on the cycle — it failed here, 3.3e-6.
+* Most random truncated 5×5/6×6 cases at χ=8/12 do not certify within 40 sweeps under either solver.
 
 ## Open problems
 
