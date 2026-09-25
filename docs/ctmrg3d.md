@@ -120,6 +120,34 @@ geometry, faces, Möbius weights, pairing and seed promotion are right.
 | 4×4×4 | 2 | 1.9e-4 | — |
 | 4×4×4 | 4 | 2.2e-8 | 7.5e-7 |
 
+**4×4×4 across the transition** (*2026-09-25*). The comparison is against exact contraction:
+ln Z = 45.091477831124, 47.430137672829, 48.201585859063 and 52.186497852932 at β = 0.1, 0.2,
+0.2217 and 0.3. Up to 30 sweeps; |F − ln Z|:
+
+| β | χ | `:cut`, `:biorth` | `:cut`, `:isometric` | `:cycle` |
+|---|---|---|---|---|
+| 0.1 | 2 | 1.3e-6 | 1.3e-6 | 1.3e-6 |
+| 0.1 | 3 | 1.2e-7 | 8.6e-8 | **3.84** |
+| 0.1 | 4 | 1.0e-12 | 1.1e-12 | 3.7e-11 |
+| 0.2 | 2 | 1.9e-4 | 1.9e-4 | 1.8e-4 |
+| 0.2 | 3 | 2.1e-5 | 1.8e-5 | 2.8e-5 |
+| 0.2 | 4 | 2.2e-8 | 1.6e-8 | 7.4e-7 |
+| 0.2217 | 2 | 3.5e-4 | 3.5e-4 | 3.3e-4 |
+| 0.2217 | 3 | 3.3e-5 | 3.2e-5 | 4.2e-5 |
+| 0.2217 | 4 | 1.2e-7 | 8.1e-8 | 1.9e-6 |
+| 0.3 | 2 | 2.1e-3 | 2.4e-3 | 1.4e-3 |
+| 0.3 | 3 | 1.3e-5 | 1.1e-4 | 5.7e-5 |
+| 0.3 | 4 | 1.1e-4 | 1.5e-5 | 7.7e-5 |
+
+* **Accuracy by phase.** A finite box is easy in the disordered phase and at β_c (a 4-site face
+  holds little entanglement). The ordered side is the hard one: the free-boundary box is a cat
+  state, and there χ = 4 `:biorth` is worse than χ = 3.
+* **Pair choice.** Neither pair wins everywhere. `:isometric` is better at χ = 4 (up to 7× at
+  β = 0.3) but 8× worse at β = 0.3, χ = 3, so the finite default stays `:biorth`.
+* **`:cycle` at χ = 3, β = 0.1 fails outright.** χ = 3 cuts through a degenerate multiplet of the
+  cube spectrum, where the invariant subspace is ill-defined. `:cut` at the same χ is fine. Keep
+  `:cycle` to χ at a spectral gap, or set `degtol`.
+
 **An observable** (4×4×4, β = 0.2 with a field h = 0.1 so ⟨σ⟩ ≠ 0; exact ⟨σ⟩ = 0.2574 at the
 corner, 0.4734 at (2,2,2)), read through the vertex shell as an impurity ratio:
 
@@ -214,17 +242,17 @@ Isometric pairs, fixed-spin seed, iterated until the largest block change is ≤
 iterations have run; m is read by the edge estimator (below). The Talapov–Blöte fit to Monte Carlo is
 m = t^0.32694 (1.69190 − 0.34358 t^0.50842 − 0.42572 t), with t = 1 − β_c/β and β_c = 0.2216544:
 
-| β | χ = 2 | χ = 4 | χ = 6 | Talapov–Blöte |
-|---|---|---|---|---|
-| 0.20 | 0 | 0 † | | 0 |
-| 0.21 | 0.2953 ‡ | † | | 0 |
-| 0.215 | 0.3996 | † | | 0 |
-| 0.22 | 0.4807 | 0.4074 | | 0 |
-| 0.2217 | 0.5050 | 0.4488 | | 0.1052 |
-| 0.225 | 0.5485 | 0.5150 | | 0.4156 |
-| 0.23 | 0.6057 | 0.6019 | | 0.5454 |
-| 0.24 | 0.6944 | 0.6936 | | 0.6758 |
-| 0.25 | 0.7581 | 0.7579 | 0.7577 | 0.7509 |
+| β | χ = 2 | χ = 4 | χ = 6 | χ = 8 | Talapov–Blöte |
+|---|---|---|---|---|---|
+| 0.20 | 0 | 0 † | | | 0 |
+| 0.21 | 0.2953 ‡ | † | | | 0 |
+| 0.215 | 0.3996 | † | | | 0 |
+| 0.22 | 0.4807 | 0.4074 | | | 0 |
+| 0.2217 | 0.5050 | 0.4488 | | | 0.1052 |
+| 0.225 | 0.5485 | 0.5150 | | | 0.4156 |
+| 0.23 | 0.6057 | 0.6019 | | | 0.5454 |
+| 0.24 | 0.6944 | 0.6936 | | | 0.6758 |
+| 0.25 | 0.7581 | 0.7579 | 0.7577 | 0.7575 | 0.7509 |
 
 † No stable fixed point. The plane pair problem collapses to rank 4 with an exact doublet
 (spectrum 1, 0.2226, 0.2226, 0.0496, 4e-9), the blocks rotate by a constant 4–6% per iteration,
@@ -239,9 +267,11 @@ What the table shows:
   m(0.215) and m(0.22) with β_c(2) = 0.2039 ± 0.0001, a transition 8% hotter than the true one.
   χ = 4's transition lies in 0.215–0.22, where its iteration has no stable fixed point.
 * **Deep in the ordered phase the bias barely moves with χ.** At β = 0.25 the fixed point is 0.9%
-  high at χ = 2, 4 and 6 (0.75806, 0.75788, 0.75769): −1.8e-4 per step of 2 in χ. That is the
-  construction, not convergence. One χ-dimensional index per quarter-plane of bonds, fed back
-  through the rest compression, is a mean-field-like treatment of a 2D boundary.
+  high at χ = 2, 4, 6 and 8 (0.75806, 0.75788, 0.75769, 0.75754): −1.8e-4 per step of 2 in χ,
+  so closing the 6.6e-3 gap this way would take χ ≈ 80 (χ = 8 alone: ~5 s per iteration on 8
+  threads, 200 iterations). That is the construction, not convergence. One χ-dimensional index
+  per quarter-plane of bonds, fed back through the rest compression, is a mean-field-like
+  treatment of a 2D boundary.
 * **Convergence is slow.** χ = 2 needs 26–135 iterations away from its transition. At χ = 4, 400
   iterations leave 2e-6 to 9e-4 of block change at β ≥ 0.22, although m is steady to ~1e-7 at
   β = 0.25 by iteration 150.
