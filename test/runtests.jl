@@ -8,6 +8,7 @@ using Test
     include("test_boundarymps.jl")
     include("test_ctmenvironment.jl")
     include("test_ctm3denvironment.jl")
+    include("test_ctm2dinfinite.jl")
     include("test_beliefpropagation.jl")
     include("test_apply.jl")
     include("test_sampling.jl")

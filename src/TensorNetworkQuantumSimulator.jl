@@ -21,6 +21,7 @@ include("MessagePassing/boundarympscache.jl")
 include("MessagePassing/ctmenvironmentcache.jl")
 include("MessagePassing/ctm3denvironmentcache.jl")
 include("MessagePassing/ctm3dinfinite.jl")
+include("MessagePassing/ctm2dinfinite.jl")
 include("MessagePassing/loopcorrection.jl")
 include("graph_ops.jl")
 include("utils.jl")
@@ -95,6 +96,9 @@ export
     InfiniteCTM3D,
     site_ratio,
     ising3d_site,
+    InfiniteCTM2D,
+    ising2d_site,
+    site_environment,
     CTMOptions,
     cvm_freenergy,
     marginal_inconsistency,
