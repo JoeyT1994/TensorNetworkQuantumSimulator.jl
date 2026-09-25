@@ -151,6 +151,7 @@ struct InfiniteCTM2D
     options::CTMOptions
     pair::Symbol
     boundary::Any
+    c4v::Bool                            # derive one pair and two blocks per step, the rest by symmetry
     state::Any                           # `nothing`, or an `_I2State`
     lnkappa::Base.RefValue{Any}
     stats::Base.RefValue{Any}            # what the last `update` did
@@ -164,7 +165,7 @@ struct _I2State
 end
 
 function InfiniteCTM2D(site, legs, maxdim::Integer; pair::Symbol = :biorth, boundary = nothing,
-                       init = nothing, kwargs...)
+                       init = nothing, c4v::Bool = false, kwargs...)
     opts = CTMOptions(; kwargs...)
     opts.projector === :cut || throw(ArgumentError("InfiniteCTM2D supports projector = :cut only"))
     maxdim >= 1 || throw(ArgumentError("maxdim must be ≥ 1, got $maxdim"))
@@ -181,6 +182,11 @@ function InfiniteCTM2D(site, legs, maxdim::Integer; pair::Symbol = :biorth, boun
     issetequal(_c3_open(layers), reduce(vcat, collect(lg))) || throw(ArgumentError(
         "the site's open indices (those on exactly one layer) must be exactly the given legs"))
     rawdims = (dim.(lg[1]), dim.(lg[3]))
+    if c4v
+        rawdims[1] == rawdims[2] || throw(ArgumentError("c4v = true needs equal x and y leg dimensions"))
+        _i2_isc4v(layers, lg) || throw(ArgumentError(
+            "c4v = true needs every layer invariant under the square's symmetries of its legs"))
+    end
     state = nothing
     if !isnothing(init)
         init isa InfiniteCTM2D || throw(ArgumentError("init must be an InfiniteCTM2D"))
@@ -188,7 +194,7 @@ function InfiniteCTM2D(site, legs, maxdim::Integer; pair::Symbol = :biorth, boun
             "init must have the same maxdim and leg dimensions"))
         state = init.state
     end
-    return InfiniteCTM2D(layers, lg, rawdims, Int(maxdim), opts, pair, boundary, state,
+    return InfiniteCTM2D(layers, lg, rawdims, Int(maxdim), opts, pair, boundary, c4v, state,
                          Ref{Any}(nothing), Ref{Any}(nothing))
 end
 
@@ -197,7 +203,7 @@ end
 _i2_layers(site) = site isa AbstractTensor ? Any[site] : collect(Any, site)
 
 _i2_setstate(ic::InfiniteCTM2D, st) =
-    InfiniteCTM2D(ic.site, ic.legs, ic.rawdims, ic.maxdim, ic.options, ic.pair, ic.boundary, st,
+    InfiniteCTM2D(ic.site, ic.legs, ic.rawdims, ic.maxdim, ic.options, ic.pair, ic.boundary, ic.c4v, st,
                   Ref{Any}(nothing), Ref{Any}(nothing))
 options(ic::InfiniteCTM2D) = ic.options
 
@@ -403,35 +409,120 @@ function _i2_pair(F::NTuple{4, Int}, Bv, tbl, prev, VX, opts::CTMOptions, χ::In
     return _c3_finish(pr, ins, only(VX[F]), prev, opts)
 end
 
+# --- the square's symmetry (`c4v = true`) -----------------------------------------------------
+#
+# When every layer is invariant under the 8 symmetries of the square acting on its legs (and the x
+# and y legs match), the whole iteration is equivariant: the 4 pairs are images of one, the 8
+# blocks images of one quadrant and one half-line. A step then derives 1 pair and grows 2 blocks
+# and relabels the rest — 4× less work, which on a GPU (where the 4 pairs of a step queue behind
+# each other) is 4× less time. An element `g = (swap, ε₁, ε₂)` maps axis a to σ(a) (σ swaps the
+# axes when `swap`) and then multiplies the sign along axis σ(a) by ε_{σ(a)}. A face keeps its kind;
+# a reflection along a face's own axis exchanges its low and high side, and so exchanges the roles
+# of a pair's P_A (consumed on the low side) and P_B. Raw faces map layer by layer (the legs of a
+# direction are listed in the same layer order for every direction).
+const _I2_C4V = [(sw, e1, e2) for sw in (false, true) for e1 in (1, -1) for e2 in (1, -1)]
+_i2_sig(g, a) = g[1] ? 3 - a : a
+_i2_eps(g, a) = a == 1 ? g[2] : g[3]
+function _i2_act_type(g, s)
+    out = [0, 0]
+    for a in 1:2
+        b = _i2_sig(g, a); out[b] = _i2_eps(g, b) * s[a]
+    end
+    return (out[1], out[2])
+end
+_i2_act_side(g, a, side) = _i2_eps(g, _i2_sig(g, a)) == -1 ? (side === :low ? :high : :low) : side
+# direction d ∈ 1:4 = (x⁻, x⁺, y⁻, y⁺) → its image
+function _i2_act_dir(g, d)
+    a = cld(d, 2); sgn = isodd(d) ? -1 : 1
+    b = _i2_sig(g, a); sb = _i2_eps(g, b) * sgn
+    return 2b - (sb == -1 ? 1 : 0)
+end
+
+function _i2_isc4v(layers, lg; atol = 1.0e-12)
+    old = reduce(vcat, collect(lg))
+    for g in _I2_C4V
+        new = reduce(vcat, [lg[_i2_act_dir(g, d)] for d in 1:4])
+        for t in layers
+            nt = norm(t)
+            norm(_i2_relabel(t, old, new) - t) <= atol * max(nt, 1) || return false
+        end
+    end
+    return true
+end
+
+_i2_find(g_of, src, dst) = something(findfirst(g -> g_of(g, src) == dst, _I2_C4V), 0)
+
+# Block type `s0`'s tensor carried onto block type `s = g(s0)`, canonical legs to canonical legs.
+function _i2_image_block(t, g, s0, leg)
+    old = Index[]; new = Index[]
+    for (F, side) in _c2_faces(_i2_centre_key(s0), _I2_L)
+        s = _i2_act_type(g, s0)
+        append!(old, leg[(s0, F[1], side)]); append!(new, leg[(s, _i2_sig(g, F[1]), _i2_act_side(g, F[1], side))])
+    end
+    return replaceinds(t, old, new)
+end
+
+# Pair type `t0 = (a, sb)`'s pair carried onto `t = g(t0)`; a reflection along a swaps P_A and P_B.
+_i2_act_pairtype(g, t0) = (_i2_sig(g, t0[1]), _i2_eps(g, _i2_sig(g, 3 - t0[1])) * t0[2])
+function _i2_image_pair(pr, g, t0, leg)
+    t = _i2_act_pairtype(g, t0)
+    old = Index[]; new = Index[]
+    for c in (false, true)
+        haskey(leg, (:slot, t0, c)) || continue
+        append!(old, leg[(:slot, t0, c)]); append!(new, leg[(:slot, t, c)])
+    end
+    push!(old, leg[(:w, t0)]); push!(new, leg[(:w, t)])
+    PA = replaceinds(pr[1], old, new); PB = replaceinds(pr[2], old, new)
+    return _i2_eps(g, _i2_sig(g, t0[1])) == -1 ? (PB, PA) : (PA, PB)
+end
+
 # One iteration: every pair from the current blocks, then the centre shell regrown with them.
 function _i2_step(ic::InfiniteCTM2D, st::_I2State)
     opts = ic.options
     VX, tbl, Bv, Pv = _i2_virtual(st, ic)
     reps = _i2_representatives()
+    # with c4v, derive the pair of type (1, −1) only
+    derive = ic.c4v ? [r for r in reps if r[1] == (1, -1)] : reps
     Pn = Dict{NTuple{4, Int}, Any}()
     lk = ReentrantLock()
-    _ctm_foreach(eachindex(reps)) do i
-        F = reps[i][2]
+    _ctm_foreach(eachindex(derive)) do i
+        F = derive[i][2]
         pr = _i2_pair(F, Bv, tbl, get(Pv, F, nothing), VX, opts, st.chi, ic.pair === :isometric)
         isnothing(pr) || lock(() -> (Pn[F] = pr), lk)
     end
-    all(((t, F),) -> haskey(Pn, F), reps) || error("2D iCTM: an interface type got no pair")
+    all(((t, F),) -> haskey(Pn, F), derive) || error("2D iCTM: an interface type got no pair")
     newP = Dict{NTuple{2, Int}, Any}()
-    for (t, F) in reps
+    for (t, F) in derive
         can, vir = _i2_pair_relabelling(F, VX, st.leg)
         newP[t] = (replaceinds(Pn[F][1], vir, can), replaceinds(Pn[F][2], vir, can))
     end
+    if ic.c4v
+        t0 = (1, -1)
+        for (t, _) in reps
+            t == t0 && continue
+            newP[t] = _i2_image_pair(newP[t0], _I2_C4V[_i2_find(_i2_act_pairtype, t0, t)], t0, st.leg)
+        end
+    end
     Pplace = _C3Lazy{NTuple{4, Int}}(F -> _i2_place_pair(newP, st.leg, F, VX))
     types = _i2_types()
-    nb = Vector{Any}(nothing, length(types))
-    _ctm_foreach(eachindex(types)) do i
-        s = types[i]; bk = _i2_centre_key(s)
+    grow = ic.c4v ? [(-1, -1), (-1, 0)] : types
+    nb = Vector{Any}(nothing, length(grow))
+    _ctm_foreach(eachindex(grow)) do i
+        s = grow[i]; bk = _i2_centre_key(s)
         extras = Any[_c3_side_proj(Pplace[F], side) for (F, side) in _c2_faces(bk, _I2_L) if !_c2_israw(F)]
         blk = _ctm_rescale(_ctm_absorb(opts, _c2_enlarged(Bv, tbl, bk), extras...))
         can, vir = _i2_block_relabelling(s, bk, VX, st.leg)
         nb[i] = replaceinds(blk, vir, can)
     end
-    return _I2State(st.chi, Dict{NTuple{2, Int}, Any}(types[i] => nb[i] for i in eachindex(types)), newP, st.leg)
+    B = Dict{NTuple{2, Int}, Any}(grow[i] => nb[i] for i in eachindex(grow))
+    if ic.c4v
+        for s in types
+            haskey(B, s) && continue
+            s0 = count(!=(0), s) == 2 ? (-1, -1) : (-1, 0)
+            B[s] = _i2_image_block(B[s0], _I2_C4V[_i2_find(_i2_act_type, s0, s)], s0, st.leg)
+        end
+    end
+    return _I2State(st.chi, B, newP, st.leg)
 end
 
 # Largest phase-free change of any block (blocks are norm-1 on fixed, aligned legs).

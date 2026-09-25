@@ -102,6 +102,64 @@ iterations, the warm-start block, the whitening). At D = 5 the step splits into 
 each and 8 block growths of ~0.45 s each, run on threads; two site environments cost 1.0 s and
 ln κ 0.5 s, so the gradient is not the bottleneck.
 
+### The square's symmetry: `c4v = true` (2026-09-25)
+
+When every layer is invariant under the 8 symmetries of the square (a symmetrised boundary PEPS
+and a C4v site), the iteration is equivariant: a step derives the pair of one interface type and
+grows one quadrant and one half-line, and relabels them onto the other 3 pairs and 6 blocks. A
+reflection along a pair's own axis swaps P_A and P_B. The constructor checks the invariance.
+`boundary_peps` turns it on whenever `symmetrize = true`. Same states as above, c4v against the full
+step, all agreeing to ≤ 6e-15 in ln κ, m and the environment:
+
+| D, χ | device | full step | c4v step | speedup |
+|---|---|---|---|---|
+| 2, 16 | CPU | 0.045 s | 0.016 s | 2.8× |
+| 3, 24 | CPU | 0.130 s | 0.100 s | 1.3× |
+| 3, 24 | GPU | 0.300 s | 0.093 s | 3.2× |
+| 4, 48 | GPU | 0.261 s | 0.078 s | 3.3× |
+| 5, 50 | GPU | 0.607 s | 0.223 s | 2.7× |
+| 6, 72 | GPU | 3.45 s | 0.864 s | 4.0× |
+
+On the CPU the full step already runs its 4 pairs on threads, so the gain is small; on the GPU they
+queue behind each other and the gain is the full factor. (GPU rows measured while another GPU job
+ran; an unloaded D = 3, χ = 24 full step was 0.055 s.)
+
+### GPU
+
+Pass the site on the device (`adapt(CuArray, site)`, and a `BoundaryPEPS` init on the device); every
+contraction follows it. One sandwich step, split pairs, Float64 on an RTX A6000 against 4 CPU threads
+on a loaded workstation: 7× at D = 3, χ = 24, 22× at D = 4, χ = 48, 23× at D = 5, χ = 50 (0.58 s
+against 13.3 s; the unloaded 8-thread CPU step is 7.1 s). At D = 3 the GPU is latency-bound: a warm
+evaluation (two environments to 1e-7, 15 steps each, plus gradients) is 4.2 s on the GPU and 3.6 s on
+the CPU with c4v. It pays from D = 4.
+
+## The optimiser near β_c (2026-09-25)
+
+Measured at D = 3, χ = 24, β = 0.2275 (2.6·10⁻² above β_c), all variants from the same start (the
+converged D = 2 state embedded at D = 3):
+
+* **Adaptive CTMRG tolerance** (`adaptive_tolerance = true`): converge the environments to
+  1e-2·|g|, clamped to [ctm_tolerance, 1e-6]. CTM steps per L-BFGS iteration fell from 54 to 30 with
+  the same progress per iteration.
+* **Norm-metric preconditioner** (`precondition = true`): L-BFGS with H₀ = (N + 1e-2·λ_max)⁻¹, N the
+  one-site norm environment with ket and bra removed (the Gram matrix of the tangent vectors): about
+  twice the gain in f per iteration.
+* Both together, after 600 s: f = 0.78461719 against 0.78461586 for the old optimiser.
+* **To convergence** (|g| < 1e-6): the old optimiser 735 iterations in 10 415 s, the new one 382 in
+  3 431 s (3.0×), both to m = 0.49169 (Monte Carlo 0.491645).
+
+Tried and rejected:
+
+* **The self-consistent local eigenproblem** (Nishino's TPVA update: A ← the dominant generalised
+  eigenvector of (T_eff, N_eff), the stationarity condition's own form). A is that eigenvector at
+  the optimum, with a wide gap (λ₁ = 1.758615 against λ₂ = 0.89), but the iteration diverges: first
+  through near-null directions of N_eff (overlap of the top eigenvector with A 0.014 unless N_eff is
+  cut at 1e-5·max, then 0.991), and then, with the cut, through the environment's response near β_c
+  (f fell and m ran from 0.49 to 0.72 within three steps). The frozen-environment problem ignores
+  exactly the large susceptibility that makes this regime hard.
+* **The frozen-environment Hessian as preconditioner**, (λ₁ Ñ − T_eff) in the Ñ-metric: behind the
+  norm metric at every checkpoint (f 0.78461695 against 0.78461726 at iteration 100).
+
 ## Validation of the boundary PEPS
 
 | check | result |

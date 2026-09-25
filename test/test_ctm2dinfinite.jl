@@ -95,6 +95,14 @@ end
         @test abs(site_ratio(split, imp) - site_ratio(dense, imp)) < 1.0e-10
         Es, zs = site_environment(split, 1); Ed, zd = site_environment(dense, 1)
         @test TNQS.norm(Es / zs - Ed / zd) < 1.0e-10 * TNQS.norm(Ed / zd)
+        # c4v = true: one pair and two blocks per step, the rest by symmetry — the same fixed point
+        # (measured 2026-09-25: Δ ln κ 4e-15, Δm 3e-16, ‖ΔE‖/‖E‖ 1e-15, same iteration count).
+        sym = update(InfiniteCTM2D(sl, slegs, 16; c4v = true); tolerance = 1.0e-10, maxiter = 400)
+        @test sym.stats[].iterations == split.stats[].iterations
+        @test abs(cvm_freenergy(sym) - cvm_freenergy(split)) < 1.0e-12
+        @test abs(site_ratio(sym, imp) - site_ratio(split, imp)) < 1.0e-10
+        Ec, zc = site_environment(sym, 1)
+        @test TNQS.norm(Ec / zc - Es / zs) < 1.0e-10 * TNQS.norm(Es / zs)
     end
 
     # argument checks
@@ -106,5 +114,7 @@ end
     @test_throws ArgumentError InfiniteCTM2D(site, (legs[1], legs[2], legs[3], TNQS.new_index(2)), 4)   # not the site's legs
     @test_throws ArgumentError InfiniteCTM2D(site, legs, 4; init = update(InfiniteCTM2D(site, legs, 6)))
     @test_throws ArgumentError site_environment(update(InfiniteCTM2D(site, legs, 4)), 2)
+    s2, l2, _ = ising2d_site(0.3; J = (1.0, 0.5))                  # not symmetric under x ↔ y
+    @test_throws ArgumentError InfiniteCTM2D(s2, l2, 4; c4v = true)
 end
 end
