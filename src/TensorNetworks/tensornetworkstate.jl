@@ -1,4 +1,3 @@
-using ITensors: random_itensor
 
 """
     TensorNetworkState{V} <: AbstractTensorNetwork{V}
@@ -22,6 +21,14 @@ tensors(tns::TensorNetworkState) = tensors(tensornetwork(tns))
 Base.copy(tns::TensorNetworkState) = TensorNetworkState(copy(tensornetwork(tns)), copy(siteinds(tns)))
 
 TensorNetworkState(tn::TensorNetwork) = TensorNetworkState(tn, siteinds(tn))
+# Widen a concretely-typed site-index dictionary to the field type.
+function TensorNetworkState(tn::TensorNetwork{V}, sinds::Dictionary) where {V}
+    s = Dictionary{V, Vector{<:Index}}()
+    for v in keys(sinds)
+        set!(s, v, sinds[v])
+    end
+    return TensorNetworkState(tn, s)
+end
 TensorNetworkState(tensors::Dictionary, g::NamedGraph) = TensorNetworkState(TensorNetwork(tensors, g))
 TensorNetworkState(tensors::Union{Dictionary, Vector{<:ITensor}}) = TensorNetworkState(TensorNetwork(tensors))
 
@@ -47,19 +54,34 @@ function Base.setindex!(tns::TensorNetworkState, value::ITensor, v)
     return tns
 end
 
-function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I")
+# Bra copy of a tensor: `conj` and prime all legs except `auxinds` — dangling
+# non-physical legs (e.g. a charged state's charge leg), which always pair directly
+# between ket and bra rather than through an operator or a message.
+function bra_tensor(t::ITensor, auxinds::Vector{<:Index})
+    tdag = conj(prime(t))
+    return isempty(auxinds) ? tdag : replaceinds(tdag, (prime.(auxinds) .=> auxinds)...)
+end
+bra_tensor(tns::TensorNetworkState, v) = bra_tensor(tns[v], auxinds(tns, v))
+
+# The dangling non-physical legs of a vertex tensor: dangling legs that are not site indices.
+auxinds(tns::TensorNetworkState, v) = Index[i for i in setdiff(uniqueinds(tns, v), siteinds(tns, v))]
+
+# `auxinds_f` overrides the live aux-leg classification. The loop-correction weights
+# need this: they deliberately relabel a bond so it dangles in the modified network,
+# and the live classification would misread it as a charge leg.
+function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I", auxinds_f::Function = v -> auxinds(tns, v))
     factors = ITensor[]
     for v in verts
         sinds = siteinds(tns, v)
         tnv = tns[v]
-        tnv_dag = dag(prime(tnv))
+        tnv_dag = bra_tensor(tnv, auxinds_f(v))
         if op_strings(v) == "ρ" || isempty(sinds)
             append!(factors, ITensor[tnv, tnv_dag])
         elseif op_strings(v) == "I"
-            tnv_dag = replaceinds(tnv_dag, prime.(sinds), sinds)
+            tnv_dag = replaceinds(tnv_dag, (prime.(sinds) .=> sinds)...)
             append!(factors, ITensor[tnv, tnv_dag])
         else
-            op = adapt_like(tnv, ITensors.op(op_strings(v), only(sinds)))
+            op = adapt_like(tnv, Ops.op(op_strings(v), only(sinds)))
             append!(factors, ITensor[tnv, tnv_dag, op])
         end
     end
@@ -69,9 +91,13 @@ end
 norm_factors(tns::TensorNetworkState, v; kwargs...) = norm_factors(tns, [v]; kwargs...)
 bp_factors(tns::TensorNetworkState, v) = norm_factors(tns, v)
 
+# The flat starting message is the identity between the ket links and their bra
+# copies, built as an identity operator so it follows the links' backend (graded
+# links give a graded message; the legacy `delta` filled a dense diagonal).
 function default_message(tns::TensorNetworkState, edge::AbstractEdge)
     linds = virtualinds(tns, edge)
-    return adapt_like(tns, denseblocks(delta(vcat(linds, prime(dag(linds))))))
+    cod, dom = Tuple(linds), Tuple(prime.(conj.(linds)))
+    return adapt_like(tns, one(zeros(scalartype(tns), cod..., dom...), cod, dom))
 end
 
 """
@@ -97,7 +123,7 @@ function random_tensornetworkstate(eltype, g::AbstractGraph, siteinds::Dictionar
     tensors = Dictionary{vertextype(g), ITensor}()
     for v in vs
         is = vcat(siteinds[v], [l[NamedEdge(v => vn)] for vn in neighbors(g, v)])
-        set!(tensors, v, random_itensor(eltype, is))
+        set!(tensors, v, randn(eltype, is...))
     end
     return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
 end
@@ -144,20 +170,24 @@ function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dic
     for v in vs
         tnv = f(v)
         if tnv isa String
-            set!(tensors, v, adapt(eltype)(ITensors.state(f(v), only(siteinds[v]))))
+            set!(tensors, v, adapt_scalartype(eltype)(Ops.state(f(v), only(siteinds[v]))))
         elseif tnv isa Vector{<:Number}
-            set!(tensors, v, adapt(eltype)(ITensors.ITensor(f(v), only(siteinds[v]))))
+            set!(tensors, v, adapt_scalartype(eltype)(Ops.state(f(v), only(siteinds[v]))))
         else
             error("Unrecognized local state constructor. Currently supported: Strings and Vectors.")
         end
     end
 
-    l = Dict(e => Index(1) for e in edges(g))
+    # Trivial links, minted to match the site indices' backend (`trivialrange` of a
+    # graded range is the length-1 trivial-sector range) so graded product states
+    # stay graded. The dst side takes the conjugate so the pair contracts to 1.
     for e in edges(g)
-        tensors[src(e)] *= onehot(eltype, l[e] => 1)
-        tensors[dst(e)] *= onehot(eltype, l[e] => 1)
+        l = Index(trivialrange(unnamed(only(siteinds[src(e)]))))
+        x = fill!(similar(tensors[src(e)], (l,)), true)
+        tensors[src(e)] *= x
+        tensors[dst(e)] *= conj(x)
     end
-    return TensorNetworkState(tensors, g)
+    return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
 end
 
 """
@@ -189,6 +219,5 @@ function tensornetworkstate(f::Function, args...)
 end
 
 function NamedGraphs.vertices(t::ITensor, tns::TensorNetworkState)
-    t_inds = inds(t)
-    return filter(v -> !isempty(intersect(t_inds, siteinds(tns, v))), collect(vertices(tns)))
+    return filter(v -> !isdisjoint(inds(t), siteinds(tns, v)), collect(vertices(tns)))
 end

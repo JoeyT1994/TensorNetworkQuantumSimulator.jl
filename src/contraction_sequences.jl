@@ -1,4 +1,3 @@
-using ITensors: Index, ITensor, @Algorithm_str, inds, noncommoninds, dim
 using OMEinsumContractionOrders: OMEinsumContractionOrders, optimize_code, EinCode, NestedEinsum, TreeSA, GreedyMethod, SABipartite, Treewidth, ExactTreewidth, HyperND, ExhaustiveSearch
 
 # The exact "optimal" contraction order (Pfeifer 2014 netcon) is provided by
@@ -23,12 +22,10 @@ end
 
 #OMEinsumContractionOrders helpers
 function to_eincode(tensors::Vector{<:ITensor})
-    ixs = map(t -> collect(inds(t)), tensors)
+    ixs = map(inds, tensors)
     LT = eltype(eltype(ixs))
-    #`reduce` over a single tensor returns the tensor itself, not its indices; a one-tensor
-    #network is trivial and its open indices are all of that tensor's indices.
-    iy = length(tensors) == 1 ? collect(LT, inds(only(tensors))) : collect(LT, reduce(noncommoninds, tensors))
-    size_dict = Dict{LT, Int}(i => dim(i) for ix in ixs for i in ix)
+    iy = collect(LT, reduce(symdiff, inds.(tensors)))
+    size_dict = Dict{LT, Int}(i => length(i) for t in tensors for i in inds(t))
     return EinCode(ixs, iy), size_dict
 end
 
