@@ -246,8 +246,12 @@ options(cache::CTMEnvironmentCache) = cache.options
 # `AbstractForm` (⟨ψ|O|ψ⟩) — all of them expose their per-vertex tensors through
 # `bp_factors`, which is how the double layer is kept LAZY.
 function CTMEnvironmentCache(net, maxdim::Integer; kwargs...)
-    opts = CTMOptions(; kwargs...)
     vs = collect(vertices(graph(net)))
+    # A 3D grid (vertices `(x, y, z)`) goes to the cubic engine, `CTM3DEnvironmentCache`.
+    if !isempty(vs) && all(v -> (v isa Tuple || v isa CartesianIndex) && length(v) == 3, vs)
+        return CTM3DEnvironmentCache(net, maxdim; kwargs...)
+    end
+    opts = CTMOptions(; kwargs...)
     # `cycle_solver = :auto` → `:warm`: the cold Krylov–Schur solve started from last sweep's Schur basis.
     # Measured to reach the cold solve's fixed point and 1e-14 floors on dense double-layer norms, never
     # slower, up to 1.6× faster per sweep; its only cost is a transient (sweeps 2–4 of a cold `update`

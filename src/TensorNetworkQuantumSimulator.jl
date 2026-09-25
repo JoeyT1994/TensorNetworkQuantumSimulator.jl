@@ -19,6 +19,8 @@ include("MessagePassing/abstractbeliefpropagationcache.jl")
 include("MessagePassing/beliefpropagationcache.jl")
 include("MessagePassing/boundarympscache.jl")
 include("MessagePassing/ctmenvironmentcache.jl")
+include("MessagePassing/ctm3denvironmentcache.jl")
+include("MessagePassing/ctm3dinfinite.jl")
 include("MessagePassing/loopcorrection.jl")
 include("graph_ops.jl")
 include("utils.jl")
@@ -89,6 +91,10 @@ export
     scalartype,
     BoundaryMPSCache,
     CTMEnvironmentCache,
+    CTM3DEnvironmentCache,
+    InfiniteCTM3D,
+    site_ratio,
+    ising3d_site,
     CTMOptions,
     cvm_freenergy,
     marginal_inconsistency,
