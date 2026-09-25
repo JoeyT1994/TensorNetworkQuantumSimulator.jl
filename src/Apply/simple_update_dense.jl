@@ -345,6 +345,9 @@ function simple_update_dense_boundary(
     Q, R, q_in_scratch = qr_forward!(
         setup.own, scratch, setup.array, setup.perm, setup.matrices, backend, allocator
     )
+    # A reshaped CuArray holds its own reference to `own`'s buffer, which would otherwise keep it
+    # allocated through `qr_backward!`'s `free_scratch_buffer!(own)`.
+    free_scratch_buffer!(setup.array)
 
     if compute
         Rother, isother = recv_factor(R, comm; source = other_rank)
@@ -420,6 +423,9 @@ function simple_update_dense(
                 setups[i].matrices, backend, allocator
             ), 2
         )
+        # A reshaped CuArray holds its own reference to `own`'s buffer, which would otherwise keep it
+        # allocated through `qr_backward!`'s `free_scratch_buffer!(own)`.
+        foreach(s -> free_scratch_buffer!(s.array), setups)
         R1, R2, svals, err = gate_split(gate, fwd[1][2], fwd[2][2]; allocator, apply_kwargs...)
         us = ntuple(
             i -> qr_backward!(
