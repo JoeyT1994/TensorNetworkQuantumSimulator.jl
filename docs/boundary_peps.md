@@ -148,6 +148,21 @@ converged D = 2 state embedded at D = 3):
 * **To convergence** (|g| < 1e-6): the old optimiser 735 iterations in 10 415 s, the new one 382 in
   3 431 s (3.0×), both to m = 0.49169 (Monte Carlo 0.491645).
 
+**Anderson acceleration of the 2D CTMRG** (`update(ic; anderson = m)`, opt-in). Type-II mixing of
+the last m iterates on the aligned blocks, the reported state always a genuine step. D = 3, χ = 24
+at β = 0.2275, CTM steps to tolerance:
+
+| network | m = 0 | m = 3 | m = 5 | m = 8 |
+|---|---|---|---|---|
+| sandwich, warm (1e-3 kick, tol 1e-8) | 19 | 14 | 12 | 12 |
+| sandwich, cold (tol 1e-10) | 41 | 37 | 41 | 55 |
+| norm, warm | 17 | 17 | 15 | 13 |
+| norm, cold | 37 | **328, wrong fixed point** | 67 | 67 |
+
+Warm, where the optimiser lives, it saves 1.4–1.6× on the sandwich. From the vacuum it does not
+help, and at m = 3 the norm network converged to a fixed point 3e-4 off in ln κ: mixing while the
+kept rank is still growing can change the basin. Hence off by default.
+
 Tried and rejected:
 
 * **The self-consistent local eigenproblem** (Nishino's TPVA update: A ← the dominant generalised

@@ -607,6 +607,55 @@ function site_environment(ic::InfiniteCTM2D, k::Integer = 1)
     return _i2_relabel(E, new, old), z
 end
 
+# --- Anderson acceleration of the fixed-point iteration ----------------------------------------
+#
+# The step x ↦ G(x) acts on blocks with fixed, aligned legs (every pair is Procrustes-aligned to
+# its predecessor), so iterates are directly comparable vectors and type-II Anderson mixing applies:
+# with f_k = G(x_k) − x_k and the last m differences ΔX, ΔF,
+#   γ = argmin ‖f_k − ΔF γ‖,   x_{k+1} = G(x_k) − (ΔX + ΔF) γ.
+# Blocks are renormalised after mixing (their scale is a gauge). A mixed point whose residual grows
+# past 10× the smallest seen restarts the history. The pairs of G(x_k) go along unchanged: they are
+# only the next step's warm start and alignment reference.
+mutable struct _I2Anderson
+    m::Int
+    X::Vector{Dict{NTuple{2, Int}, Any}}
+    F::Vector{Dict{NTuple{2, Int}, Any}}
+    best::Float64
+end
+_I2Anderson(m::Integer) = _I2Anderson(Int(m), Dict{NTuple{2, Int}, Any}[], Dict{NTuple{2, Int}, Any}[], Inf)
+_i2_bdot(a, b) = sum(real(dot(a[s], b[s])) for s in keys(a))
+_i2_bcomb(a, b, β) = Dict{NTuple{2, Int}, Any}(s => a[s] + β * b[s] for s in keys(a))
+
+function _i2_anderson!(acc::_I2Anderson, x::_I2State, gx::_I2State)
+    f = _i2_bcomb(gx.B, x.B, -1.0)
+    r = sqrt(_i2_bdot(f, f))
+    if !isfinite(r) || r > 10 * acc.best
+        empty!(acc.X); empty!(acc.F); acc.best = r
+        return gx
+    end
+    acc.best = min(acc.best, r)
+    push!(acc.X, x.B); push!(acc.F, f)
+    length(acc.X) > acc.m + 1 && (popfirst!(acc.X); popfirst!(acc.F))
+    k = length(acc.X) - 1
+    k >= 1 || return gx
+    dF = [_i2_bcomb(acc.F[i + 1], acc.F[i], -1.0) for i in 1:k]
+    dX = [_i2_bcomb(acc.X[i + 1], acc.X[i], -1.0) for i in 1:k]
+    M = [_i2_bdot(dF[i], dF[j]) for i in 1:k, j in 1:k]
+    v = [_i2_bdot(dF[i], f) for i in 1:k]
+    γ = (M + 1.0e-12 * (tr(M) / k + eps()) * I) \ v
+    all(isfinite, γ) || (empty!(acc.X); empty!(acc.F); return gx)
+    B = copy(gx.B)
+    for i in 1:k
+        for s in keys(B)
+            B[s] = B[s] - γ[i] * (dX[i][s] + dF[i][s])
+        end
+    end
+    for s in keys(B)
+        B[s] = _ctm_rescale(B[s])
+    end
+    return _I2State(gx.chi, B, gx.P, gx.leg)
+end
+
 """
     update(ic::InfiniteCTM2D; maxiter = 1000, tolerance = 1e-10, convergence = :environment,
            miniter = 2, verbose = false)
@@ -624,10 +673,13 @@ via `init`) until the signal falls below `tolerance`:
   settles long before the environment: stopping on it left Yang's magnetisation 5e-7 off and
   environment gradients 1e-7 off (K = 0.5, χ = 16), against 3e-16 and 1e-9 converged.
 
-`ic.stats[]` records the iterations, the final change and whether it converged.
+`anderson = m > 0` mixes the last `m` iterates (type-II Anderson acceleration, from iteration
+`anderson_start`); the fixed point is unchanged. `ic.stats[]` records the iterations, the final
+change and whether it converged.
 """
 function update(ic::InfiniteCTM2D; maxiter::Integer = 1000, tolerance::Real = 1.0e-10,
-                convergence::Symbol = :environment, miniter::Integer = 2, verbose::Bool = false)
+                convergence::Symbol = :environment, miniter::Integer = 2, verbose::Bool = false,
+                anderson::Integer = 0, anderson_start::Integer = 3)
     convergence in (:environment, :blocks, :lnkappa) || throw(ArgumentError(
         "convergence must be :environment, :blocks or :lnkappa, got $(repr(convergence))"))
     st = isnothing(ic.state) ? _i2_seed_state(ic, ic.maxdim) : ic.state
@@ -635,8 +687,13 @@ function update(ic::InfiniteCTM2D; maxiter::Integer = 1000, tolerance::Real = 1.
                 convergence === :environment ? _i2_shellenv(ic, s) : nothing
     prev = signal(st)
     converged, Δ, n = false, Inf, 0
+    acc = anderson > 0 ? _I2Anderson(anderson) : nothing
+    x = st                                             # the point the next step is applied to
     for it in 1:maxiter
-        stn = _i2_step(ic, st)
+        stn = _i2_step(ic, x)
+        # Anderson: the next point mixes the last iterates; the reported state stays G(x), a
+        # genuine CTM step, so the fixed point and every signal are unchanged.
+        x = (isnothing(acc) || it < anderson_start) ? stn : _i2_anderson!(acc, x, stn)
         cur = signal(stn)
         if convergence === :lnkappa
             Δ = abs(cur - prev)
