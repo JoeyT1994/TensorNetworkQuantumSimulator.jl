@@ -275,6 +275,21 @@ At D = 2 it does not beat L-BFGS on evaluations: about 100 either way, since eve
 the whole 10-dimensional space. From 25 L-BFGS iterations (β = 0.25, |g| = 2.1e-4), it reaches
 |g| = 2.5e-11 in 16 steps, with f and m equal to L-BFGS's optimum to 1e-13 and 1e-8.
 
+**The gradient's noise floor rises towards β_c.** The χ truncation makes the gradient slightly
+non-smooth, so |g| cannot be driven below a floor, and near β_c that floor can sit above
+`noise_tol` (default 1e-7). The solver then stops at the floor, correctly, but reports
+`converged = false`. Measured 2026-09-26, D = 3, χ = 16, warm-started along a β scan:
+
+| β | t | where Newton–Krylov stops |
+|---|---|---|
+| 0.2275 | 0.026 | ≤ 5e-9 (the benchmark reference below) |
+| 0.2235 | 0.008 | 1.7e-7: four restarts made no progress |
+| 0.2225 | 0.004 | 1.1e-7 |
+| 0.222 | 0.0016 | 2.3e-7 |
+
+There, pass `noise_tol = 1e-6`, which makes a stall below 1e-6 count as converged. Whether a
+larger χ lowers the floor is not yet measured.
+
 ### The benchmark: `examples/ising3d_solver_benchmark.jl`
 
 Each run uses one solver, from a shared cached start state (D = 2 converged, embedded at D with
