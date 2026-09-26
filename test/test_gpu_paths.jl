@@ -8,7 +8,8 @@ using Adapt: adapt
 
 # GPU-path validation on real hardware: the same dense state on host and device through BP, exact
 # contraction, gate application (both the copying and the consuming entry points), CTM (`:cut`,
-# `:cycle`) and boundary MPS must agree to roundoff. Scalar indexing is disallowed so any silent
+# `:cycle`), boundary MPS, and the thermodynamic-limit engines (`InfiniteCTM2D`, the 3D boundary
+# PEPS solvers) must agree to roundoff. Scalar indexing is disallowed so any silent
 # host round-trip inside a device path throws. Skipped when CUDA is not functional (CI without a GPU).
 const HAS_CUDA = try
     @eval using CUDA
@@ -64,6 +65,34 @@ if HAS_CUDA
         # boundary MPS at a lossless χ (D² = 9 per bond, two bonds per cut on a 4-row column → 81)
         @test z(expect(ψg, obs; alg = "boundarymps", mps_bond_dimension = 81)) ≈
             z(expect(ψ, obs; alg = "boundarymps", mps_bond_dimension = 81)) atol = 1.0e-10
+
+        # classical networks in the thermodynamic limit. 2D Ising in an imaginary field (complex data,
+        # the c4v symmetric pair) and its correlation length:
+        s2, l2, m2 = ising2d_site(0.4; h = im * 0.01)
+        ic = TNQS.update(InfiniteCTM2D(s2, l2, 8; c4v = true); tolerance = 1.0e-10)
+        icg = TNQS.update(InfiniteCTM2D(adapt(CuArray, s2), l2, 8; c4v = true); tolerance = 1.0e-10)
+        @test abs(site_ratio(icg, adapt(CuArray, m2)) - site_ratio(ic, m2)) < 1.0e-9
+        @test abs(first(correlation_length(icg)) - first(correlation_length(ic))) < 1.0e-6
+        # the 3D boundary PEPS, a host state moved with `adapt`: L-BFGS and Newton–Krylov steps agree
+        s3, l3, m3 = ising3d_site(0.25)
+        bp0 = boundary_peps(s3, l3, 2; maxdim = 8, boundary = [1.0, 0.0], maxiter = 10)
+        bp0g = adapt(CuArray, bp0)
+        @test TNQS.TensorInterface.data(bp0g.A) isa CuArray
+        b1 = boundary_peps(s3, l3, 2; maxdim = 8, init = bp0, maxiter = 3)
+        b1g = boundary_peps(adapt(CuArray, s3), l3, 2; maxdim = 8, init = bp0g, maxiter = 3)
+        @test abs(cvm_freenergy(b1g) - cvm_freenergy(b1)) < 1.0e-10
+        k1, _ = boundary_peps_krylov(s3, l3, bp0; maxiter = 3)
+        k1g, _ = boundary_peps_krylov(adapt(CuArray, s3), l3, bp0g; maxiter = 3)
+        @test abs(cvm_freenergy(k1g) - cvm_freenergy(k1)) < 1.0e-10
+        @test abs(site_ratio(k1g, m3) - site_ratio(k1, m3)) < 1.0e-8
+        # … and the complex (Levenberg–Marquardt) path: chains along z in an imaginary field
+        sr, lr, _ = ising3d_site(0.3; J = (0.0, 0.0, 1.0))
+        bpr = boundary_peps(sr, lr, 1; maxdim = 4, maxiter = 50)
+        x = ising3d_site(0.3; J = (0.0, 0.0, 1.0), h = im * 0.1)
+        sc = TNQS.replaceinds(x[1], collect(x[2]), collect(lr)); mc = TNQS.replaceinds(x[3], collect(x[2]), collect(lr))
+        kc, _ = boundary_peps_krylov(sc, lr, bpr; tol = 1.0e-10)
+        kcg, _ = boundary_peps_krylov(adapt(CuArray, sc), lr, adapt(CuArray, bpr); tol = 1.0e-10)
+        @test abs(site_ratio(kcg, mc) - site_ratio(kc, mc)) < 1.0e-9
 
         # ComplexF32 through `cu`, the example's route
         ψ32 = CUDA.cu(ψ)

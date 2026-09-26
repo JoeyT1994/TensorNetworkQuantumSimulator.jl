@@ -8,13 +8,18 @@
 # of the previous one (A and both 2D environments). Below β_c the finite-D optimum keeps a
 # residual m: that pseudo-transition is the D-dependent error of the method.
 #
+# Each point is the recommended route (docs/boundary_peps.md, "Routes to the boundary state"): L-BFGS
+# (`boundary_peps`) to |g| < 1e-4, then Newton–Krylov (`boundary_peps_krylov`) to |g| < BP_GTOL. Near
+# β_c the magnetisation is decided by a soft mode, so it is only trustworthy once converged.
+#
 # The first β climbs to D through D = 2, 3, … (each optimised and embedded into the next, χ scaled
 # as D²), since a cold start at large D is slow and can land in a poor local optimum.
 #
-# Output: one row per β on stdout and in the CSV `OUT` (β, m, m_ref, f, |g|, L-BFGS iterations, s).
-# Override D, χ, the output file, the β list (comma-separated, scanned in the given order), the
-# iteration cap and the device with BP_D, BP_CHI, BP_OUT, BP_BETAS, BP_MAXITER and BP_GPU=1 (the
-# GPU pays from D = 4; at D = 3 it is no faster than 8 CPU threads).
+# Output: one row per β on stdout and in the CSV `OUT` (β, m, m_ref, f, |g|, L-BFGS iterations,
+# Newton–Krylov evaluations, s). Override D, χ, the output file, the β list (comma-separated, scanned
+# in the given order), the L-BFGS iteration cap, the final gradient tolerance and the device with
+# BP_D, BP_CHI, BP_OUT, BP_BETAS, BP_MAXITER, BP_GTOL and BP_GPU=1 (the GPU pays from D = 4 on a
+# data-centre card; at D = 3 it is no faster than 8 CPU threads, and consumer cards are slow in Float64).
 
 using TensorNetworkQuantumSimulator
 using Printf
@@ -30,7 +35,8 @@ const BETAS = haskey(ENV, "BP_BETAS") ? parse.(Float64, split(ENV["BP_BETAS"], "
               [0.40, 0.35, 0.30, 0.28, 0.26, 0.25, 0.24, 0.235, 0.23, 0.2275, 0.225, 0.2235,
                0.2225, 0.2217, 0.221, 0.22, 0.218, 0.215, 0.21, 0.20]
 const MAXITER = parse(Int, get(ENV, "BP_MAXITER", "1000"))  # L-BFGS iterations per β
-const GTOL = 1.0e-6
+const GTOL = parse(Float64, get(ENV, "BP_GTOL", "1e-8"))    # the final |g| (Newton–Krylov)
+const LBFGS_GTOL = 1.0e-4                                  # hand over to Newton–Krylov here
 const CTM_TOL = 1.0e-10     # the floor of the adaptive CTMRG tolerance
 const BETA_C = 0.2216544
 
@@ -49,38 +55,47 @@ redirect_stderr(stdout)
 println("3D Ising boundary PEPS scan: D = $D, χ = $CHI, maxiter = $MAXITER, threads = $(Threads.nthreads()), ",
         GPU ? "GPU" : "CPU")
 open(OUT, "w") do io
-    println(io, "beta,m,m_ref,f,gnorm,iters,seconds")
+    println(io, "beta,m,m_ref,f,gnorm,lbfgs_iters,krylov_evals,seconds")
 end
-@printf("%8s %12s %12s %10s %12s %10s %6s %8s\n", "β", "m", "m_MC", "m − m_MC", "f = ln κ", "|g|", "iters", "s")
+@printf("%8s %12s %12s %10s %12s %10s %6s %6s %8s\n", "β", "m", "m_MC", "m − m_MC", "f = ln κ", "|g|", "lbfgs", "evals", "s")
 flush(stdout)
 
 global prev = nothing
 for β in BETAS
     site0, legs, mag = ising3d_site(β)
     site = device(site0)
+    lbfgs_its = 0
+    evals = 0
     t = @elapsed begin
         if isnothing(prev)
-            # climb D = 2, 3, …, D at this β
+            # climb D = 2, 3, …, D at this β (L-BFGS; each D embedded into the next)
             global bp = boundary_peps(site, legs, 2; maxdim = chi_for(2), boundary = [1.0, 0.0],
-                                      maxiter = MAXITER, gtol = GTOL, ctm_tolerance = CTM_TOL)
+                                      maxiter = MAXITER, gtol = LBFGS_GTOL, ctm_tolerance = CTM_TOL)
+            lbfgs_its += length(bp.history) - 1
             for d in 3:D
                 println("  first β: D = $(d - 1) done (f = $(bp.lnkappa)), embedding into D = $d"); flush(stdout)
                 global bp = boundary_peps(site, legs, d; maxdim = chi_for(d), init = bp, maxiter = MAXITER,
-                                          gtol = GTOL, ctm_tolerance = CTM_TOL)
+                                          gtol = LBFGS_GTOL, ctm_tolerance = CTM_TOL)
+                lbfgs_its += length(bp.history) - 1
             end
         else
             global bp = boundary_peps(site, legs, D; maxdim = CHI, init = prev, maxiter = MAXITER,
-                                      gtol = GTOL, ctm_tolerance = CTM_TOL)
+                                      gtol = LBFGS_GTOL, ctm_tolerance = CTM_TOL)
+            lbfgs_its += length(bp.history) - 1
         end
+        # converge: Newton–Krylov with the subspace trust region
+        kr = boundary_peps_krylov(site, legs, bp; tol = GTOL)
+        global bp = kr[1]
+        evals = kr[2].evals
     end
     m = abs(real(site_ratio(bp, mag)))
     f = cvm_freenergy(bp)
     mref = m_reference(β)
-    @printf("%8.4f %12.8f %12.8f %+10.2e %12.8f %10.2e %6d %8.1f\n", β, m, mref, m - mref, f, bp.gnorm,
-            length(bp.history) - 1, t)
+    @printf("%8.4f %12.8f %12.8f %+10.2e %12.8f %10.2e %6d %6d %8.1f\n", β, m, mref, m - mref, f, bp.gnorm,
+            lbfgs_its, evals, t)
     flush(stdout)
     open(OUT, "a") do io
-        println(io, join((β, m, mref, f, bp.gnorm, length(bp.history) - 1, t), ","))
+        println(io, join((β, m, mref, f, bp.gnorm, lbfgs_its, evals, t), ","))
     end
     global prev = bp
 end

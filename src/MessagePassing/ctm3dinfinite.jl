@@ -458,8 +458,9 @@ end
 
 The cubic-lattice Ising model's site tensor for [`InfiniteCTM3D`](@ref): spins on the vertices,
 weight `exp(β Σ J_a σσ′ + β h Σ σ)`, each bond's Boltzmann matrix split symmetrically between its
-two sites. `J = (Jx, Jy, Jz) ≥ 0`. Returns the site tensor, its legs `(x⁻, x⁺, y⁻, y⁺, z⁻, z⁺)`
-and the impurity tensor with σ inserted (for [`site_ratio`](@ref)).
+two sites. `J = (Jx, Jy, Jz) ≥ 0`; a complex `h` (e.g. imaginary, for the Yang–Lee edge) gives
+complex tensors. Returns the site tensor, its legs `(x⁻, x⁺, y⁻, y⁺, z⁻, z⁺)` and the impurity
+tensor with σ inserted (for [`site_ratio`](@ref)).
 """
 function ising3d_site(β::Real; J = (1.0, 1.0, 1.0), h::Number = 0.0)
     legs = Tuple(new_index(2; tags = "i3,$n") for n in ("xm", "xp", "ym", "yp", "zm", "zp"))

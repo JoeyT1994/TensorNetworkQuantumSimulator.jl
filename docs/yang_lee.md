@@ -15,11 +15,14 @@ the zeros condense and the fixed point acquires Re m ≠ 0 (our branch test).
 
 * `ising2d_site` / `ising3d_site` take a complex `h`.
 * `InfiniteCTM2D` on complex networks; `c4v = true` needed a fix for complex data (below).
-* `correlation_length(ic; axis)`: ξ from the one-row channel transfer matrix (restarted Arnoldi).
+* `correlation_length(ic; axis)`: ξ from the one-row channel transfer matrix (KrylovKit Arnoldi).
   Above T_c the axis correlation of the 2D Ising decays as r^{-1/2} e^{-r/ξ} — a continuum edge that
   the finite channel discretises: at τ = 0.5 the χ-converged channel ξ is 1.2 % below the exact
   1/(2(K*−K)). Fine as a length scale, not as a precision observable.
-* `boundary_peps_stationary`: the bilinear boundary PEPS for complex symmetric layer operators.
+* `boundary_peps_stationary`: the bilinear boundary PEPS for complex symmetric layer operators, by
+  Newton with the full finite-difference Jacobian (reused along a continuation). `boundary_peps_krylov`
+  solves the same equations without forming J (docs/boundary_peps.md); its complex path is so far
+  tested on the D = 1 chains only.
 
 ### The c4v fix (complex data)
 
@@ -49,7 +52,7 @@ Exact tests (D = 1, test_boundarypeps3d.jl):
 | test | result |
 |---|---|
 | chains along z (K = 0.3), f = ln λ₁ | 2.8e-15, down to v = 1e-3 from the edge |
-| same, m = d ln λ₁/dH (diverging as v^{-1/2}) | 4e-11 relative |
+| same, m = d ln λ₁/dH (diverging as v^{-1/2}) | 1.1e-9 relative (the damped solver) |
 | same, edge sin θ_c = e^{−2K} from m⁻² → 0 | 1.8e-6 |
 | planes (J_z = 0), f = 2D Ising ln κ at the same field | 3e-15 |
 

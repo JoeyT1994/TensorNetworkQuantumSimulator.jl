@@ -11,7 +11,9 @@
 # axis `a` between `k` and `k + 1` over the transverse extent `(sb, pb)`: `sb ≠ 0` a LINE face (a
 # half-line of bonds), `sb = 0` the raw bond(s) of a T into its vertex, never truncated. Each line
 # interface's pair comes from the two enlarged quadrants on either side, rest faces open (the 2D
-# engine's `:cut`, Fishman et al.'s two-sided construction); there are no plane faces in 2D.
+# engine's `:cut`, Fishman et al.'s two-sided construction); there are no plane faces in 2D. With
+# `projector = :cycle` all four pairs come instead from the dominant invariant subspace of the
+# plaquette's corner cycle (MP-BP / eig-CTMRG, below).
 #
 # STATE. One tensor per block type (8) and one pair per line-interface type `(a, sb)` (4), on fixed
 # canonical legs. An iteration places them on a virtual 5×5 box, derives the 4 pairs at
@@ -24,6 +26,8 @@
 # SEED. The open-boundary vacuum at the target χ: every line leg carries e₁, every raw leg the
 # `boundary` vector; the pairs' rank grows by the raw bond dimension per iteration, zero-padded
 # onto the fixed kept width meanwhile.
+
+using KrylovKit: eigsolve
 
 const _I2_L = (5, 5)                                     # the virtual box …
 const _I2_V = (3, 3)                                     # … and its centre vertex
@@ -212,6 +216,21 @@ _i2_setstate(ic::InfiniteCTM2D, st) =
     InfiniteCTM2D(ic.site, ic.legs, ic.rawdims, ic.maxdim, ic.options, ic.pair, ic.boundary, ic.c4v, st,
                   Ref{Any}(nothing), Ref{Any}(nothing))
 options(ic::InfiniteCTM2D) = ic.options
+
+# Moving an environment between devices, e.g. `adapt(CuArray, ic)`: the layers and every block and
+# pair tensor. The `:cycle` solver's stored Schur bases are dropped (a warm start only: the next
+# step solves that plaquette cold).
+function Adapt.adapt_structure(to, ic::InfiniteCTM2D)
+    st = ic.state
+    if !isnothing(st)
+        B = Dict{NTuple{2, Int}, Any}(s => adapt(to, t) for (s, t) in st.B)
+        P = Dict{NTuple{2, Int}, Any}(t => map(x -> x isa AbstractTensor ? adapt(to, x) : x, pr)
+                                      for (t, pr) in st.P if t != _I2_CYCLE_KEY)
+        st = _I2State(st.chi, B, P, st.leg)
+    end
+    return InfiniteCTM2D(Any[adapt(to, t) for t in ic.site], ic.legs, ic.rawdims, ic.maxdim, ic.options,
+                         ic.pair, ic.boundary, ic.c4v, st, Ref{Any}(ic.lnkappa[]), Ref{Any}(ic.stats[]))
+end
 
 # Fresh legs for face `F`: one per layer leg for a raw face, one χ-leg for a line face.
 _i2_newlegs(F, χ::Int, rawdims, tag::String) = _c2_israw(F) ?
@@ -503,19 +522,19 @@ function _i2_symmetric_pair(pr, w::Index)
     MA = MA0[:, act]; MB = MB0[act, :]
     G = transpose(MA) * MA
     cond(G) < 1.0e12 || (_ctm_stat!(:i2_c4v_asym); return pr)
-    D = inv(G)
+    Gi = inv(G)
     # Always symmetrise: P Pᵀ = M_A G⁻¹ M_Aᵀ is an oblique projector onto span(M_A) whatever M_B is,
     # and the pair out of the whitening is biorthogonal only to ~1e-5 while tiny singular values
     # are kept early on (falling back to the raw pair there broke the c4v state for good).
-    err = norm(MB - D * transpose(MA)) / max(norm(MB), eps())
+    err = norm(MB - Gi * transpose(MA)) / max(norm(MB), eps())
     err <= 1.0e-4 || _ctm_stat!(:i2_c4v_asym)
     if eltype(MA) <: Real
-        # a real pair stays real: needs D positive definite (else keep the pair as it was)
-        F = eigen(Symmetric((D + D') / 2))
+        # a real pair stays real: needs G⁻¹ positive definite (else keep the pair as it was)
+        F = eigen(Symmetric((Gi + Gi') / 2))
         all(>(0), F.values) || (_ctm_stat!(:i2_c4v_indefinite); return pr)
         R = F.vectors * Diagonal(sqrt.(F.values)) * F.vectors'
     else
-        R = sqrt(D)
+        R = sqrt(Gi)
         R = (R + transpose(R)) / 2
     end
     MP = zeros(eltype(MA * R), size(MA0))
@@ -845,8 +864,8 @@ end
 #
 # The ten blocks around the horizontal nearest-neighbour pair (3,3)–(4,3) on the virtual box, and
 # the box's face legs: contract them with the two sites' layers (placed by `_i2_place_site` at
-# (3,3) and (4,3)) for a two-site region, or with modified layers for a bond environment (e.g. the
-# boundary-PEPS power step). Per axis: x < 3 | x == 3 | x == 4 | x ≥ 5, and y < 3 | y == 3 | y ≥ 4.
+# (3,3) and (4,3)) for a two-site region (`pair_ratio`), or with modified layers for a bond
+# environment. Per axis: x < 3 | x == 3 | x == 4 | x ≥ 5, and y < 3 | y == 3 | y ≥ 4.
 const _I2_PAIR_KEYS = [(-1, -1, 3, 3), (0, -1, 3, 3), (0, -1, 4, 3), (1, -1, 5, 3), (-1, 0, 3, 3),
                        (1, 0, 5, 3), (-1, 1, 3, 4), (0, 1, 3, 4), (0, 1, 4, 4), (1, 1, 5, 4)]
 
@@ -874,51 +893,18 @@ end
 #
 # The one-row channel along axis `a`: the two half-lines across it and the vertex's layers between
 # them, mapping the in-faces (k = 2) to the out-faces (k = 3). Its two leading eigenvalues give
-# ξ_a = 1 / ln|λ₁/λ₂|, the finite-χ correlation length (it saturates as χ⁻¹ → 0 is not reached;
-# finite-correlation-length scaling uses it as the length scale). Matrix-free restarted Arnoldi on
-# host vectors of size χ²·Π(raw dims).
-
-# Leading `nev` eigenvalues (by modulus) of the linear map `apply` on vectors like `v0`.
-function _i2_arnoldi(apply, v0::Vector{ComplexF64}, nev::Int; krylov::Int = 30, tol::Real = 1.0e-10,
-                     maxrestart::Int = 200)
-    n = length(v0)
-    m = min(krylov, n)
-    v = v0 / norm(v0)
-    vals = ComplexF64[]
-    for _ in 1:maxrestart
-        V = zeros(ComplexF64, n, m + 1); H = zeros(ComplexF64, m + 1, m)
-        V[:, 1] = v
-        k = m
-        for j in 1:m
-            w = apply(V[:, j])
-            for _ in 1:2, i in 1:j                       # Gram–Schmidt, twice
-                h = dot(view(V, :, i), w); H[i, j] += h; w .-= h .* view(V, :, i)
-            end
-            H[j + 1, j] = norm(w)
-            if abs(H[j + 1, j]) < 1.0e-14 * max(1.0, abs(H[j, j]))
-                k = j; break
-            end
-            V[:, j + 1] = w / H[j + 1, j]
-        end
-        F = eigen(H[1:k, 1:k])
-        ord = sortperm(abs.(F.values); rev = true)
-        q = min(nev, k)
-        vals = F.values[ord[1:q]]
-        res = [abs(H[k + 1, k] * F.vectors[k, ord[i]]) for i in 1:q]
-        all(res .<= tol * abs(vals[1])) && return vals
-        v = V[:, 1:k] * sum(F.vectors[:, ord[i]] for i in 1:q)
-        v /= norm(v)
-    end
-    return vals
-end
+# ξ_a = 1 / ln|λ₁/λ₂|, the finite-χ correlation length (finite at every χ even at a critical point,
+# which is what finite-correlation-length scaling uses). Matrix-free: KrylovKit's Arnoldi on host
+# vectors of size χ²·Π(raw dims).
 
 """
     correlation_length(ic::InfiniteCTM2D; axis = 2, nev = 2, tol = 1e-10) -> (ξ, λ)
 
 The finite-χ correlation length along `axis` (1 = x, 2 = y) from the one-row channel transfer
 matrix — the two half-lines across the axis and the site's layers between them: `ξ = 1/ln|λ₁/λ₂|`
-with `λ` its `nev` leading eigenvalues by modulus (normalised by λ₁). A complex `λ[2]` signals
-oscillating correlations; `|λ[2]| → 1` a critical point, e.g. the Yang–Lee edge.
+with `λ` its `nev` leading eigenvalues by modulus (normalised by λ₁, to relative accuracy `tol`).
+A complex `λ[2]` signals oscillating correlations; `|λ[2]| → 1` a critical point, e.g. the
+Yang–Lee edge.
 """
 function correlation_length(ic::InfiniteCTM2D; axis::Integer = 2, nev::Integer = 2, tol::Real = 1.0e-10)
     isnothing(ic.state) && error("InfiniteCTM2D has not been `update`d.")
@@ -953,9 +939,12 @@ function correlation_length(ic::InfiniteCTM2D; axis::Integer = 2, nev::Integer =
     # a real network takes the real and imaginary parts separately (no mixed-type contractions)
     apply(x) = realnet ? apply1(real.(x)) + im * apply1(imag.(x)) : apply1(x)
     v0 = randn(Xoshiro(1), ComplexF64, prod(dims))
-    λ = _i2_arnoldi(apply, v0, Int(nev); tol)
-    # a Krylov space that closes early (a random start in an invariant subspace of dimension < nev)
-    # means the rest of the spectrum is zero
+    # KrylovKit's tolerance is absolute on the residual: scale it by the map's size on v0
+    scale = norm(apply(v0)) / norm(v0)
+    vals, _, _ = eigsolve(apply, v0, Int(nev), :LM; tol = tol * scale, krylovdim = max(30, 2nev + 2),
+                          ishermitian = false, verbosity = 0)
+    λ = ComplexF64.(vals[1:min(Int(nev), length(vals))])
+    # a Krylov space that closes early (the map's rank below nev) means the rest of the spectrum is zero
     length(λ) < nev && (λ = vcat(λ, zeros(ComplexF64, nev - length(λ))))
     λ = λ ./ λ[1]
     ξ = length(λ) >= 2 ? 1 / log(1 / abs(λ[2])) : Inf
@@ -967,8 +956,8 @@ end
 
 The square-lattice Ising model's site tensor for [`InfiniteCTM2D`](@ref): spins on the vertices,
 weight `exp(β Σ J_a σσ′ + β h Σ σ)`, each bond's Boltzmann matrix split symmetrically between its
-two sites. Returns the site tensor, its legs `(x⁻, x⁺, y⁻, y⁺)` and the impurity tensor with σ
-inserted.
+two sites. A complex `h` (e.g. imaginary, for the Yang–Lee edge) gives complex tensors. Returns the
+site tensor, its legs `(x⁻, x⁺, y⁻, y⁺)` and the impurity tensor with σ inserted.
 """
 function ising2d_site(β::Real; J = (1.0, 1.0), h::Number = 0.0)
     legs = Tuple(new_index(2; tags = "i2,$n") for n in ("xm", "xp", "ym", "yp"))

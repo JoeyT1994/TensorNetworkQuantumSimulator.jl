@@ -2,6 +2,7 @@
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test, @test_throws
+using Adapt: adapt
 const TNQS = TensorNetworkQuantumSimulator
 
 onsager(K; n = 400) = log(2) + sum(log(cosh(2K)^2 - sinh(2K) * (cos(2π * i / n) + cos(2π * j / n)))
@@ -55,6 +56,8 @@ product_A(v) = (is = [TNQS.new_index(1) for _ in 1:4]; p = TNQS.new_index(length
     @test info.converged && info.residual < 1.0e-9
     @test abs(cvm_freenergy(bpk) - 0.821406483585) < 1.0e-11
     @test abs(real(site_ratio(bpk, mag)) - 0.750929125) < 1.0e-8
+    # `adapt` carries the tensor, site and environments (host → host here; test_gpu_paths.jl: device)
+    @test site_ratio(adapt(Array, bpk), mag) == site_ratio(bpk, mag)
 
     # THE STATIONARY (bilinear) boundary PEPS in an imaginary field, exact at D = 1, continued from
     # the real maximiser at θ = 0 with secant predictors. Measured 2026-09-26:
@@ -112,30 +115,13 @@ product_A(v) = (is = [TNQS.new_index(1) for _ in 1:4]; p = TNQS.new_index(length
         end
     end
 
-    # THE PROJECTED POWER METHOD (MP-BP bond projectors): exact where the dominant eigenvector is a
-    # product (chains along z: ln 2cosh K to 1e-16 in 3 steps); on 3D Ising it converges fast (β = 0.25,
-    # D = 2: 30 steps, ~7 s) but to a BIASED fixed point — bond-local truncation ignores the plane's
-    # loops: f 4.7e-6 below the variational optimum, m = 0.75386 against 0.75093, and ∇f ≠ 0 there
-    # (|g||c| = 3.7e-3). Measured 2026-09-26; at β = 0.22 it even orders (m = 0.40) where the D = 2
-    # optimum is disordered.
-    let K = 0.4
-        s, l, _ = ising3d_site(K; J = (0.0, 0.0, 1.0))
-        bp, info = boundary_peps_power(s, l, 1; maxdim = 4, tol = 1.0e-12)
-        @test info.converged && abs(cvm_freenergy(bp) - log(2cosh(K))) < 1.0e-13
-    end
-    let β = 0.25
-        s, l, m = ising3d_site(β)
-        bp, info = boundary_peps_power(s, l, 2; maxdim = 16, boundary = [1.0, 0.0], tol = 1.0e-8)
-        @test info.converged && info.asym < 1.0e-12
-        @test -1.0e-5 < cvm_freenergy(bp) - 0.8214064836 < 0          # below the variational optimum
-        @test 2.0e-3 < abs(site_ratio(bp, m)) - 0.7509291 < 4.0e-3     # the documented bias
-        @test info.gnorm > 1.0e-3                                      # not stationary for f
-    end
-
     # argument checks
     @test_throws ArgumentError boundary_peps(site, legs, 0; maxdim = 4)
     @test_throws ArgumentError boundary_peps(site, legs[1:5], 2; maxdim = 4)
     s2, l2, _ = ising3d_site(0.25; J = (1.0, 0.5, 1.0))           # not C4v-invariant in x, y
     @test_throws ArgumentError boundary_peps(s2, l2, 2; maxdim = 4)
+    @test_throws ArgumentError boundary_peps_krylov(s2, l2, bp)
+    @test_throws ArgumentError boundary_peps_krylov(site * complex(1.0), legs, bp; merit = :f)   # no maximum principle
+    @test_throws ArgumentError boundary_peps_krylov(site, legs, bp; merit = :nonsense)
 end
 end

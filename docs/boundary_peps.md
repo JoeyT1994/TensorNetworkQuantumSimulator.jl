@@ -11,11 +11,18 @@ dimension D. It leaves CTMRG only line interfaces, the kind it converges on.
 
 ```julia
 site, legs, mag = ising3d_site(0.25)                   # cubic Ising, symmetric bond split
-bp = boundary_peps(site, legs, 2; maxdim = 16, boundary = [1.0, 0.0])
+bp = boundary_peps(site, legs, 2; maxdim = 16, boundary = [1.0, 0.0], gtol = 1e-4)   # L-BFGS: get close
+bp, info = boundary_peps_krylov(site, legs, bp)        # Newton–Krylov: converge (|∇f| < 1e-9)
 cvm_freenergy(bp)            # ln κ per site — a variational LOWER bound
 site_ratio(bp, mag)          # ⟨σ⟩ in the bulk
-bp2 = boundary_peps(ising3d_site(0.24)[1:2]..., 2; maxdim = 16, init = bp)   # warm start
+s3, l3, _ = ising3d_site(0.24)
+bp3 = boundary_peps(s3, l3, 3; maxdim = 24, init = bp, gtol = 1e-4)   # a nearby β, D = 3 (embedded)
+bp3, _ = boundary_peps_krylov(s3, l3, bp3)
+bpg = adapt(CuArray, bp3)    # to the GPU (it pays from D = 4); every solver continues there
 ```
+
+Near a critical point converge before measuring: m is decided by a soft mode that f and a loose
+gradient do not see ("Routes to the boundary state" below).
 
 ## Construction
 
@@ -126,12 +133,18 @@ ran; an unloaded D = 3, χ = 24 full step was 0.055 s.)
 
 ### GPU
 
-Pass the site on the device (`adapt(CuArray, site)`, and a `BoundaryPEPS` init on the device); every
-contraction follows it. One sandwich step, split pairs, Float64 on an RTX A6000 against 4 CPU threads
+Pass the site on the device (`adapt(CuArray, site)`, and a `BoundaryPEPS` init on the device, or move a
+host state with `adapt(CuArray, bp)`: tensor, site and both environments); every contraction follows
+it, for every solver. `test/test_gpu_paths.jl` checks host/device agreement for L-BFGS, Newton–Krylov
+(real and complex data) and the complex c4v `InfiniteCTM2D`. One sandwich step, split pairs, Float64 on an RTX A6000 against 4 CPU threads
 on a loaded workstation: 7× at D = 3, χ = 24, 22× at D = 4, χ = 48, 23× at D = 5, χ = 50 (0.58 s
 against 13.3 s; the unloaded 8-thread CPU step is 7.1 s). At D = 3 the GPU is latency-bound: a warm
 evaluation (two environments to 1e-7, 15 steps each, plus gradients) is 4.2 s on the GPU and 3.6 s on
 the CPU with c4v. It pays from D = 4.
+
+Consumer GPUs run Float64 at 1/32–1/64 of their Float32 rate: on an RTX 3070 (2026-09-26) one warm
+D = 3, χ = 16 evaluation (two environments to 1e-12, ~14 steps each with Anderson mixing) is 1.1 s,
+against 0.6 s on 8 CPU threads.
 
 ## The optimiser near β_c (2026-09-25)
 
@@ -161,7 +174,9 @@ at β = 0.2275, CTM steps to tolerance:
 
 Warm, where the optimiser lives, it saves 1.4–1.6× on the sandwich. From the vacuum it does not
 help, and at m = 3 the norm network converged to a fixed point 3e-4 off in ln κ: mixing while the
-kept rank is still growing can change the basin. Hence off by default.
+kept rank is still growing can change the basin. Hence off by default in `update`; the boundary-PEPS
+solvers apply it to warm-started runs only (`ctm_anderson`; on by default in `boundary_peps_krylov`,
+1.7–1.8× fewer steps per evaluation at D = 3, see "Routes to the boundary state").
 
 Tried and rejected:
 
@@ -189,8 +204,8 @@ order. Every local shortcut tried lands somewhere else, or nowhere:
 | route | fixed point | measured |
 |---|---|---|
 | direct 3D CTMRG (`InfiniteCTM3D`) | biased | m 0.9% high at β = 0.25 for every χ ≤ 8 |
-| projected power with MP-BP bond projectors (`boundary_peps_power`) | biased | β = 0.25, D = 2: m = 0.75386 against 0.75093, f 4.7e-6 low, \|∇f\| = 3.7e-3. At β = 0.22 it orders (m = 0.40) where D = 2 is disordered. Fast: 30 steps, 7 s |
-| natural power A ← N⁻¹E_s (`boundary_peps_natural`) | exact | unstable: from 2e-3 away, \|ΔA\| grows 0.08 → 1.3 |
+| projected power with MP-BP bond projectors (`boundary_peps_power`, removed; code in bf8ae70) | biased | β = 0.25, D = 2: m = 0.75386 against 0.75093, f 4.7e-6 low, \|∇f\| = 3.7e-3. At β = 0.22 it orders (m = 0.40) where D = 2 is disordered. Fast: 30 steps, 7 s |
+| natural power A ← N⁻¹E_s (`boundary_peps_natural`, removed; code in 6ad5c54) | exact | unstable: from 2e-3 away, \|ΔA\| grows 0.08 → 1.3 |
 | stationary or variational: L-BFGS, Newton, Newton–Krylov | exact | see below |
 
 * **The bond projectors** cut each bond against its own environment and are blind to the plane's
@@ -308,14 +323,7 @@ The fastest accurate route measured, from the network inwards:
    loose |g| do not see.
 
 At D = 3 near β_c on 8 cores this gets m to 1e-7 in about 5 minutes, where L-BFGS still wanders at
-1e-5 after 400 s.
-
-Not yet measured:
-
-* D ≥ 4 (n = 110 coordinates), where the subspace should matter more.
-* The GPU, where concurrent products compete for one device.
-* The complex (Yang–Lee) continuation with Newton–Krylov beyond the D = 1 chain test.
-* β continuation with a tangent predictor.
+1e-5 after 400 s. What is not yet measured is under "Open problems" below.
 
 ## Validation of the boundary PEPS
 
@@ -359,9 +367,19 @@ interrupted and restarted from the fixed-spin seed): |g| = 1.9e-4 at the cap.
 
 ## Costs
 
-D = 2, χ = 16: one evaluation (two 2D CTMRG runs plus four one-site environments) is ~0.5 s
-warm-started. 60 L-BFGS iterations at β = 0.25 took 37 s.
+* D = 2, χ = 16: one evaluation (two 2D CTMRG runs plus four one-site environments) is ~0.5 s
+  warm-started. 60 L-BFGS iterations at β = 0.25 took 37 s.
+* D = 3, χ = 16, 8 threads, Anderson mixing (2026-09-26): 0.6 s per warm evaluation, almost all of
+  it the CTM steps (norm network 0.2 s, sandwich 0.6 s run concurrently, 13–15 steps each); the four
+  site environments and both ln κ are 1% of it.
 
 ## Open problems
 
-RESULTS PENDING
+* D ≥ 4 with Newton–Krylov (n = 110 coordinates at D = 4), where the subspace should matter more,
+  and with the GPU, where concurrent products compete for one device.
+* The complex path of `boundary_peps_krylov` beyond the D = 1 chains: the Yang–Lee continuations
+  (docs/yang_lee.md) still use `boundary_peps_stationary`.
+* β continuation with a tangent predictor, which would start each point of a scan near the soft
+  mode's answer.
+* How long L-BFGS takes to settle m at D = 3 near β_c: not within 400 s (the chained run that was to
+  measure it did not finish).

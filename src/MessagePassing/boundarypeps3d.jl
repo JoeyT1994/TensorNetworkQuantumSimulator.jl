@@ -8,7 +8,8 @@
 #   f(A) = ln κ(⟨Ψ|T|Ψ⟩) − ln κ(⟨Ψ|Ψ⟩)                      (per site)
 #
 # both terms the free energy per site of an ordinary 2D network — three layers and two —
-# contracted by `InfiniteCTM2D` in the Kikuchi form. For a symmetric T (a symmetric bond split, as
+# contracted by `InfiniteCTM2D` in the Kikuchi form. f is the nested Bethe estimate: stationary at
+# the boundary state, so its errors are second order. For a symmetric T (a symmetric bond split, as
 # `ising3d_site`'s) f is variational: f ≤ ln κ₃D, approaching it as D grows.
 #
 # THE GRADIENT IS LOCAL. T is a product of site tensors, not a sum of local terms, so the derivative
@@ -18,17 +19,27 @@
 #
 #   ∂f/∂A = (E_ket + E_bra)/z |_{⟨Ψ|T|Ψ⟩} − (E_ket + E_bra)/z |_{⟨Ψ|Ψ⟩}   (real A)
 #
-# f is invariant under A → cA, so the gradient is orthogonal to A; the optimiser works on the unit
-# sphere (steps projected tangent, A renormalised), with L-BFGS and Armijo backtracking as in the
-# DMRG branch's `ctmrg_lbfgs`. With `symmetrize = true` (a C4v-invariant site) A and every gradient
-# are projected onto the C4v-symmetric subspace of the virtual legs.
+# f is invariant under A → cA, so the gradient is orthogonal to A. With `symmetrize = true` (a
+# C4v-invariant site) A and every gradient are projected onto the C4v-symmetric subspace of the
+# virtual legs. Three solvers for ∇f = 0 (measured against each other in docs/boundary_peps.md):
+#
+# * `boundary_peps` — L-BFGS on the unit sphere with the norm-metric preconditioner: cheap per
+#   iteration and robust from a cold start; real data only.
+# * `boundary_peps_krylov` — Newton–Krylov with a trust region in the Krylov subspace, real or complex
+#   (bilinear) data: the fast route to a CONVERGED state, where observables near a critical point
+#   are decided by soft modes that f and a loose gradient do not see.
+# * `boundary_peps_stationary` — Newton with the full finite-difference Jacobian: small D and
+#   continuations that reuse the Jacobian (the Yang–Lee scans, docs/yang_lee.md).
 
 """
     BoundaryPEPS
 
-The result of [`boundary_peps`](@ref): the boundary tensor `A` on legs `Alegs = (x⁻, x⁺, y⁻, y⁺, p)`
+The result of [`boundary_peps`](@ref), [`boundary_peps_krylov`](@ref) or
+[`boundary_peps_stationary`](@ref): the boundary tensor `A` on legs `Alegs = (x⁻, x⁺, y⁻, y⁺, p)`
 (`p` the z bond), the 3D `site` and its `legs`, the converged 2D environments of ⟨Ψ|Ψ⟩ (`normenv`)
-and ⟨Ψ|T|Ψ⟩ (`openv`), `lnkappa = f(A)` and the optimisation `history` of f.
+and ⟨Ψ|T|Ψ⟩ (`openv`), `lnkappa = f(A)`, the final gradient norm `gnorm`, the `history` of f, and
+whether the bra is `A` itself (`bilinear`, the stationary solvers) or `conj(A)`. Any of the solvers
+takes it as `init`; `adapt(CuArray, bp)` moves it (tensor, site and environments) to the GPU.
 """
 struct BoundaryPEPS
     A::Any
@@ -43,6 +54,10 @@ struct BoundaryPEPS
     history::Vector{Float64}
     bilinear::Bool                 # bra = A (a complex symmetric T: ⟨L| = |R⟩ᵀ), not conj(A)
 end
+
+Adapt.adapt_structure(to, bp::BoundaryPEPS) =
+    BoundaryPEPS(adapt(to, bp.A), bp.Alegs, bp.blegs, adapt(to, bp.site), bp.legs, adapt(to, bp.normenv),
+                 adapt(to, bp.openv), bp.lnkappa, bp.gnorm, bp.history, bp.bilinear)
 
 # The 8 symmetries of the square acting on the legs (x⁻, x⁺, y⁻, y⁺): swap within either pair,
 # and swap the pairs.
@@ -448,15 +463,19 @@ end
 
 """
     boundary_peps_stationary(site, legs, init; maxdim, A0 = init.A, jacobian = nothing, tol = 1e-9,
-                             maxiter = 12, fd_step = 1e-5, ctm_tolerance = 1e-12,
-                             ctm_maxiter = 4000, verbose = false, kwargs...) -> (bp, info)
+                             maxiter = 12, fd_step = 1e-5, ctm_tolerance = 1e-12, ctm_maxiter = 2000,
+                             ls_max = 8, noise_tol = 1e-7, svd_rtol = 1e-6, step_tol = 1e-7,
+                             fd_ctm_tolerance = ctm_tolerance, refresh_jacobian = true,
+                             verbose = false, kwargs...) -> (bp, info)
 
-The STATIONARY 1×1 boundary PEPS of a complex symmetric layer operator (see the note above):
+The STATIONARY 1×1 boundary PEPS of a (complex) symmetric layer operator (see the note above):
 Newton's method on ∇f = 0 for the bilinear estimator `f(R) = ln κ(RᵀTR) − ln κ(RᵀR)` in the
 C4v-symmetric coordinates, from `A0` (default `init.A`; a predictor in a continuation), with
-`init`'s legs and warm-started environments. `site` must carry `legs` (relabel a new coupling's
-site onto them). The Jacobian is recomputed by central differences (step `fd_step`) at the first
-iteration unless `jacobian` (a previous `info.J`) is passed, and Broyden-updated after every
+`init`'s legs and warm-started environments; real data stay real. The full finite-difference
+Jacobian costs 2n evaluations, so this suits small D and continuations that reuse it (`jacobian`);
+otherwise [`boundary_peps_krylov`](@ref) is faster. `site` must carry `legs` (relabel a new
+coupling's site onto them). The Jacobian is recomputed by central differences (step `fd_step`) at
+the first iteration unless `jacobian` (a previous `info.J`) is passed, and Broyden-updated after every
 accepted step; steps backtrack on the residual (up to `ls_max` halvings), a stale Jacobian is
 recomputed once, and a fresh one that gives no descent means the gradient's noise floor (set by χ
 and `ctm_tolerance`: measured 2e-9 at 3D Ising β = 0.18, 1e-8 at β = 0.21, D = 2, χ = 16) —
@@ -571,12 +590,15 @@ end
 
 # --- NEWTON–KRYLOV WITH A SUBSPACE TRUST REGION --------------------------------------------------
 #
-# The Newton method above builds all of J by finite differences (2n evaluations: n = 42 at D = 3,
-# 110 at D = 4) before its first step. Newton–Krylov never forms J: the Krylov basis is built by
-# Arnoldi from Jacobian-vector products, each the finite difference of the gradient along a basis
-# vector (one warm-started evaluation; two, in parallel, with `central`), in the reduced coordinates
-# (the complement Q of the scale and bond-gauge null directions, W = Q̄, so the operator QᵀJQ is
-# complex symmetric, and real symmetric — the Hessian of f — for real data).
+# The recommended solver (docs/boundary_peps.md, "Routes to the boundary state"). The Newton method
+# above builds all of J by finite differences (2n evaluations: n = 42 at D = 3, 110 at D = 4) before
+# its first step. Newton–Krylov never forms J: it builds a subspace from Jacobian-vector products, each
+# the finite difference of the gradient along a basis vector (one warm-started evaluation; two, in
+# parallel, with `central`), in the reduced coordinates (the complement Q of the scale and bond-gauge
+# null directions, W = Q̄, so the operator QᵀJQ is complex symmetric, and real symmetric — the Hessian
+# of f — for real data). The subspace starts from −g and the directions recycled from the last step,
+# and grows by block Arnoldi (`block` products at a time, on threads) until the model's residual
+# outside it is below η|g| (Eisenstat–Walker forcing).
 #
 # WHY A TRUST REGION. The Hessian's spectrum is wide and soft at the bottom. 3D Ising β = 0.25, D = 2,
 # χ = 16 (measured 2026-09-26): reduced eigenvalues −2.7 … −2.9e-6; at D = 3 they reach ±1e-13, some
@@ -584,28 +606,24 @@ end
 # change the state). Along the soft modes the Newton step is long (0.063 along the λ = −1.6e-4 mode at
 # |g| = 3.9e-5) and f is far from quadratic on that scale: the full step raised |g| 30× while f
 # improved, and a line search on |g| stalled. So the step is the trust-region step of the model in the
-# Krylov subspace: for real data the model of f (maximised; negative curvature, i.e. a positive
-# eigenvalue, is followed to the boundary) and the ratio of the actual to the predicted gain in f
-# accepts it and adapts the radius; for complex data, with no maximum principle, the model of |g|²
-# (Levenberg–Marquardt, small singular values below `svd_rtol` dropped). A rejected step shrinks the
-# radius and is re-solved in the SAME subspace: no new products. The basis grows until the model's
-# residual outside it is below η|g| (Eisenstat–Walker forcing).
+# subspace: for real data the model of f (maximised; negative curvature, i.e. a positive eigenvalue,
+# is followed to the boundary), the ratio of the actual to the predicted gain in f accepting it and
+# adapting the radius; for complex data, with no maximum principle, the model of |g|²
+# (Levenberg–Marquardt, singular values below `svd_rtol` dropped). A rejected step shrinks the radius
+# and is re-solved in the SAME subspace: no new products.
 #
-# The norm metric does not help here as a preconditioner: at D = 3 the metric-preconditioned
-# operator needed more products to a 1e-1 / 1e-2 relative residual than the plain one (12 / 27
-# against 3 / 12, of 38).
+# Measured and dropped: the norm metric as a preconditioner (at D = 3 GMRES needed 12 / 27 products to
+# a 1e-1 / 1e-2 residual against 3 / 12 plain), and reusing a subspace for further steps without new
+# products (it stalls at D = 2 unless recycling feeds it, and is slower when it does).
 
-# max_y  −bᵀy + ½ yᵀ T y  over |y| ≤ Δ (T = the symmetrised Krylov projection of the Hessian of f, −b
-# the gradient of f in the subspace; b = β e₁ for a fresh basis): Moré–Sorensen on the
-# eigendecomposition of the small T, the hard case completed along the lowest mode. Returns
-# (y, predicted gain in f).
-_bp_trs_max(T, β::Number, Δ) = _bp_trs_max(T, [β; zeros(size(T, 1) - 1)], Δ)
-function _bp_trs_max(T, b::AbstractVector, Δ)
-    M = -Symmetric(real((T + T') / 2))                # minimise q(y) = bᵀy + ½ yᵀ M y
+# max_y  −β y₁ + ½ yᵀ T y  over |y| ≤ Δ (T = the symmetrised subspace projection of the Hessian of f,
+# −β e₁ the gradient of f there): Moré–Sorensen on the eigendecomposition of the small T, the hard case
+# completed along the lowest mode. Returns (y, predicted gain in f).
+function _bp_trs_max(T, β::Real, Δ::Real)
+    M = -Symmetric(real((T + T') / 2))                # minimise q(y) = β y₁ + ½ yᵀ M y
     F = eigen(M)
     μ, U = F.values, F.vectors
-    a = U' * real(b)
-    nb = norm(a)
+    a = β .* U[1, :]
     ylen(λ) = norm(a ./ (μ .+ λ))
     λ = 0.0
     hard = false
@@ -614,7 +632,7 @@ function _bp_trs_max(T, b::AbstractVector, Δ)
         if ylen(lo + 1.0e-12 * max(1.0, abs(μ[end]))) <= Δ
             λ = lo; hard = true                          # a₁ ≈ 0: complete along the lowest mode
         else
-            hi = lo + nb / Δ + 1.0e-12
+            hi = lo + β / Δ + 1.0e-12                    # ylen(hi) ≤ β / (μ₁ + hi) ≤ Δ
             for _ in 1:200
                 mid = (lo + hi) / 2
                 ylen(mid) > Δ ? (lo = mid) : (hi = mid)
@@ -633,20 +651,19 @@ function _bp_trs_max(T, b::AbstractVector, Δ)
         z[1] = sqrt(max(Δ^2 - sum(abs2, z), 0.0))
     end
     y = U * z
-    return y, -(dot(real(b), y) + dot(y, M * y) / 2)
+    return y, -(β * y[1] + dot(y, M * y) / 2)
 end
 
-# min_y ‖b − H y‖ over |y| ≤ Δ (b = β e₁ for a fresh basis), singular values below rtol·σ_max
-# dropped (Levenberg–Marquardt in the Krylov subspace). Returns (y, predicted decrease of |g|²,
-# unconstrained relative residual).
-_bp_trs_lsq(H, β::Number, Δ, rtol) = _bp_trs_lsq(H, [β; zeros(eltype(H), size(H, 1) - 1)], Δ, rtol)
-function _bp_trs_lsq(H, b::AbstractVector, Δ, rtol)
+# min_y ‖β e₁ − H y‖ over |y| ≤ Δ, singular values below rtol·σ_max dropped (Levenberg–Marquardt in
+# the subspace). Returns (y, predicted decrease of |g|², unconstrained relative residual).
+function _bp_trs_lsq(H, β::Real, Δ::Real, rtol::Real)
     F = svd(H)
     keep = F.S .> rtol * F.S[1]
-    S = F.S[keep]; a = F.U[:, keep]' * b
+    S = F.S[keep]; a = β .* conj.(F.U[1, keep])
+    e1 = zeros(eltype(H), size(H, 1)); e1[1] = β
     ystep(λ) = F.V[:, keep] * (S .* a ./ (S .^ 2 .+ λ))
     y0 = ystep(0.0)
-    free = norm(b - H * y0) / norm(b)
+    free = norm(e1 - H * y0) / β
     λ = 0.0
     if norm(y0) > Δ
         lo = 0.0; hi = S[1] * norm(a) / Δ
@@ -658,12 +675,12 @@ function _bp_trs_lsq(H, b::AbstractVector, Δ, rtol)
         λ = hi
     end
     y = λ == 0 ? y0 : ystep(λ)
-    return y, norm(b)^2 - norm(b - H * y)^2, free
+    return y, β^2 - norm(e1 - H * y)^2, free
 end
 
 """
     boundary_peps_krylov(site, legs, init; maxdim, A0 = init.A, merit = :auto, tol = 1e-9,
-                         maxiter = 50, krylovdim = 40, radius = 0.05, max_radius = 0.5,
+                         maxiter = 200, krylovdim = 40, radius = 0.05, max_radius = 0.5,
                          fd_step = 1e-5, central = false, ctm_tolerance = 1e-12,
                          fd_ctm_tolerance = ctm_tolerance, ctm_maxiter = 2000, max_rejects = 8,
                          svd_rtol = 1e-6, eta_max = 0.1, eta_min = 1e-4, noise_tol = 1e-7, block = 4,
@@ -691,7 +708,7 @@ radius), `radius` (the final trust radius), `c` (the final coordinates).
 """
 function boundary_peps_krylov(site, legs, init::BoundaryPEPS; maxdim::Integer = init.normenv.maxdim,
                               A0 = init.A, merit::Symbol = :auto, tol::Real = 1.0e-9,
-                              maxiter::Integer = 50, krylovdim::Integer = 40, radius::Real = 0.05,
+                              maxiter::Integer = 200, krylovdim::Integer = 40, radius::Real = 0.05,
                               max_radius::Real = 0.5, fd_step::Real = 1.0e-5, central::Bool = false,
                               ctm_tolerance::Real = 1.0e-12, fd_ctm_tolerance::Real = ctm_tolerance,
                               ctm_maxiter::Integer = 2000, max_rejects::Integer = 8,
@@ -703,7 +720,8 @@ function boundary_peps_krylov(site, legs, init::BoundaryPEPS; maxdim::Integer = 
     _bp_isc4v(site, legs) || throw(ArgumentError("boundary_peps_krylov needs a C4v-invariant site"))
     cplx = scalartype(site) <: Complex || scalartype(A0) <: Complex
     merit in (:auto, :f, :residual) || throw(ArgumentError("merit must be :auto, :f or :residual"))
-    cplx && merit === :f && throw(ArgumentError("merit = :f needs real data (no maximum principle for complex T)"))
+    cplx && merit === :f &&
+        throw(ArgumentError("merit = :f needs real data (no maximum principle for complex T)"))
     variational = merit === :f || (merit === :auto && !cplx)
     sitec = cplx && !(scalartype(site) <: Complex) ? site * complex(1.0) : site
     ctx = (; al, bl, site = sitec, legs = Tuple(legs), maxdim = Int(maxdim), symmetrize = true,
@@ -747,8 +765,7 @@ function boundary_peps_krylov(site, legs, init::BoundaryPEPS; maxdim::Integer = 
         # the subspace of the reduced operator: r₀ = −Qᵀg first, then the directions recycled from
         # the last step, then (block) Arnoldi — `block` products at a time, on threads. Any orthonormal
         # V with J V_k ⊂ span V works: T = H[1:k, 1:k] is the Galerkin projection, and the model's
-        # residual outside span V_k is H[k+1:p, 1:k] y. (Reusing a subspace for further steps from the
-        # new gradient, without new products, was tried and measured worse: 3D Ising β = 0.25, D = 2.)
+        # residual outside span V_k is H[k+1:p, 1:k] y.
         N = reduce(hcat, vcat([c], _bp_gauge_tangents(c, B, D, dp)))
         Q = nullspace(Matrix(N'))
         cplx || (Q = real(Q))
@@ -792,7 +809,8 @@ function boundary_peps_krylov(site, legs, init::BoundaryPEPS; maxdim::Integer = 
         # the trust-region step in the fixed subspace; a rejection shrinks Δ and re-solves there
         accepted = false
         for _ in 1:max_rejects
-            y, pred = variational ? _bp_trs_max(H[1:kk, 1:kk], β0, Δ) : _bp_trs_lsq(H[1:p, 1:kk], β0, Δ, svd_rtol)
+            y, pred = variational ? _bp_trs_max(H[1:kk, 1:kk], β0, Δ) :
+                                    _bp_trs_lsq(H[1:p, 1:kk], β0, Δ, svd_rtol)
             dc = Q * (V[:, 1:kk] * y)
             ct = (c + dc) / norm(c + dc)
             ft, gt, lnt, lst = _bp_krylov_eval(ct, B, ctx, ln, ls, ctm_tolerance, cplx, nevals, nsteps)
@@ -801,8 +819,8 @@ function boundary_peps_krylov(site, legs, init::BoundaryPEPS; maxdim::Integer = 
             # below the resolution of f (or of |g|²) the residual decides
             ρ = pred > 1.0e-13 * max(1.0, abs(f)) || !variational ? actual / pred : (rt < res ? 1.0 : -1.0)
             ok = isfinite(rt) && isfinite(ρ) && ρ > 1.0e-4
-            verbose && (println("    $kk products, |y| = $(norm(y)) (Δ = $Δ): predicted $pred, actual $actual, ρ = $ρ, |g| → $rt",
-                                ok ? "" : "  REJECTED"); flush(stdout))
+            verbose && (println("    $kk products, |y| = $(norm(y)) (Δ = $Δ): predicted $pred, actual $actual, ",
+                                "ρ = $ρ, |g| → $rt", ok ? "" : "  REJECTED"); flush(stdout))
             if ρ < 0.25 || !isfinite(ρ)
                 Δ = 0.25 * norm(y)
             elseif ρ > 0.75 && norm(y) > 0.99 * Δ
@@ -840,9 +858,9 @@ end
 
 # J u for every u in `us`, concurrently
 function _bp_krylov_products(c, g, us, B, ctx, ln, ls, h, central, τ, cplx, nevals, nsteps)
-    length(us) == 1 && return [_bp_krylov_jv(c, g, us[1], B, ctx, ln, ls, h, central, τ, cplx, nevals, nsteps)]
-    tasks = [Threads.@spawn _bp_krylov_jv(c, g, u, B, ctx, ln, ls, h, central, τ, cplx, nevals, nsteps) for u in us]
-    return fetch.(tasks)
+    jv(u) = _bp_krylov_jv(c, g, u, B, ctx, ln, ls, h, central, τ, cplx, nevals, nsteps)
+    length(us) == 1 && return [jv(only(us))]
+    return fetch.([Threads.@spawn jv(u) for u in us])
 end
 
 # V with v appended, orthonormalised against it (unchanged if v is dependent on V's columns)
@@ -884,236 +902,4 @@ function _bp_krylov_jv(c, g, u, B, ctx, ln, ls, h, central, τ, cplx, nevals, ns
         return (fetch(tp)[2] - gm) / (2h)
     end
     return (_bp_krylov_eval(c + h * u, B, ctx, ln, ls, τ, cplx, nevals, nsteps)[2] - g) / h
-end
-
-# --- the NATURAL POWER METHOD: the full-environment update A ← N⁻¹ E_s --------------------------
-#
-# One application of T per step, the result fitted back into the bond-D manifold with the FULL
-# environment rather than bond by bond: the new tensor maximises the fidelity |⟨X|T|A⟩|²/⟨X|X⟩ (in the
-# bilinear sense for complex symmetric T), X = N⁻¹ E_s, with N the norm metric of ⟨A|A⟩ (its shell with
-# both of the site's layers removed) and E_s the environment of the bra slot of ⟨A|T|A⟩. At a fixed
-# point N A ∝ E_s, i.e. E_s/z_s = E_n/z_n: ∇f = 0 — the stationary point of the Bethe estimate, loops
-# included (unlike the bond-projector power method below). No Jacobian, no Hessian, no line search, and
-# it needs no variational principle, so it serves complex (non-Hermitian) T as it serves real. It is
-# the natural-gradient step with the power method's step length; for a Hermitian T the preconditioned
-# L-BFGS of `boundary_peps` accelerates exactly this. Near-null directions of N are regularised by
-# `shift`·‖N‖ — in the correction only (see inside), which keeps the fixed point exact.
-#
-# ⚠️ MEASURED UNSTABLE as a plain iteration (2026-09-26, 3D Ising β = 0.25, D = 2, χ = 16): from the
-# projected-power state (2e-3 from the optimum) |ΔA| grows 0.08 → 0.40 → 0.96 → ~1.3 and wanders (m ends
-# at 0.49), with shift 1e-12 … 1e-5 alike. The step is computed in FROZEN environments and the true map
-# is expansive — the environment response the local-eigenproblem update also tripped on
-# (docs/boundary_peps.md). Kept for experiments; a damped version is fixed-step natural gradient, which
-# the line-searched L-BFGS of `boundary_peps` already does better.
-"""
-    boundary_peps_natural(site, legs, init::BoundaryPEPS; maxdim = init.normenv.maxdim,
-                          maxiter = 400, tol = 1e-9, shift = 1e-5, ctm_tolerance = 1e-11,
-                          ctm_maxiter = 2000, verbose = false, kwargs...) -> (bp, info)
-
-The natural power method (see the note above) from `init`'s tensor and environments (`site` carrying
-`init`'s legs; real or complex, bilinear pairing). Stops at ‖ΔA‖ < `tol`. `info`: `iterations`,
-`change`, `converged`, `history`, `gnorm` (|∇f|·|c| at the end, in the C4v coordinates).
-"""
-function boundary_peps_natural(site, legs, init::BoundaryPEPS; maxdim::Integer = init.normenv.maxdim,
-                               maxiter::Integer = 400, tol::Real = 1.0e-9, shift::Real = 1.0e-5,
-                               ctm_tolerance::Real = 1.0e-11, ctm_maxiter::Integer = 2000,
-                               verbose::Bool = false, kwargs...)
-    al, bl = init.Alegs, init.blegs
-    _bp_isc4v(site, legs) || throw(ArgumentError("boundary_peps_natural needs a C4v-invariant site"))
-    cplx = scalartype(site) <: Complex || scalartype(init.A) <: Complex
-    sitec = cplx && !(scalartype(site) <: Complex) ? site * complex(1.0) : site
-    ctx = (; al, bl, site = sitec, legs = Tuple(legs), maxdim = Int(maxdim), symmetrize = true, ctm_tolerance,
-           ctm_maxiter = Int(ctm_maxiter), ctm_kwargs = merge((; c4v = true), kwargs), bilinear = true)
-    A = cplx ? init.A * complex(1.0) : init.A
-    A = A / norm(A)
-    reuse = init.normenv isa InfiniteCTM2D && init.normenv.maxdim == maxdim
-    ln = reuse ? (cplx ? _i2_complexify(init.normenv) : init.normenv) : nothing
-    ls = reuse && init.openv isa InfiniteCTM2D ? (cplx ? _i2_complexify(init.openv) : init.openv) : nothing
-    ka = collect(al[1:4]); kb = collect(bl); p = al[5]
-    history = Float64[]; change = Inf; it = 0; converged = false
-    f = NaN; G = nothing
-    for k in 1:maxiter
-        it = k
-        f, G, ln, ls = _bp_evaluate(A, ctx, ln, ls, ctm_tolerance)
-        # E_s: the bra slot's environment in ⟨A|T|A⟩, on A's legs
-        Es, _ = site_environment(ls, 3)
-        Es = replaceinds(Es, vcat(collect(bl), [legs[6]]), collect(al))
-        # N: the norm metric (ket legs × bra legs), from the shell of ⟨A|A⟩
-        VX, _, env = _i2_shell(ln)
-        old, new = _i2_site_relabelling(ln.legs, _I2_V, VX)
-        Nt = _i2_relabel(env, new, old)
-        M = Array(array(Nt, ka..., kb...))
-        n = prod(size(M)[1:4]); M = reshape(M, n, n)
-        # N⁻¹E_s = (z_s/z_n)(A + (z_n/z_s) N⁻¹ r), r = E_s − (z_s/z_n) E_n: regularise the CORRECTION
-        # only. N is so ill-conditioned that A has weight in its near-null directions, and a shifted
-        # (N + s)X = E_s suppresses exactly those — measured at the variational optimum (β = 0.25,
-        # D = 2, where r ≈ 4e-9): one step moved A by 2.4e-4 / 2.8e-3 / 0.19 at s = 1e-12 / 1e-8 / 1e-5.
-        # This way the fixed point (r = 0) is exact for any shift.
-        En = replaceinds(Nt * A, kb, ka)                                  # N A, on A's legs
-        zs = scalar(Es * A); zn = scalar(En * A)
-        r = Es - (zs / zn) * En
-        R = reshape(Array(array(r, ka..., p)), n, :)
-        δ = (transpose(M) + shift * opnorm(M, 1) * I) \ R                   # N δ = r over the bra legs
-        Xt = A + (zn / zs) * adapt_like(A, from_array(reshape(δ, (dim.(ka)..., dim(p))), ka..., p))
-        Xt = _bp_symmetrize(Xt, al[1:4]); Xt = Xt / norm(Xt)
-        ph = dot(A, Xt); ph = iszero(ph) ? one(ph) : conj(ph) / abs(ph)
-        change = norm(Xt * ph - A)
-        push!(history, change)
-        A = Xt * ph
-        verbose && (println("  natural it $k: f = $f, |ΔA| = $change"); flush(stdout))
-        if change < tol
-            converged = true
-            break
-        end
-    end
-    f, G, ln, ls = _bp_evaluate(A, ctx, ln, ls, ctm_tolerance)
-    B = _bp_c4v_basis(al)
-    gn = norm(_bp_to_coords(G, B, al)) * norm(_bp_to_coords(A, B, al))
-    bp = BoundaryPEPS(A, al, bl, sitec, Tuple(legs), ln, ls, real(f), gn, Float64[real(f)], true)
-    return bp, (; iterations = it, change, converged, history, gnorm = gn)
-end
-
-# --- the PROJECTED POWER METHOD: z-direction eig-CTMRG ------------------------------------------
-#
-# The boundary state by iteration rather than optimisation: R ← Π(T R), T's layer raising the bond to
-# D·d and a rank-D projector Π = V_R V_L on every bond cutting it back. The projector is the MP-BP
-# choice (Woolls et al., MP-BP §V B, one dimension up): the approximation Z(Π) = ⟨L|Π(T R)⟩ is made
-# STATIONARY under Π, i.e. V_R / V_L span the dominant right / left invariant subspaces of the bond
-# environment K — the environment of one bond of the network ⟨L|R′⟩ (R′ = Π(T R) everywhere else) with
-# the two sites next to the bond left untruncated on it. Gauge-equivariant, no Jacobian, no Hessian,
-# and a power method converges to the dominant eigenvector whether or not T is Hermitian. For a C4v
-# network K is (complex) symmetric and Π a Takagi pair, V_L = V_Rᵀ, so R stays C4v-symmetric.
-#
-# L = R (bilinear): the left eigenvector of a complex symmetric T, and for real data the Hermitian
-# case as well. The Bethe estimator f = ln κ⟨R|T|R⟩ − ln κ⟨R|R⟩ is evaluated at the end, with its
-# gradient: whether the power fixed point is ALSO the stationary point of f is not implied for PEPS
-# messages (the bond projectors are a restricted family on a plane with loops).
-
-# T·A as an array with fused (a, s) virtual legs, a fastest: dims (D ds, D ds, D ds, D ds, dp)
-function _bp_TA(Aarr, Tarr)
-    D = size(Aarr, 1); dp = size(Aarr, 5); ds = size(Tarr, 1)
-    M = reshape(Aarr, D^4, dp) * reshape(permutedims(Tarr, (5, 1, 2, 3, 4, 6)), dp, ds^4 * dp)
-    X = reshape(M, D, D, D, D, ds, ds, ds, ds, dp)
-    return reshape(permutedims(X, (1, 5, 2, 6, 3, 7, 4, 8, 9)), D * ds, D * ds, D * ds, D * ds, dp)
-end
-
-# Π applied on the virtual legs `modes` of X (V_L on the minus legs 1, 3; V_Rᵀ on the plus legs 2, 4)
-function _bp_project(X, VR, VL, modes)
-    for k in modes
-        X = _bp_modemul(X, isodd(k) ? VL : transpose(VR), k)
-    end
-    return X
-end
-
-# the symmetric square root of a (complex) symmetric matrix, real for real input
-_bp_symsqrt(G) = eltype(G) <: Real ? real(sqrt(Symmetric(G))) : (R = sqrt(G); (R + transpose(R)) / 2)
-# bilinear (Takagi) normalisation V ← V (VᵀV)^{-1/2}, so that V_L = Vᵀ is its biorthogonal partner
-_bp_takagi(V) = V / _bp_symsqrt(transpose(V) * V)
-# the complex-orthogonal rotation of V closest to Vref (the bilinear polar factor of VᵀVref)
-function _bp_align(V, Vref)
-    size(V) == size(Vref) || return V
-    M = transpose(V) * Vref
-    R = _bp_symsqrt(transpose(M) * M)
-    all(isfinite, R) || return V
-    return V * (M / R)
-end
-
-"""
-    boundary_peps_power(site, legs, D; maxdim, init = nothing, boundary = nothing, maxiter = 400,
-                        tol = 1e-9, ctm_tolerance = 1e-11, ctm_maxiter = 2000, noise = 1e-3,
-                        seed = 0, evaluate = true, verbose = false, kwargs...) -> (bp, info)
-
-The boundary PEPS of a C4v-symmetric cubic network by the projected power method with MP-BP bond
-projectors (see the note above). Iterates to ‖ΔA‖ < `tol` (A normalised, phase-aligned). With
-`evaluate`, the returned `BoundaryPEPS` carries the Bethe estimate f and the sandwich environment,
-and `info.gnorm` is |∇f|·|c| at the fixed point. `info`: `iterations`, `change`, `converged`,
-`history` (‖ΔA‖ per step), `asym` (the bond environment's asymmetry ‖K − Kᵀ‖/‖K‖), `spectrum` (the
-kept and first dropped eigenvalues of K, normalised), `gnorm`.
-"""
-function boundary_peps_power(site, legs, D::Integer; maxdim::Integer, init = nothing, boundary = nothing,
-                             maxiter::Integer = 400, tol::Real = 1.0e-9, ctm_tolerance::Real = 1.0e-11,
-                             ctm_maxiter::Integer = 2000, noise::Real = 1.0e-3, seed::Integer = 0,
-                             evaluate::Bool = true, verbose::Bool = false, kwargs...)
-    length(legs) == 6 || throw(ArgumentError("legs must be the six legs (x⁻, x⁺, y⁻, y⁺, z⁻, z⁺)"))
-    _bp_isc4v(site, legs) || throw(ArgumentError("boundary_peps_power needs a C4v-invariant site"))
-    rng = Xoshiro(seed)
-    ds, dp = dim(legs[1]), dim(legs[5])
-    Tarr = Array(array(site, legs...))
-    if init isa BoundaryPEPS && dim(init.Alegs[1]) == D
-        al, bl = init.Alegs, init.blegs
-        A = init.A
-    else
-        al = (new_index(D; tags = "bp,xm"), new_index(D; tags = "bp,xp"), new_index(D; tags = "bp,ym"),
-              new_index(D; tags = "bp,yp"), new_index(dp; tags = "bp,p"))
-        bl = Tuple(new_index(D; tags = "bp,bra") for _ in 1:4)
-        A = init isa BoundaryPEPS ? _bp_embed(init.A, init.Alegs, al, noise, rng) :
-            _bp_initial(site, legs, al, D, boundary, D > ds ? noise : 0.0, rng)
-    end
-    A = _bp_symmetrize(A, al[1:4]); A = A / norm(A)
-    Aarr = Array(array(A, al...))
-    elt = promote_type(scalartype(site), eltype(Aarr))
-    Aarr = convert(Array{elt}, Aarr); Tarr = convert(Array{elt}, Tarr)
-    # initial projector: the dominant left singular vectors of T·A across one virtual leg
-    TA = _bp_TA(Aarr, Tarr)
-    U = svd(reshape(permutedims(TA, (2, 1, 3, 4, 5)), size(TA, 2), :)).U[:, 1:D]
-    VR = _bp_takagi(convert(Matrix{elt}, U))
-    ckw = merge((; c4v = true), kwargs)
-    runctm(nl, nlegs, init) = update(InfiniteCTM2D(nl, nlegs, Int(maxdim); init, ckw...);
-                                     tolerance = ctm_tolerance, maxiter = ctm_maxiter)
-    ln = nothing
-    history = Float64[]; asym = NaN; spec = ComplexF64[]
-    converged = false; it = 0; change = Inf
-    iL = new_index(D * ds; tags = "bp,iL"); iR = new_index(D * ds; tags = "bp,iR")
-    for k in 1:maxiter
-        it = k
-        # R′ = Π(T R), C4v-symmetrised and normalised, phase-aligned to R
-        Anew = _bp_project(TA, VR, transpose(VR), 1:4)
-        Anew = Array(array(_bp_symmetrize(from_array(Anew, al...), al[1:4]), al...))
-        Anew ./= norm(Anew)
-        ph = dot(Aarr, Anew); ph = iszero(ph) ? one(ph) : conj(ph) / abs(ph)
-        change = norm(Anew * ph - Aarr)
-        push!(history, change)
-        Aarr = Anew * ph
-        At = from_array(Aarr, al...)
-        # the environment of ⟨R′|R′⟩ (L = R′, bilinear)
-        nl, nlegs = _bp_norm_layers(At, al, bl; bilinear = true)
-        ln = runctm(nl, nlegs, ln)
-        # the bond environment: the pair (3,3)–(4,3) with T·R′ on the open bond, Π elsewhere
-        TA = _bp_TA(Aarr, Tarr)
-        Xl = from_array(_bp_project(TA, VR, transpose(VR), (1, 3, 4)), al[1], iL, al[3], al[4], al[5])
-        Xr = from_array(_bp_project(TA, VR, transpose(VR), (2, 3, 4)), iR, al[2], al[3], al[4], al[5])
-        VX, _, blocks = _i2_pair_blocks(ln)
-        bra = ln.site[2]
-        Nt = _ctm_contract(vcat(blocks, _i2_place_site(Any[Xl, bra], ln.legs, (3, 3), VX),
-                                _i2_place_site(Any[Xr, bra], ln.legs, (4, 3), VX)), ln.options)
-        K = transpose(Array(array(Nt, iL, iR)))
-        asym = norm(K - transpose(K)) / norm(K)
-        K = (K + transpose(K)) / 2
-        F = eigen(K)
-        o = sortperm(abs.(F.values); rev = true)
-        spec = ComplexF64.(F.values[o[1:min(D + 1, end)]] ./ F.values[o[1]])
-        Vn = _bp_takagi(convert(Matrix{elt}, F.vectors[:, o[1:D]]))
-        VR = _bp_align(Vn, VR)
-        if verbose
-            println("  power it $k: |ΔA| = $change, asym $asym, |λ_{D+1}/λ_D| = ",
-                    length(spec) > D ? abs(spec[D + 1] / spec[D]) : NaN, ", norm CTM ", ln.stats[].iterations, " its")
-            flush(stdout)
-        end
-        if change < tol && k > 2
-            converged = true
-            break
-        end
-    end
-    A = from_array(Aarr, al...)
-    f = NaN; gn = NaN; ls = nothing
-    if evaluate
-        sitec = elt <: Complex && !(scalartype(site) <: Complex) ? site * complex(1.0) : site
-        ctx = (; al, bl, site = sitec, legs = Tuple(legs), maxdim = Int(maxdim), symmetrize = true, ctm_tolerance,
-               ctm_maxiter = Int(ctm_maxiter), ctm_kwargs = ckw, bilinear = true)
-        f, G, ln, ls = _bp_evaluate(A, ctx, ln, nothing)
-        B = _bp_c4v_basis(al)
-        gn = norm(_bp_to_coords(G, B, al)) * norm(_bp_to_coords(A, B, al))
-    end
-    bp = BoundaryPEPS(A, al, bl, site, Tuple(legs), ln, ls, real(f), gn, Float64[real(f)], true)
-    return bp, (; iterations = it, change, converged, history, asym, spectrum = spec, gnorm = gn)
 end
