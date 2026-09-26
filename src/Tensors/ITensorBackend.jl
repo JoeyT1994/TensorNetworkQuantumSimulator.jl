@@ -1521,7 +1521,15 @@ function _close_bond!(R::AbstractMatrix, Ψ3::AbstractArray{<:Any, 3}, T3::Abstr
     return R
 end
 
-# Outgoing message on the one bond of ψ not covered by `incoming`: R[b′, b] = Σ conj(ψ)[…b′…] T[…b…].
+"""
+    fused_norm_message(ψ, sinds, incoming; normalize = true)
+
+The fused double-layer BP kernel: the outgoing message on the one bond of `ψ` not covered by the
+`incoming` messages, R[b′, b] = Σ conj(ψ)[…b′…] T[…b…] with T = ψ contracted with `incoming`
+(ket and bra share the site indices `sinds`), without forming the double-layer tensor; normalised
+to unit sum with `normalize`. Returns `nothing` where the fused path does not apply (dense data
+only, every bond but one covered), and the caller falls back to the generic contraction.
+"""
 function fused_norm_message(ψ::AbstractTensor, sinds::Vector{<:Index}, incoming::Vector; normalize::Bool = true)
     A = _fused_data(ψ)
     A === nothing && return nothing

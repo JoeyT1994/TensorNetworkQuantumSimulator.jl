@@ -26,6 +26,7 @@ ising_partitionfunction
 
 ```@docs
 apply_gates
+apply_gates!
 simple_update
 full_update
 ```
@@ -83,10 +84,44 @@ update
 update_iteration!
 ```
 
+## Corner Transfer Matrix Environments
+
+```@docs
+CTMOptions
+CTMEnvironmentCache
+CTM3DEnvironmentCache
+environments
+options
+vertex_environments
+sweep_vertex_environments
+region_lnZ
+vertex_window
+vertex_ring
+region_ring
+marginal_inconsistency
+cvm_freenergy
+```
+
+## Classical Models in the Thermodynamic Limit
+
+```@docs
+InfiniteCTM2D
+InfiniteCTM3D
+site_ratio
+site_environment
+pair_ratio
+correlation_length
+ising2d_site
+ising3d_site
+BoundaryPEPS
+boundary_peps
+boundary_peps_krylov
+boundary_peps_stationary
+```
+
 ## Utilities
 
 ```@docs
-safe_eigen
 add
 fidelity
 optimise_p_q
@@ -104,7 +139,7 @@ TensorNetworkQuantumSimulator.Tensors.register_op!
 TensorNetworkQuantumSimulator.TensorInterface.Algorithm
 TensorNetworkQuantumSimulator.TensorInterface.factorize_svd
 TensorNetworkQuantumSimulator.Tensors.fused_norm_message
-TensorNetworkQuantumSimulator.Tensors.fused_norm_closure
+TensorNetworkQuantumSimulator.Tensors.graded_space
 ```
 
 ## Index

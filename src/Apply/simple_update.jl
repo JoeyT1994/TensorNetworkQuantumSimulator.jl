@@ -47,6 +47,32 @@ function gauged_env_pairs(ψ⃗::Vector, envs, sqrt_cutoff)
     return first.(ssi1), last.(ssi1), first.(ssi2), last.(ssi2)
 end
 
+"""
+    simple_update(o, ψ⃗; envs, normalize_tensors = true, sqrt_cutoff = nothing, consume_inputs = false,
+                  apply_kwargs...)
+
+Simple update of one or two local tensors in the presence of factorized environments under the
+action of a one- or two-site gate. This is a computationally cheaper but less accurate alternative
+to `full_update`. It is exact if no truncation is performed.
+
+# Arguments
+- `o`: The gate to be applied.
+- `ψ⃗::Vector`: The one or two local tensors being updated.
+- `envs`: The factorized (2-index) environment tensors associated with the tensors in `ψ⃗`.
+
+# Keyword Arguments
+- `normalize_tensors::Bool`: Whether to normalize the updated tensors. Default is `true`.
+- `sqrt_cutoff`: Cutoff below which environment eigenvalues are treated as zero when forming their
+  (inverse) square roots. Defaults to the environments' scalar-type tolerance.
+- `consume_inputs::Bool`: The caller relinquishes `ψ⃗`, whose storage may then be reused for the
+  gauged intermediates. Default is `false`.
+- `apply_kwargs...`: Additional keyword arguments passed to the SVD factorization.
+
+# Returns
+- `updated_tensors`: The updated tensors after applying the gate.
+- `s_values`: The singular values from the SVD (`nothing` for a one-site gate).
+- `err::Number`: The truncation error from the SVD (0 for a one-site gate).
+"""
 function simple_update(
         o, ψ⃗::Vector;
         envs, normalize_tensors = true, sqrt_cutoff = nothing, consume_inputs = false,
