@@ -167,7 +167,13 @@ end
 function InfiniteCTM2D(site, legs, maxdim::Integer; pair::Symbol = :biorth, boundary = nothing,
                        init = nothing, c4v::Bool = false, kwargs...)
     opts = CTMOptions(; kwargs...)
-    opts.projector === :cut || throw(ArgumentError("InfiniteCTM2D supports projector = :cut only"))
+    # `:cycle` (MP-BP / eig-CTMRG) as in the finite engine: `cycle_solver = :auto` resolves to `:warm`
+    if opts.cycle_solver === :auto
+        kw = (; (f => getfield(opts, f) for f in fieldnames(CTMOptions))...)
+        opts = CTMOptions(; merge(kw, (; cycle_solver = :warm))...)
+    end
+    opts.projector === :cycle && pair === :isometric && throw(ArgumentError(
+        "pair = :isometric is a :cut construction; :cycle derives its own pairs"))
     maxdim >= 1 || throw(ArgumentError("maxdim must be ≥ 1, got $maxdim"))
     pair in (:biorth, :isometric) || throw(ArgumentError("pair must be :biorth or :isometric, got $(repr(pair))"))
     layers = _i2_layers(site)
@@ -518,6 +524,42 @@ function _i2_symmetric_pair(pr, w::Index)
     return (P, P)
 end
 
+# --- the CYCLE pairs (`projector = :cycle`): MP-BP / eig-CTMRG -----------------------------------
+#
+# The four representative interfaces meet at ONE plaquette (the point between vertices 3 and 4 on
+# both axes), bounded by the four enlarged quadrants (±1, ±1, 4, 4). `:cut` derives each interface's
+# pair from its own two quadrants (an SVD, i.e. a Frobenius-optimal truncation of one bipartition);
+# `:cycle` derives all four from the dominant invariant subspace of the four-corner cycle
+# Λ = C₄C₃C₂C₁ — the projectors that make the Kikuchi/Bethe ln κ STATIONARY (Woolls et al., MP-BP,
+# §V B; Baxter's CTM variational principle). Gauge-equivariant, and the one-site environment then gives
+# ε²-accurate single-site quantities where `:cut`'s are ε-accurate on non-Hermitian networks. The solve
+# is the finite engine's `_ctm_cycle_projectors` (matrix-free Krylov–Schur, scale-free tolerance,
+# degenerate-partner restarts, `:warm` starts from the previous step's Schur bases).
+#
+# Orientation: calling low y "north", the finite engine's convention (P_A on the west/north side of a
+# bond) is ours (P_A consumed by the low side), bond by bond.
+const _I2_CYCLE_KEY = (0, 0)                 # the cycle's Schur bases ride along in the pair dictionary
+
+function _i2_cycle_pairs(Bv, tbl, VX, Pv, opts::CTMOptions, χ::Int, warm)
+    E(s1, s2) = _ctm_rescale(_ctm_contract(_c2_enlarged(Bv, tbl, (s1, s2, 4, 4)), opts))
+    ENW, ENE, ESE, ESW = E(-1, -1), E(1, -1), E(1, 1), E(-1, 1)
+    cyc = _ctm_cycle_projectors(ENW, ENE, ESE, ESW, χ, opts, hash(:i2_cycle); warm)
+    isnothing(cyc) && return nothing
+    # N = NW|NE and S = SW|SE are axis-1 interfaces (low / high y); W = NW|SW and E = NE|SE axis-2
+    faces = (N = (1, 3, -1, 4), S = (1, 3, 1, 4), W = (2, 3, -1, 4), E = (2, 3, 1, 4))
+    out = Dict{NTuple{4, Int}, Any}()
+    for k in (:N, :S, :W, :E)
+        a, b, w, ins = getfield(cyc, k)
+        F = getfield(faces, k)
+        issetequal(collect(ins), [i for i in _c3_open(_c2_enlarged(Bv, tbl, _c2_side_block(F, -1))) if
+                                  i in _c3_open(_c2_enlarged(Bv, tbl, _c2_side_block(F, 1)))]) ||
+            error("2D iCTM :cycle: bond $k does not sit on interface $F")
+        out[F] = _c3_finish((a, b, w), collect(ins), only(VX[F]), get(Pv, F, nothing), opts)
+    end
+    _ctm_stat!(:i2_cycle)
+    return out, cyc.bases
+end
+
 # One iteration: every pair from the current blocks, then the centre shell regrown with them.
 function _i2_step(ic::InfiniteCTM2D, st::_I2State)
     opts = ic.options
@@ -526,14 +568,25 @@ function _i2_step(ic::InfiniteCTM2D, st::_I2State)
     # with c4v, derive the pair of type (1, −1) only
     derive = ic.c4v ? [r for r in reps if r[1] == (1, -1)] : reps
     Pn = Dict{NTuple{4, Int}, Any}()
+    bases = nothing
+    if opts.projector === :cycle
+        cp = _i2_cycle_pairs(Bv, tbl, VX, Pv, opts, st.chi, get(st.P, _I2_CYCLE_KEY, nothing))
+        if cp isa Tuple
+            merge!(Pn, cp[1]); bases = cp[2]
+        else
+            _ctm_stat!(:i2_cycle_declined)          # the plaquette declined: this step takes the cut
+        end
+    end
     lk = ReentrantLock()
     _ctm_foreach(eachindex(derive)) do i
         F = derive[i][2]
+        haskey(Pn, F) && return
         pr = _i2_pair(F, Bv, tbl, get(Pv, F, nothing), VX, opts, st.chi, ic.pair === :isometric)
         isnothing(pr) || lock(() -> (Pn[F] = pr), lk)
     end
     all(((t, F),) -> haskey(Pn, F), derive) || error("2D iCTM: an interface type got no pair")
     newP = Dict{NTuple{2, Int}, Any}()
+    isnothing(bases) || (newP[_I2_CYCLE_KEY] = bases)
     for (t, F) in derive
         can, vir = _i2_pair_relabelling(F, VX, st.leg)
         newP[t] = (replaceinds(Pn[F][1], vir, can), replaceinds(Pn[F][2], vir, can))
@@ -786,6 +839,35 @@ function _i2_phasefree(a, b)
     ov = dot(a, b)
     ph = iszero(ov) ? one(ov) : conj(ov) / abs(ov)
     return norm(a - b * ph)
+end
+
+# --- two-site clusters ------------------------------------------------------------------------
+#
+# The ten blocks around the horizontal nearest-neighbour pair (3,3)–(4,3) on the virtual box, and
+# the box's face legs: contract them with the two sites' layers (placed by `_i2_place_site` at
+# (3,3) and (4,3)) for a two-site region, or with modified layers for a bond environment (e.g. the
+# boundary-PEPS power step). Per axis: x < 3 | x == 3 | x == 4 | x ≥ 5, and y < 3 | y == 3 | y ≥ 4.
+const _I2_PAIR_KEYS = [(-1, -1, 3, 3), (0, -1, 3, 3), (0, -1, 4, 3), (1, -1, 5, 3), (-1, 0, 3, 3),
+                       (1, 0, 5, 3), (-1, 1, 3, 4), (0, 1, 3, 4), (0, 1, 4, 4), (1, 1, 5, 4)]
+
+function _i2_pair_blocks(ic::InfiniteCTM2D)
+    isnothing(ic.state) && error("InfiniteCTM2D has not been `update`d.")
+    VX, tbl, Bv, _ = _i2_virtual(ic.state, ic)
+    return VX, tbl, AbstractTensor[Bv[k] for k in _I2_PAIR_KEYS]
+end
+
+"""
+    pair_ratio(ic::InfiniteCTM2D, imp1, imp2)
+
+`⟨imp1 imp2⟩ / ⟨site site⟩` for impurities on the horizontal nearest-neighbour pair (tensors or layer
+lists with the site's legs), through the pair's ten-block environment.
+"""
+function pair_ratio(ic::InfiniteCTM2D, imp1, imp2)
+    VX, tbl, blocks = _i2_pair_blocks(ic)
+    z0 = scalar(_ctm_contract(vcat(blocks, tbl[(3, 3)], tbl[(4, 3)]), ic.options))
+    i1 = _i2_place_site(_i2_layers(imp1), ic.legs, (3, 3), VX)
+    i2 = _i2_place_site(_i2_layers(imp2), ic.legs, (4, 3), VX)
+    return scalar(_ctm_contract(vcat(blocks, i1, i2), ic.options)) / z0
 end
 
 # --- correlation length from the channel transfer matrix ---------------------------------------

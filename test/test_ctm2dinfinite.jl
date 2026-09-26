@@ -130,10 +130,40 @@ end
         @test first(correlation_length(ic; axis = 2)) < 0.05          # |λ₂/λ₁| at roundoff (measured e^{-41})
     end
 
+    # projector = :cycle — MP-BP / eig-CTMRG (Woolls et al.): the four pairs from the dominant invariant
+    # subspace of the four-corner cycle. On a reflection-symmetric Hermitian network it is :cut's
+    # fixed point (measured: identical ln κ, m to 1e-12 on 2D Ising); under a gauge transform G on
+    # every bond (ln κ exactly unchanged) :cycle's truncation error is gauge-INVARIANT while :cut's is
+    # not (measured K = 0.42, χ = 4: :cycle −1.930e-6 for G = 1 and two random G; :cut −1.6e-7 and
+    # +5.2e-5).
+    let K = 0.42, χ = 4
+        s, l, _ = ising2d_site(K)
+        run(t; kw...) = update(InfiniteCTM2D(t, l, χ; kw...); tolerance = 1.0e-12, maxiter = 3000)
+        ref = run(s; projector = :cycle)
+        @test abs(cvm_freenergy(ref) - cvm_freenergy(run(s))) < 1.0e-12
+        G = [1.3 0.6; -0.4 0.9]; Gi = inv(G)
+        a, b, c, d = (TNQS.new_index(2) for _ in 1:4)
+        sg = s * TNQS.from_array(Gi, a, l[1]) * TNQS.from_array(Matrix(transpose(G)), b, l[2]) *
+             TNQS.from_array(Gi, c, l[3]) * TNQS.from_array(Matrix(transpose(G)), d, l[4])
+        sg = TNQS.replaceinds(sg, [a, b, c, d], collect(l))
+        @test abs(cvm_freenergy(run(sg; projector = :cycle)) - cvm_freenergy(ref)) < 1.0e-9
+        @test abs(cvm_freenergy(run(sg; projector = :cut)) - cvm_freenergy(ref)) > 1.0e-8
+    end
+
+    # pair_ratio: the ten-block environment of a nearest-neighbour pair, against the exact 2D Ising
+    # ⟨σσ⟩ = (1/2) d(ln Z/N)/dK (numerical derivative of Onsager; measured agreement 2.3e-10)
+    let K = 0.3
+        s, l, m = ising2d_site(K)
+        ic = update(InfiniteCTM2D(s, l, 16); tolerance = 1.0e-12)
+        fK(k) = onsager(k; n = 1000)
+        @test abs(real(pair_ratio(ic, m, m)) - (fK(K + 1.0e-4) - fK(K - 1.0e-4)) / 4.0e-4) < 1.0e-7
+        @test abs(pair_ratio(ic, s, s) - 1) < 1.0e-12
+    end
+
     # argument checks
     site, legs, _ = ising2d_site(0.3)
     @test_throws ArgumentError InfiniteCTM2D(site, legs, 4; pair = :nonsense)
-    @test_throws ArgumentError InfiniteCTM2D(site, legs, 4; projector = :cycle)
+    @test_throws ArgumentError InfiniteCTM2D(site, legs, 4; projector = :cycle, pair = :isometric)
     @test_throws ArgumentError InfiniteCTM2D(site, (legs[1], legs[2], legs[3]), 4)
     @test_throws ArgumentError InfiniteCTM2D(site, (legs[1], legs[2], legs[3], TNQS.new_index(3)), 4)   # y± dims differ
     @test_throws ArgumentError InfiniteCTM2D(site, (legs[1], legs[2], legs[3], TNQS.new_index(2)), 4)   # not the site's legs

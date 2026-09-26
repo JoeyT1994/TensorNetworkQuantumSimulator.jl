@@ -547,3 +547,148 @@ function boundary_peps_stationary(site, legs, init::BoundaryPEPS; maxdim::Intege
     bp = BoundaryPEPS(A, al, bl, sitec, Tuple(legs), ln, ls, f, norm(g), history, true)
     return bp, (; J, sv, iterations = it, residual = res, converged, c)
 end
+
+# --- the PROJECTED POWER METHOD: z-direction eig-CTMRG ------------------------------------------
+#
+# The boundary state by iteration rather than optimisation: R ← Π(T R), T's layer raising the bond to
+# D·d and a rank-D projector Π = V_R V_L on every bond cutting it back. The projector is the MP-BP
+# choice (Woolls et al., MP-BP §V B, one dimension up): the approximation Z(Π) = ⟨L|Π(T R)⟩ is made
+# STATIONARY under Π, i.e. V_R / V_L span the dominant right / left invariant subspaces of the bond
+# environment K — the environment of one bond of the network ⟨L|R′⟩ (R′ = Π(T R) everywhere else) with
+# the two sites next to the bond left untruncated on it. Gauge-equivariant, no Jacobian, no Hessian,
+# and a power method converges to the dominant eigenvector whether or not T is Hermitian. For a C4v
+# network K is (complex) symmetric and Π a Takagi pair, V_L = V_Rᵀ, so R stays C4v-symmetric.
+#
+# L = R (bilinear): the left eigenvector of a complex symmetric T, and for real data the Hermitian
+# case as well. The Bethe estimator f = ln κ⟨R|T|R⟩ − ln κ⟨R|R⟩ is evaluated at the end, with its
+# gradient: whether the power fixed point is ALSO the stationary point of f is not implied for PEPS
+# messages (the bond projectors are a restricted family on a plane with loops).
+
+# T·A as an array with fused (a, s) virtual legs, a fastest: dims (D ds, D ds, D ds, D ds, dp)
+function _bp_TA(Aarr, Tarr)
+    D = size(Aarr, 1); dp = size(Aarr, 5); ds = size(Tarr, 1)
+    M = reshape(Aarr, D^4, dp) * reshape(permutedims(Tarr, (5, 1, 2, 3, 4, 6)), dp, ds^4 * dp)
+    X = reshape(M, D, D, D, D, ds, ds, ds, ds, dp)
+    return reshape(permutedims(X, (1, 5, 2, 6, 3, 7, 4, 8, 9)), D * ds, D * ds, D * ds, D * ds, dp)
+end
+
+# Π applied on the virtual legs `modes` of X (V_L on the minus legs 1, 3; V_Rᵀ on the plus legs 2, 4)
+function _bp_project(X, VR, VL, modes)
+    for k in modes
+        X = _bp_modemul(X, isodd(k) ? VL : transpose(VR), k)
+    end
+    return X
+end
+
+# the symmetric square root of a (complex) symmetric matrix, real for real input
+_bp_symsqrt(G) = eltype(G) <: Real ? real(sqrt(Symmetric(G))) : (R = sqrt(G); (R + transpose(R)) / 2)
+# bilinear (Takagi) normalisation V ← V (VᵀV)^{-1/2}, so that V_L = Vᵀ is its biorthogonal partner
+_bp_takagi(V) = V / _bp_symsqrt(transpose(V) * V)
+# the complex-orthogonal rotation of V closest to Vref (the bilinear polar factor of VᵀVref)
+function _bp_align(V, Vref)
+    size(V) == size(Vref) || return V
+    M = transpose(V) * Vref
+    R = _bp_symsqrt(transpose(M) * M)
+    all(isfinite, R) || return V
+    return V * (M / R)
+end
+
+"""
+    boundary_peps_power(site, legs, D; maxdim, init = nothing, boundary = nothing, maxiter = 400,
+                        tol = 1e-9, ctm_tolerance = 1e-11, ctm_maxiter = 2000, noise = 1e-3,
+                        seed = 0, evaluate = true, verbose = false, kwargs...) -> (bp, info)
+
+The boundary PEPS of a C4v-symmetric cubic network by the projected power method with MP-BP bond
+projectors (see the note above). Iterates to ‖ΔA‖ < `tol` (A normalised, phase-aligned). With
+`evaluate`, the returned `BoundaryPEPS` carries the Bethe estimate f and the sandwich environment,
+and `info.gnorm` is |∇f|·|c| at the fixed point. `info`: `iterations`, `change`, `converged`,
+`history` (‖ΔA‖ per step), `asym` (the bond environment's asymmetry ‖K − Kᵀ‖/‖K‖), `spectrum` (the
+kept and first dropped eigenvalues of K, normalised), `gnorm`.
+"""
+function boundary_peps_power(site, legs, D::Integer; maxdim::Integer, init = nothing, boundary = nothing,
+                             maxiter::Integer = 400, tol::Real = 1.0e-9, ctm_tolerance::Real = 1.0e-11,
+                             ctm_maxiter::Integer = 2000, noise::Real = 1.0e-3, seed::Integer = 0,
+                             evaluate::Bool = true, verbose::Bool = false, kwargs...)
+    length(legs) == 6 || throw(ArgumentError("legs must be the six legs (x⁻, x⁺, y⁻, y⁺, z⁻, z⁺)"))
+    _bp_isc4v(site, legs) || throw(ArgumentError("boundary_peps_power needs a C4v-invariant site"))
+    rng = Xoshiro(seed)
+    ds, dp = dim(legs[1]), dim(legs[5])
+    Tarr = Array(array(site, legs...))
+    if init isa BoundaryPEPS && dim(init.Alegs[1]) == D
+        al, bl = init.Alegs, init.blegs
+        A = init.A
+    else
+        al = (new_index(D; tags = "bp,xm"), new_index(D; tags = "bp,xp"), new_index(D; tags = "bp,ym"),
+              new_index(D; tags = "bp,yp"), new_index(dp; tags = "bp,p"))
+        bl = Tuple(new_index(D; tags = "bp,bra") for _ in 1:4)
+        A = init isa BoundaryPEPS ? _bp_embed(init.A, init.Alegs, al, noise, rng) :
+            _bp_initial(site, legs, al, D, boundary, D > ds ? noise : 0.0, rng)
+    end
+    A = _bp_symmetrize(A, al[1:4]); A = A / norm(A)
+    Aarr = Array(array(A, al...))
+    elt = promote_type(scalartype(site), eltype(Aarr))
+    Aarr = convert(Array{elt}, Aarr); Tarr = convert(Array{elt}, Tarr)
+    # initial projector: the dominant left singular vectors of T·A across one virtual leg
+    TA = _bp_TA(Aarr, Tarr)
+    U = svd(reshape(permutedims(TA, (2, 1, 3, 4, 5)), size(TA, 2), :)).U[:, 1:D]
+    VR = _bp_takagi(convert(Matrix{elt}, U))
+    ckw = merge((; c4v = true), kwargs)
+    runctm(nl, nlegs, init) = update(InfiniteCTM2D(nl, nlegs, Int(maxdim); init, ckw...);
+                                     tolerance = ctm_tolerance, maxiter = ctm_maxiter)
+    ln = nothing
+    history = Float64[]; asym = NaN; spec = ComplexF64[]
+    converged = false; it = 0; change = Inf
+    iL = new_index(D * ds; tags = "bp,iL"); iR = new_index(D * ds; tags = "bp,iR")
+    for k in 1:maxiter
+        it = k
+        # R′ = Π(T R), C4v-symmetrised and normalised, phase-aligned to R
+        Anew = _bp_project(TA, VR, transpose(VR), 1:4)
+        Anew = Array(array(_bp_symmetrize(from_array(Anew, al...), al[1:4]), al...))
+        Anew ./= norm(Anew)
+        ph = dot(Aarr, Anew); ph = iszero(ph) ? one(ph) : conj(ph) / abs(ph)
+        change = norm(Anew * ph - Aarr)
+        push!(history, change)
+        Aarr = Anew * ph
+        At = from_array(Aarr, al...)
+        # the environment of ⟨R′|R′⟩ (L = R′, bilinear)
+        nl, nlegs = _bp_norm_layers(At, al, bl; bilinear = true)
+        ln = runctm(nl, nlegs, ln)
+        # the bond environment: the pair (3,3)–(4,3) with T·R′ on the open bond, Π elsewhere
+        TA = _bp_TA(Aarr, Tarr)
+        Xl = from_array(_bp_project(TA, VR, transpose(VR), (1, 3, 4)), al[1], iL, al[3], al[4], al[5])
+        Xr = from_array(_bp_project(TA, VR, transpose(VR), (2, 3, 4)), iR, al[2], al[3], al[4], al[5])
+        VX, _, blocks = _i2_pair_blocks(ln)
+        bra = ln.site[2]
+        Nt = _ctm_contract(vcat(blocks, _i2_place_site(Any[Xl, bra], ln.legs, (3, 3), VX),
+                                _i2_place_site(Any[Xr, bra], ln.legs, (4, 3), VX)), ln.options)
+        K = transpose(Array(array(Nt, iL, iR)))
+        asym = norm(K - transpose(K)) / norm(K)
+        K = (K + transpose(K)) / 2
+        F = eigen(K)
+        o = sortperm(abs.(F.values); rev = true)
+        spec = ComplexF64.(F.values[o[1:min(D + 1, end)]] ./ F.values[o[1]])
+        Vn = _bp_takagi(convert(Matrix{elt}, F.vectors[:, o[1:D]]))
+        VR = _bp_align(Vn, VR)
+        if verbose
+            println("  power it $k: |ΔA| = $change, asym $asym, |λ_{D+1}/λ_D| = ",
+                    length(spec) > D ? abs(spec[D + 1] / spec[D]) : NaN, ", norm CTM ", ln.stats[].iterations, " its")
+            flush(stdout)
+        end
+        if change < tol && k > 2
+            converged = true
+            break
+        end
+    end
+    A = from_array(Aarr, al...)
+    f = NaN; gn = NaN; ls = nothing
+    if evaluate
+        sitec = elt <: Complex && !(scalartype(site) <: Complex) ? site * complex(1.0) : site
+        ctx = (; al, bl, site = sitec, legs = Tuple(legs), maxdim = Int(maxdim), symmetrize = true, ctm_tolerance,
+               ctm_maxiter = Int(ctm_maxiter), ctm_kwargs = ckw, bilinear = true)
+        f, G, ln, ls = _bp_evaluate(A, ctx, ln, nothing)
+        B = _bp_c4v_basis(al)
+        gn = norm(_bp_to_coords(G, B, al)) * norm(_bp_to_coords(A, B, al))
+    end
+    bp = BoundaryPEPS(A, al, bl, site, Tuple(legs), ln, ls, real(f), gn, Float64[real(f)], true)
+    return bp, (; iterations = it, change, converged, history, asym, spectrum = spec, gnorm = gn)
+end

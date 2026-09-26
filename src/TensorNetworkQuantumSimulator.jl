@@ -103,6 +103,8 @@ export
     correlation_length,
     boundary_peps,
     boundary_peps_stationary,
+    boundary_peps_power,
+    pair_ratio,
     BoundaryPEPS,
     CTMOptions,
     cvm_freenergy,
