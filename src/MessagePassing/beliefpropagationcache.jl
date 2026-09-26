@@ -149,7 +149,7 @@ function loop_correlation(bpc::BeliefPropagationCache, loop::Vector{<:NamedEdge}
         if !isempty(t_inds)
             t_ind = only(t_inds)
             t_ind_pos = findfirst(x -> x == t_ind, e_virtualinds)
-            t = replaceinds(t, t_ind => e_virtualinds_sim[t_ind_pos])
+            t = rename(t, t_ind => e_virtualinds_sim[t_ind_pos])
         end
         push!(local_tensors, t)
     end

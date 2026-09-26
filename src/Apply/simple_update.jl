@@ -77,14 +77,14 @@ function simple_update(
             S = normalize(S)
         end
         sqrtS = sqrth_safe(S, (u,), (v,); atol = 0, rtol = 0)
-        Rᵥ₁, Rᵥ₂ = U * replaceinds(sqrtS, v => prime(u)), replaceinds(sqrtS, u => prime(u)) * V
+        Rᵥ₁, Rᵥ₂ = U * rename(sqrtS, v => prime(u)), rename(sqrtS, u => prime(u)) * V
         # The two directed bond messages, each the doubled contraction `conj(R) * R` of that side's
         # reformed factor over its environment-facing legs, leaving the ket bond `u` and the bra
         # bond `prime(u)`. A doubled ket/bra contraction carries the odd-parity sign, so the
         # refreshed message is fermion-sign-correct instead of the bare (sign-blind) singular values.
         messages = (
-            conj(Rᵥ₁) * replaceinds(Rᵥ₁, prime(u) => u),
-            conj(Rᵥ₂) * replaceinds(Rᵥ₂, prime(u) => u),
+            conj(Rᵥ₁) * rename(Rᵥ₁, prime(u) => u),
+            conj(Rᵥ₂) * rename(Rᵥ₂, prime(u) => u),
         )
         Qᵥ₁ = contract_network([Qᵥ₁; conj.(inv_sqrt_envs_v1)])
         Qᵥ₂ = contract_network([Qᵥ₂; conj.(inv_sqrt_envs_v2)])
