@@ -21,8 +21,8 @@ the zeros condense and the fixed point acquires Re m ≠ 0 (our branch test).
   1/(2(K*−K)). Fine as a length scale, not as a precision observable.
 * `boundary_peps_stationary`: the bilinear boundary PEPS for complex symmetric layer operators, by
   Newton with the full finite-difference Jacobian (reused along a continuation). `boundary_peps_krylov`
-  solves the same equations without forming J (docs/boundary_peps.md); its complex path is so far
-  tested on the D = 1 chains only.
+  solves the same equations without forming J (docs/boundary_peps.md); its complex path matches the
+  stationary solver along a D = 2 continuation to the fold (below) and takes larger steps.
 
 ### The c4v fix (complex data)
 
@@ -150,6 +150,29 @@ with m off the branch; steps ≤ 0.004 growing ×1.3 converge); (ii) cost: a fin
 (84 two-environment evaluations) is 140 s at β = 0.18 and 450 s at β = 0.20 (χ = 24), a point
 50–400 s. D = 3 at β = 0.20 could not be continued within 10-minute runs.
 
+### Newton–Krylov in the imaginary field (2026-09-26)
+
+`boundary_peps_krylov` solves the same stationarity equations without forming J: complex data take
+its Levenberg–Marquardt trust region on |g|². Validated against the scans above at β = 0.18.
+
+**A bug found on the way.** Anderson mixing of the 2D CTMRG (`ctm_anderson`) stalls on these
+complex networks. A warm product evaluation (D = 2, χ = 16, θ = 0.005) ran the full 2000 steps
+without converging (|Δ| ~ 3e-7), against 20 steps unmixed. It now applies to real networks only.
+
+**D = 2, χ = 16.** A continuation over the old scan's 32 converged points, θ = 0.0081 to 0.04905,
+with v = (θ_f − θ)/θ_f from 0.83 down to 1.1e-3. Agreement in Im m:
+
+| v | \|Δ Im m\| against the stationary scan |
+|---|---|
+| > 0.03 | ≤ 5e-8 (one point 4.9e-7) |
+| 3e-3 – 0.03 | 2–6e-7 |
+| 2.6e-3 → 1.1e-3 (last three points) | 2e-6 → 1.7e-5 (dm/dθ ∝ v^{-1/2} amplifies the noise floor) |
+
+Cost: 3.5–19 s per point, 42–58 s for the last three, 8 minutes in all. Both solvers converge to
+|g| ~ 1e-8. On larger steps (Δθ = 0.005–0.01 from θ = 0) Newton–Krylov converged in 21–30
+evaluations (9–17 s) where the stationary solver stalled at |g| = 1–4e-5 after 27–209 s. On the
+old scan's small steps both reproduce the old values to 2e-8.
+
 ### Results (2026-09-26)
 
 The edge map — the finite-D fold θ_f(t) of the stationary boundary PEPS, D = 2, χ = 16, fitted as
@@ -195,7 +218,7 @@ Next steps, in order of leverage: (1) an improved model (Blume–Capel at its im
 removing the t^{ων} corrections that dominate the extrapolation; (2) larger D at small t with a
 cheaper solver — Newton–Krylov with directional derivatives instead of a 2n-evaluation Jacobian
 (now `boundary_peps_krylov`, whose complex path is a Levenberg–Marquardt trust region in the Krylov
-subspace; tested so far on the D = 1 chains only, see boundary_peps.md), and a parametrisation
+subspace; validated along a D = 2 continuation, above), and a parametrisation
 without the redundant directions — so that ξ at the fold grows with D and
 finite-correlation-length scaling (θ_c − θ_f ∝ ξ_f^{−(3−Δ_φ)}) can locate the true edge; (3) σ from
 that scaling rather than from local exponents.

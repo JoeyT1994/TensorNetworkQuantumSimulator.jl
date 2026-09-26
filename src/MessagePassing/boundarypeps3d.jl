@@ -98,8 +98,11 @@ function _bp_evaluate(A, ctx, init_n, init_s, tol = ctx.ctm_tolerance)
     # ANDERSON mixing (`ctx.anderson` iterates) only from a warm start: from the vacuum it can pick a
     # wrong fixed point while the kept rank grows (docs/boundary_peps.md). Warm, it cuts the CTM steps
     # per evaluation 1.7–1.8× (3D Ising β = 0.2275, D = 3, χ = 16, m = 5: 26.5 → 14.5 for a
-    # finite-difference product, 35.8 → 21.2 after a 2e-2 step); the fixed point is unchanged.
-    am = get(ctx, :anderson, 0)
+    # finite-difference product, 35.8 → 21.2 after a 2e-2 step); the fixed point is unchanged. REAL
+    # networks only: on the complex c4v networks of an imaginary field a warm product evaluation ran
+    # 2000 steps without converging (|Δ| ~ 3e-7), against 20 steps unmixed (β = 0.18, D = 2, χ = 16,
+    # θ = 0.005).
+    am = scalartype(site) <: Real && scalartype(A) <: Real ? get(ctx, :anderson, 0) : 0
     run_n() = update(InfiniteCTM2D(nl, nlegs, ctx.maxdim; init = init_n, ctx.ctm_kwargs...);
                      tolerance = tol, maxiter = ctx.ctm_maxiter, anderson = isnothing(init_n) ? 0 : am)
     run_s() = update(InfiniteCTM2D(sl, slegs, ctx.maxdim; init = init_s, ctx.ctm_kwargs...);
@@ -220,7 +223,8 @@ dimension `D`, both terms contracted by [`InfiniteCTM2D`](@ref) at `maxdim`. For
   L-BFGS iterations, or after `time_limit` seconds, or when the line search fails.
 * `callback(it, state)` — `state` a NamedTuple (A, Alegs, f, res) — runs after every accepted step.
 * `ctm_anderson = m` — Anderson mixing of the last m iterates in every warm-started 2D CTMRG
-  (1.7–1.8× fewer steps per evaluation at D = 3; the fixed point is unchanged); 0 is off.
+  (1.7–1.8× fewer steps per evaluation at D = 3; the fixed point is unchanged); 0 is off. Real
+  networks only: complex ones are always unmixed (mixing stalled them).
 * `precondition` — L-BFGS with the norm metric `(N + precondition_shift·λ_max)⁻¹` as its initial
   inverse Hessian (a natural-gradient step); `false` gives the plain `γ I`.
 * `adaptive_tolerance` — converge the 2D environments to `1e-2·|g|`, clamped to

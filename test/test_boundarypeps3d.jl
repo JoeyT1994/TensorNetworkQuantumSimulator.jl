@@ -105,6 +105,21 @@ product_A(v) = (is = [TNQS.new_index(1) for _ in 1:4]; p = TNQS.new_index(length
         @test abs(cvm_freenergy(bpk) - real(exact(θ)[1])) < 1.0e-12
         @test abs(site_ratio(bpk, TNQS.replaceinds(x[3], collect(x[2]), collect(lg))) - exact(θ)[2]) < 1.0e-9
     end
+    # … and at D = 2: 3D Ising at β = 0.18, the first imaginary-field point of a continuation from the
+    # real maximiser (θ = 0.005, χ = 8). Measured 2026-09-26: 58 evaluations, m = 0.0425043700 i, on the
+    # physical branch (Re m ~ 1e-13); the D = 2, χ = 16 continuation to the fold matches the stationary
+    # solver's to 1e-8 (docs/yang_lee.md). Guards the complex CTM runs, which Anderson mixing stalled
+    # (each evaluation then ran to the 2000-step cap).
+    let β = 0.18, θ = 0.005
+        s0, lg, _ = ising3d_site(β)
+        bpr = boundary_peps(s0, lg, 2; maxdim = 8, gtol = 1.0e-7, maxiter = 200)
+        x = ising3d_site(β; h = im * θ / β)
+        sc = TNQS.replaceinds(x[1], collect(x[2]), collect(lg)); mc = TNQS.replaceinds(x[3], collect(x[2]), collect(lg))
+        bk, ik = boundary_peps_krylov(sc, lg, bpr; tol = 1.0e-9)
+        m = site_ratio(bk, mc)
+        @test ik.converged && ik.evals < 120
+        @test abs(real(m)) < 1.0e-10 && abs(imag(m) - 0.0425043700) < 1.0e-7
+    end
     let β = 0.35
         out = continuation(β, (1.0, 1.0, 0.0), [0.004, 0.02]; χ = 16)
         for (θ, f, m, info) in out

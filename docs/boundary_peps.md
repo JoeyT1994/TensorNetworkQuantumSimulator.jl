@@ -266,7 +266,8 @@ Options, as measured:
 * **`ctm_anderson = 5` (the default here; opt-in for `boundary_peps`).** Anderson mixing in every
   warm-started 2D CTMRG run. CTM steps per evaluation from the D = 3 start state at β = 0.2275:
   26.5 → 14.5 for a product, and 35.8 → 21.2 after a 2e-2 step. The fixed point is unchanged. Cold
-  runs are left unmixed (see Anderson above).
+  runs are left unmixed (see Anderson above), and so are complex networks, where mixing stalled the
+  CTM (docs/yang_lee.md).
 * **Reusing a subspace** for further steps from the new gradient, without new products: worse. It
   stalls without recycling, and with it costs 115 evaluations and 14.5 s. Removed.
 * **The norm-metric preconditioner:** worse, as above.
@@ -392,8 +393,8 @@ interrupted and restarted from the fixed-spin seed): |g| = 1.9e-4 at the cap.
 
 * D ≥ 4 with Newton–Krylov (n = 110 coordinates at D = 4), where the subspace should matter more,
   and with the GPU, where concurrent products compete for one device.
-* The complex path of `boundary_peps_krylov` beyond the D = 1 chains: the Yang–Lee continuations
-  (docs/yang_lee.md) still use `boundary_peps_stationary`.
+* The complex path of `boundary_peps_krylov` at D ≥ 3: at D = 2 it matches `boundary_peps_stationary`
+  along a continuation to the Yang–Lee fold (docs/yang_lee.md).
 * β continuation with a tangent predictor, which would start each point of a scan near the soft
   mode's answer.
 * How long L-BFGS takes to settle m at D = 3 near β_c: not within 400 s (the chained run that was to
