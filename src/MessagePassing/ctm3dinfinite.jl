@@ -461,7 +461,7 @@ weight `exp(β Σ J_a σσ′ + β h Σ σ)`, each bond's Boltzmann matrix split
 two sites. `J = (Jx, Jy, Jz) ≥ 0`. Returns the site tensor, its legs `(x⁻, x⁺, y⁻, y⁺, z⁻, z⁺)`
 and the impurity tensor with σ inserted (for [`site_ratio`](@ref)).
 """
-function ising3d_site(β::Real; J = (1.0, 1.0, 1.0), h::Real = 0.0)
+function ising3d_site(β::Real; J = (1.0, 1.0, 1.0), h::Number = 0.0)
     legs = Tuple(new_index(2; tags = "i3,$n") for n in ("xm", "xp", "ym", "yp", "zm", "zp"))
     function sqrtW(K)
         K >= 0 || throw(ArgumentError("ising3d_site takes ferromagnetic couplings, got βJ = $K"))
@@ -470,7 +470,7 @@ function ising3d_site(β::Real; J = (1.0, 1.0, 1.0), h::Real = 0.0)
         return sqrt(2) * [α ϕ; ϕ α]
     end
     function tensor(sgn)
-        A = zeros(ntuple(_ -> 2, 6))
+        A = zeros(typeof(exp(β * h)), ntuple(_ -> 2, 6))
         A[ones(Int, 6)...] = exp(β * h)
         A[fill(2, 6)...] = sgn * exp(-β * h)
         t = from_array(A, legs...)

@@ -49,6 +49,51 @@ product_A(v) = (is = [TNQS.new_index(1) for _ in 1:4]; p = TNQS.new_index(length
     @test abs(real(site_ratio(bp, mag)) - 0.750925) < 2.0e-4
     @test cvm_freenergy(bp) > 0.82140
 
+    # THE STATIONARY (bilinear) boundary PEPS in an imaginary field, exact at D = 1, continued from
+    # the real maximiser at θ = 0 with secant predictors. Measured 2026-09-26:
+    # chains along z (K = 0.3): f = ln λ₁ to 2.8e-15 and m to 4e-11 (relative) down to 1e-3 from the
+    # edge, and the edge sin θ_c = e^{−2K} from m⁻² → 0 (σ = −1/2 in 1D) to 1.8e-6;
+    # planes (J_z = 0): f equals the 2D Ising ln κ at the same field to 3e-15.
+    function continuation(β, J, θs; χ)
+        _, lg, _ = ising3d_site(β; J)
+        on(θ) = (x = ising3d_site(β; J, h = im * θ / β);
+                 (TNQS.replaceinds(x[1], collect(x[2]), collect(lg)), TNQS.replaceinds(x[3], collect(x[2]), collect(lg))))
+        s0 = ising3d_site(β; J)
+        bp = boundary_peps(TNQS.replaceinds(s0[1], collect(s0[2]), collect(lg)), lg, 1; maxdim = χ, gtol = 1.0e-11, maxiter = 100)
+        out = []; prev = bp; prevA = nothing; θp = 0.0; θ0 = 0.0; Jac = nothing
+        for θ in θs
+            st, mg = on(θ)
+            A0 = isnothing(prevA) ? prev.A : prev.A + (prev.A - prevA) * ((θ - θ0) / (θ0 - θp))
+            res, info = boundary_peps_stationary(st, lg, prev; maxdim = χ, A0, jacobian = Jac, tol = 1.0e-11)
+            push!(out, (θ, cvm_freenergy(res), site_ratio(res, mg), info))
+            info.converged || break
+            prevA = prev.A; θp = θ0; θ0 = θ; prev = res; Jac = info.J
+        end
+        return out
+    end
+    let β = 0.3, K = 0.3
+        θc = asin(exp(-2K))
+        exact(θ) = (H = im * θ; s = sqrt(exp(2K) * sinh(H)^2 + exp(-2K)); λ = exp(K) * cosh(H) + s;
+                    (log(λ), (exp(K) * sinh(H) + exp(2K) * sinh(H) * cosh(H) / s) / λ))
+        vs = [0.9, 0.5, 0.25, 0.13, 0.065, 0.032, 0.016, 0.008, 0.004, 0.002, 0.001]
+        out = continuation(β, (0.0, 0.0, 1.0), θc .* (1 .- vs); χ = 4)
+        @test length(out) == length(vs) && all(o -> o[4].converged, out)
+        @test maximum(abs(o[2] - real(exact(o[1])[1])) for o in out) < 1.0e-12
+        @test maximum(abs(o[3] - exact(o[1])[2]) / abs(o[3]) for o in out) < 1.0e-9
+        a, b = out[end - 1], out[end]
+        θe = b[1] + abs(b[3])^-2 * (b[1] - a[1]) / (abs(a[3])^-2 - abs(b[3])^-2)
+        @test abs(θe - θc) < 1.0e-5
+    end
+    let β = 0.35
+        out = continuation(β, (1.0, 1.0, 0.0), [0.004, 0.02]; χ = 16)
+        for (θ, f, m, info) in out
+            s2, l2, m2 = ising2d_site(β; h = im * θ / β)
+            ic = update(InfiniteCTM2D(s2, l2, 16); tolerance = 1.0e-12, maxiter = 3000)
+            @test abs(f - cvm_freenergy(ic)) < 1.0e-12
+            @test abs(m - site_ratio(ic, m2)) < 1.0e-10
+        end
+    end
+
     # argument checks
     @test_throws ArgumentError boundary_peps(site, legs, 0; maxdim = 4)
     @test_throws ArgumentError boundary_peps(site, legs[1:5], 2; maxdim = 4)

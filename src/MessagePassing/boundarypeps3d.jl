@@ -41,6 +41,7 @@ struct BoundaryPEPS
     lnkappa::Float64
     gnorm::Float64
     history::Vector{Float64}
+    bilinear::Bool                 # bra = A (a complex symmetric T: ⟨L| = |R⟩ᵀ), not conj(A)
 end
 
 # The 8 symmetries of the square acting on the legs (x⁻, x⁺, y⁻, y⁺): swap within either pair,
@@ -58,15 +59,15 @@ function _bp_isc4v(site, legs; atol = 1.0e-12)
 end
 
 # ⟨Ψ|Ψ⟩ and ⟨Ψ|T|Ψ⟩ as layer lists with their (x⁻, x⁺, y⁻, y⁺) leg lists.
-function _bp_norm_layers(A, al, bl)
+function _bp_norm_layers(A, al, bl; bilinear::Bool = false)
     ket = A
-    bra = replaceinds(conj(A), collect(al[1:4]), collect(bl))
+    bra = replaceinds(bilinear ? A : conj(A), collect(al[1:4]), collect(bl))
     return Any[ket, bra], ntuple(d -> Index[al[d], bl[d]], 4)
 end
 
-function _bp_sandwich_layers(A, al, bl, site, legs)
+function _bp_sandwich_layers(A, al, bl, site, legs; bilinear::Bool = false)
     ket = replaceind(A, al[5], legs[5])                                         # A's p = T's z⁻
-    bra = replaceinds(conj(A), vcat(collect(al[1:4]), [al[5]]), vcat(collect(bl), [legs[6]]))   # … z⁺
+    bra = replaceinds(bilinear ? A : conj(A), vcat(collect(al[1:4]), [al[5]]), vcat(collect(bl), [legs[6]]))   # … z⁺
     return Any[ket, site, bra], ntuple(d -> Index[al[d], legs[d], bl[d]], 4)
 end
 
@@ -74,8 +75,9 @@ end
 # the environments converged to `tol` (default: the context's fixed tolerance).
 function _bp_evaluate(A, ctx, init_n, init_s, tol = ctx.ctm_tolerance)
     al, bl, site, legs = ctx.al, ctx.bl, ctx.site, ctx.legs
-    nl, nlegs = _bp_norm_layers(A, al, bl)
-    sl, slegs = _bp_sandwich_layers(A, al, bl, site, legs)
+    bil = get(ctx, :bilinear, false)
+    nl, nlegs = _bp_norm_layers(A, al, bl; bilinear = bil)
+    sl, slegs = _bp_sandwich_layers(A, al, bl, site, legs; bilinear = bil)
     # The two environments are independent: converge them concurrently (each step's pairs and
     # blocks occupy at most 8 tasks, so on more threads the norm network rides along for free).
     run_n() = update(InfiniteCTM2D(nl, nlegs, ctx.maxdim; init = init_n, ctx.ctm_kwargs...);
@@ -312,7 +314,7 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
         push!(history, f)
         verbose && (println("boundary_peps it $it: f = $f, |g| = $(norm(g)), α = $α"); flush(stdout))
     end
-    return BoundaryPEPS(A, al, bl, site, Tuple(legs), ln, ls, f, norm(g), history)
+    return BoundaryPEPS(A, al, bl, site, Tuple(legs), ln, ls, f, norm(g), history, false)
 end
 
 """
@@ -330,6 +332,201 @@ cvm_freenergy(bp::BoundaryPEPS) = bp.lnkappa
 magnetisation tensor of [`ising3d_site`](@ref)): the single-site expectation value in the bulk.
 """
 function site_ratio(bp::BoundaryPEPS, impurity)
-    sl, _ = _bp_sandwich_layers(bp.A, bp.Alegs, bp.blegs, bp.site, bp.legs)
+    sl, _ = _bp_sandwich_layers(bp.A, bp.Alegs, bp.blegs, bp.site, bp.legs; bilinear = bp.bilinear)
     return site_ratio(bp.openv, Any[sl[1], adapt_like(bp.site, impurity), sl[3]])
+end
+
+# --- the STATIONARY boundary PEPS: complex symmetric transfer operators ---------------------------
+#
+# For a site with complex weights whose layer operator is complex SYMMETRIC (Tᵀ = T, e.g. the Ising
+# model in an imaginary field, whose bond splits are symmetric), the left eigenvector is the
+# transpose of the right one, ⟨L| = |R⟩ᵀ, and the estimator is BILINEAR:
+#
+#   f(R) = ln κ(Rᵀ T R) − ln κ(Rᵀ R)          (the bra layer is R itself, not R̄)
+#
+# f is holomorphic in R and stationary — not maximal — at the dominant eigenvector, with first-order
+# errors cancelling. There is no maximum principle, so it is solved as ∇f = 0 by Newton's method in
+# the C4v-symmetric coordinates `c` (R = B c, B an orthonormal orbit basis; n = 12, 42, 110 at
+# D = 2, 3, 4), with the Jacobian J = ∂g/∂c by central differences of the gradient (each a pair of
+# warm-started 2D environments), refreshed by Broyden updates between recomputations.
+#
+# THE GAUGE. f(λR) = f(R), so g(λc) = g(c)/λ: J c = −g and cᵀ g = 0 — c is a right and (bilinearly)
+# a left null vector of J at a stationary point. Newton works in the reduced Jacobian
+# J_r = W† J Q, Q spanning c^⊥ and W spanning {y : cᵀy = 0}. Its smallest singular value vanishes
+# where two stationary points merge: the FOLD, the finite-D image of the Yang–Lee edge (there the
+# two leading eigenvectors of T coalesce, an exceptional point).
+
+# An orthonormal real basis of the tensors on `al` invariant under the square's symmetries of the
+# virtual legs: one normalised orbit sum per (orbit of the virtual multi-index, physical index).
+function _bp_c4v_basis(al)
+    D = dim(al[1]); dp = dim(al[5])
+    seen = Set{NTuple{4, Int}}()
+    orbits = Vector{Vector{NTuple{4, Int}}}()
+    for I in CartesianIndices((D, D, D, D))
+        i = Tuple(I)
+        i in seen && continue
+        orb = unique([(i[π[1]], i[π[2]], i[π[3]], i[π[4]]) for π in _BP_C4V])
+        push!(orbits, orb); union!(seen, orb)
+    end
+    LI = LinearIndices((D, D, D, D, dp))
+    B = zeros(D^4 * dp, length(orbits) * dp)
+    col = 0
+    for p in 1:dp, orb in orbits
+        col += 1
+        for o in orb
+            B[LI[o..., p], col] = 1 / sqrt(length(orb))
+        end
+    end
+    return B
+end
+
+_bp_from_coords(c, B, al, ref) = adapt_like(ref, from_array(reshape(B * c, Tuple(dim.(collect(al)))), al...))
+_bp_to_coords(G, B, al) = transpose(B) * vec(ComplexF64.(Array(array(G, al...))))
+
+# `M` applied to dimension `k` of the array `A`.
+function _bp_modemul(A::AbstractArray, M::AbstractMatrix, k::Int)
+    p = [k; setdiff(1:ndims(A), k)]
+    Ap = permutedims(A, p)
+    sz = size(Ap)
+    Bp = reshape(M * reshape(Ap, sz[1], :), size(M, 1), sz[2:end]...)
+    return permutedims(Bp, invperm(p))
+end
+
+# THE BOND GAUGE. A 1×1 C4v PEPS is invariant under R → (X ⊗ X ⊗ X ⊗ X) R for complex orthogonal X
+# (X Xᵀ = 1, the same on every virtual leg): D(D−1)/2 more null directions of J, right and
+# (bilinearly) left — the tangents a·R of the antisymmetric generators a, in coordinates.
+function _bp_gauge_tangents(c, B, D::Int, dp::Int)
+    A = reshape(B * c, D, D, D, D, dp)
+    out = Vector{ComplexF64}[]
+    for i in 1:D, j in (i + 1):D
+        a = zeros(D, D); a[i, j] = 1; a[j, i] = -1
+        δ = sum(_bp_modemul(A, a, leg) for leg in 1:4)
+        push!(out, transpose(B) * vec(δ))
+    end
+    return out
+end
+
+# Newton's reduced system at `c`: Q spans the Hermitian complement of the null directions (c and
+# the gauge tangents), W the bilinear one ({y : vᵀy = 0}).
+function _bp_gauge_bases(c, B, D::Int, dp::Int)
+    N = reduce(hcat, vcat([c], _bp_gauge_tangents(c, B, D, dp)))
+    return nullspace(Matrix(N')), nullspace(Matrix(transpose(N)))
+end
+
+# Central-difference Jacobian of the gradient coordinates, columns in parallel.
+function _bp_fd_jacobian(c, B, ctx, ln, ls, ε, tol, ref)
+    n = length(c)
+    cols = Vector{Vector{ComplexF64}}(undef, n)
+    tasks = map(1:n) do k
+        Threads.@spawn begin
+            e = zeros(ComplexF64, n); e[k] = ε
+            _, Gp, _, _ = _bp_evaluate(_bp_from_coords(c + e, B, ctx.al, ref), ctx, ln, ls, tol)
+            _, Gm, _, _ = _bp_evaluate(_bp_from_coords(c - e, B, ctx.al, ref), ctx, ln, ls, tol)
+            (_bp_to_coords(Gp, B, ctx.al) - _bp_to_coords(Gm, B, ctx.al)) / (2ε)
+        end
+    end
+    for k in 1:n
+        cols[k] = fetch(tasks[k])
+    end
+    return reduce(hcat, cols)
+end
+
+"""
+    boundary_peps_stationary(site, legs, init; maxdim, A0 = init.A, jacobian = nothing, tol = 1e-9,
+                             maxiter = 12, fd_step = 1e-5, ctm_tolerance = 1e-12,
+                             ctm_maxiter = 4000, verbose = false, kwargs...) -> (bp, info)
+
+The STATIONARY 1×1 boundary PEPS of a complex symmetric layer operator (see the note above):
+Newton's method on ∇f = 0 for the bilinear estimator `f(R) = ln κ(RᵀTR) − ln κ(RᵀR)` in the
+C4v-symmetric coordinates, from `A0` (default `init.A`; a predictor in a continuation), with
+`init`'s legs and warm-started environments. `site` must carry `legs` (relabel a new coupling's
+site onto them). The Jacobian is recomputed by central differences (step `fd_step`) at the first
+iteration unless `jacobian` (a previous `info.J`) is passed, and Broyden-updated after every
+accepted step; steps backtrack on the residual (up to `ls_max` halvings), a stale Jacobian is
+recomputed once, and a fresh one that gives no descent means the gradient's noise floor (set by χ
+and `ctm_tolerance`: measured 2e-9 at 3D Ising β = 0.18, 1e-8 at β = 0.21, D = 2, χ = 16) —
+converged if the residual is below `noise_tol`.
+
+`info`: `J` (the last Jacobian), `sv` (singular values of the reduced Jacobian, ascending),
+`iterations`, `residual` (|g|·|c|), `converged`. The reduced Jacobian is ill-conditioned (3D Ising,
+D = 2: singular values from 5e-6 to 2.6 — the flat directions of the boundary-PEPS landscape), so
+`sv[1]` is not a fold indicator in practice; the magnetisation is (m − m_c ∝ √(θ_f − θ) at a fold).
+"""
+function boundary_peps_stationary(site, legs, init::BoundaryPEPS; maxdim::Integer = init.normenv.maxdim,
+                                  A0 = init.A, jacobian = nothing, tol::Real = 1.0e-9,
+                                  maxiter::Integer = 12, fd_step::Real = 1.0e-5,
+                                  ctm_tolerance::Real = 1.0e-12, ctm_maxiter::Integer = 2000,
+                                  ls_max::Integer = 8, noise_tol::Real = 1.0e-7, verbose::Bool = false,
+                                  kwargs...)
+    al, bl = init.Alegs, init.blegs
+    _bp_isc4v(site, legs) || throw(ArgumentError("boundary_peps_stationary needs a C4v-invariant site"))
+    sitec = scalartype(site) <: Complex ? site : site * complex(1.0)
+    ctx = (; al, bl, site = sitec, legs = Tuple(legs), maxdim = Int(maxdim), symmetrize = true,
+           ctm_tolerance, ctm_maxiter = Int(ctm_maxiter), ctm_kwargs = merge((; c4v = true), kwargs),
+           bilinear = true)
+    B = _bp_c4v_basis(al)
+    ref = sitec
+    c = _bp_to_coords(A0, B, al)
+    c /= norm(c)
+    reuse = init.normenv isa InfiniteCTM2D && init.normenv.maxdim == maxdim
+    ln = reuse ? _i2_complexify(init.normenv) : nothing
+    ls = reuse ? _i2_complexify(init.openv) : nothing
+    J = jacobian
+    f = NaN; g = zeros(ComplexF64, length(c)); res = Inf; it = 0; converged = false
+    history = Float64[]
+    evalc(cc, n0, s0) = (r = _bp_evaluate(_bp_from_coords(cc, B, al, ref), ctx, n0, s0, ctm_tolerance);
+                         (r[1], _bp_to_coords(r[2], B, al), r[3], r[4]))
+    f, g, ln, ls = evalc(c, ln, ls)
+    res = norm(g) * norm(c)
+    push!(history, f)
+    fresh = false                                   # is J a finite-difference Jacobian at c?
+    for k in 1:(maxiter + 1)
+        it = k - 1
+        verbose && (println("  stationary it $it: f = $f, |g||c| = $res"); flush(stdout))
+        if res < tol
+            converged = true
+            break
+        end
+        k == maxiter + 1 && break
+        if isnothing(J)
+            J = _bp_fd_jacobian(c, B, ctx, ln, ls, fd_step * norm(c), ctm_tolerance, ref)
+            fresh = true
+        end
+        Q, W = _bp_gauge_bases(c, B, dim(al[1]), dim(al[5]))
+        dc = Q * (-((W' * J * Q) \ (W' * g)))
+        # DAMPED: backtrack on the residual |g||c| (the undamped step from a distant start diverged,
+        # 3D Ising β = 0.18: 0.11 → 0.13 → 5.3). Trials warm-start from the accepted environments;
+        # every accepted step Broyden-updates J (J Δc = Δg).
+        accepted = false
+        α = 1.0
+        for _ in 1:ls_max
+            ct = c + α * dc
+            ct /= norm(ct)
+            ft, gt, lnt, lst = evalc(ct, ln, ls)
+            rt = norm(gt) * norm(ct)
+            if isfinite(rt) && rt < (1 - 1.0e-4 * α) * res
+                Δc = ct - c; Δg = gt - g
+                J = J + ((Δg - J * Δc) * Δc') / real(dot(Δc, Δc))
+                c, g, f, ln, ls, res = ct, gt, ft, lnt, lst, rt
+                push!(history, f)
+                accepted = true; fresh = false
+                break
+            end
+            verbose && (println("    trial α = $α rejected: |g||c| = $rt"); flush(stdout))
+            α /= 2
+        end
+        if !accepted
+            if fresh                                # a fresh Jacobian and no descent: the noise floor
+                converged = res < noise_tol
+                break
+            end
+            J = nothing                             # a stale Broyden Jacobian: recompute it
+        end
+    end
+    converged = converged || res < noise_tol        # stopped at the gradient's noise floor
+    Q, W = _bp_gauge_bases(c, B, dim(al[1]), dim(al[5]))
+    sv = isnothing(J) ? Float64[] : sort(svdvals(W' * J * Q))
+    A = _bp_from_coords(c, B, al, ref)
+    bp = BoundaryPEPS(A, al, bl, sitec, Tuple(legs), ln, ls, f, norm(g), history, true)
+    return bp, (; J, sv, iterations = it, residual = res, converged, c)
 end

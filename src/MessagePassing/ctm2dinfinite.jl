@@ -476,6 +476,48 @@ function _i2_image_pair(pr, g, t0, leg)
     return _i2_eps(g, _i2_sig(g, t0[1])) == -1 ? (PB, PA) : (PA, PB)
 end
 
+# THE SELF-REFLECTION of a pair. The reflection along an interface's own axis maps the interface to
+# itself with its sides exchanged, and in canonical legs acts on the pair's legs trivially; so
+# under `c4v` the high side's blocks (images of low-side ones) consume P_A where the full step
+# consumes P_B, and the derived pair must have P_A = P_B. A biorthogonal pair (M_B M_A = 1 over the
+# interface, M_A = P_A as an n×k matrix) of a mirror-symmetric interface has M_B = (M_Aᵀ M_A)⁻¹ M_Aᵀ;
+# its symmetric (Takagi) gauge is P = M_A (M_Aᵀ M_A)^{-1/2}, with Π = P Pᵀ unchanged. Real data out of
+# a positive problem are already there (M_Aᵀ M_A = 1), but complex data are not: the SVD's column
+# phases and the unitary gauge alignment break it (measured: 2D Ising at an imaginary field, the
+# c4v step off the full step at the first iteration and converging nowhere).
+function _i2_symmetric_pair(pr, w::Index)
+    PA, PB = pr[1], pr[2]
+    ins = Index[i for i in inds(PA) if i != w]
+    k = dim(w)
+    MA0 = reshape(Array(array(PA, ins..., w)), :, k)
+    MB0 = reshape(Array(array(PB, w, ins...)), k, :)
+    # the kept leg is zero-padded while the rank grows: work on its active columns only
+    act = [j for j in 1:k if norm(view(MA0, :, j)) > 0 || norm(view(MB0, j, :)) > 0]
+    isempty(act) && return pr
+    MA = MA0[:, act]; MB = MB0[act, :]
+    G = transpose(MA) * MA
+    cond(G) < 1.0e12 || (_ctm_stat!(:i2_c4v_asym); return pr)
+    D = inv(G)
+    # Always symmetrise: P Pᵀ = M_A G⁻¹ M_Aᵀ is an oblique projector onto span(M_A) whatever M_B is,
+    # and the pair out of the whitening is biorthogonal only to ~1e-5 while tiny singular values
+    # are kept early on (falling back to the raw pair there broke the c4v state for good).
+    err = norm(MB - D * transpose(MA)) / max(norm(MB), eps())
+    err <= 1.0e-4 || _ctm_stat!(:i2_c4v_asym)
+    if eltype(MA) <: Real
+        # a real pair stays real: needs D positive definite (else keep the pair as it was)
+        F = eigen(Symmetric((D + D') / 2))
+        all(>(0), F.values) || (_ctm_stat!(:i2_c4v_indefinite); return pr)
+        R = F.vectors * Diagonal(sqrt.(F.values)) * F.vectors'
+    else
+        R = sqrt(D)
+        R = (R + transpose(R)) / 2
+    end
+    MP = zeros(eltype(MA * R), size(MA0))
+    MP[:, act] = MA * R
+    P = adapt_like(PA, from_array(reshape(MP, (dim.(ins)..., k)), ins..., w))
+    return (P, P)
+end
+
 # One iteration: every pair from the current blocks, then the centre shell regrown with them.
 function _i2_step(ic::InfiniteCTM2D, st::_I2State)
     opts = ic.options
@@ -498,6 +540,7 @@ function _i2_step(ic::InfiniteCTM2D, st::_I2State)
     end
     if ic.c4v
         t0 = (1, -1)
+        newP[t0] = _i2_symmetric_pair(newP[t0], st.leg[(:w, t0)])
         for (t, _) in reps
             t == t0 && continue
             newP[t] = _i2_image_pair(newP[t0], _I2_C4V[_i2_find(_i2_act_pairtype, t0, t)], t0, st.leg)
@@ -523,6 +566,18 @@ function _i2_step(ic::InfiniteCTM2D, st::_I2State)
         end
     end
     return _I2State(st.chi, B, newP, st.leg)
+end
+
+# The state with every block and pair promoted to complex scalars — a real warm start for a network
+# that has turned complex (e.g. a field continued from real to imaginary); contractions do not mix
+# real and complex tensors.
+function _i2_complexify(ic::InfiniteCTM2D)
+    st = ic.state
+    (isnothing(st) || all(t -> scalartype(t) <: Complex, values(st.B))) && return ic
+    z = complex(1.0)
+    B = Dict{NTuple{2, Int}, Any}(s => t * z for (s, t) in st.B)
+    P = Dict{NTuple{2, Int}, Any}(t => map(x -> x isa AbstractTensor ? x * z : x, pr) for (t, pr) in st.P)
+    return _i2_setstate(ic, _I2State(st.chi, B, P, st.leg))
 end
 
 # Largest phase-free change of any block (blocks are norm-1 on fixed, aligned legs).
@@ -733,6 +788,98 @@ function _i2_phasefree(a, b)
     return norm(a - b * ph)
 end
 
+# --- correlation length from the channel transfer matrix ---------------------------------------
+#
+# The one-row channel along axis `a`: the two half-lines across it and the vertex's layers between
+# them, mapping the in-faces (k = 2) to the out-faces (k = 3). Its two leading eigenvalues give
+# ξ_a = 1 / ln|λ₁/λ₂|, the finite-χ correlation length (it saturates as χ⁻¹ → 0 is not reached;
+# finite-correlation-length scaling uses it as the length scale). Matrix-free restarted Arnoldi on
+# host vectors of size χ²·Π(raw dims).
+
+# Leading `nev` eigenvalues (by modulus) of the linear map `apply` on vectors like `v0`.
+function _i2_arnoldi(apply, v0::Vector{ComplexF64}, nev::Int; krylov::Int = 30, tol::Real = 1.0e-10,
+                     maxrestart::Int = 200)
+    n = length(v0)
+    m = min(krylov, n)
+    v = v0 / norm(v0)
+    vals = ComplexF64[]
+    for _ in 1:maxrestart
+        V = zeros(ComplexF64, n, m + 1); H = zeros(ComplexF64, m + 1, m)
+        V[:, 1] = v
+        k = m
+        for j in 1:m
+            w = apply(V[:, j])
+            for _ in 1:2, i in 1:j                       # Gram–Schmidt, twice
+                h = dot(view(V, :, i), w); H[i, j] += h; w .-= h .* view(V, :, i)
+            end
+            H[j + 1, j] = norm(w)
+            if abs(H[j + 1, j]) < 1.0e-14 * max(1.0, abs(H[j, j]))
+                k = j; break
+            end
+            V[:, j + 1] = w / H[j + 1, j]
+        end
+        F = eigen(H[1:k, 1:k])
+        ord = sortperm(abs.(F.values); rev = true)
+        q = min(nev, k)
+        vals = F.values[ord[1:q]]
+        res = [abs(H[k + 1, k] * F.vectors[k, ord[i]]) for i in 1:q]
+        all(res .<= tol * abs(vals[1])) && return vals
+        v = V[:, 1:k] * sum(F.vectors[:, ord[i]] for i in 1:q)
+        v /= norm(v)
+    end
+    return vals
+end
+
+"""
+    correlation_length(ic::InfiniteCTM2D; axis = 2, nev = 2, tol = 1e-10) -> (ξ, λ)
+
+The finite-χ correlation length along `axis` (1 = x, 2 = y) from the one-row channel transfer
+matrix — the two half-lines across the axis and the site's layers between them: `ξ = 1/ln|λ₁/λ₂|`
+with `λ` its `nev` leading eigenvalues by modulus (normalised by λ₁). A complex `λ[2]` signals
+oscillating correlations; `|λ[2]| → 1` a critical point, e.g. the Yang–Lee edge.
+"""
+function correlation_length(ic::InfiniteCTM2D; axis::Integer = 2, nev::Integer = 2, tol::Real = 1.0e-10)
+    isnothing(ic.state) && error("InfiniteCTM2D has not been `update`d.")
+    axis in (1, 2) || throw(ArgumentError("axis must be 1 or 2, got $axis"))
+    VX, tbl, Bv, _ = _i2_virtual(ic.state, ic)
+    a = Int(axis); b = 3 - a
+    parts = AbstractTensor[]
+    in_legs = Index[]; out_legs = Index[]
+    for sb in (-1, 0, 1)
+        if sb == 0
+            append!(parts, tbl[_I2_V])
+            faces = [(a, 2, 0, _I2_V[b]), (a, 3, 0, _I2_V[b])]
+        else
+            s = [0, 0]; s[b] = sb
+            bk = _i2_centre_key((s[1], s[2]))
+            push!(parts, Bv[bk])
+            faces = [F for (F, _) in _c2_faces(bk, _I2_L) if F[1] == a]
+        end
+        for F in faces
+            F[2] == 2 ? append!(in_legs, VX[F]) : append!(out_legs, VX[F])
+        end
+    end
+    length(in_legs) == length(out_legs) || error("correlation_length: channel legs do not match")
+    ref = first(parts)
+    dims = Tuple(dim.(in_legs))
+    realnet = all(t -> scalartype(t) <: Real, parts)
+    function apply1(x)
+        X = adapt_like(ref, from_array(reshape(x, dims), in_legs...))
+        Y = _ctm_contract(vcat(parts, AbstractTensor[X]), ic.options)
+        return vec(ComplexF64.(Array(array(Y, out_legs...))))
+    end
+    # a real network takes the real and imaginary parts separately (no mixed-type contractions)
+    apply(x) = realnet ? apply1(real.(x)) + im * apply1(imag.(x)) : apply1(x)
+    v0 = randn(Xoshiro(1), ComplexF64, prod(dims))
+    λ = _i2_arnoldi(apply, v0, Int(nev); tol)
+    # a Krylov space that closes early (a random start in an invariant subspace of dimension < nev)
+    # means the rest of the spectrum is zero
+    length(λ) < nev && (λ = vcat(λ, zeros(ComplexF64, nev - length(λ))))
+    λ = λ ./ λ[1]
+    ξ = length(λ) >= 2 ? 1 / log(1 / abs(λ[2])) : Inf
+    return ξ, λ
+end
+
 """
     ising2d_site(β; J = (1.0, 1.0), h = 0.0) -> (site, legs, magnetisation)
 
@@ -741,7 +888,7 @@ weight `exp(β Σ J_a σσ′ + β h Σ σ)`, each bond's Boltzmann matrix split
 two sites. Returns the site tensor, its legs `(x⁻, x⁺, y⁻, y⁺)` and the impurity tensor with σ
 inserted.
 """
-function ising2d_site(β::Real; J = (1.0, 1.0), h::Real = 0.0)
+function ising2d_site(β::Real; J = (1.0, 1.0), h::Number = 0.0)
     legs = Tuple(new_index(2; tags = "i2,$n") for n in ("xm", "xp", "ym", "yp"))
     function sqrtW(K)
         K >= 0 || throw(ArgumentError("ising2d_site takes ferromagnetic couplings, got βJ = $K"))
@@ -750,7 +897,7 @@ function ising2d_site(β::Real; J = (1.0, 1.0), h::Real = 0.0)
         return sqrt(2) * [α ϕ; ϕ α]
     end
     function tensor(sgn)
-        A = zeros(2, 2, 2, 2)
+        A = zeros(typeof(exp(β * h)), 2, 2, 2, 2)
         A[1, 1, 1, 1] = exp(β * h)
         A[2, 2, 2, 2] = sgn * exp(-β * h)
         t = from_array(A, legs...)

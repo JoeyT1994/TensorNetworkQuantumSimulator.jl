@@ -105,6 +105,31 @@ end
         @test TNQS.norm(Ec / zc - Es / zs) < 1.0e-10 * TNQS.norm(Es / zs)
     end
 
+    # COMPLEX weights: the 2D Ising model in an imaginary field below its Yang–Lee edge (β = 0.40628,
+    # τ = 0.1, e^{±iθ} per spin with θ = 2.24e-3; the edge is at θ_c = 5.59975e-3). Z is real, so ln κ is
+    # and m is purely imaginary; c4v = true must agree with the full step. (Before the symmetric-gauge
+    # pair, c4v left the full step at the first truncating iteration and converged nowhere.)
+    let β = 0.406284783665, θ = 2.2398e-3
+        site, legs, mag = ising2d_site(β; h = im * θ / β)
+        full = update(InfiniteCTM2D(site, legs, 16); tolerance = 1.0e-11)
+        sym = update(InfiniteCTM2D(site, legs, 16; c4v = true); tolerance = 1.0e-11)
+        @test full.stats[].converged && sym.stats[].converged
+        mf, ms = site_ratio(full, mag), site_ratio(sym, mag)
+        @test abs(real(mf)) < 1.0e-12 && abs(imag(mf) - 0.198893692) < 1.0e-8
+        @test abs(ms - mf) < 1.0e-10
+        @test abs(cvm_freenergy(sym) - cvm_freenergy(full)) < 1.0e-12
+    end
+
+    # correlation_length against decoupled chains along x (J_y = 0): the channel transfer matrix is
+    # the 1D one, ξ_x = −1/ln tanh K exactly, and no correlation along y.
+    let K = 0.5
+        site, legs, _ = ising2d_site(K; J = (1.0, 0.0))
+        ic = update(InfiniteCTM2D(site, legs, 4); tolerance = 1.0e-12)
+        ξx, λ = correlation_length(ic; axis = 1)
+        @test abs(ξx + 1 / log(tanh(K))) < 1.0e-10
+        @test first(correlation_length(ic; axis = 2)) < 0.05          # |λ₂/λ₁| at roundoff (measured e^{-41})
+    end
+
     # argument checks
     site, legs, _ = ising2d_site(0.3)
     @test_throws ArgumentError InfiniteCTM2D(site, legs, 4; pair = :nonsense)
