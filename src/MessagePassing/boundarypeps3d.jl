@@ -456,8 +456,10 @@ function boundary_peps_stationary(site, legs, init::BoundaryPEPS; maxdim::Intege
                                   A0 = init.A, jacobian = nothing, tol::Real = 1.0e-9,
                                   maxiter::Integer = 12, fd_step::Real = 1.0e-5,
                                   ctm_tolerance::Real = 1.0e-12, ctm_maxiter::Integer = 2000,
-                                  ls_max::Integer = 8, noise_tol::Real = 1.0e-7, verbose::Bool = false,
-                                  kwargs...)
+                                  ls_max::Integer = 8, noise_tol::Real = 1.0e-7, svd_rtol::Real = 1.0e-6,
+                                  step_tol::Real = 1.0e-7, fd_ctm_tolerance::Real = ctm_tolerance,
+                                  refresh_jacobian::Bool = true,
+                                  verbose::Bool = false, kwargs...)
     al, bl = init.Alegs, init.blegs
     _bp_isc4v(site, legs) || throw(ArgumentError("boundary_peps_stationary needs a C4v-invariant site"))
     sitec = scalartype(site) <: Complex ? site : site * complex(1.0)
@@ -489,11 +491,25 @@ function boundary_peps_stationary(site, legs, init::BoundaryPEPS; maxdim::Intege
         end
         k == maxiter + 1 && break
         if isnothing(J)
-            J = _bp_fd_jacobian(c, B, ctx, ln, ls, fd_step * norm(c), ctm_tolerance, ref)
+            J = _bp_fd_jacobian(c, B, ctx, ln, ls, fd_step * norm(c), fd_ctm_tolerance, ref)
             fresh = true
         end
         Q, W = _bp_gauge_bases(c, B, dim(al[1]), dim(al[5]))
-        dc = Q * (-((W' * J * Q) \ (W' * g)))
+        # TRUNCATED-SVD Newton step: a boundary PEPS with more bond dimension than the state uses is
+        # redundant — 3D Ising β = 0.18, D = 3: ~15 reduced-Jacobian singular values below 1e-8 (to
+        # 1e-17) against a largest 2.6, and the plain solve stepped |dc| = 1.9e3. Directions below
+        # `svd_rtol`·σ_max leave f (and the state) unchanged; they are dropped.
+        F = svd(W' * J * Q)
+        keep = F.S .> svd_rtol * F.S[1]
+        dc = Q * (-(F.V[:, keep] * ((F.U[:, keep]' * (W' * g)) ./ F.S[keep])))
+        # the residual along the dropped directions cannot be reduced (a floor ~1e-6 at D = 3):
+        # converged once the step on the kept ones is negligible AND the residual is at the noise
+        # level (near an exceptional point J grows as v^{-1/2}, so steps get small early: the D = 1
+        # chain stopped with m 1.4e-6 off)
+        if norm(dc) < step_tol && res < noise_tol
+            converged = true
+            break
+        end
         # DAMPED: backtrack on the residual |g||c| (the undamped step from a distant start diverged,
         # 3D Ising β = 0.18: 0.11 → 0.13 → 5.3). Trials warm-start from the accepted environments;
         # every accepted step Broyden-updates J (J Δc = Δg).
@@ -520,6 +536,7 @@ function boundary_peps_stationary(site, legs, init::BoundaryPEPS; maxdim::Intege
                 converged = res < noise_tol
                 break
             end
+            refresh_jacobian || break               # (a refresh costs 2n evaluations: ~450 s at D = 3)
             J = nothing                             # a stale Broyden Jacobian: recompute it
         end
     end
