@@ -393,8 +393,8 @@ interrupted and restarted from the fixed-spin seed): |g| = 1.9e-4 at the cap.
 
 * D ≥ 4 with Newton–Krylov (n = 110 coordinates at D = 4), where the subspace should matter more,
   and with the GPU, where concurrent products compete for one device.
-* The complex path of `boundary_peps_krylov` at D ≥ 3: at D = 2 it matches `boundary_peps_stationary`
-  along a continuation to the Yang–Lee fold (docs/yang_lee.md).
+* The complex path of `boundary_peps_krylov` at D ≥ 4: at D = 2 and 3 it matches `boundary_peps_stationary`
+  along continuations towards the Yang–Lee fold (docs/yang_lee.md).
 * β continuation with a tangent predictor, which would start each point of a scan near the soft
   mode's answer.
 * How long L-BFGS takes to settle m at D = 3 near β_c: not within 400 s (the chained run that was to

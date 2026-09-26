@@ -22,7 +22,7 @@ the zeros condense and the fixed point acquires Re m ≠ 0 (our branch test).
 * `boundary_peps_stationary`: the bilinear boundary PEPS for complex symmetric layer operators, by
   Newton with the full finite-difference Jacobian (reused along a continuation). `boundary_peps_krylov`
   solves the same equations without forming J (docs/boundary_peps.md); its complex path matches the
-  stationary solver along a D = 2 continuation to the fold (below) and takes larger steps.
+  stationary solver along D = 2 and D = 3 continuations towards the fold (below) and takes larger steps.
 
 ### The c4v fix (complex data)
 
@@ -173,6 +173,22 @@ Cost: 3.5–19 s per point, 42–58 s for the last three, 8 minutes in all. Both
 evaluations (9–17 s) where the stationary solver stalled at |g| = 1–4e-5 after 27–209 s. On the
 old scan's small steps both reproduce the old values to 2e-8.
 
+**D = 3, χ = 24.** 11 of the old scan's points, θ = 0.006 to 0.04705 (v ≈ 0.04), with tol = 1e-7
+and noise_tol = 1e-6. Every point converged, to |g| = 2e-8 – 2.5e-7, where the old scan stopped at
+1e-7 – 1.3e-6. Agreement in Im m:
+
+| θ | \|Δ Im m\| |
+|---|---|
+| ≤ 0.032 | ≤ 5e-7 |
+| 0.0399 | 7e-7 |
+| 0.0432, 0.0450 | 1.3e-6 |
+| 0.0462 | 3.7e-6 |
+| 0.04705 | 7.9e-6 |
+
+The difference grows towards the fold as the old scan's residual does, so it is most likely that
+scan's error. Cost: 83–345 s per point, 40 minutes in all, with no 140 s Jacobian up front. The
+stationary solver took 110–125 s per point near the fold, but at a residual 10–20× larger.
+
 ### Results (2026-09-26)
 
 The edge map — the finite-D fold θ_f(t) of the stationary boundary PEPS, D = 2, χ = 16, fitted as
@@ -218,7 +234,7 @@ Next steps, in order of leverage: (1) an improved model (Blume–Capel at its im
 removing the t^{ων} corrections that dominate the extrapolation; (2) larger D at small t with a
 cheaper solver — Newton–Krylov with directional derivatives instead of a 2n-evaluation Jacobian
 (now `boundary_peps_krylov`, whose complex path is a Levenberg–Marquardt trust region in the Krylov
-subspace; validated along a D = 2 continuation, above), and a parametrisation
+subspace; validated along D = 2 and D = 3 continuations, above), and a parametrisation
 without the redundant directions — so that ξ at the fold grows with D and
 finite-correlation-length scaling (θ_c − θ_f ∝ ξ_f^{−(3−Δ_φ)}) can locate the true edge; (3) σ from
 that scaling rather than from local exponents.
