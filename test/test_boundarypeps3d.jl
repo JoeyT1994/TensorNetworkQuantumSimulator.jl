@@ -48,6 +48,13 @@ product_A(v) = (is = [TNQS.new_index(1) for _ in 1:4]; p = TNQS.new_index(length
     @test issorted(bp.history)
     @test abs(real(site_ratio(bp, mag)) - 0.750925) < 2.0e-4
     @test cvm_freenergy(bp) > 0.82140
+    # NEWTON–KRYLOV with the subspace trust region on f, from that state (|g| = 2.2e-5): the same optimum
+    # (measured 2026-09-26: 55 evaluations to |g| = 6.8e-10, f = 0.8214064835850, m = 0.7509291256; the
+    # converged m is 0.7509291249)
+    bpk, info = boundary_peps_krylov(site, legs, bp; tol = 1.0e-9)
+    @test info.converged && info.residual < 1.0e-9
+    @test abs(cvm_freenergy(bpk) - 0.821406483585) < 1.0e-11
+    @test abs(real(site_ratio(bpk, mag)) - 0.750929125) < 1.0e-8
 
     # THE STATIONARY (bilinear) boundary PEPS in an imaginary field, exact at D = 1, continued from
     # the real maximiser at θ = 0 with secant predictors. Measured 2026-09-26:
@@ -83,6 +90,17 @@ product_A(v) = (is = [TNQS.new_index(1) for _ in 1:4]; p = TNQS.new_index(length
         a, b = out[end - 1], out[end]
         θe = b[1] + abs(b[3])^-2 * (b[1] - a[1]) / (abs(a[3])^-2 - abs(b[3])^-2)
         @test abs(θe - θc) < 1.0e-5
+        # Newton–Krylov (complex: the Levenberg–Marquardt trust region on |g|²), straight from the
+        # real θ = 0 state to half-way to the edge
+        _, lg, _ = ising3d_site(β; J = (0.0, 0.0, 1.0))
+        s0 = ising3d_site(β; J = (0.0, 0.0, 1.0))
+        bp1 = boundary_peps(TNQS.replaceinds(s0[1], collect(s0[2]), collect(lg)), lg, 1; maxdim = 4, gtol = 1.0e-11, maxiter = 100)
+        θ = θc / 2
+        x = ising3d_site(β; J = (0.0, 0.0, 1.0), h = im * θ / β)
+        bpk, info = boundary_peps_krylov(TNQS.replaceinds(x[1], collect(x[2]), collect(lg)), lg, bp1; tol = 1.0e-11)
+        @test info.converged
+        @test abs(cvm_freenergy(bpk) - real(exact(θ)[1])) < 1.0e-12
+        @test abs(site_ratio(bpk, TNQS.replaceinds(x[3], collect(x[2]), collect(lg))) - exact(θ)[2]) < 1.0e-9
     end
     let β = 0.35
         out = continuation(β, (1.0, 1.0, 0.0), [0.004, 0.02]; χ = 16)

@@ -190,7 +190,9 @@ uncontrolled estimate, not a measurement; it does not confirm or refute the FRG 
 
 Next steps, in order of leverage: (1) an improved model (Blume–Capel at its improved coupling),
 removing the t^{ων} corrections that dominate the extrapolation; (2) larger D at small t with a
-cheaper solver — Newton–Krylov with directional derivatives instead of a 2n-evaluation Jacobian,
-and a parametrisation without the redundant directions — so that ξ at the fold grows with D and
+cheaper solver — Newton–Krylov with directional derivatives instead of a 2n-evaluation Jacobian
+(now `boundary_peps_krylov`, whose complex path is a Levenberg–Marquardt trust region in the Krylov
+subspace; tested so far on the D = 1 chains only, see boundary_peps.md), and a parametrisation
+without the redundant directions — so that ξ at the fold grows with D and
 finite-correlation-length scaling (θ_c − θ_f ∝ ξ_f^{−(3−Δ_φ)}) can locate the true edge; (3) σ from
 that scaling rather than from local exponents.

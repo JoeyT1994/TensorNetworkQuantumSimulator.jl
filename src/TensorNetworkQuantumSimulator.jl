@@ -103,6 +103,7 @@ export
     correlation_length,
     boundary_peps,
     boundary_peps_stationary,
+    boundary_peps_krylov,
     boundary_peps_power,
     boundary_peps_natural,
     pair_ratio,

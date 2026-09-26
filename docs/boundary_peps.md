@@ -175,6 +175,148 @@ Tried and rejected:
 * **The frozen-environment Hessian as preconditioner**, (λ₁ Ñ − T_eff) in the Ñ-metric: behind the
   norm metric at every checkpoint (f 0.78461695 against 0.78461726 at iteration 100).
 
+## Routes to the boundary state (2026-09-26)
+
+This section compares the routes by which fixed point each reaches and how fast. Everything is 3D
+Ising with `ising3d_site`, measured on the 8-core i9-9900K here.
+
+### Accuracy: only the stationary point of f
+
+f(A) = ln κ⟨A|T|A⟩ − ln κ⟨A|A⟩ is the nested Bethe (Kikuchi) estimate. Its stationary point is the
+MP-BP fixed point along z, Woolls et al.'s condition one dimension up, so its errors are second
+order. Every local shortcut tried lands somewhere else, or nowhere:
+
+| route | fixed point | measured |
+|---|---|---|
+| direct 3D CTMRG (`InfiniteCTM3D`) | biased | m 0.9% high at β = 0.25 for every χ ≤ 8 |
+| projected power with MP-BP bond projectors (`boundary_peps_power`) | biased | β = 0.25, D = 2: m = 0.75386 against 0.75093, f 4.7e-6 low, \|∇f\| = 3.7e-3. At β = 0.22 it orders (m = 0.40) where D = 2 is disordered. Fast: 30 steps, 7 s |
+| natural power A ← N⁻¹E_s (`boundary_peps_natural`) | exact | unstable: from 2e-3 away, \|ΔA\| grows 0.08 → 1.3 |
+| stationary or variational: L-BFGS, Newton, Newton–Krylov | exact | see below |
+
+* **The bond projectors** cut each bond against its own environment and are blind to the plane's
+  loops. That is the direct 3D CTMRG's mean-field bias, one dimension down.
+* **The natural update** is the stationarity condition's own form. But its step is taken in frozen
+  environments, and their response makes the map expansive, as for Nishino's local eigenproblem
+  above.
+
+**The inner contraction: `:cut` or `:cycle`.** `projector = :cycle` works in `InfiniteCTM2D`. It is
+MP-BP / eig-CTMRG, taking its projectors from the dominant invariant subspace of the corner cycle.
+
+* On real reflection-symmetric networks, the 3D Ising sandwiches among them, it finds `:cut`'s
+  fixed point.
+* It is gauge-invariant where `:cut` is not. For 2D Ising at K = 0.42, χ = 4, with one random bond
+  gauge on every bond: Δln κ = −1.93e-6 for every gauge, against −1.6e-7 or +5.2e-5 for `:cut`.
+* On the complex Yang–Lee networks it is 2–20× more accurate in m. At χ = 16: 1.2e-11 against
+  2.5e-10 far from the edge, and 3.9e-7 against 8.4e-7 near it.
+* It costs 3–50× more per step (24.9 ms against 2.4 ms at χ = 16).
+
+So use `:cut` for real networks and `:cycle` for non-Hermitian or badly gauged ones.
+
+### Newton–Krylov: `boundary_peps_krylov`
+
+The finite-difference Newton of `boundary_peps_stationary` builds all of J: 2n evaluations, with
+n = 12, 42, 110 C4v coordinates at D = 2, 3, 4. Newton–Krylov builds only a subspace of it.
+
+* **Products.** Each Jacobian-vector product is one warm-started evaluation at c + h u (forward
+  difference, h = 1e-5). The products are clean: the D = 2 FD Jacobian is symmetric to 4e-8, and
+  J c = −g to 3e-8.
+* **Coordinates.** It works in the reduced coordinates, with scale and the O(D) bond gauge projected
+  out.
+
+**The landscape is soft and curved.** Reduced Hessian eigenvalues at β = 0.25, χ = 16:
+
+| case | range | notes |
+|---|---|---|
+| D = 2 (m = 10) | −2.7 … −2.9e-6 | the soft modes carry the last digits of m |
+| D = 3 (m = 38) | −2.8 … ±1e-13 | several are POSITIVE: the unused bond dimension, a saddle in directions that barely move the state |
+| D = 3, in the norm metric | 1.2e-5 … 1.5e3 | no better conditioned; GMRES needs 12 / 27 products to a 1e-1 / 1e-2 residual, against 3 / 12 plain |
+
+Along the soft modes the Newton step is long: 0.063 along the λ = −1.6e-4 mode at |g| = 3.9e-5,
+D = 2. And f is not quadratic on that scale. The full step raised |g| 30× while f improved, and a
+line search on |g| stalled at 3.9e-5.
+
+Hence a TRUST REGION IN THE KRYLOV SUBSPACE:
+
+* The model is of f for real data (negative curvature followed to the boundary), and of |g|² for
+  complex data (Levenberg–Marquardt).
+* The ratio of actual to predicted gain accepts the step and sizes the next one.
+* A rejected step is re-solved in the same subspace, with no new products.
+
+Options, as measured:
+
+* **`block = 4`, `recycle = 3` (the defaults).** Four products at a time on threads (block Arnoldi),
+  and each subspace starts from −g, the accepted step, and the two Ritz vectors the step moved along
+  most. Products per step stay the same, and wall time falls 1.8×: D = 2, 8 threads, 107 evaluations
+  in 10.5 s against 102 in 18.6 s.
+* **`ctm_anderson = 5` (the default here; opt-in for `boundary_peps`).** Anderson mixing in every
+  warm-started 2D CTMRG run. CTM steps per evaluation from the D = 3 start state at β = 0.2275:
+  26.5 → 14.5 for a product, and 35.8 → 21.2 after a 2e-2 step. The fixed point is unchanged. Cold
+  runs are left unmixed (see Anderson above).
+* **Reusing a subspace** for further steps from the new gradient, without new products: worse. It
+  stalls without recycling, and with it costs 115 evaluations and 14.5 s. Removed.
+* **The norm-metric preconditioner:** worse, as above.
+
+At D = 2 it does not beat L-BFGS on evaluations: about 100 either way, since every soft step needs
+the whole 10-dimensional space. From 25 L-BFGS iterations (β = 0.25, |g| = 2.1e-4), it reaches
+|g| = 2.5e-11 in 16 steps, with f and m equal to L-BFGS's optimum to 1e-13 and 1e-8.
+
+### The benchmark: `examples/ising3d_solver_benchmark.jl`
+
+Each run uses one solver, from a shared cached start state (D = 2 converged, embedded at D with
+noise 1e-2), within a wall-clock budget, with compilation kept outside the timing.
+
+* **Outputs.** The trace (t, f, |g|) goes to CSV. So does m at checkpoints, each checkpoint's state
+  evaluated with freshly converged environments.
+* **Chaining.** `BP_SAVE`, `BP_INIT` and `BP_TOFFSET` chain runs past the 10-minute cap.
+
+The setting: 3D Ising at β = 0.2275 (2.6% above β_c), D = 3, χ = 16, 8 threads, 400 s per run. The
+reference is Newton–Krylov chained to |g| = 5.1e-9 (856 s): f* = 0.7846174816989,
+m* = 0.4917076547.
+
+| solver | f* − f < 1e-8 | < 1e-9 | < 1e-10 | \|m − m*\| < 1e-7 to stay | at 400 s: f* − f, \|m − m*\| |
+|---|---|---|---|---|---|
+| L-BFGS (`boundary_peps`) | 309 s | — | — | — | 6.8e-9, 7.0e-6 |
+| L-BFGS, `ctm_anderson = 5` | 243 s | — | — | — | 3.4e-9, 2.7e-6 |
+| Newton–Krylov, no Anderson | 305 s | ≈ 600 s | ≈ 600 s | not checkpointed | 1.9e-9, 4.1e-6 |
+| **Newton–Krylov, `ctm_anderson = 5`** | **156 s** | **238 s** | **310 s** | **310 s** | converged at 395 s: 8e-11, 1.8e-8 |
+
+The no-Anderson Newton–Krylov times to 1e-9 and 1e-10 come from the reference chain (f* − f ≈ 1e-12 by
+596 s). Identical runs vary by about ±15% in wall time: the trajectories are deterministic, and one
+repeat ran 15% slower throughout.
+
+**m is the hard part.**
+
+* **L-BFGS never settles in m.** In both of its runs, m wandered by ±1.5e-5 around m* over the last
+  200 s, while f changed by less than 1e-10.
+* **Single steps move m.** One L-BFGS step moved m by 9e-6.
+* **Why.** The soft mode is the magnetisation's: f is flat along it, and m is not. So m converges
+  only when that mode is resolved, which Newton does quadratically once near. A converged |g| or f
+  says little about m before then. The first L-BFGS run here happened to stop at a point 3.7e-7 from
+  m*, at |g| = 3.6e-6.
+
+### Verdict
+
+The fastest accurate route measured, from the network inwards:
+
+1. **The inner contraction.** `InfiniteCTM2D` with `c4v = true` and split pairs. Use `:cut` for
+   real networks and `:cycle` for complex ones. Mix warm runs (`ctm_anderson = 5`), and use the
+   GPU from D = 4.
+2. **The boundary state.** The stationary point of the Bethe estimate, solved by
+   `boundary_peps_krylov` from a warm start: a nearby β, or a few L-BFGS iterations after an
+   embedding.
+3. **Observables** only from a converged state. Near β_c, m is set by a soft mode that f and a
+   loose |g| do not see.
+
+At D = 3 near β_c on 8 cores this gets m to 1e-7 in about 5 minutes, where L-BFGS still wanders at
+1e-5 after 400 s.
+
+Not yet measured:
+
+* D ≥ 4 (n = 110 coordinates), where the subspace should matter more.
+* The GPU, where concurrent products compete for one device.
+* The complex (Yang–Lee) continuation with Newton–Krylov beyond the D = 1 chain test.
+* β continuation with a tangent predictor.
+
 ## Validation of the boundary PEPS
 
 | check | result |

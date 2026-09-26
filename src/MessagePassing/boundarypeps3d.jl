@@ -80,10 +80,15 @@ function _bp_evaluate(A, ctx, init_n, init_s, tol = ctx.ctm_tolerance)
     sl, slegs = _bp_sandwich_layers(A, al, bl, site, legs; bilinear = bil)
     # The two environments are independent: converge them concurrently (each step's pairs and
     # blocks occupy at most 8 tasks, so on more threads the norm network rides along for free).
+    # ANDERSON mixing (`ctx.anderson` iterates) only from a warm start: from the vacuum it can pick a
+    # wrong fixed point while the kept rank grows (docs/boundary_peps.md). Warm, it cuts the CTM steps
+    # per evaluation 1.7–1.8× (3D Ising β = 0.2275, D = 3, χ = 16, m = 5: 26.5 → 14.5 for a
+    # finite-difference product, 35.8 → 21.2 after a 2e-2 step); the fixed point is unchanged.
+    am = get(ctx, :anderson, 0)
     run_n() = update(InfiniteCTM2D(nl, nlegs, ctx.maxdim; init = init_n, ctx.ctm_kwargs...);
-                     tolerance = tol, maxiter = ctx.ctm_maxiter)
+                     tolerance = tol, maxiter = ctx.ctm_maxiter, anderson = isnothing(init_n) ? 0 : am)
     run_s() = update(InfiniteCTM2D(sl, slegs, ctx.maxdim; init = init_s, ctx.ctm_kwargs...);
-                     tolerance = tol, maxiter = ctx.ctm_maxiter)
+                     tolerance = tol, maxiter = ctx.ctm_maxiter, anderson = isnothing(init_s) ? 0 : am)
     if Threads.nthreads() > 1
         tn = Threads.@spawn run_n()
         ls = run_s()
@@ -180,7 +185,8 @@ end
     boundary_peps(site, legs, D; maxdim, init = nothing, boundary = nothing, symmetrize = true,
                   maxiter = 200, gtol = 1e-7, memory = 10, max_step = 0.2, ctm_tolerance = 1e-10,
                   ctm_maxiter = 1000, noise = 1e-2, seed = 0, precondition = true,
-                  precondition_shift = 1e-2, adaptive_tolerance = true, verbose = false, kwargs...) -> BoundaryPEPS
+                  precondition_shift = 1e-2, adaptive_tolerance = true, ctm_anderson = 0, callback = nothing,
+                  time_limit = Inf, verbose = false, kwargs...) -> BoundaryPEPS
 
 Variational boundary PEPS for the translation-invariant cubic network of `site` (legs
 `(x⁻, x⁺, y⁻, y⁺, z⁻, z⁺)`, as for [`InfiniteCTM3D`](@ref)): maximise the per-site Rayleigh quotient
@@ -196,7 +202,10 @@ dimension `D`, both terms contracted by [`InfiniteCTM2D`](@ref) at `maxdim`. For
 * `symmetrize` — keep A and the gradient C4v-symmetric in the virtual legs; requires an invariant
   site.
 * Stops when the tangent gradient norm (for normalised A) is below `gtol`, or after `maxiter`
-  L-BFGS iterations, or when the line search fails.
+  L-BFGS iterations, or after `time_limit` seconds, or when the line search fails.
+* `callback(it, state)` — `state` a NamedTuple (A, Alegs, f, res) — runs after every accepted step.
+* `ctm_anderson = m` — Anderson mixing of the last m iterates in every warm-started 2D CTMRG
+  (1.7–1.8× fewer steps per evaluation at D = 3; the fixed point is unchanged); 0 is off.
 * `precondition` — L-BFGS with the norm metric `(N + precondition_shift·λ_max)⁻¹` as its initial
   inverse Hessian (a natural-gradient step); `false` gives the plain `γ I`.
 * `adaptive_tolerance` — converge the 2D environments to `1e-2·|g|`, clamped to
@@ -211,7 +220,9 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
                        memory::Integer = 10, max_step::Real = 0.2, ctm_tolerance::Real = 1.0e-10,
                        ctm_maxiter::Integer = 1000, noise::Real = 1.0e-2, seed::Integer = 0,
                        ls_max::Integer = 12, precondition::Bool = true, precondition_shift::Real = 1.0e-2,
-                       adaptive_tolerance::Bool = true, verbose::Bool = false, kwargs...)
+                       adaptive_tolerance::Bool = true, ctm_anderson::Integer = 0, callback = nothing,
+                       time_limit::Real = Inf,
+                       verbose::Bool = false, kwargs...)
     D >= 1 || throw(ArgumentError("D must be ≥ 1, got $D"))
     length(legs) == 6 || throw(ArgumentError("legs must be the six legs (x⁻, x⁺, y⁻, y⁺, z⁻, z⁺)"))
     issetequal(collect(inds(site)), collect(legs)) || throw(ArgumentError("the site tensor's indices must be exactly the six given legs"))
@@ -222,7 +233,8 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
           new_index(D; tags = "bp,yp"), new_index(dim(legs[5]); tags = "bp,p"))
     bl = Tuple(new_index(D; tags = "bp,bra") for _ in 1:4)
     ctx = (; al, bl, site, legs = Tuple(legs), maxdim = Int(maxdim), symmetrize, ctm_tolerance,
-           ctm_maxiter = Int(ctm_maxiter), ctm_kwargs = merge((; c4v = symmetrize), kwargs))
+           ctm_maxiter = Int(ctm_maxiter), ctm_kwargs = merge((; c4v = symmetrize), kwargs),
+           anderson = Int(ctm_anderson))
     rng = Xoshiro(seed)
     A = if init isa BoundaryPEPS
         dim(init.Alegs[5]) == dim(al[5]) || throw(ArgumentError("init's physical dimension differs from the site's z legs"))
@@ -247,6 +259,7 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
     # needs, 1e-2·|g| clamped to [ctm_tolerance, 1e-6]; ctm_tolerance is reached as |g| → gtol.
     # Measured near β_c (D = 3, χ = 24): half the CTM steps per iteration at no loss per iteration.
     ctmtol(gn) = adaptive_tolerance ? clamp(1.0e-2 * gn, ctm_tolerance, max(ctm_tolerance, 1.0e-6)) : ctm_tolerance
+    tstart = time()
     f, G, ln, ls = _bp_evaluate(A, ctx, init_n, init_s, adaptive_tolerance ? max(ctm_tolerance, 1.0e-8) : ctm_tolerance)
     F, g = -f, tangent(-G, A)
     history = [f]
@@ -261,6 +274,7 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
     for it in 1:maxiter
         gnorm = norm(g)
         gnorm < gtol && (verbose && println("boundary_peps: |g| = $gnorm below gtol"); break)
+        time() - tstart > time_limit && (verbose && println("boundary_peps: time limit"); break)
         # two-loop recursion, H₀ = γ P⁻¹
         q = copy(g); αs = zeros(length(Ss))
         for i in length(Ss):-1:1
@@ -313,6 +327,7 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
         Mk = metric(ln)
         push!(history, f)
         verbose && (println("boundary_peps it $it: f = $f, |g| = $(norm(g)), α = $α"); flush(stdout))
+        isnothing(callback) || callback(it, (; A, Alegs = al, f, res = norm(g)))
     end
     return BoundaryPEPS(A, al, bl, site, Tuple(legs), ln, ls, f, norm(g), history, false)
 end
@@ -397,7 +412,7 @@ end
 # (bilinearly) left — the tangents a·R of the antisymmetric generators a, in coordinates.
 function _bp_gauge_tangents(c, B, D::Int, dp::Int)
     A = reshape(B * c, D, D, D, D, dp)
-    out = Vector{ComplexF64}[]
+    out = Vector{eltype(A)}[]
     for i in 1:D, j in (i + 1):D
         a = zeros(D, D); a[i, j] = 1; a[j, i] = -1
         δ = sum(_bp_modemul(A, a, leg) for leg in 1:4)
@@ -419,7 +434,7 @@ function _bp_fd_jacobian(c, B, ctx, ln, ls, ε, tol, ref)
     cols = Vector{Vector{ComplexF64}}(undef, n)
     tasks = map(1:n) do k
         Threads.@spawn begin
-            e = zeros(ComplexF64, n); e[k] = ε
+            e = zeros(eltype(c), n); e[k] = ε
             _, Gp, _, _ = _bp_evaluate(_bp_from_coords(c + e, B, ctx.al, ref), ctx, ln, ls, tol)
             _, Gm, _, _ = _bp_evaluate(_bp_from_coords(c - e, B, ctx.al, ref), ctx, ln, ls, tol)
             (_bp_to_coords(Gp, B, ctx.al) - _bp_to_coords(Gm, B, ctx.al)) / (2ε)
@@ -462,22 +477,26 @@ function boundary_peps_stationary(site, legs, init::BoundaryPEPS; maxdim::Intege
                                   verbose::Bool = false, kwargs...)
     al, bl = init.Alegs, init.blegs
     _bp_isc4v(site, legs) || throw(ArgumentError("boundary_peps_stationary needs a C4v-invariant site"))
-    sitec = scalartype(site) <: Complex ? site : site * complex(1.0)
+    # real data stays real (the complex contraction costs 2–4× more)
+    cplx = scalartype(site) <: Complex || scalartype(A0) <: Complex ||
+           (!isnothing(jacobian) && eltype(jacobian) <: Complex)
+    sitec = cplx && !(scalartype(site) <: Complex) ? site * complex(1.0) : site
     ctx = (; al, bl, site = sitec, legs = Tuple(legs), maxdim = Int(maxdim), symmetrize = true,
            ctm_tolerance, ctm_maxiter = Int(ctm_maxiter), ctm_kwargs = merge((; c4v = true), kwargs),
            bilinear = true)
     B = _bp_c4v_basis(al)
     ref = sitec
-    c = _bp_to_coords(A0, B, al)
+    coords(G) = (x = _bp_to_coords(G, B, al); cplx ? x : real(x))
+    c = coords(A0)
     c /= norm(c)
     reuse = init.normenv isa InfiniteCTM2D && init.normenv.maxdim == maxdim
-    ln = reuse ? _i2_complexify(init.normenv) : nothing
-    ls = reuse ? _i2_complexify(init.openv) : nothing
+    ln = reuse ? (cplx ? _i2_complexify(init.normenv) : init.normenv) : nothing
+    ls = reuse ? (cplx ? _i2_complexify(init.openv) : init.openv) : nothing
     J = jacobian
-    f = NaN; g = zeros(ComplexF64, length(c)); res = Inf; it = 0; converged = false
+    f = NaN; g = zeros(eltype(c), length(c)); res = Inf; it = 0; converged = false
     history = Float64[]
     evalc(cc, n0, s0) = (r = _bp_evaluate(_bp_from_coords(cc, B, al, ref), ctx, n0, s0, ctm_tolerance);
-                         (r[1], _bp_to_coords(r[2], B, al), r[3], r[4]))
+                         (real(r[1]), coords(r[2]), r[3], r[4]))
     f, g, ln, ls = evalc(c, ln, ls)
     res = norm(g) * norm(c)
     push!(history, f)
@@ -492,9 +511,11 @@ function boundary_peps_stationary(site, legs, init::BoundaryPEPS; maxdim::Intege
         k == maxiter + 1 && break
         if isnothing(J)
             J = _bp_fd_jacobian(c, B, ctx, ln, ls, fd_step * norm(c), fd_ctm_tolerance, ref)
+            cplx || (J = real(J))
             fresh = true
         end
         Q, W = _bp_gauge_bases(c, B, dim(al[1]), dim(al[5]))
+        cplx || (Q = real(Q); W = real(W))
         # TRUNCATED-SVD Newton step: a boundary PEPS with more bond dimension than the state uses is
         # redundant — 3D Ising β = 0.18, D = 3: ~15 reduced-Jacobian singular values below 1e-8 (to
         # 1e-17) against a largest 2.6, and the plain solve stepped |dc| = 1.9e3. Directions below
@@ -546,6 +567,323 @@ function boundary_peps_stationary(site, legs, init::BoundaryPEPS; maxdim::Intege
     A = _bp_from_coords(c, B, al, ref)
     bp = BoundaryPEPS(A, al, bl, sitec, Tuple(legs), ln, ls, f, norm(g), history, true)
     return bp, (; J, sv, iterations = it, residual = res, converged, c)
+end
+
+# --- NEWTON–KRYLOV WITH A SUBSPACE TRUST REGION --------------------------------------------------
+#
+# The Newton method above builds all of J by finite differences (2n evaluations: n = 42 at D = 3,
+# 110 at D = 4) before its first step. Newton–Krylov never forms J: the Krylov basis is built by
+# Arnoldi from Jacobian-vector products, each the finite difference of the gradient along a basis
+# vector (one warm-started evaluation; two, in parallel, with `central`), in the reduced coordinates
+# (the complement Q of the scale and bond-gauge null directions, W = Q̄, so the operator QᵀJQ is
+# complex symmetric, and real symmetric — the Hessian of f — for real data).
+#
+# WHY A TRUST REGION. The Hessian's spectrum is wide and soft at the bottom. 3D Ising β = 0.25, D = 2,
+# χ = 16 (measured 2026-09-26): reduced eigenvalues −2.7 … −2.9e-6; at D = 3 they reach ±1e-13, some
+# of them POSITIVE (the redundant bond dimension: the point is a saddle in directions that barely
+# change the state). Along the soft modes the Newton step is long (0.063 along the λ = −1.6e-4 mode at
+# |g| = 3.9e-5) and f is far from quadratic on that scale: the full step raised |g| 30× while f
+# improved, and a line search on |g| stalled. So the step is the trust-region step of the model in the
+# Krylov subspace: for real data the model of f (maximised; negative curvature, i.e. a positive
+# eigenvalue, is followed to the boundary) and the ratio of the actual to the predicted gain in f
+# accepts it and adapts the radius; for complex data, with no maximum principle, the model of |g|²
+# (Levenberg–Marquardt, small singular values below `svd_rtol` dropped). A rejected step shrinks the
+# radius and is re-solved in the SAME subspace: no new products. The basis grows until the model's
+# residual outside it is below η|g| (Eisenstat–Walker forcing).
+#
+# The norm metric does not help here as a preconditioner: at D = 3 the metric-preconditioned
+# operator needed more products to a 1e-1 / 1e-2 relative residual than the plain one (12 / 27
+# against 3 / 12, of 38).
+
+# max_y  −bᵀy + ½ yᵀ T y  over |y| ≤ Δ (T = the symmetrised Krylov projection of the Hessian of f, −b
+# the gradient of f in the subspace; b = β e₁ for a fresh basis): Moré–Sorensen on the
+# eigendecomposition of the small T, the hard case completed along the lowest mode. Returns
+# (y, predicted gain in f).
+_bp_trs_max(T, β::Number, Δ) = _bp_trs_max(T, [β; zeros(size(T, 1) - 1)], Δ)
+function _bp_trs_max(T, b::AbstractVector, Δ)
+    M = -Symmetric(real((T + T') / 2))                # minimise q(y) = bᵀy + ½ yᵀ M y
+    F = eigen(M)
+    μ, U = F.values, F.vectors
+    a = U' * real(b)
+    nb = norm(a)
+    ylen(λ) = norm(a ./ (μ .+ λ))
+    λ = 0.0
+    hard = false
+    if !(μ[1] > 0 && ylen(0.0) <= Δ)
+        lo = max(0.0, -μ[1])
+        if ylen(lo + 1.0e-12 * max(1.0, abs(μ[end]))) <= Δ
+            λ = lo; hard = true                          # a₁ ≈ 0: complete along the lowest mode
+        else
+            hi = lo + nb / Δ + 1.0e-12
+            for _ in 1:200
+                mid = (lo + hi) / 2
+                ylen(mid) > Δ ? (lo = mid) : (hi = mid)
+                hi - lo <= 1.0e-14 * max(1.0, hi) && break
+            end
+            λ = hi
+        end
+    end
+    z = zeros(length(μ))
+    for i in eachindex(μ)
+        d = μ[i] + λ
+        abs(d) > 1.0e-300 && (z[i] = -a[i] / d)
+    end
+    if hard
+        z[1] = 0.0
+        z[1] = sqrt(max(Δ^2 - sum(abs2, z), 0.0))
+    end
+    y = U * z
+    return y, -(dot(real(b), y) + dot(y, M * y) / 2)
+end
+
+# min_y ‖b − H y‖ over |y| ≤ Δ (b = β e₁ for a fresh basis), singular values below rtol·σ_max
+# dropped (Levenberg–Marquardt in the Krylov subspace). Returns (y, predicted decrease of |g|²,
+# unconstrained relative residual).
+_bp_trs_lsq(H, β::Number, Δ, rtol) = _bp_trs_lsq(H, [β; zeros(eltype(H), size(H, 1) - 1)], Δ, rtol)
+function _bp_trs_lsq(H, b::AbstractVector, Δ, rtol)
+    F = svd(H)
+    keep = F.S .> rtol * F.S[1]
+    S = F.S[keep]; a = F.U[:, keep]' * b
+    ystep(λ) = F.V[:, keep] * (S .* a ./ (S .^ 2 .+ λ))
+    y0 = ystep(0.0)
+    free = norm(b - H * y0) / norm(b)
+    λ = 0.0
+    if norm(y0) > Δ
+        lo = 0.0; hi = S[1] * norm(a) / Δ
+        for _ in 1:200
+            mid = (lo + hi) / 2
+            norm(S .* a ./ (S .^ 2 .+ mid)) > Δ ? (lo = mid) : (hi = mid)
+            hi - lo <= 1.0e-14 * max(1.0, hi) && break
+        end
+        λ = hi
+    end
+    y = λ == 0 ? y0 : ystep(λ)
+    return y, norm(b)^2 - norm(b - H * y)^2, free
+end
+
+"""
+    boundary_peps_krylov(site, legs, init; maxdim, A0 = init.A, merit = :auto, tol = 1e-9,
+                         maxiter = 50, krylovdim = 40, radius = 0.05, max_radius = 0.5,
+                         fd_step = 1e-5, central = false, ctm_tolerance = 1e-12,
+                         fd_ctm_tolerance = ctm_tolerance, ctm_maxiter = 2000, max_rejects = 8,
+                         svd_rtol = 1e-6, eta_max = 0.1, eta_min = 1e-4, noise_tol = 1e-7, block = 4,
+                         recycle = 3, ctm_anderson = 5,
+                         callback = nothing, time_limit = Inf, verbose = false, kwargs...) -> (bp, info)
+
+The stationary boundary PEPS (∇f = 0 for the bilinear estimator, as [`boundary_peps_stationary`](@ref);
+for real data the variational optimum of [`boundary_peps`](@ref)) by Newton–Krylov with a subspace
+trust region (see the note above). `merit`: `:f` (maximise f; the default for real data) or
+`:residual` (minimise |g|²; the default, and the only choice, for complex data). The Krylov basis
+is built from finite-difference Jacobian-vector products (step `fd_step`, forward unless `central`,
+the perturbed environments converged to `fd_ctm_tolerance`), at most `krylovdim` per step, until
+the model residual outside it is below η|g|, η from Eisenstat–Walker forcing in
+[`eta_min`, `eta_max`]; `block` products are computed at a time, concurrently (block Arnoldi), and
+with `recycle = r > 0` the subspace starts from the last accepted step and the r − 1 Ritz vectors
+it moved along most, besides −g. The trust radius starts at `radius` (on the unit-norm coordinates)
+and is capped at `max_radius`; a step rejected `max_rejects` times running stops the solver. Stops at
+|g|·|c| < `tol`, converged, or after `time_limit` seconds; otherwise converged if the residual is
+below `noise_tol` (the gradient's noise floor). `callback(it, state)` — `state` a NamedTuple
+(A, Alegs, f, res, evals, time) — runs before every step. `ctm_anderson` as for [`boundary_peps`](@ref).
+
+`info`: `iterations`, `residual`, `converged`, `evals` (gradient evaluations), `ctm_steps` (2D CTMRG
+steps over all evaluations), `krylov` (products per step), `trace` (per step: time, evals, res, f,
+radius), `radius` (the final trust radius), `c` (the final coordinates).
+"""
+function boundary_peps_krylov(site, legs, init::BoundaryPEPS; maxdim::Integer = init.normenv.maxdim,
+                              A0 = init.A, merit::Symbol = :auto, tol::Real = 1.0e-9,
+                              maxiter::Integer = 50, krylovdim::Integer = 40, radius::Real = 0.05,
+                              max_radius::Real = 0.5, fd_step::Real = 1.0e-5, central::Bool = false,
+                              ctm_tolerance::Real = 1.0e-12, fd_ctm_tolerance::Real = ctm_tolerance,
+                              ctm_maxiter::Integer = 2000, max_rejects::Integer = 8,
+                              svd_rtol::Real = 1.0e-6, eta_max::Real = 0.1, eta_min::Real = 1.0e-4,
+                              noise_tol::Real = 1.0e-7, block::Integer = 4, recycle::Integer = 3,
+                              ctm_anderson::Integer = 5, callback = nothing, time_limit::Real = Inf,
+                              verbose::Bool = false, kwargs...)
+    al, bl = init.Alegs, init.blegs
+    _bp_isc4v(site, legs) || throw(ArgumentError("boundary_peps_krylov needs a C4v-invariant site"))
+    cplx = scalartype(site) <: Complex || scalartype(A0) <: Complex
+    merit in (:auto, :f, :residual) || throw(ArgumentError("merit must be :auto, :f or :residual"))
+    cplx && merit === :f && throw(ArgumentError("merit = :f needs real data (no maximum principle for complex T)"))
+    variational = merit === :f || (merit === :auto && !cplx)
+    sitec = cplx && !(scalartype(site) <: Complex) ? site * complex(1.0) : site
+    ctx = (; al, bl, site = sitec, legs = Tuple(legs), maxdim = Int(maxdim), symmetrize = true,
+           ctm_tolerance, ctm_maxiter = Int(ctm_maxiter), ctm_kwargs = merge((; c4v = true), kwargs),
+           bilinear = true, anderson = Int(ctm_anderson))
+    B = _bp_c4v_basis(al)
+    D, dp = dim(al[1]), dim(al[5])
+    c = _bp_to_coords(A0, B, al)
+    cplx || (c = real(c))
+    c /= norm(c)
+    reuse = init.normenv isa InfiniteCTM2D && init.openv isa InfiniteCTM2D && init.normenv.maxdim == maxdim
+    ln = reuse ? (cplx ? _i2_complexify(init.normenv) : init.normenv) : nothing
+    ls = reuse ? (cplx ? _i2_complexify(init.openv) : init.openv) : nothing
+    nevals = Threads.Atomic{Int}(0); nsteps = Threads.Atomic{Int}(0)
+    t0 = time()
+    f, g, ln, ls = _bp_krylov_eval(c, B, ctx, ln, ls, ctm_tolerance, cplx, nevals, nsteps)
+    res = norm(g)
+    Δ = Float64(radius)
+    resprev = NaN; η = Float64(eta_max)
+    trace = [(; time = time() - t0, evals = nevals[], res, f, radius = Δ)]
+    ksizes = Int[]; it = 0; converged = false; stall = 0
+    recycled = Vector{Vector{eltype(c)}}()
+    for k in 1:(maxiter + 1)
+        it = k - 1
+        verbose && (println("  krylov it $it: f = $f, |g| = $res, Δ = $Δ, evals $(nevals[]), ",
+                            round(time() - t0; digits = 1), " s"); flush(stdout))
+        isnothing(callback) || callback(it, (; A = _bp_from_coords(c, B, al, sitec), Alegs = al, f, res,
+                                            evals = nevals[], time = time() - t0))
+        if res < tol
+            converged = true
+            break
+        end
+        (k == maxiter + 1 || time() - t0 > time_limit) && break
+        # forcing term (Eisenstat–Walker choice 2), never tighter than the last step needs
+        if k > 1 && isfinite(resprev)
+            ηn = 0.9 * (res / resprev)^2
+            0.9 * η^2 > 0.1 && (ηn = max(ηn, 0.9 * η^2))
+            η = clamp(ηn, eta_min, eta_max)
+        end
+        ηk = max(η, 0.5 * tol / res)
+        # the subspace of the reduced operator: r₀ = −Qᵀg first, then the directions recycled from
+        # the last step, then (block) Arnoldi — `block` products at a time, on threads. Any orthonormal
+        # V with J V_k ⊂ span V works: T = H[1:k, 1:k] is the Galerkin projection, and the model's
+        # residual outside span V_k is H[k+1:p, 1:k] y. (Reusing a subspace for further steps from the
+        # new gradient, without new products, was tried and measured worse: 3D Ising β = 0.25, D = 2.)
+        N = reduce(hcat, vcat([c], _bp_gauge_tangents(c, B, D, dp)))
+        Q = nullspace(Matrix(N'))
+        cplx || (Q = real(Q))
+        m = size(Q, 2)
+        r0 = -(transpose(Q) * g)
+        β0 = norm(r0)
+        kmax = min(krylovdim, m)
+        V = reshape(r0 / β0, m, 1)
+        for v in recycled
+            V = _bp_extend(V, Q' * v)
+        end
+        H = zeros(eltype(Q), m + 1, kmax)
+        kk = 0; est = 1.0
+        while kk < min(kmax, size(V, 2))
+            batch = (kk + 1):min(kk + block, kmax, size(V, 2))
+            Jus = _bp_krylov_products(c, g, [Q * V[:, j] for j in batch], B, ctx, ln, ls, fd_step, central,
+                                      fd_ctm_tolerance, cplx, nevals, nsteps)
+            for (i, j) in enumerate(batch)
+                w = transpose(Q) * Jus[i]
+                for _ in 1:2, l in 1:size(V, 2)       # modified Gram–Schmidt, twice
+                    h = dot(V[:, l], w); H[l, j] += h; w -= h * V[:, l]
+                end
+                nw = norm(w)
+                if nw > 1.0e-12 * β0 && size(V, 2) < m
+                    V = hcat(V, w / nw); H[size(V, 2), j] = nw
+                end
+            end
+            kk = last(batch)
+            p = size(V, 2)
+            # the model's residual outside the subspace, relative to |g|
+            if variational
+                y, _ = _bp_trs_max(H[1:kk, 1:kk], β0, Δ)
+                est = norm(H[(kk + 1):p, 1:kk] * y) / β0
+            else
+                _, _, est = _bp_trs_lsq(H[1:p, 1:kk], β0, Inf, svd_rtol)
+            end
+            (est <= ηk || p == kk) && break
+        end
+        p = size(V, 2)
+        push!(ksizes, kk)
+        # the trust-region step in the fixed subspace; a rejection shrinks Δ and re-solves there
+        accepted = false
+        for _ in 1:max_rejects
+            y, pred = variational ? _bp_trs_max(H[1:kk, 1:kk], β0, Δ) : _bp_trs_lsq(H[1:p, 1:kk], β0, Δ, svd_rtol)
+            dc = Q * (V[:, 1:kk] * y)
+            ct = (c + dc) / norm(c + dc)
+            ft, gt, lnt, lst = _bp_krylov_eval(ct, B, ctx, ln, ls, ctm_tolerance, cplx, nevals, nsteps)
+            rt = norm(gt)
+            actual = variational ? ft - f : res^2 - rt^2
+            # below the resolution of f (or of |g|²) the residual decides
+            ρ = pred > 1.0e-13 * max(1.0, abs(f)) || !variational ? actual / pred : (rt < res ? 1.0 : -1.0)
+            ok = isfinite(rt) && isfinite(ρ) && ρ > 1.0e-4
+            verbose && (println("    $kk products, |y| = $(norm(y)) (Δ = $Δ): predicted $pred, actual $actual, ρ = $ρ, |g| → $rt",
+                                ok ? "" : "  REJECTED"); flush(stdout))
+            if ρ < 0.25 || !isfinite(ρ)
+                Δ = 0.25 * norm(y)
+            elseif ρ > 0.75 && norm(y) > 0.99 * Δ
+                Δ = min(2Δ, Float64(max_radius))
+            end
+            if ok
+                recycled = _bp_recycle(dc, y, H, V, Q, kk, p, recycle, variational)
+                resprev = res
+                c, g, f, ln, ls, res = ct, gt, ft, lnt, lst, rt
+                accepted = true
+                break
+            end
+        end
+        push!(trace, (; time = time() - t0, evals = nevals[], res, f, radius = Δ))
+        accepted || break                              # no gain: the noise floor
+        # accepted steps that no longer reduce |g| below `noise_tol`: the noise floor too (|g| crawled
+        # at 5.1e-9 for 20 steps, 3D Ising β = 0.2275, D = 3, χ = 16, ctm_tolerance = 1e-12)
+        stall = res < noise_tol && res > 0.5 * resprev ? stall + 1 : 0
+        stall >= 3 && break
+    end
+    converged = converged || res < noise_tol
+    A = _bp_from_coords(c, B, al, sitec)
+    bp = BoundaryPEPS(A, al, bl, sitec, Tuple(legs), ln, ls, f, res, [t.f for t in trace], true)
+    return bp, (; iterations = it, residual = res, converged, evals = nevals[], ctm_steps = nsteps[],
+                krylov = ksizes, trace, radius = Δ, c)
+end
+
+function _bp_krylov_eval(c, B, ctx, ln, ls, τ, cplx, nevals, nsteps)
+    f, G, lnn, lsn = _bp_evaluate(_bp_from_coords(c, B, ctx.al, ctx.site), ctx, ln, ls, τ)
+    Threads.atomic_add!(nevals, 1)
+    Threads.atomic_add!(nsteps, lnn.stats[].iterations + lsn.stats[].iterations)
+    g = _bp_to_coords(G, B, ctx.al)
+    return real(f), cplx ? g : real(g), lnn, lsn
+end
+
+# J u for every u in `us`, concurrently
+function _bp_krylov_products(c, g, us, B, ctx, ln, ls, h, central, τ, cplx, nevals, nsteps)
+    length(us) == 1 && return [_bp_krylov_jv(c, g, us[1], B, ctx, ln, ls, h, central, τ, cplx, nevals, nsteps)]
+    tasks = [Threads.@spawn _bp_krylov_jv(c, g, u, B, ctx, ln, ls, h, central, τ, cplx, nevals, nsteps) for u in us]
+    return fetch.(tasks)
+end
+
+# V with v appended, orthonormalised against it (unchanged if v is dependent on V's columns)
+function _bp_extend(V, v)
+    size(V, 2) >= size(V, 1) && return V
+    nv = norm(v)
+    nv > 0 || return V
+    w = v - V * (V' * v)
+    w -= V * (V' * w)
+    norm(w) > 1.0e-8 * nv || return V
+    return hcat(V, w / norm(w))
+end
+
+# The directions carried into the next step's subspace (full coordinates): the accepted step, then
+# the Ritz vectors of the model it moved along most (the soft modes).
+function _bp_recycle(dc, y, H, V, Q, kk, p, n, variational)
+    out = Vector{eltype(dc)}[]
+    n <= 0 && return out
+    push!(out, dc)
+    n == 1 && return out
+    if variational
+        F = eigen(Symmetric(real((H[1:kk, 1:kk] + H[1:kk, 1:kk]') / 2)))
+        U = F.vectors
+    else
+        U = svd(H[1:p, 1:kk]).V
+    end
+    w = abs.(U' * y)
+    for i in sortperm(w; rev = true)[1:min(n - 1, kk)]
+        push!(out, Q * (V[:, 1:kk] * U[:, i]))
+    end
+    return out
+end
+
+# J u by a finite difference of the gradient (|u| = 1), warm-started from the environments at c
+function _bp_krylov_jv(c, g, u, B, ctx, ln, ls, h, central, τ, cplx, nevals, nsteps)
+    if central
+        tp = Threads.@spawn _bp_krylov_eval(c + h * u, B, ctx, ln, ls, τ, cplx, nevals, nsteps)
+        gm = _bp_krylov_eval(c - h * u, B, ctx, ln, ls, τ, cplx, nevals, nsteps)[2]
+        return (fetch(tp)[2] - gm) / (2h)
+    end
+    return (_bp_krylov_eval(c + h * u, B, ctx, ln, ls, τ, cplx, nevals, nsteps)[2] - g) / h
 end
 
 # --- the NATURAL POWER METHOD: the full-environment update A ← N⁻¹ E_s --------------------------
