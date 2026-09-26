@@ -548,6 +548,93 @@ function boundary_peps_stationary(site, legs, init::BoundaryPEPS; maxdim::Intege
     return bp, (; J, sv, iterations = it, residual = res, converged, c)
 end
 
+# --- the NATURAL POWER METHOD: the full-environment update A ← N⁻¹ E_s --------------------------
+#
+# One application of T per step, the result fitted back into the bond-D manifold with the FULL
+# environment rather than bond by bond: the new tensor maximises the fidelity |⟨X|T|A⟩|²/⟨X|X⟩ (in the
+# bilinear sense for complex symmetric T), X = N⁻¹ E_s, with N the norm metric of ⟨A|A⟩ (its shell with
+# both of the site's layers removed) and E_s the environment of the bra slot of ⟨A|T|A⟩. At a fixed
+# point N A ∝ E_s, i.e. E_s/z_s = E_n/z_n: ∇f = 0 — the stationary point of the Bethe estimate, loops
+# included (unlike the bond-projector power method below). No Jacobian, no Hessian, no line search, and
+# it needs no variational principle, so it serves complex (non-Hermitian) T as it serves real. It is
+# the natural-gradient step with the power method's step length; for a Hermitian T the preconditioned
+# L-BFGS of `boundary_peps` accelerates exactly this. Near-null directions of N are regularised by
+# `shift`·‖N‖ — in the correction only (see inside), which keeps the fixed point exact.
+#
+# ⚠️ MEASURED UNSTABLE as a plain iteration (2026-09-26, 3D Ising β = 0.25, D = 2, χ = 16): from the
+# projected-power state (2e-3 from the optimum) |ΔA| grows 0.08 → 0.40 → 0.96 → ~1.3 and wanders (m ends
+# at 0.49), with shift 1e-12 … 1e-5 alike. The step is computed in FROZEN environments and the true map
+# is expansive — the environment response the local-eigenproblem update also tripped on
+# (docs/boundary_peps.md). Kept for experiments; a damped version is fixed-step natural gradient, which
+# the line-searched L-BFGS of `boundary_peps` already does better.
+"""
+    boundary_peps_natural(site, legs, init::BoundaryPEPS; maxdim = init.normenv.maxdim,
+                          maxiter = 400, tol = 1e-9, shift = 1e-5, ctm_tolerance = 1e-11,
+                          ctm_maxiter = 2000, verbose = false, kwargs...) -> (bp, info)
+
+The natural power method (see the note above) from `init`'s tensor and environments (`site` carrying
+`init`'s legs; real or complex, bilinear pairing). Stops at ‖ΔA‖ < `tol`. `info`: `iterations`,
+`change`, `converged`, `history`, `gnorm` (|∇f|·|c| at the end, in the C4v coordinates).
+"""
+function boundary_peps_natural(site, legs, init::BoundaryPEPS; maxdim::Integer = init.normenv.maxdim,
+                               maxiter::Integer = 400, tol::Real = 1.0e-9, shift::Real = 1.0e-5,
+                               ctm_tolerance::Real = 1.0e-11, ctm_maxiter::Integer = 2000,
+                               verbose::Bool = false, kwargs...)
+    al, bl = init.Alegs, init.blegs
+    _bp_isc4v(site, legs) || throw(ArgumentError("boundary_peps_natural needs a C4v-invariant site"))
+    cplx = scalartype(site) <: Complex || scalartype(init.A) <: Complex
+    sitec = cplx && !(scalartype(site) <: Complex) ? site * complex(1.0) : site
+    ctx = (; al, bl, site = sitec, legs = Tuple(legs), maxdim = Int(maxdim), symmetrize = true, ctm_tolerance,
+           ctm_maxiter = Int(ctm_maxiter), ctm_kwargs = merge((; c4v = true), kwargs), bilinear = true)
+    A = cplx ? init.A * complex(1.0) : init.A
+    A = A / norm(A)
+    reuse = init.normenv isa InfiniteCTM2D && init.normenv.maxdim == maxdim
+    ln = reuse ? (cplx ? _i2_complexify(init.normenv) : init.normenv) : nothing
+    ls = reuse && init.openv isa InfiniteCTM2D ? (cplx ? _i2_complexify(init.openv) : init.openv) : nothing
+    ka = collect(al[1:4]); kb = collect(bl); p = al[5]
+    history = Float64[]; change = Inf; it = 0; converged = false
+    f = NaN; G = nothing
+    for k in 1:maxiter
+        it = k
+        f, G, ln, ls = _bp_evaluate(A, ctx, ln, ls, ctm_tolerance)
+        # E_s: the bra slot's environment in ⟨A|T|A⟩, on A's legs
+        Es, _ = site_environment(ls, 3)
+        Es = replaceinds(Es, vcat(collect(bl), [legs[6]]), collect(al))
+        # N: the norm metric (ket legs × bra legs), from the shell of ⟨A|A⟩
+        VX, _, env = _i2_shell(ln)
+        old, new = _i2_site_relabelling(ln.legs, _I2_V, VX)
+        Nt = _i2_relabel(env, new, old)
+        M = Array(array(Nt, ka..., kb...))
+        n = prod(size(M)[1:4]); M = reshape(M, n, n)
+        # N⁻¹E_s = (z_s/z_n)(A + (z_n/z_s) N⁻¹ r), r = E_s − (z_s/z_n) E_n: regularise the CORRECTION
+        # only. N is so ill-conditioned that A has weight in its near-null directions, and a shifted
+        # (N + s)X = E_s suppresses exactly those — measured at the variational optimum (β = 0.25,
+        # D = 2, where r ≈ 4e-9): one step moved A by 2.4e-4 / 2.8e-3 / 0.19 at s = 1e-12 / 1e-8 / 1e-5.
+        # This way the fixed point (r = 0) is exact for any shift.
+        En = replaceinds(Nt * A, kb, ka)                                  # N A, on A's legs
+        zs = scalar(Es * A); zn = scalar(En * A)
+        r = Es - (zs / zn) * En
+        R = reshape(Array(array(r, ka..., p)), n, :)
+        δ = (transpose(M) + shift * opnorm(M, 1) * I) \ R                   # N δ = r over the bra legs
+        Xt = A + (zn / zs) * adapt_like(A, from_array(reshape(δ, (dim.(ka)..., dim(p))), ka..., p))
+        Xt = _bp_symmetrize(Xt, al[1:4]); Xt = Xt / norm(Xt)
+        ph = dot(A, Xt); ph = iszero(ph) ? one(ph) : conj(ph) / abs(ph)
+        change = norm(Xt * ph - A)
+        push!(history, change)
+        A = Xt * ph
+        verbose && (println("  natural it $k: f = $f, |ΔA| = $change"); flush(stdout))
+        if change < tol
+            converged = true
+            break
+        end
+    end
+    f, G, ln, ls = _bp_evaluate(A, ctx, ln, ls, ctm_tolerance)
+    B = _bp_c4v_basis(al)
+    gn = norm(_bp_to_coords(G, B, al)) * norm(_bp_to_coords(A, B, al))
+    bp = BoundaryPEPS(A, al, bl, sitec, Tuple(legs), ln, ls, real(f), gn, Float64[real(f)], true)
+    return bp, (; iterations = it, change, converged, history, gnorm = gn)
+end
+
 # --- the PROJECTED POWER METHOD: z-direction eig-CTMRG ------------------------------------------
 #
 # The boundary state by iteration rather than optimisation: R ← Π(T R), T's layer raising the bond to
