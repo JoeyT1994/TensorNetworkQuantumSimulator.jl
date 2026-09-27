@@ -40,8 +40,9 @@ the cell lattice. Hence:
   the estimator could not test the equality.)
 
 **Exact check** (brute-force transfer matrices, all proton configurations, L1 × L2 cell tori):
-Mᵀ = I M I holds exactly on every torus, I M is exactly symmetric with λ(I M) = σ_max. On tori with
-an even side the three entropies coincide exactly (F_I = 1). On 3 × 3 (dimension 512):
+Mᵀ = I M I holds exactly on every torus, I M is exactly symmetric with λ(I M) = σ_max. On the
+smallest tori (2 × 2 … 2 × 4) the three entropies coincide exactly (F_I = 1) — an accident of size,
+see the larger cross-sections below. On 3 × 3 (dimension 512):
 
 | | per molecule |
 |---|---|
@@ -50,6 +51,44 @@ an even side the three entropies coincide exactly (F_I = 1). On 3 × 3 (dimensio
 | F_I per cell | 1 − 9e-6 |
 
 — the inequality is strict there, and the Rayleigh quotient sits halfway.
+
+### Flux sectors, larger cross-sections, and why the Rayleigh value sits halfway (2026-09-27)
+
+The ice rules conserve the vertical flux: counting near-H around a bilayer, Σ_c in_c = Σ_c out_c, so
+M is block diagonal in k = Σ in_c. A cross-section with an odd number of cells has no zero-flux
+sector — its dominant state carries flux ±1 (3 × 3, 3 × 5). The even-sided tori that gave exact
+equality (2 × 2 … 2 × 5) are small-size accidents: larger zero-flux cross-sections, from
+matrix-free products in the dominant sector (checked against brute force to 3e-16; Mᵀ = I M I to
+1e-14 on every torus), per molecule:
+
+| L1 × L2 | cells | S_h − S_c | S_sym − S_c | 1 − F_I per cell |
+|---|---|---|---|---|
+| 3 × 3 | 9 (flux 1) | 4.35e-6 | 2.14e-6 | 8.97e-6 |
+| 2 × 5 | 10 | 0 | 0 | 0 |
+| 2 × 6 | 12 | 4.79e-7 | 2.39e-7 | 9.61e-7 |
+| 3 × 4 | 12 | 2.73e-7 | 1.36e-7 | 5.46e-7 |
+| 2 × 7 | 14 | 1.08e-6 | 5.41e-7 | 2.16e-6 |
+| 3 × 5 | 15 (flux 1) | 2.15e-6 | 1.06e-6 | 4.37e-6 |
+| 2 × 8 | 16 | 1.65e-6 | 8.25e-7 | 3.27e-6 |
+| 4 × 4 | 16 | 3.27e-7 | — | 6.54e-7 |
+| 2 × 9 | 18 | 2.13e-6 | 1.07e-6 | 4.21e-6 |
+
+(L2 × L1 is the mirror image of L1 × L2.) The inequality is strict on every zero-flux cross-section
+beyond the smallest: ~3e-7 on the 2D tori, growing with length on the two-cell strips.
+
+Two regularities hold on every torus to 1–3 %: S_sym sits halfway, and S_h − S_c per cell equals the
+hexagonal state's inversion infidelity −ln F_I per cell (4 × 4: 6.53e-7 against 6.54e-7). The first
+is structural. With A = I M (symmetric) and P± the projectors on inversion-even and -odd states,
+
+    (M + Mᵀ)/2 = (I A + A I)/2 = P₊ A P₊ − P₋ A P₋,
+
+so S_sym is the hexagonal operator restricted to inversion-symmetric states, and S_h − S_sym is what
+the hexagonal state gains by breaking inversion. In the same blocks M = I A = [[A₊₊, A₊₋], [−A₋₊, −A₋₋]]:
+to second order in the coupling A₋₊, σ and λ(M) sit symmetrically about λ(A₊₊), λ(M) ≈ λ₊₊ − c/σ and
+σ ≈ λ₊₊ + c/σ with c = |A₋₊ s|² (s the even Perron vector), while the odd admixture gives
+1 − F_I ≈ 2c/σ². Hence S_c ≈ 2 S_sym − S_h and S_h − S_c ≈ −ln F_I: the gap is measured by the
+inversion asymmetry of the (variational, well-conditioned) hexagonal state — no ill-conditioned
+cubic stationary point needed.
 
 ## Boundary PEPS (2026-09-27)
 
@@ -109,9 +148,12 @@ larger than the differences sought: D ≤ 3 on four CPU cores cannot resolve a c
 difference of 1e-6 or less (the 3 × 3 torus has 4.35e-6).
 
 The cleaner diagnostic is the hexagonal state's inversion overlap, converged in χ at D = 2
-(ln F_I = −1.153e-5 per cell), −8.15e-6 at D = 3, χ = 24 and −7.63e-6 at χ = 32 — shrinking with D
-and χ, and of the size of the 3 × 3 torus's exact −9e-6. S_h = S_c iff it vanishes as D → ∞; three
-points cannot say.
+(ln F_I = −1.153e-5 per cell), −8.15e-6 at D = 3, χ = 24 and −7.63e-6 at χ = 32. Through
+S_h − S_c ≈ −ln F_I per cell (exact to leading order, 1–3 % on every torus, above) these read
+S_h − S_c ≈ 5.8e-6 (D = 2) and 3.8e-6 (D = 3) per molecule — still falling with D, and ten times
+the 4 × 4 torus's 3.3e-7, so at D ≤ 3 the PEPS's inversion asymmetry is mostly finite-D error.
+What the estimator buys: the gap from one variational, well-conditioned state (the hexagonal
+maximum) and an overlap, not from the soft cubic stationary point.
 
 ## What it needs
 
@@ -122,5 +164,8 @@ points cannot say.
 * A better hexagonal estimator at finite D: ln σ_max from two independent states,
   max ⟨L|M|R⟩/(|L||R|) (single-layer sandwich, no I M negative-eigenvalue penalty), or Xu–Lin–Zhang's
   M Mᵀ (bond 4D²).
-* The cubic stationary point's soft direction: a solver that converges below 1e-6 there, or the
-  cubic value from the D-extrapolated inversion overlap.
+* The gap from the hexagonal state's inversion overlap F_I, extrapolated in D, rather than from the
+  soft cubic stationary point; and the inversion-symmetric restriction of the same maximisation
+  (S_sym, exactly the other half of the relation) as the check.
+* Larger zero-flux tori (4 × 5, 5 × 5, 6 × 6 — the 2D thermodynamic trend of the ~3e-7 gap), by a
+  transfer-matrix product in the flux sector rather than dense contraction.
