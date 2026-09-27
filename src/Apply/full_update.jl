@@ -44,7 +44,7 @@ function full_update(
         u = only(commoninds(U, S))
         v = only(commoninds(S, V))
         sqrtS = sqrth_safe(S, (u,), (v,); atol = 0, rtol = 0)
-        Rᵥ₁, Rᵥ₂ = U * replaceinds(sqrtS, v => prime(u)), replaceinds(sqrtS, u => prime(u)) * V
+        Rᵥ₁, Rᵥ₂ = U * rename(sqrtS, v => prime(u)), rename(sqrtS, u => prime(u)) * V
         # Relative squared truncation error, from MatrixAlgebraKit's exact discarded-weight `ϵ`
         # (the 2-norm of the discarded singular values) rather than the cancellation-prone
         # `1 - ‖S‖²/‖M‖²` norm subtraction.
@@ -69,13 +69,13 @@ function fidelity(
     p_sind, q_sind = commonind(p_cur, gate), commonind(q_cur, gate)
     p_sind_sim, q_sind_sim = sim(p_sind), sim(q_sind)
     gate_sq =
-        gate * replaceinds(conj(gate), p_sind => p_sind_sim, q_sind => q_sind_sim)
+        gate * rename(conj(gate), p_sind => p_sind_sim, q_sind => q_sind_sim)
     term1_tns = vcat(
         [
             p_prev,
             q_prev,
-            replaceinds(prime(conj(p_prev)), prime(p_sind) => p_sind_sim),
-            replaceinds(prime(conj(q_prev)), prime(q_sind) => q_sind_sim),
+            rename(prime(conj(p_prev)), prime(p_sind) => p_sind_sim),
+            rename(prime(conj(q_prev)), prime(q_sind) => q_sind_sim),
             gate_sq,
         ],
         envs,
@@ -87,8 +87,8 @@ function fidelity(
         [
             p_cur,
             q_cur,
-            replaceinds(prime(conj(p_cur)), prime(p_sind) => p_sind),
-            replaceinds(prime(conj(q_cur)), prime(q_sind) => q_sind),
+            rename(prime(conj(p_cur)), prime(p_sind) => p_sind),
+            rename(prime(conj(q_cur)), prime(q_sind) => q_sind),
         ],
         envs,
     )
@@ -131,7 +131,7 @@ function optimise_p_q(
         # symmetry-invariant). Un-prime them on the bra so they trace against the ket instead
         # of surviving as duplicate names under `noprime`.
         spectator = setdiff(s_ind, inds(o))
-        r_bra = replaceinds(conj(prime(r)), (prime.(spectator) .=> spectator)...)
+        r_bra = rename(conj(prime(r)), (prime.(spectator) .=> spectator)...)
         ts = vcat(ITensor[p, q, o, r_bra], envs)
         sequence = contraction_sequence(ts; alg = "optimal")
         return noprime(contract_network(ts; sequence))
@@ -140,7 +140,7 @@ function optimise_p_q(
     function M_p(envs::Vector{ITensor}, p_q_tensor::ITensor, s_ind, apply_tensor::ITensor)
         ts = vcat(
             ITensor[
-                p_q_tensor, replaceinds(prime(conj(p_q_tensor)), (prime.(s_ind) .=> s_ind)...), apply_tensor,
+                p_q_tensor, rename(prime(conj(p_q_tensor)), (prime.(s_ind) .=> s_ind)...), apply_tensor,
             ],
             envs,
         )

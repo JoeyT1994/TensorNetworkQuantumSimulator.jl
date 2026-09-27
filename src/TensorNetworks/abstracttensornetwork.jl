@@ -94,8 +94,8 @@ function map_virtualinds!(f::Function, tn::AbstractTensorNetwork)
     for e in edges(tn)
         vinds = commoninds(tn[src(e)], tn[dst(e)])
         vinds_sim = f.(vinds)
-        setindex_preserve!(tn, replaceinds(tn[src(e)], (vinds .=> vinds_sim)...), src(e))
-        setindex_preserve!(tn, replaceinds(tn[dst(e)], (vinds .=> vinds_sim)...), dst(e))
+        setindex_preserve!(tn, rename(tn[src(e)], (vinds .=> vinds_sim)...), src(e))
+        setindex_preserve!(tn, rename(tn[dst(e)], (vinds .=> vinds_sim)...), dst(e))
     end
     return tn
 end

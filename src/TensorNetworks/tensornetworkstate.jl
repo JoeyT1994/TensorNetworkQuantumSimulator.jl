@@ -59,7 +59,7 @@ end
 # between ket and bra rather than through an operator or a message.
 function bra_tensor(t::ITensor, auxinds::Vector{<:Index})
     tdag = conj(prime(t))
-    return isempty(auxinds) ? tdag : replaceinds(tdag, (prime.(auxinds) .=> auxinds)...)
+    return isempty(auxinds) ? tdag : rename(tdag, (prime.(auxinds) .=> auxinds)...)
 end
 bra_tensor(tns::TensorNetworkState, v) = bra_tensor(tns[v], auxinds(tns, v))
 
@@ -78,7 +78,7 @@ function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Functi
         if op_strings(v) == "ρ" || isempty(sinds)
             append!(factors, ITensor[tnv, tnv_dag])
         elseif op_strings(v) == "I"
-            tnv_dag = replaceinds(tnv_dag, (prime.(sinds) .=> sinds)...)
+            tnv_dag = rename(tnv_dag, (prime.(sinds) .=> sinds)...)
             append!(factors, ITensor[tnv, tnv_dag])
         else
             op = adapt_like(tnv, Ops.op(op_strings(v), only(sinds)))
