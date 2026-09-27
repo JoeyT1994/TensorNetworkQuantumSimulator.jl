@@ -216,25 +216,59 @@ depends on the correction model — a t: 1.69–1.72; a t^{ων}: 1.76–1.78; a
 (0.19), 0.29 (0.14), 0.35 (0.10), 0.39 (0.05) before rising towards the fold's 1/2 — against
 σ ≈ 0.074–0.085 (ε expansion, bootstrap, fuzzy sphere). NOT resolved.
 
+### D = 3 edge maps (2026-09-27)
+
+Newton–Krylov continuations at D = 3, χ = 24, from the real maximiser at θ = 0, in resumable
+ten-minute runs; points accepted at |g| ≤ 1e-6, or near the fold, where |g| floors at 3–4e-6, at
+5e-6. Stopped at v ≈ 0.013–0.016: a near-fold point took 2–3 runs, and the running fold estimate
+(from (dm/dθ)⁻² → 0, biased low far from the fold) kept receding. The same six-point fit; its bias
+from stopping at v ≈ 0.01, measured by refitting the D = 2 maps without their closer points: θ_f
+0.15–0.35 % low.
+
+| β | t | θ_f D = 2 | θ_f D = 3 | shift | ζ_eff D = 2 → 3 | ξ (last point with v ≥ 0.01) D = 2 → 3 |
+|---|---|---|---|---|---|---|
+| 0.18 | 0.188 | 0.0491047 | ≈ 0.04916 | +0.12 % (like for like) | 1.5979 → ≈ 1.597 | — |
+| 0.20 | 0.098 | 0.0167357 | 0.0170106 | +1.6 % | 1.6373 → 1.6214 | 2.48 → 3.73 |
+| 0.21 | 0.053 | 0.0059898 | 0.0063160 | +5.5 % | 1.6821 → 1.6336 | 2.73 → 4.70 |
+
+At β = 0.18 the D = 3 points (the validation continuation above) reach only v ≈ 0.04, where the fit
+reads 1.5 % low; D = 2 refitted over the same θ range gives 0.048308 against D = 3's 0.048365, so
+the shift is taken like for like. At β = 0.20 and 0.21 it needs no fit: the D = 3 branch continues
+past the D = 2 fold, to θ = 0.016787 > 0.016736 and 0.006213 > 0.005990. The susceptibility is the
+same at D = 3 (to 0.1–0.6 %), so ζ_eff moves through θ_f alone.
+
+* The fold moves up with D, the more the closer to β_c: the finite-D fold lies below the true edge,
+  and D = 2 is not converged at small t.
+* ζ_eff(t) flattens: at t = 0.053 it falls from 1.682 to 1.634. The rise of the D = 2 curve towards
+  t → 0, which drove the extrapolations to 1.7–1.9 above, is largely a finite-D effect.
+* ξ near the fold grows 50–70 % from D = 2 to 3 (to 4.7 at t = 0.053). Re m, zero on the physical
+  branch, drifts to 1e-4 there: the residual floor's cost near a fold.
+
+An illustration, not a measurement (two D, ξ at the last point with v ≥ 0.01 standing in for ξ_f, the
+exponent 3 − Δ_φ = 2.785 assumed): θ_f extrapolated linearly in ξ^{−2.785} gives ζ ≈ 1.614 at
+t = 0.098 and 1.618 at t = 0.053 (θ_c 0.8 % and 1.5 % above the D = 3 folds) — flat in t and
+within 0.5 % of the FRG 1.621. It needs D = 4 and 5 and ξ at the fold itself to become one.
+
+The runs also fixed `boundary_peps_krylov`'s `time_limit`: near the fold a Newton step is ~24
+finite-difference products (~5 minutes) and the first trust-region trial overshoots ~100× (a nearly
+singular Jacobian), and a time limit that also cut the trials discarded each run's subspace — two
+continuations resumed the same point for 45 minutes at a fixed |g|. The trials in a built subspace
+now always run; resumed points keep their trust radius.
+
 ### Assessment
 
 What works: the stationary bilinear boundary PEPS follows the analytic continuation of the dominant
-eigenvector into the imaginary field in 3D, stays on the physical branch (Re m = 0 to 1e-7), gives
-the zero-field susceptibility to 1e-4 of the series away from β_c, and ends in a fold whose location
-is stable between D = 2 and D = 3 (6e-4 at t = 0.19).
+eigenvector into the imaginary field in 3D, stays on the physical branch (Re m = 0 to 1e-7 away from
+the fold), gives the zero-field susceptibility to 1e-4 of the series away from β_c, and ends in a fold
+that moves up with D: by 0.1 % at t = 0.19, 1.6 % at t = 0.10 and 5.5 % at t = 0.05.
 
-What does not yet: the fold is mean-field-like — the correlation length there stays ≈ 3 at every t,
-so the true Yang–Lee regime (ξ → ∞, σ ≈ 0.08) is never entered: σ_eff is a crossover value, and the
-fold sits an unknown, t-dependent distance below the true edge (a rough estimate with ν_YL ≈ 0.36 and
-a bare length ~0.5: ~1 % at t = 0.19, larger as t → 0 — consistent with ζ_eff rising). Together with
-the t^{ων} corrections (20 % at t = 0.05) this makes the extrapolated ζ_c = 1.8 ± 0.1 an
-uncontrolled estimate, not a measurement; it does not confirm or refute the FRG 1.621(4).
+What does not yet: at D ≤ 3 the fold is still mean-field-like (ξ ≈ 3–5 there), so the true Yang–Lee
+regime (ξ → ∞, σ ≈ 0.08) is never entered and σ_eff is a crossover value. The D = 3 maps show that
+the fold's distance below the true edge, not only the t^{ων} corrections, drove the D = 2
+extrapolation to ζ_c = 1.8 ± 0.1: that value is superseded. With D extrapolated from two points
+ζ ≈ 1.61–1.62, consistent with the FRG 1.621(4) but uncontrolled until D ≥ 4.
 
-Next steps, in order of leverage: (1) an improved model (Blume–Capel at its improved coupling),
-removing the t^{ων} corrections that dominate the extrapolation; (2) larger D at small t with a
-cheaper solver — Newton–Krylov with directional derivatives instead of a 2n-evaluation Jacobian
-(now `boundary_peps_krylov`, whose complex path is a Levenberg–Marquardt trust region in the Krylov
-subspace; validated along D = 2 and D = 3 continuations, above), and a parametrisation
-without the redundant directions — so that ξ at the fold grows with D and
-finite-correlation-length scaling (θ_c − θ_f ∝ ξ_f^{−(3−Δ_φ)}) can locate the true edge; (3) σ from
-that scaling rather than from local exponents.
+Next steps, in order of leverage: (1) D = 4 and 5 at t ≈ 0.05–0.10, with ξ at the fold, for
+finite-correlation-length scaling θ_c − θ_f ∝ ξ_f^{−(3−Δ_φ)} (a GPU job: a D = 5 CTM step is 40 s on
+four CPU cores, docs/boundary_peps.md "Costs"); (2) an improved model (Blume–Capel at its improved coupling), removing the
+t^{ων} corrections from the t → 0 limit; (3) σ from that scaling rather than from local exponents.

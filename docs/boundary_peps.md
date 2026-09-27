@@ -388,6 +388,22 @@ interrupted and restarted from the fixed-spin seed): |g| = 1.9e-4 at the cap.
 * D = 3, χ = 16, 8 threads, Anderson mixing (2026-09-26): 0.6 s per warm evaluation, almost all of
   it the CTM steps (norm network 0.2 s, sandwich 0.6 s run concurrently, 13–15 steps each); the four
   site environments and both ln κ are 1% of it.
+* The D-scaling of one c4v CTM step (2026-09-27; complex data, the β = 0.20 Yang–Lee state near its
+  fold embedded at larger D; 4 CPU threads, BLAS on 1, an i9-9900K with a second job running):
+
+  | D | χ | bond (norm / sandwich) | norm step | sandwich step |
+  |---|---|---|---|---|
+  | 3 | 24 | 9 / 18 | 0.065 s | 0.36 s |
+  | 4 | 32 | 16 / 32 | 0.42 s | 2.5 s |
+  | 4 | 48 | 16 / 32 | 0.82 s | 6.0 s |
+  | 5 | 50 | 25 / 50 | 2.4 s | 18.5 s |
+  | 5 | 72 | 25 / 50 | 6.3 s | 41.5 s |
+
+  At χ ≈ 1.3–1.5× the sandwich bond the step grows as (bond)^4.7, i.e. ~D^9.3. A profile of the
+  D = 4, χ = 48 sandwich step: the time is the dense contractions (BLAS gemm, then permutations); the
+  projectors' decompositions do not register. That is the GPU's strong case: at the ~20× measured
+  on an A6000 above (D ≥ 4), a D = 5, χ = 72 step is ~2 s, and a data-centre GPU's full-rate Float64
+  should do several times better (an estimate, not yet measured).
 
 ## Open problems
 
