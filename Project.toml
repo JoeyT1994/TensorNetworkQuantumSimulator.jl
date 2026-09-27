@@ -23,9 +23,6 @@ TensorAlgebra = "68bd88dc-f39d-4e12-b2ca-f046b68fcc6a"
 TypeParameterAccessors = "7e5a90cf-f82e-492e-a09b-e3e26432c138"
 VectorInterface = "409d34a3-91d5-4945-b6ec-7529ddf182d8"
 
-[sources.ITensorBase]
-url = "https://github.com/ITensor/ITensorBase.jl"
-rev = "mf/interface-renames"
 
 [compat]
 Adapt = "4.3.0"
