@@ -32,8 +32,12 @@ the cell lattice. Hence:
   symmetric; its inversion overlap per cell, F_I, is the order parameter.
 * the real Rayleigh quotient ⟨R|M|R⟩/⟨R|R⟩, which Xu, Lin & Zhang maximise for Ic (justified by
   normality of M, which their own diagnostic shows is violated at 1e-4), has maximum
-  λ_max((M + Mᵀ)/2), between λ(M) and σ_max(M), and equal to λ(M) only if the left and right
-  Perron vectors coincide — which is again S_h = S_c. That estimator cannot test the equality.
+  S_sym = ln λ_max((M + Mᵀ)/2), with S_c ≤ S_sym ≤ S_h — not the cubic entropy unless the left and
+  right Perron vectors coincide. It still tests the equality: on a finite cross-section S_sym = S_h
+  iff S_c = S_h (if the top eigenvector x of (M + Mᵀ)/2 reached xᵀMx = σ_max|x|², Cauchy–Schwarz
+  would make x an eigenvector of M with eigenvalue σ_max), so their S_h − S_sym is a valid test,
+  with about half the gap (the 3 × 3 torus below). (Corrected 2026-09-27: an earlier version said
+  the estimator could not test the equality.)
 
 **Exact check** (brute-force transfer matrices, all proton configurations, L1 × L2 cell tori):
 Mᵀ = I M I holds exactly on every torus, I M is exactly symmetric with λ(I M) = σ_max. On tori with
