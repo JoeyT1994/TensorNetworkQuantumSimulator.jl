@@ -67,8 +67,8 @@ truncation floor (~2e-6 at χ = 16, ~1e-8 at χ ≥ 32; Ising's is ~1e-9), at D 
 | 2 | 24 | 1.5073953076 | 1.5073986155 | 1.5074024485 | −1.153e-5 |
 | 2 | 32 | 1.5073953081 | 1.5073986160 | 1.5074024490 | −1.153e-5 |
 | 2 | 48 | 1.5073953082 | 1.5073986160 | (1.5074040814, stalled at 1.8e-5) | −1.153e-5 |
-| 3 | 24 | 1.5074420992 | 1.5074443564 (±1e-7) | 1.5074481143 (creeping ~1e-8/run) | −8.15e-6 |
-| 3 | 32 | 1.5074447646 | 1.5074471042 | 1.5074489061 (creeping ~5e-9/run) | −7.63e-6 |
+| 3 | 24 | 1.5074420992 | 1.5074443564 (±1e-7) | 1.5074482469 (\|g\| 4.5e-5, stalled) | −8.15e-6 |
+| 3 | 32 | 1.5074447646 | 1.5074471042 | 1.5074493675 (\|g\| 4.7e-5, still moving) | −7.63e-6 |
 
 Every stored D = 2 optimum re-evaluated with the independent prototype (its own bra construction and
 gradient) agrees to 3e-15 in f and exactly in |g|.
@@ -89,13 +89,16 @@ warm-started — the ice networks converge slowly), so a ten-minute run makes 1�
 Newton steps, and f still rose ~2e-7 per step at |g| ~ 1e-4. A first pass stopped on |g| stagnating
 was premature by ~1e-7 in f; the rows above continue until f stops moving, which can itself stop early
 when the radius has shrunk (the Rayleigh maximum at χ = 24 is uncertain by ~1e-7). χ matters at
-D = 3 as it did not at D = 2: the maxima rise 2.7e-6 in w from χ = 24 to 32, the cubic value 0.8e-6.
+D = 3 as it did not at D = 2: the maxima rise 2.7e-6 in w from χ = 24 to 32, the cubic value 1.1e-6.
+The cubic solves do not creep monotonically: over ~25 runs each, f first fell (by 3e-7) and then rose
+(by 4–6e-7) while |g| went from 8e-5 to 4.5e-5 — the soft direction again — so the D = 3 cubic values
+are uncertain by several 1e-7 in w (χ = 32 was still rising 1.5e-8 in w per run when stopped).
 
 **Against Xu–Lin–Zhang at matching D.** Our Rayleigh values are close to theirs (D = 2: 1.5073986
 against 1.5073981; D = 3: 1.5074444 at χ = 24 and 1.5074471 at χ = 32, against 1.5074454), which
 validates the setup. The stationary cubic value on the same ansatz lies *above* their Rayleigh number,
-by 4.3e-6 (D = 2) and 3.5e-6 (D = 3, χ = 32), and above our own: 3.8e-6 at D = 2, and at D = 3 3.8e-6
-(χ = 24) falling to 1.8e-6 (χ = 32). That is the reverse of the exact ordering w_c ≤ w_R, so at D ≤ 3
+by 4.3e-6 (D = 2) and 4.0e-6 (D = 3, χ = 32), and above our own: 3.8e-6 at D = 2, and at D = 3 3.9e-6
+(χ = 24) falling to 2.3e-6 (χ = 32). That is the reverse of the exact ordering w_c ≤ w_R, so at D ≤ 3
 it is the stationary estimator's finite-D (and at D = 3 finite-χ) error, not a measurement of S_c.
 All three estimators rise by ~4.6e-5 from D = 2 to 3, and by 1–3e-6 from χ = 24 to 32 at D = 3 —
 larger than the differences sought: D ≤ 3 on four CPU cores cannot resolve a cubic–hexagonal
