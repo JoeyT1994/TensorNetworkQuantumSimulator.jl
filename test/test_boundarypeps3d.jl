@@ -28,7 +28,7 @@ product_A(v) = (is = [TNQS.new_index(1) for _ in 1:4]; p = TNQS.new_index(length
     site, legs, mag = ising3d_site(0.22)
     al = Tuple(TNQS.new_index(2) for _ in 1:5)
     bl = Tuple(TNQS.new_index(2) for _ in 1:4)
-    ctx = (; al, bl, site, legs = Tuple(legs), maxdim = 16, symmetrize = true, ctm_tolerance = 1.0e-12,
+    ctx = (; al, bl, site, legs = Tuple(legs), maxdim = 16, group = TNQS._BP_C4V, ctm_tolerance = 1.0e-12,
            ctm_maxiter = 2000, ctm_kwargs = NamedTuple())
     rng = Xoshiro(1)
     A = TNQS._bp_initial(site, legs, al, 2, [1.0, 0.0], 0.0, rng) + 0.1 * TNQS.random_tensor(rng, Float64, collect(al))

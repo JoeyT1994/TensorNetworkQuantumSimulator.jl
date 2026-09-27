@@ -483,3 +483,35 @@ function ising3d_site(β::Real; J = (1.0, 1.0, 1.0), h::Number = 0.0)
     end
     return tensor(1), legs, tensor(-1)
 end
+
+"""
+    ice_site() -> (site, legs)
+
+The layer tensor of water ice's proton configurations (Pauling's ice rules: one H per O–O bond, two
+near every O; every configuration weight 1) for the boundary-PEPS treatment of ice Ic and Ih. The O
+lattice is stacked puckered honeycomb bilayers; the site is one bilayer CELL, an O on the lower
+sublayer (a) and its in-plane neighbour on the upper one (b), their bond contracted. On the cell
+lattice (a triangular lattice, a square network topologically) a carries x⁻, y⁻ and b carries x⁺,
+y⁺: the honeycomb's other two bonds of each. z⁻ is the vertical bond into a from below, z⁺ the one
+out of b above. Every leg is 2: an in-plane bond's index is 1 when its H is near the a end, a
+vertical bond's when its H is near the upper O.
+
+The bilayer transfer operator M (z⁻ → z⁺) gives both stackings (Onsager): Z(Ic) = Tr Mⁿ, with the
+cells of successive bilayers above one another, and Z(Ih) = Tr (M Mᵀ)^{n/2}. The site is invariant
+under the diagonal mirror (`symmetry = :diagonal`) and under the inversion of its x, y legs combined
+with z⁻ ↔ z⁺, so Mᵀ = I M I with I the in-plane inversion `(2, 1, 4, 3)`: per cell (two
+molecules), ln W(Ic) per molecule is ½ ln λ(M) — the stationary point of [`boundary_peps_krylov`](@ref)
+with `bra_perm = norm_perm = (2, 1, 4, 3)` — and ln W(Ih) is ½ ln σ_max(M) = ½ ln λ(I M), the
+maximum with `bra_perm = (2, 1, 4, 3)` and `norm_perm = (1, 2, 3, 4)`.
+"""
+function ice_site()
+    legs = Tuple(new_index(2; tags = "ice,$n") for n in ("xm", "xp", "ym", "yp", "zm", "zp"))
+    rule(n...) = sum(n) == 2 ? 1.0 : 0.0                # two of the O's four H near it
+    W = zeros(2, 2, 2, 2, 2, 2)
+    for xm in 0:1, xp in 0:1, ym in 0:1, yp in 0:1, zm in 0:1, zp in 0:1, h in 0:1
+        # a sees its legs directly (H near a); b sees the complement on its in-plane legs, the intra-
+        # cell bond h and its vertical bond (H near the O above b is H far from b)
+        W[xm + 1, xp + 1, ym + 1, yp + 1, zm + 1, zp + 1] += rule(h, xm, ym, zm) * rule(1 - h, 1 - xp, 1 - yp, 1 - zp)
+    end
+    return from_array(W, legs...), legs
+end

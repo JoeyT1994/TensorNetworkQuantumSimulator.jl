@@ -47,9 +47,35 @@ bra layer:
 That is four one-site environments, with no sum over positions and no channel environments. f is
 invariant under A → cA, so the gradient is orthogonal to A. The optimiser works on the unit
 sphere: L-BFGS with Armijo backtracking, tangent steps, A renormalised, and the step capped, as in
-the DMRG branch's `ctmrg_lbfgs`. Both 2D environments warm-start from the previous evaluation. With
-`symmetrize = true`, which needs a site invariant under the square's symmetries of its x, y legs, A
-and every gradient are projected onto the C4v-symmetric subspace.
+the DMRG branch's `ctmrg_lbfgs`. Both 2D environments warm-start from the previous evaluation. A
+and every gradient are projected onto the subspace invariant under `symmetry`, a group of the
+square's symmetries of the virtual legs that the site must share: `:c4v` (the default), `:diagonal`
+(the mirror x ↔ y), `:none`, or an explicit group. Outside C4v the 2D environments run the full
+step, and the bond gauge the Newton solvers project out is a general invertible X per axis rather
+than an orthogonal one.
+
+### Permuted bras (2026-09-27)
+
+The bra layer of ⟨Ψ|T|Ψ⟩ and of ⟨Ψ|Ψ⟩ can be Ψ mapped by a square symmetry π (`bra_perm`,
+`norm_perm`; π must commute with the group). When Tᵀ = π T π, which holds when the site is
+invariant under π on its x, y legs combined with z⁻ ↔ z⁺, the left eigenvector of T is π(R). Then:
+
+* both perms π: ln κ⟨π(Ψ)|T|Ψ⟩ − ln κ⟨π(Ψ)|Ψ⟩ is stationary at the dominant eigenvector, with errors
+  second order — the bilinear estimator of the imaginary-field work, with a permuted bra. No
+  maximum principle: `boundary_peps_krylov` with the residual merit.
+* `bra_perm = π`, `norm_perm` the identity: π T is symmetric, (π T)² = Tᵀ T, and the estimator is its
+  Rayleigh quotient, maximal at ln σ_max(T) — L-BFGS or `merit = :f`.
+
+The gradient maps each bra's environment back through π. `ice_site` is the case in point: its
+bilayer operator M has Mᵀ = I M I (I the in-plane inversion, `(2, 1, 4, 3)`), so cubic ice (Z =
+Tr Mⁿ) is the first estimator and hexagonal ice (Z = Tr (M Mᵀ)^{n/2}) the second; the plain real
+Rayleigh quotient ⟨Ψ|M|Ψ⟩/⟨Ψ|Ψ⟩ maximises λ((M + Mᵀ)/2) instead, which lies between them. Checked
+against brute-force transfer matrices on small tori (`test/test_ice.jl`).
+
+The ice networks need χ: the environment gradient differs from the derivative of the finite-χ
+ln κ by the truncation, 2e-5 at χ = 16 and 1e-6 at χ = 32 from a scrambled D = 2 state (7e-9 and
+1e-12 near the product state), and near the optimum the gradient floors at ~2e-6 at χ = 16 — against
+~1e-9 for Ising. Solve to that floor (`noise_tol`), not below it.
 
 ## The 2D engine: `InfiniteCTM2D`
 

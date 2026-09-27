@@ -113,6 +113,7 @@ pair_ratio
 correlation_length
 ising2d_site
 ising3d_site
+ice_site
 BoundaryPEPS
 boundary_peps
 boundary_peps_krylov

@@ -19,9 +19,21 @@
 #
 #   ∂f/∂A = (E_ket + E_bra)/z |_{⟨Ψ|T|Ψ⟩} − (E_ket + E_bra)/z |_{⟨Ψ|Ψ⟩}   (real A)
 #
-# f is invariant under A → cA, so the gradient is orthogonal to A. With `symmetrize = true` (a
-# C4v-invariant site) A and every gradient are projected onto the C4v-symmetric subspace of the
-# virtual legs. Three solvers for ∇f = 0 (measured against each other in docs/boundary_peps.md):
+# f is invariant under A → cA, so the gradient is orthogonal to A. A and every gradient are kept in
+# the subspace invariant under a group of the square's symmetries of the virtual legs (`symmetry`:
+# C4v by default, which needs a C4v-invariant site; a subgroup, e.g. the diagonal mirror, for less
+# symmetric sites).
+#
+# PERMUTED BRAS. The bra layer of either network may be A with its virtual legs permuted by a square
+# symmetry π (`bra_perm` for ⟨Ψ|T|Ψ⟩, `norm_perm` for ⟨Ψ|Ψ⟩): ⟨π(Ψ)|, the PEPS mapped by that lattice
+# symmetry. When Tᵀ = π T π (the site invariant under π on its x, y legs combined with z⁻ ↔ z⁺) the
+# left eigenvector of T is π(R), and with both perms π the estimator ln κ⟨π(Ψ)|T|Ψ⟩ − ln κ⟨π(Ψ)|Ψ⟩ is
+# stationary there (the bilinear estimator again, second order); π T is then symmetric, and
+# ln κ⟨π(Ψ)|T|Ψ⟩ − ln κ⟨Ψ|Ψ⟩ is its Rayleigh quotient, maximal at ln σ_max(T). The ice bilayer
+# (`ice_site`, π the inversion) is the case in point: cubic ice is λ(T), hexagonal ice σ_max(T).
+# The gradient maps the bra's environment back through π.
+#
+# Three solvers for ∇f = 0 (measured against each other in docs/boundary_peps.md):
 #
 # * `boundary_peps` — L-BFGS on the unit sphere with the norm-metric preconditioner: cheap per
 #   iteration and robust from a cold start; real data only.
@@ -37,9 +49,11 @@
 The result of [`boundary_peps`](@ref), [`boundary_peps_krylov`](@ref) or
 [`boundary_peps_stationary`](@ref): the boundary tensor `A` on legs `Alegs = (x⁻, x⁺, y⁻, y⁺, p)`
 (`p` the z bond), the 3D `site` and its `legs`, the converged 2D environments of ⟨Ψ|Ψ⟩ (`normenv`)
-and ⟨Ψ|T|Ψ⟩ (`openv`), `lnkappa = f(A)`, the final gradient norm `gnorm`, the `history` of f, and
-whether the bra is `A` itself (`bilinear`, the stationary solvers) or `conj(A)`. Any of the solvers
-takes it as `init`; `adapt(CuArray, bp)` moves it (tensor, site and environments) to the GPU.
+and ⟨Ψ|T|Ψ⟩ (`openv`), `lnkappa = f(A)`, the final gradient norm `gnorm`, the `history` of f,
+whether the bra is `A` itself (`bilinear`, the stationary solvers) or `conj(A)`, and the bras' leg
+permutations `bra_perm` (of ⟨Ψ|T|Ψ⟩) and `norm_perm` (of ⟨Ψ|Ψ⟩), the identity unless a solver was
+given them. Any of the solvers takes it as `init`; `adapt(CuArray, bp)` moves it (tensor, site and
+environments) to the GPU.
 """
 struct BoundaryPEPS
     A::Any
@@ -53,36 +67,71 @@ struct BoundaryPEPS
     gnorm::Float64
     history::Vector{Float64}
     bilinear::Bool                 # bra = A (a complex symmetric T: ⟨L| = |R⟩ᵀ), not conj(A)
+    bra_perm::NTuple{4, Int}       # the bra of ⟨Ψ|T|Ψ⟩ is A with its virtual leg k on bra leg bra_perm[k]
+    norm_perm::NTuple{4, Int}      # … and of ⟨Ψ|Ψ⟩
 end
+
+const _BP_ID = (1, 2, 3, 4)
+
+BoundaryPEPS(A, Alegs, blegs, site, legs, normenv, openv, lnkappa, gnorm, history, bilinear) =
+    BoundaryPEPS(A, Alegs, blegs, site, legs, normenv, openv, lnkappa, gnorm, history, bilinear, _BP_ID, _BP_ID)
 
 Adapt.adapt_structure(to, bp::BoundaryPEPS) =
     BoundaryPEPS(adapt(to, bp.A), bp.Alegs, bp.blegs, adapt(to, bp.site), bp.legs, adapt(to, bp.normenv),
-                 adapt(to, bp.openv), bp.lnkappa, bp.gnorm, bp.history, bp.bilinear)
+                 adapt(to, bp.openv), bp.lnkappa, bp.gnorm, bp.history, bp.bilinear, bp.bra_perm, bp.norm_perm)
 
 # The 8 symmetries of the square acting on the legs (x⁻, x⁺, y⁻, y⁺): swap within either pair,
-# and swap the pairs.
+# and swap the pairs. π maps leg k to leg π[k].
 const _BP_C4V = ((1, 2, 3, 4), (2, 1, 3, 4), (1, 2, 4, 3), (2, 1, 4, 3),
                  (3, 4, 1, 2), (4, 3, 1, 2), (3, 4, 2, 1), (4, 3, 2, 1))
+const _BP_GROUPS = Dict(:c4v => _BP_C4V, :diagonal => ((1, 2, 3, 4), (3, 4, 1, 2)), :none => ((1, 2, 3, 4),))
 
-_bp_symmetrize(t, vl) = sum(replaceinds(t, collect(vl), [vl[π[i]] for i in 1:4]) for π in _BP_C4V) / length(_BP_C4V)
+_bp_compose(π, σ) = ntuple(k -> π[σ[k]], 4)          # σ first, then π
 
-# Is the 3D site invariant under the square's symmetries of its (x±, y±) legs?
-function _bp_isc4v(site, legs; atol = 1.0e-12)
-    xy = collect(legs[1:4])
-    ref = norm(site)
-    return all(norm(replaceinds(site, xy, [xy[π[i]] for i in 1:4]) - site) <= atol * ref for π in _BP_C4V)
+# `symmetry` as a group of square symmetries: `:c4v`, `:diagonal` (the mirror x ↔ y), `:none`, or an
+# explicit collection of permutations (checked to be a group).
+function _bp_group(symmetry)
+    symmetry isa Symbol && return get(() -> throw(ArgumentError(
+        "symmetry must be :c4v, :diagonal, :none or a group of square symmetries, got :$symmetry")), _BP_GROUPS, symmetry)
+    G = Tuple(unique(NTuple{4, Int}.(Tuple.(collect(symmetry)))))
+    all(π -> π in _BP_C4V, G) || throw(ArgumentError("every element of symmetry must be one of the square's 8 symmetries"))
+    _BP_ID in G || throw(ArgumentError("symmetry must contain the identity"))
+    all(_bp_compose(π, σ) in G for π in G, σ in G) || throw(ArgumentError("symmetry must be closed under composition"))
+    return G
 end
 
-# ⟨Ψ|Ψ⟩ and ⟨Ψ|T|Ψ⟩ as layer lists with their (x⁻, x⁺, y⁻, y⁺) leg lists.
-function _bp_norm_layers(A, al, bl; bilinear::Bool = false)
+_bp_permute(t, vl, π) = replaceinds(t, collect(vl), [vl[π[i]] for i in 1:4])
+_bp_symmetrize(t, vl, G = _BP_C4V) = length(G) == 1 ? t : sum(_bp_permute(t, vl, π) for π in G) / length(G)
+
+# Is the 3D site invariant under the group's symmetries of its (x±, y±) legs?
+function _bp_isinvariant(site, legs, G = _BP_C4V; atol = 1.0e-12)
+    xy = collect(legs[1:4])
+    ref = norm(site)
+    return all(norm(_bp_permute(site, xy, π) - site) <= atol * ref for π in G)
+end
+_bp_isc4v(site, legs; atol = 1.0e-12) = _bp_isinvariant(site, legs, _BP_C4V; atol)
+
+# A bra permutation must be a square symmetry commuting with the group (f is then group-invariant).
+function _bp_check_perm(π, G, name)
+    π = NTuple{4, Int}(Tuple(π))
+    π in _BP_C4V || throw(ArgumentError("$name must be one of the square's 8 symmetries, got $π"))
+    all(_bp_compose(π, σ) == _bp_compose(σ, π) for σ in G) ||
+        throw(ArgumentError("$name = $π must commute with every element of the symmetry group"))
+    return π
+end
+
+# ⟨π(Ψ)|Ψ⟩ and ⟨π(Ψ)|T|Ψ⟩ as layer lists with their (x⁻, x⁺, y⁻, y⁺) leg lists: the bra is A (or
+# conj(A)) with its virtual leg k on bra leg π[k].
+function _bp_norm_layers(A, al, bl; bilinear::Bool = false, perm = _BP_ID)
     ket = A
-    bra = replaceinds(bilinear ? A : conj(A), collect(al[1:4]), collect(bl))
+    bra = replaceinds(bilinear ? A : conj(A), collect(al[1:4]), [bl[perm[k]] for k in 1:4])
     return Any[ket, bra], ntuple(d -> Index[al[d], bl[d]], 4)
 end
 
-function _bp_sandwich_layers(A, al, bl, site, legs; bilinear::Bool = false)
+function _bp_sandwich_layers(A, al, bl, site, legs; bilinear::Bool = false, perm = _BP_ID)
     ket = replaceind(A, al[5], legs[5])                                         # A's p = T's z⁻
-    bra = replaceinds(bilinear ? A : conj(A), vcat(collect(al[1:4]), [al[5]]), vcat(collect(bl), [legs[6]]))   # … z⁺
+    bra = replaceinds(bilinear ? A : conj(A), vcat(collect(al[1:4]), [al[5]]),
+                      vcat([bl[perm[k]] for k in 1:4], [legs[6]]))              # … z⁺
     return Any[ket, site, bra], ntuple(d -> Index[al[d], legs[d], bl[d]], 4)
 end
 
@@ -91,8 +140,9 @@ end
 function _bp_evaluate(A, ctx, init_n, init_s, tol = ctx.ctm_tolerance)
     al, bl, site, legs = ctx.al, ctx.bl, ctx.site, ctx.legs
     bil = get(ctx, :bilinear, false)
-    nl, nlegs = _bp_norm_layers(A, al, bl; bilinear = bil)
-    sl, slegs = _bp_sandwich_layers(A, al, bl, site, legs; bilinear = bil)
+    sp, np = get(ctx, :bra_perm, _BP_ID), get(ctx, :norm_perm, _BP_ID)
+    nl, nlegs = _bp_norm_layers(A, al, bl; bilinear = bil, perm = np)
+    sl, slegs = _bp_sandwich_layers(A, al, bl, site, legs; bilinear = bil, perm = sp)
     # The two environments are independent: converge them concurrently (each step's pairs and
     # blocks occupy at most 8 tasks, so on more threads the norm network rides along for free).
     # ANDERSON mixing (`ctx.anderson` iterates) only from a warm start: from the vacuum it can pick a
@@ -119,9 +169,11 @@ function _bp_evaluate(A, ctx, init_n, init_s, tol = ctx.ctm_tolerance)
     Ebs, _ = site_environment(ls, 3)
     Ekn, zn = site_environment(ln, 1)
     Ebn, _ = site_environment(ln, 2)
-    G = (replaceind(Eks, legs[5], al[5]) + replaceinds(Ebs, vcat(collect(bl), [legs[6]]), collect(al))) / zs -
-        (Ekn + replaceinds(Ebn, collect(bl), collect(al[1:4]))) / zn
-    ctx.symmetrize && (G = _bp_symmetrize(G, al[1:4]))
+    # the bra environments back onto A's legs, through the bras' permutations
+    G = (replaceind(Eks, legs[5], al[5]) +
+         replaceinds(Ebs, vcat([bl[sp[k]] for k in 1:4], [legs[6]]), collect(al))) / zs -
+        (Ekn + replaceinds(Ebn, [bl[np[k]] for k in 1:4], collect(al[1:4]))) / zn
+    G = _bp_symmetrize(G, al[1:4], ctx.group)
     return f, G, ln, ls
 end
 
@@ -201,10 +253,11 @@ end
 
 """
     boundary_peps(site, legs, D; maxdim, init = nothing, boundary = nothing, symmetrize = true,
-                  maxiter = 200, gtol = 1e-7, memory = 10, max_step = 0.2, ctm_tolerance = 1e-10,
-                  ctm_maxiter = 1000, noise = 1e-2, seed = 0, precondition = true,
-                  precondition_shift = 1e-2, adaptive_tolerance = true, ctm_anderson = 0, callback = nothing,
-                  time_limit = Inf, verbose = false, kwargs...) -> BoundaryPEPS
+                  symmetry = symmetrize ? :c4v : :none, bra_perm = (1, 2, 3, 4), maxiter = 200,
+                  gtol = 1e-7, memory = 10, max_step = 0.2, ctm_tolerance = 1e-10, ctm_maxiter = 1000,
+                  noise = 1e-2, seed = 0, precondition = true, precondition_shift = 1e-2,
+                  adaptive_tolerance = true, ctm_anderson = 0, callback = nothing, time_limit = Inf,
+                  verbose = false, kwargs...) -> BoundaryPEPS
 
 Variational boundary PEPS for the translation-invariant cubic network of `site` (legs
 `(x⁻, x⁺, y⁻, y⁺, z⁻, z⁺)`, as for [`InfiniteCTM3D`](@ref)): maximise the per-site Rayleigh quotient
@@ -217,8 +270,12 @@ dimension `D`, both terms contracted by [`InfiniteCTM2D`](@ref) at `maxdim`. For
   the right dimensions; otherwise T applied to the product state `boundary` on z⁻ (ones by default;
   a fixed-spin vector selects a symmetry-broken phase), embedded at bond dimension `D` with
   relative `noise`.
-* `symmetrize` — keep A and the gradient C4v-symmetric in the virtual legs; requires an invariant
-  site.
+* `symmetry` — the group A and the gradient are kept invariant under: `:c4v`, `:diagonal` (the
+  mirror x ↔ y), `:none`, or a collection of the square's symmetries (as permutations of
+  (x⁻, x⁺, y⁻, y⁺)); the site must be invariant under it. `symmetrize = false` is `symmetry = :none`.
+* `bra_perm` — the bra of ⟨Ψ|T|Ψ⟩ is Ψ mapped by this square symmetry (its virtual leg k on leg
+  `bra_perm[k]`): f is then the Rayleigh quotient of π T, the maximum wanted when π T is symmetric
+  (hexagonal ice, [`ice_site`](@ref)). Must commute with the group.
 * Stops when the tangent gradient norm (for normalised A) is below `gtol`, or after `maxiter`
   L-BFGS iterations, or after `time_limit` seconds, or when the line search fails.
 * `callback(it, state)` — `state` a NamedTuple (A, Alegs, f, res) — runs after every accepted step.
@@ -230,12 +287,13 @@ dimension `D`, both terms contracted by [`InfiniteCTM2D`](@ref) at `maxdim`. For
 * `adaptive_tolerance` — converge the 2D environments to `1e-2·|g|`, clamped to
   `[ctm_tolerance, 1e-6]`, rather than always to `ctm_tolerance`.
 
-Remaining keywords go to [`InfiniteCTM2D`](@ref) (e.g. `pair`). With `symmetrize = true` the 2D
+Remaining keywords go to [`InfiniteCTM2D`](@ref) (e.g. `pair`). With `symmetry = :c4v` the 2D
 environments use `c4v = true` (one pair and two blocks per step, the rest by symmetry; exact, 3–4×
 less work) unless `c4v = false` is passed.
 """
 function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, boundary = nothing,
-                       symmetrize::Bool = true, maxiter::Integer = 200, gtol::Real = 1.0e-7,
+                       symmetrize::Bool = true, symmetry = symmetrize ? :c4v : :none, bra_perm = _BP_ID,
+                       maxiter::Integer = 200, gtol::Real = 1.0e-7,
                        memory::Integer = 10, max_step::Real = 0.2, ctm_tolerance::Real = 1.0e-10,
                        ctm_maxiter::Integer = 1000, noise::Real = 1.0e-2, seed::Integer = 0,
                        ls_max::Integer = 12, precondition::Bool = true, precondition_shift::Real = 1.0e-2,
@@ -246,13 +304,15 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
     length(legs) == 6 || throw(ArgumentError("legs must be the six legs (x⁻, x⁺, y⁻, y⁺, z⁻, z⁺)"))
     issetequal(collect(inds(site)), collect(legs)) || throw(ArgumentError("the site tensor's indices must be exactly the six given legs"))
     dim(legs[5]) == dim(legs[6]) || throw(ArgumentError("the z legs must have equal dimensions"))
-    symmetrize && !_bp_isc4v(site, legs) && throw(ArgumentError(
-        "symmetrize = true needs a site invariant under the square's symmetries of its x, y legs"))
+    group = _bp_group(symmetry)
+    _bp_isinvariant(site, legs, group) || throw(ArgumentError(
+        "the site must be invariant under the symmetry group's permutations of its x, y legs (symmetry = $symmetry)"))
+    sp = _bp_check_perm(bra_perm, group, "bra_perm")
     al = (new_index(D; tags = "bp,xm"), new_index(D; tags = "bp,xp"), new_index(D; tags = "bp,ym"),
           new_index(D; tags = "bp,yp"), new_index(dim(legs[5]); tags = "bp,p"))
     bl = Tuple(new_index(D; tags = "bp,bra") for _ in 1:4)
-    ctx = (; al, bl, site, legs = Tuple(legs), maxdim = Int(maxdim), symmetrize, ctm_tolerance,
-           ctm_maxiter = Int(ctm_maxiter), ctm_kwargs = merge((; c4v = symmetrize), kwargs),
+    ctx = (; al, bl, site, legs = Tuple(legs), maxdim = Int(maxdim), group, bra_perm = sp, ctm_tolerance,
+           ctm_maxiter = Int(ctm_maxiter), ctm_kwargs = merge((; c4v = group == _BP_C4V), kwargs),
            anderson = Int(ctm_anderson))
     rng = Xoshiro(seed)
     A = if init isa BoundaryPEPS
@@ -265,10 +325,10 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
     else
         _bp_initial(site, legs, al, D, boundary, D > dim(legs[1]) ? noise : 0.0, rng)
     end
-    symmetrize && (A = _bp_symmetrize(A, al[1:4]); A = A / norm(A))
-    # the environments warm-start too when they fit (same χ and bond dimension)
+    A = _bp_symmetrize(A, al[1:4], group); A = A / norm(A)
+    # the environments warm-start too when they fit (same χ, bond dimension and networks)
     reuse = init isa BoundaryPEPS && init.normenv isa InfiniteCTM2D && init.normenv.maxdim == maxdim &&
-            dim(init.Alegs[1]) == D
+            dim(init.Alegs[1]) == D && init.bra_perm == sp && init.norm_perm == _BP_ID
     init_n = reuse ? init.normenv : nothing
     init_s = reuse ? init.openv : nothing
 
@@ -288,7 +348,7 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
     metric(ln) = precondition ? _bp_metric(ln, al, bl, precondition_shift) : nothing
     Mk = metric(ln)
     Pinv(v) = isnothing(Mk) ? v : (w = _bp_precondition(Mk[1], Mk[2], al[5], v);
-                                   symmetrize && (w = _bp_symmetrize(w, al[1:4])); tangent(w, A))
+                                   w = _bp_symmetrize(w, al[1:4], group); tangent(w, A))
     gnorm = norm(g)
     for it in 1:maxiter
         gnorm = norm(g)
@@ -321,7 +381,7 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
         local An, fn, Gn, lnn, lsn
         for k in 1:ls_max
             An = A + α * d
-            symmetrize && (An = _bp_symmetrize(An, al[1:4]))
+            An = _bp_symmetrize(An, al[1:4], group)
             An = An / norm(An)
             fn, Gn, lnn, lsn = _bp_evaluate(An, ctx, ln, ls, ctmtol(gnorm))
             if -fn <= F + 1.0e-4 * α * slope
@@ -348,14 +408,15 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
         verbose && (println("boundary_peps it $it: f = $f, |g| = $(norm(g)), α = $α"); flush(stdout))
         isnothing(callback) || callback(it, (; A, Alegs = al, f, res = norm(g)))
     end
-    return BoundaryPEPS(A, al, bl, site, Tuple(legs), ln, ls, f, norm(g), history, false)
+    return BoundaryPEPS(A, al, bl, site, Tuple(legs), ln, ls, f, norm(g), history, false, sp, _BP_ID)
 end
 
 """
     cvm_freenergy(bp::BoundaryPEPS)
 
 The boundary PEPS's estimate of ln κ, the log partition function per site of the 3D network:
-`f(A) = ln κ(⟨Ψ|T|Ψ⟩) − ln κ(⟨Ψ|Ψ⟩)` — a lower bound for a symmetric transfer operator.
+`f(A) = ln κ(⟨π(Ψ)|T|Ψ⟩) − ln κ(⟨π′(Ψ)|Ψ⟩)` (π, π′ the bras' permutations, usually the
+identity) — a lower bound for a symmetric transfer operator.
 """
 cvm_freenergy(bp::BoundaryPEPS) = bp.lnkappa
 
@@ -366,7 +427,8 @@ cvm_freenergy(bp::BoundaryPEPS) = bp.lnkappa
 magnetisation tensor of [`ising3d_site`](@ref)): the single-site expectation value in the bulk.
 """
 function site_ratio(bp::BoundaryPEPS, impurity)
-    sl, _ = _bp_sandwich_layers(bp.A, bp.Alegs, bp.blegs, bp.site, bp.legs; bilinear = bp.bilinear)
+    sl, _ = _bp_sandwich_layers(bp.A, bp.Alegs, bp.blegs, bp.site, bp.legs; bilinear = bp.bilinear,
+                                perm = bp.bra_perm)
     return site_ratio(bp.openv, Any[sl[1], adapt_like(bp.site, impurity), sl[3]])
 end
 
@@ -390,16 +452,17 @@ end
 # where two stationary points merge: the FOLD, the finite-D image of the Yang–Lee edge (there the
 # two leading eigenvectors of T coalesce, an exceptional point).
 
-# An orthonormal real basis of the tensors on `al` invariant under the square's symmetries of the
-# virtual legs: one normalised orbit sum per (orbit of the virtual multi-index, physical index).
-function _bp_c4v_basis(al)
+# An orthonormal real basis of the tensors on `al` invariant under the group `G` of the square's
+# symmetries of the virtual legs: one normalised orbit sum per (orbit of the virtual multi-index,
+# physical index).
+function _bp_sym_basis(al, G = _BP_C4V)
     D = dim(al[1]); dp = dim(al[5])
     seen = Set{NTuple{4, Int}}()
     orbits = Vector{Vector{NTuple{4, Int}}}()
     for I in CartesianIndices((D, D, D, D))
         i = Tuple(I)
         i in seen && continue
-        orb = unique([(i[π[1]], i[π[2]], i[π[3]], i[π[4]]) for π in _BP_C4V])
+        orb = unique([(i[π[1]], i[π[2]], i[π[3]], i[π[4]]) for π in G])
         push!(orbits, orb); union!(seen, orb)
     end
     LI = LinearIndices((D, D, D, D, dp))
@@ -413,6 +476,7 @@ function _bp_c4v_basis(al)
     end
     return B
 end
+_bp_c4v_basis(al) = _bp_sym_basis(al, _BP_C4V)
 
 _bp_from_coords(c, B, al, ref) = adapt_like(ref, from_array(reshape(B * c, Tuple(dim.(collect(al)))), al...))
 _bp_to_coords(G, B, al) = transpose(B) * vec(ComplexF64.(Array(array(G, al...))))
@@ -428,13 +492,24 @@ end
 
 # THE BOND GAUGE. A 1×1 C4v PEPS is invariant under R → (X ⊗ X ⊗ X ⊗ X) R for complex orthogonal X
 # (X Xᵀ = 1, the same on every virtual leg): D(D−1)/2 more null directions of J, right and
-# (bilinearly) left — the tangents a·R of the antisymmetric generators a, in coordinates.
-function _bp_gauge_tangents(c, B, D::Int, dp::Int)
+# (bilinearly) left — the tangents a·R of the antisymmetric generators a, in coordinates. With less
+# symmetry the gauge is X on x⁺ and X⁻¹ on x⁻ (likewise Y along y) for any invertible X, and (a
+# permuted bra carrying its own copy) the estimators are invariant under it too: the tangents of
+# every generator a on either axis, projected onto the invariant subspace (spanning, not independent).
+function _bp_gauge_tangents(c, B, D::Int, dp::Int, G = _BP_C4V)
     A = reshape(B * c, D, D, D, D, dp)
     out = Vector{eltype(A)}[]
-    for i in 1:D, j in (i + 1):D
-        a = zeros(D, D); a[i, j] = 1; a[j, i] = -1
-        δ = sum(_bp_modemul(A, a, leg) for leg in 1:4)
+    if G == _BP_C4V
+        for i in 1:D, j in (i + 1):D
+            a = zeros(D, D); a[i, j] = 1; a[j, i] = -1
+            δ = sum(_bp_modemul(A, a, leg) for leg in 1:4)
+            push!(out, transpose(B) * vec(δ))
+        end
+        return out
+    end
+    for (minus, plus) in ((1, 2), (3, 4)), i in 1:D, j in 1:D
+        a = zeros(D, D); a[i, j] = 1
+        δ = _bp_modemul(A, transpose(a), plus) - _bp_modemul(A, a, minus)
         push!(out, transpose(B) * vec(δ))
     end
     return out
@@ -504,7 +579,7 @@ function boundary_peps_stationary(site, legs, init::BoundaryPEPS; maxdim::Intege
     cplx = scalartype(site) <: Complex || scalartype(A0) <: Complex ||
            (!isnothing(jacobian) && eltype(jacobian) <: Complex)
     sitec = cplx && !(scalartype(site) <: Complex) ? site * complex(1.0) : site
-    ctx = (; al, bl, site = sitec, legs = Tuple(legs), maxdim = Int(maxdim), symmetrize = true,
+    ctx = (; al, bl, site = sitec, legs = Tuple(legs), maxdim = Int(maxdim), group = _BP_C4V,
            ctm_tolerance, ctm_maxiter = Int(ctm_maxiter), ctm_kwargs = merge((; c4v = true), kwargs),
            bilinear = true)
     B = _bp_c4v_basis(al)
@@ -688,13 +763,19 @@ end
                          fd_step = 1e-5, central = false, ctm_tolerance = 1e-12,
                          fd_ctm_tolerance = ctm_tolerance, ctm_maxiter = 2000, max_rejects = 8,
                          svd_rtol = 1e-6, eta_max = 0.1, eta_min = 1e-4, noise_tol = 1e-7, block = 4,
-                         recycle = 3, ctm_anderson = 5,
-                         callback = nothing, time_limit = Inf, verbose = false, kwargs...) -> (bp, info)
+                         recycle = 3, ctm_anderson = 5, symmetry = :c4v, bra_perm = init.bra_perm,
+                         norm_perm = bra_perm, callback = nothing, time_limit = Inf, verbose = false,
+                         kwargs...) -> (bp, info)
 
 The stationary boundary PEPS (∇f = 0 for the bilinear estimator, as [`boundary_peps_stationary`](@ref);
 for real data the variational optimum of [`boundary_peps`](@ref)) by Newton–Krylov with a subspace
-trust region (see the note above). `merit`: `:f` (maximise f; the default for real data) or
-`:residual` (minimise |g|²; the default, and the only choice, for complex data). The Krylov basis
+trust region (see the note above). `merit`: `:f` (maximise f; the default for real data with an
+unpermuted norm) or `:residual` (minimise |g|²; the default otherwise, and the only choice for
+complex data). `symmetry` as for [`boundary_peps`](@ref); `bra_perm` and `norm_perm` permute the
+bras of ⟨Ψ|T|Ψ⟩ and ⟨Ψ|Ψ⟩ (the note above): both `(2, 1, 4, 3)`, the inversion, give the
+stationary estimator of ln λ(T) when Tᵀ = π T π (cubic ice, [`ice_site`](@ref)); `bra_perm =
+(2, 1, 4, 3)` with `norm_perm = (1, 2, 3, 4)` and `merit = :f` the maximum of π T's Rayleigh
+quotient, ln σ_max(T) (hexagonal ice). The Krylov basis
 is built from finite-difference Jacobian-vector products (step `fd_step`, forward unless `central`,
 the perturbed environments converged to `fd_ctm_tolerance`), at most `krylovdim` per step, until
 the model residual outside it is below η|g|, η from Eisenstat–Walker forcing in
@@ -702,8 +783,10 @@ the model residual outside it is below η|g|, η from Eisenstat–Walker forcing
 with `recycle = r > 0` the subspace starts from the last accepted step and the r − 1 Ritz vectors
 it moved along most, besides −g. The trust radius starts at `radius` (on the unit-norm coordinates)
 and is capped at `max_radius`; a step rejected `max_rejects` times running stops the solver. Stops at
-|g|·|c| < `tol`, converged, or after `time_limit` seconds; otherwise converged if the residual is
-below `noise_tol` (the gradient's noise floor). `callback(it, state)` — `state` a NamedTuple
+|g|·|c| < `tol`, converged, or after `time_limit` seconds (checked between blocks of products; the
+trust-region trials in a subspace always run, so a run overruns it by at most one block and
+`max_rejects` evaluations); otherwise converged if the residual is below `noise_tol` (the gradient's
+noise floor). `callback(it, state)` — `state` a NamedTuple
 (A, Alegs, f, res, evals, time) — runs before every step. `ctm_anderson` as for [`boundary_peps`](@ref).
 
 `info`: `iterations`, `residual`, `converged`, `evals` (gradient evaluations), `ctm_steps` (2D CTMRG
@@ -718,25 +801,33 @@ function boundary_peps_krylov(site, legs, init::BoundaryPEPS; maxdim::Integer = 
                               ctm_maxiter::Integer = 2000, max_rejects::Integer = 8,
                               svd_rtol::Real = 1.0e-6, eta_max::Real = 0.1, eta_min::Real = 1.0e-4,
                               noise_tol::Real = 1.0e-7, block::Integer = 4, recycle::Integer = 3,
-                              ctm_anderson::Integer = 5, callback = nothing, time_limit::Real = Inf,
+                              ctm_anderson::Integer = 5, symmetry = :c4v, bra_perm = init.bra_perm,
+                              norm_perm = bra_perm, callback = nothing, time_limit::Real = Inf,
                               verbose::Bool = false, kwargs...)
     al, bl = init.Alegs, init.blegs
-    _bp_isc4v(site, legs) || throw(ArgumentError("boundary_peps_krylov needs a C4v-invariant site"))
+    group = _bp_group(symmetry)
+    _bp_isinvariant(site, legs, group) || throw(ArgumentError(
+        "boundary_peps_krylov needs a site invariant under the symmetry group (symmetry = $symmetry)"))
+    sp = _bp_check_perm(bra_perm, group, "bra_perm")
+    np = _bp_check_perm(norm_perm, group, "norm_perm")
     cplx = scalartype(site) <: Complex || scalartype(A0) <: Complex
     merit in (:auto, :f, :residual) || throw(ArgumentError("merit must be :auto, :f or :residual"))
     cplx && merit === :f &&
         throw(ArgumentError("merit = :f needs real data (no maximum principle for complex T)"))
-    variational = merit === :f || (merit === :auto && !cplx)
+    merit === :f && np != _BP_ID &&
+        throw(ArgumentError("merit = :f needs norm_perm = (1, 2, 3, 4) (a permuted norm has no maximum principle)"))
+    variational = merit === :f || (merit === :auto && !cplx && np == _BP_ID)
     sitec = cplx && !(scalartype(site) <: Complex) ? site * complex(1.0) : site
-    ctx = (; al, bl, site = sitec, legs = Tuple(legs), maxdim = Int(maxdim), symmetrize = true,
-           ctm_tolerance, ctm_maxiter = Int(ctm_maxiter), ctm_kwargs = merge((; c4v = true), kwargs),
-           bilinear = true, anderson = Int(ctm_anderson))
-    B = _bp_c4v_basis(al)
+    ctx = (; al, bl, site = sitec, legs = Tuple(legs), maxdim = Int(maxdim), group, bra_perm = sp,
+           norm_perm = np, ctm_tolerance, ctm_maxiter = Int(ctm_maxiter),
+           ctm_kwargs = merge((; c4v = group == _BP_C4V), kwargs), bilinear = true, anderson = Int(ctm_anderson))
+    B = _bp_sym_basis(al, group)
     D, dp = dim(al[1]), dim(al[5])
     c = _bp_to_coords(A0, B, al)
     cplx || (c = real(c))
     c /= norm(c)
-    reuse = init.normenv isa InfiniteCTM2D && init.openv isa InfiniteCTM2D && init.normenv.maxdim == maxdim
+    reuse = init.normenv isa InfiniteCTM2D && init.openv isa InfiniteCTM2D && init.normenv.maxdim == maxdim &&
+            init.bra_perm == sp && init.norm_perm == np
     ln = reuse ? (cplx ? _i2_complexify(init.normenv) : init.normenv) : nothing
     ls = reuse ? (cplx ? _i2_complexify(init.openv) : init.openv) : nothing
     nevals = Threads.Atomic{Int}(0); nsteps = Threads.Atomic{Int}(0)
@@ -770,7 +861,7 @@ function boundary_peps_krylov(site, legs, init::BoundaryPEPS; maxdim::Integer = 
         # the last step, then (block) Arnoldi — `block` products at a time, on threads. Any orthonormal
         # V with J V_k ⊂ span V works: T = H[1:k, 1:k] is the Galerkin projection, and the model's
         # residual outside span V_k is H[k+1:p, 1:k] y.
-        N = reduce(hcat, vcat([c], _bp_gauge_tangents(c, B, D, dp)))
+        N = reduce(hcat, vcat([c], _bp_gauge_tangents(c, B, D, dp, group)))
         Q = nullspace(Matrix(N'))
         cplx || (Q = real(Q))
         m = size(Q, 2)
@@ -807,10 +898,13 @@ function boundary_peps_krylov(site, legs, init::BoundaryPEPS; maxdim::Integer = 
                 _, _, est = _bp_trs_lsq(H[1:p, 1:kk], β0, Inf, svd_rtol)
             end
             (est <= ηk || p == kk) && break
+            time() - t0 > time_limit && break          # out of time: step in the subspace built so far
         end
         p = size(V, 2)
         push!(ksizes, kk)
-        # the trust-region step in the fixed subspace; a rejection shrinks Δ and re-solves there
+        # the trust-region step in the fixed subspace; a rejection shrinks Δ and re-solves there. The
+        # trials run even out of time: they cost one evaluation each, the subspace up to `krylovdim`
+        # (near a fold the first trial can overshoot 100×, 3D Ising β = 0.20, D = 3, v = 0.04)
         accepted = false
         for _ in 1:max_rejects
             y, pred = variational ? _bp_trs_max(H[1:kk, 1:kk], β0, Δ) :
@@ -847,7 +941,7 @@ function boundary_peps_krylov(site, legs, init::BoundaryPEPS; maxdim::Integer = 
     end
     converged = converged || res < noise_tol
     A = _bp_from_coords(c, B, al, sitec)
-    bp = BoundaryPEPS(A, al, bl, sitec, Tuple(legs), ln, ls, f, res, [t.f for t in trace], true)
+    bp = BoundaryPEPS(A, al, bl, sitec, Tuple(legs), ln, ls, f, res, [t.f for t in trace], true, sp, np)
     return bp, (; iterations = it, residual = res, converged, evals = nevals[], ctm_steps = nsteps[],
                 krylov = ksizes, trace, radius = Δ, c)
 end
