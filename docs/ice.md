@@ -247,7 +247,7 @@ update (χ = D²):
 
 | D | 3 | 4 | 5 | 6 | 7 | 8 |
 |---|---|---|---|---|---|---|
-| ln f per cell | −8.26e-5 | −2.38e-5 | −3.70e-5 | −1.15e-5 | −1.12e-5 | (running) |
+| ln f per cell | −8.26e-5 | −2.38e-5 | −3.70e-5 | −1.15e-5 | −1.12e-5 | −1.15e-5 |
 | BP's discarded weight per bilayer | 4.7e-7 | 1.2e-10 | 4.3e-11 | 7.6e-12 | 3.2e-13 | 1.5e-14 |
 
 BP's own measure of what the truncation throws away is wrong by 2 to 9 orders of magnitude and the true

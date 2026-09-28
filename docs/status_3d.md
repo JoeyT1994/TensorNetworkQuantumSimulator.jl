@@ -15,7 +15,7 @@ numbers: `examples/ice/results_honeycomb.csv`; run everything with `julia exampl
 
 1. **BP simple update is ~1e-5 per cell from an eigenvector, whatever BP says.** The true truncation
    error, ln f = 2 RQ(A) − RQ(A²) per cell (A = I M; 0 only for an eigenvector; the new `:mnorm`
-   network), for D = 3–8 at χ = D²: −8.3e-5, −2.4e-5, −3.7e-5, −1.15e-5, −1.12e-5, D = 8 (running) — against BP's
+   network), for D = 3–8 at χ = D²: −8.3e-5, −2.4e-5, −3.7e-5, −1.15e-5, −1.12e-5, −1.15e-5 — against BP's
    own discarded weight per bilayer of 5e-7 … 1.5e-14. The Bethe metric misjudges the loop (ice-rule)
    correlations it truncates by up to nine orders of magnitude; that is why w_h(BP-SU) creeps.
 2. **Variational states (GPU, resumable, `honeycomb_variational.jl`)**, from BP-SU, at the practical
