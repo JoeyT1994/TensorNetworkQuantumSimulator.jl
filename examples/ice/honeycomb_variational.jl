@@ -151,6 +151,7 @@ function hoptimize!(ck, S; cfg, budget, gtol, ftol, maxit, max_step, memory = 10
     nfail = S.nfail; status = S.status; lastdur = S.lastdur
     evaldur = get(S, :evalwarm, 0.0); nrun = 0               # WARM evaluation time; evaluations this run
     lasttrials = 2                                 # evaluations the last line search needed
+    laststep = get(S, :laststep, 0.0)              # the last accepted step length |a d| (carried across runs)
     function timed!(t)                             # the first evaluation of a run compiles: never the estimate
         nrun += 1
         if nrun > 1
@@ -160,7 +161,7 @@ function hoptimize!(ck, S; cfg, budget, gtol, ftol, maxit, max_step, memory = 10
         end
     end
     save() = vatomic(ck, (; Xh = unpack(x)[1], Yh = unpack(x)[2], f, g, it, hist, Sm, Ym, ρ, icn = vhost(icn),
-                          ics = vhost(ics), nfail, status, lastdur, χ = cfg.χ, P, evalwarm = evaldur))
+                          ics = vhost(ics), nfail, status, lastdur, χ = cfg.χ, P, evalwarm = evaldur, laststep))
     if isnan(f)                                     # the first evaluation (BP-SU state)
         te = time()
         f, gX, gY, icn, ics, _, P = hevaluate(unpack(x)..., ix, cfg; metric = usemetric)
@@ -192,7 +193,8 @@ function hoptimize!(ck, S; cfg, budget, gtol, ftol, maxit, max_step, memory = 10
             empty!(Sm); empty!(Ym); empty!(ρ); d = tang(precond(g, P), x)
             dot(d, g) > 0 || (d = g)
         end
-        a = min(1.0, max_step / norm(d)); ok = false; nct = 0; aborted = false
+        s0 = laststep > 0 ? min(max_step, 2 * laststep) : max_step   # start near the last accepted step
+        a = min(1.0, s0 / norm(d)); ok = false; nct = 0; aborted = false
         local xn, fn, gXn, gYn, icnn, icsn, Pn
         for trial in 1:8
             if trial > 1 && time() - t0 + 1.2 * evaldur > budget   # the next trial would not fit
@@ -233,6 +235,7 @@ function hoptimize!(ck, S; cfg, budget, gtol, ftol, maxit, max_step, memory = 10
             push!(Sm, s); push!(Ym, y); push!(ρ, 1 / sy)
             length(Sm) > memory && (popfirst!(Sm); popfirst!(Ym); popfirst!(ρ))
         end
+        laststep = a * norm(d)
         x, f, g, icn, ics, P = xn, fn, gn, icnn, icsn, Pn
         it += 1; push!(hist, f); lastdur = time() - ts
         @printf("  it %3d: RQ = %.12f (w_h %.10f), |g| = %.2e, step %.1e, %d CTM its  (%.0f s)\n", it, f, exp(f / 2),
