@@ -10,8 +10,8 @@
 # rerun resumes. The CTM converges on ln κ (`convergence = :lnkappa`, tolerance TOL relative) with the
 # subspace oversampling at ~1.3χ (docs/status_3d.md "GPU readiness"), then POLISH more iterations so the
 # environment gradients are accurate (ln κ is stationary; the environment lags). STOP at the gradient's
-# noise floor: |g| < GTOL, or a line search that fails again right after a memory reset, or no RQ gain
-# above FTOL over the last 10 accepted steps. Then the optimum is written as OUT/eval_D<D>_chi<χ>/su_D<D>.jls
+# noise floor: |g| < GTOL, or a line search that fails again right after a memory reset and a cold
+# re-evaluation, or an RQ gain below FTOL3 (3e-9) over 3 accepted steps or FTOL over 10. Then the optimum is written as OUT/eval_D<D>_chi<χ>/su_D<D>.jls
 # (X = Xh, Y = Yh, w = ones) for `honeycomb_prod.jl` (KINDS=norm,inv,sand,mnorm, same OUT) to evaluate
 # w_h, ln F_I, ξ and the eigenvector residual resumably.
 #
@@ -122,7 +122,7 @@ function hmetric(ic, ids, pos, τ)
 end
 
 # L-BFGS ascent on the product of spheres, resumable. `S` is the checkpoint state (a NamedTuple).
-function hoptimize!(ck, S; cfg, budget, gtol, ftol, maxit, max_step, memory = 10)
+function hoptimize!(ck, S; cfg, budget, gtol, ftol, maxit, max_step, memory = 10, ftol3 = 3.0e-9)
     t0 = time()
     Xh, Yh = S.Xh, S.Yh
     nx = length(Xh)
@@ -172,8 +172,8 @@ function hoptimize!(ck, S; cfg, budget, gtol, ftol, maxit, max_step, memory = 10
     while status === :running
         norm(g) < gtol && (status = :gtol; break)
         it >= maxit && (status = :maxit; break)
-        if length(hist) > 10 && hist[end] - hist[end - 10] < ftol
-            status = :stagnant; break
+        if (length(hist) > 10 && hist[end] - hist[end - 10] < ftol) || (length(hist) > 3 && hist[end] - hist[end - 3] < ftol3)
+            status = :stagnant; break                # RQ no longer moves: the gradient's noise floor
         end
         time() - t0 + 1.1 * max(2, lasttrials) * evaldur > budget && break   # the last search's trials, warm
         ts = time()
@@ -275,6 +275,7 @@ function main()
     if S.status === :running
         status, Xo, Yo, f, gn, it = hoptimize!(ck, S; cfg, budget, gtol = parse(Float64, get(ENV, "GTOL", "1e-8")),
                                                ftol = parse(Float64, get(ENV, "FTOL", "1e-11")),
+                                               ftol3 = parse(Float64, get(ENV, "FTOL3", "3e-9")),
                                                maxit = parse(Int, get(ENV, "MAXIT", "500")),
                                                max_step = parse(Float64, get(ENV, "MAXSTEP", "0.01")))
     else
