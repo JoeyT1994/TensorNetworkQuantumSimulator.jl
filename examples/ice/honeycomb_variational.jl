@@ -11,9 +11,10 @@
 # subspace oversampling at ~1.3χ (docs/status_3d.md "GPU readiness"), then POLISH more iterations so the
 # environment gradients are accurate (ln κ is stationary; the environment lags). STOP at the gradient's
 # noise floor: |g| < GTOL, or a line search that fails again right after a memory reset and a cold
-# re-evaluation, or an RQ gain below FTOL3 (3e-9) over 3 accepted steps or FTOL over 10. Then the optimum is written as OUT/eval_D<D>_chi<χ>/su_D<D>.jls
-# (X = Xh, Y = Yh, w = ones) for `honeycomb_prod.jl` (KINDS=norm,inv,sand,mnorm, same OUT) to evaluate
-# w_h, ln F_I, ξ and the eigenvector residual resumably.
+# re-evaluation, or an RQ gain below FTOL3 (3e-9) over 3 accepted steps or FTOL over 10. Then the
+# optimum is written as OUT/eval_D<D>_chi<χ>/su_D<D>.jls (X = Xh, Y = Yh, w = ones) for
+# `honeycomb_prod.jl` (KINDS=norm,inv,sand,mnorm, same OUT) to evaluate w_h, ln F_I, ξ and the
+# eigenvector residual resumably.
 #
 # ENV: D (3), CHI (2D²), DEVICE (cpu | gpu), OUT ("ice_var"), BUDGET (s, 540), SUDIR (a directory with the
 # BP-SU su_D<D>.jls to start from; else built), GTOL (1e-8), FTOL (1e-11), MAXIT (500), TOL (2e-14),
