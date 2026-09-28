@@ -51,6 +51,8 @@ function collect_rows(dirs)
     return sort!(collect(values(rows)); by = d -> (d[:method], d[:D], d[:chi]))
 end
 
+fmtv(key, e) = key === :w ? @sprintf("%.8f", e) : @sprintf("%+.3e", e)
+
 function fitlast(xs, ys, p, k)
     n = length(xs); n < k && return NaN
     x = xs[(n - k + 1):n] .^ (-p); y = ys[(n - k + 1):n]
@@ -81,7 +83,7 @@ function report(dirs)
             ests = [fitlast(xs, ys, p, k) for p in ps for k in (3, 4) if length(xs) >= k]
             @printf("%-12s %-7s from %d D (ξ %.2f–%.2f): last %s; ξ-extrapolations %s → %.8g ± %.1g\n", m, lab, length(xs),
                     minimum(xs), maximum(xs), key === :w ? @sprintf("%.10f", ys[end]) : @sprintf("%+.4e", ys[end]),
-                    join([@sprintf(key === :w ? "%.8f" : "%+.3e", e) for e in ests], ", "),
+                    join([fmtv(key, e) for e in ests], ", "),
                     sum(ests) / length(ests), (maximum(ests) - minimum(ests)) / 2)
         end
     end
