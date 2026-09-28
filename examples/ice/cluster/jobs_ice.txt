@@ -1,0 +1,22 @@
+# The first ice campaign (docs/status_3d.md, docs/roadmap_3d.md). One line per GPU task:
+#   MODE D CHI KINDS CHUNK
+#   prod — BP simple-update state + the networks in KINDS (norm, inv, sand, mnorm) → prod/summary.csv, residual.csv
+#   var  — variational optimum from the BP-SU state (KINDS ignored: "-"), then norm,inv,sand,mnorm at the same χ
+# Kinds of one (D, χ) may be separate tasks (the driver joins them). Memory (cost_table.md): the sandwich at
+# χ = D² fits an 80-GB H100 to D = 11, an H200 at D = 12; ⟨Mψ|Mψ⟩ (raw bond 4D²) is 4× the sandwich.
+# BP simple update, χ = D²
+prod 9  81  norm,inv 5
+prod 9  81  sand 5
+prod 10 100 norm,inv 5
+prod 10 100 sand 3
+prod 11 121 norm,inv 3
+prod 11 121 sand 2
+# the eigenvector residual of the BP-SU states (≥ 88 GB from D = 10: H200)
+prod 7  49  mnorm 2
+prod 8  64  mnorm 2
+prod 9  81  mnorm 2
+# variational optima, χ = 2D²
+var  5  50  - 5
+var  6  72  - 5
+var  7  98  - 3
+var  8  128 - 2

@@ -1,0 +1,4 @@
+# Smoke test (~5 minutes on one GPU): the pipeline end to end at small D; compare with
+# examples/ice/results_honeycomb.csv (D = 4, χ = 16: w_h 1.5073816, ln F_I −5.10e-6) and residual −2.38e-5.
+prod 4 16 norm,inv,sand,mnorm 10
+var  3 18 - 10

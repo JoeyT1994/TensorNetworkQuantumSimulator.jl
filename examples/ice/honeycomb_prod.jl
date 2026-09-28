@@ -40,7 +40,8 @@ atomic_serialize(f, x) = (serialize(f * ".tmp", x); mv(f * ".tmp", f; force = tr
 BLAS.set_num_threads(parse(Int, get(ENV, "BLASN", "4")))
 const D = parse(Int, get(ENV, "D", "4")); const χ = parse(Int, get(ENV, "CHI", string(D^2)))
 const KINDS = Symbol.(split(get(ENV, "KINDS", "norm,inv,sand"), ","))
-const CHUNK = parse(Int, get(ENV, "CHUNK", "5")); const BUDGET = parse(Float64, get(ENV, "BUDGET", "540"))
+const CHUNK = parse(Int, get(ENV, "CHUNK", "5"))
+const BUDGET = parse(Float64, get(ENV, "BUDGET", "540")) - parse(Float64, get(ENV, "STARTUP_S", "90"))   # minus load time
 const CONV = Symbol(get(ENV, "CONV", "lnkappa"))
 const TOL = parse(Float64, get(ENV, "TOL", CONV === :lnkappa ? "2e-14" : "1e-9")); const MAXIT = parse(Int, get(ENV, "MAXIT", "600"))
 const MINITS = parse(Int, get(ENV, "MINITS", "15"))           # no convergence before (the seed's rank still grows)
