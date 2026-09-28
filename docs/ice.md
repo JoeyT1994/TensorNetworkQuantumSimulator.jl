@@ -235,10 +235,63 @@ consistent with the gapless (Coulomb-phase) boundary state.
 50–100 s, 300–470 s. ~χ³r² ≈ D¹⁰. The D = 8 sandwich does not fit ten-minute runs here; the CUDA path
 (`DEVICE=gpu`) reproduces the CPU to 13 digits.
 
+## How far BP simple update is from the eigenvector — and variational states (2026-09-28)
+
+**The eigenvector residual.** For A = I M (symmetric), Cauchy–Schwarz gives, per cell,
+
+    ln f = 2 RQ(A) − RQ(A²) = 2 ln κ⟨Iψ|M|ψ⟩ − ln κ⟨Mψ|Mψ⟩ − ln κ⟨ψ|ψ⟩ ≤ 0,
+
+0 only for an eigenvector: the TRUE log-fidelity between one exact bilayer applied to the state and its
+truncation back. ⟨Mψ|Mψ⟩ = ⟨ψ|A²|ψ⟩ (Mᵀ M = A²) is the `:mnorm` network (raw bond 4D²). BP simple
+update (χ = D²):
+
+| D | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|
+| ln f per cell | −8.26e-5 | −2.38e-5 | −3.70e-5 | −1.15e-5 | −1.12e-5 | (running) |
+| BP's discarded weight per bilayer | 4.7e-7 | 1.2e-10 | 4.3e-11 | 7.6e-12 | 3.2e-13 | 1.5e-14 |
+
+BP's own measure of what the truncation throws away is wrong by 2 to 9 orders of magnitude and the true
+residual stalls near 1e-5 per cell from D = 6 — the BP (Bethe) metric cannot see the loop (ice-rule)
+correlations it truncates. That is why w_h(BP-SU) creeps up with D far below the literature.
+
+**Variational states** (`honeycomb_variational.jl`, on the local GPU): L-BFGS on RQ with the CTM
+gradient and the norm-metric preconditioner, started from the BP-SU state, optimised at χ_opt and
+evaluated at χ_opt and 2χ_opt (`results_honeycomb.csv`):
+
+| D | χ | w_h | ln F_I per cell | ξ | ln f per cell | against BP-SU (same D) |
+|---|---|---|---|---|---|---|
+| 3 | 36 (opt. 18) | 1.5074106 | −4.250e-6 | 2.16 | −3.19e-5 | w 1.5072791, F −7.06e-6, ξ 1.31, f −8.3e-5 |
+| 4 | 64 (opt. 32) | 1.5074547 | −5.404e-6 | 4.80 | −1.99e-6 | w 1.5073835, F −5.17e-6, ξ 1.97, f −2.4e-5 |
+| 5 | 64 (opt. 32) | 1.5074530 | −3.045e-6 | 4.40 | −3.39e-6 | w 1.5073588, F −4.74e-6, ξ 2.04, f −3.7e-5 |
+
+References: cell PEPS variational 1.5074448 (D = 3, a richer ansatz at equal D); Xu–Lin–Zhang's raw
+D = 7, χ = 150: w_h 1.5074584 (their w_c 1.5074533); Kolafa's MC 1.5074674(38).
+
+* The variational states are 10× closer to an eigenvector (D = 4: −2.0e-6 against −2.4e-5) and twice
+  as correlated (ξ 4.4–4.8 against ~2): BP-SU underestimates the boundary state's correlations, as a
+  Bethe approximation should.
+* w_h: D = 4 reaches 1.5074547 at χ = 64 — 3.7e-6 below Xu–Lin–Zhang's D = 7, χ = 150 value, and still
+  rising with χ (+8e-7 from χ = 32 to 64). D = 5 is NOT its optimum: optimised at χ = 32, below the
+  sandwich's raw bond 2D² = 50, its gradient was too noisy and it stalled below D = 4. The variational
+  optimum at D ≥ 5 needs χ_opt ≥ 2D² — cluster work (docs/status_3d.md).
+* ln F_I is converged in χ at every variational point (≤ 3e-8 from χ_opt to 2χ_opt).
+* Every "ln f > 0" at χ_opt is ⟨Mψ|Mψ⟩ not converged in χ (raw bond 4D² > χ); at 2χ_opt it is negative.
+
+**Verdict on ln F_I ≈ −5e-6 per cell.** The sign and the order of magnitude survive: every state —
+BP-SU at D = 4–9 (−4.5 … −5.2e-6) and variational at D = 3–5 (−3.0 … −5.4e-6) — has a clearly
+nonzero inversion asymmetry, i.e. S_h − S_c ≈ 1.5–2.7e-6 per molecule by S_h − S_c ≈ −ln F_I. The
+specific value −5e-6 does not: across the variational states it scatters by ±1.2e-6 without a trend,
+F_I being first order in the state error and the D ≥ 4 optima noise-limited (the gradient's floor at
+χ_opt). The number that would settle the question needs converged optima at D = 5–8 with χ_opt ≥ 2D²
+and a ξ-extrapolation of both w_h and F_I — the first cluster campaign.
+
 ## What it needs
 
-* D ≥ 8 with χ ≥ D², on the GPU cluster: `honeycomb_prod.jl` as a job array over (D, χ). Then
-  the ξ-extrapolation of w_h and ln F_I. Z2 block sparsity is available (U(1) is not, above).
+* The first cluster campaign (`examples/ice/cluster/`): variational optima at D = 5–8 with χ_opt ≥ 2D²,
+  evaluated at 2χ_opt; BP-SU D = 9–11 and the residual for the record; then the ξ-extrapolation of w_h
+  and ln F_I. Z2 block sparsity is available (U(1) is not, above).
+* A better optimiser: gradients accurate below the current floor (|g| ~ 1e-4–1e-3 at χ_opt) — implicit
+  (fixed-point) differentiation of the CTM environment, and χ_opt ≥ 2D² throughout.
 * A better hexagonal estimator at finite D: ln σ_max from two independent states,
   max ⟨L|M|R⟩/(|L||R|) (single-layer sandwich, no I M negative-eigenvalue penalty), or Xu–Lin–Zhang's
   M Mᵀ (bond 4D²).

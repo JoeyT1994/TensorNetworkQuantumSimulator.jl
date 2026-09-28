@@ -8,6 +8,49 @@ Where this can go — the literature, the levers ranked, the targets ranked, and
 
 ---
 
+## Morning summary — overnight 2026-09-27/28 (local machine only; nothing pushed)
+
+Detail: docs/ice.md, "How far BP simple update is from the eigenvector — and variational states";
+numbers: `examples/ice/results_honeycomb.csv`; run everything with `julia examples/ice/analyse_honeycomb.jl`.
+
+1. **BP simple update is ~1e-5 per cell from an eigenvector, whatever BP says.** The true truncation
+   error, ln f = 2 RQ(A) − RQ(A²) per cell (A = I M; 0 only for an eigenvector; the new `:mnorm`
+   network), for D = 3–8 at χ = D²: −8.3e-5, −2.4e-5, −3.7e-5, −1.15e-5, −1.12e-5, D = 8 (running) — against BP's
+   own discarded weight per bilayer of 5e-7 … 1.5e-14. The Bethe metric misjudges the loop (ice-rule)
+   correlations it truncates by up to nine orders of magnitude; that is why w_h(BP-SU) creeps.
+2. **Variational states (GPU, resumable, `honeycomb_variational.jl`)**, from BP-SU, at the practical
+   noise floor:
+
+   | D | w_h | ln F_I per cell | ξ | ln f per cell |
+   |---|---|---|---|---|
+   | 3 | 1.5074106 (BP-SU 1.5072791) | −4.25e-6 (BP-SU −7.06e-6) | 2.16 (1.31) | −3.2e-5 (−8.3e-5) |
+   | 4 | 1.5074547 (1.5073835) | −5.40e-6 (−5.17e-6) | 4.80 (1.97) | −2.0e-6 (−2.4e-5) |
+   | 5 | 1.5074530 (1.5073588) — not the optimum | −3.04e-6 (−4.74e-6) | 4.40 (2.04) | −3.4e-6 (−3.7e-5) |
+
+   (χ = 2χ_opt; cell PEPS D = 3: 1.5074448; Xu–Lin–Zhang raw D = 7, χ = 150: 1.5074584; Kolafa
+   1.5074674(38).) The variational states are 10× closer to an eigenvector and twice as correlated. D = 5
+   stalled below D = 4: optimised at χ = 32 < 2D², its gradient was too noisy — the reason the campaign
+   must optimise at χ ≥ 2D².
+3. **Verdict on ln F_I ≈ −5e-6 per cell: survives in sign and order of magnitude, not in value.** Every
+   state — BP-SU D = 4–9 (−4.5 … −5.2e-6; D = 9: −4.48e-6) and variational D = 3–5 (−3.0 … −5.4e-6) — has a
+   nonzero inversion asymmetry: S_h − S_c ≈ 1.5–2.7e-6 per molecule. But the variational values scatter
+   ±1.2e-6 without a trend (F_I is first order in the state error; the D ≥ 4 optima are noise-limited).
+   Settling it needs converged optima at D = 5–8 with χ_opt ≥ 2D², then a ξ-extrapolation.
+4. **Cluster kit ready** (`examples/ice/cluster/`): pinned environment (Project + Manifest, repo by relative
+   path), `setup.sh`, `ice_array.slurm` (job array, resume, self-requeue, dry-run mode), `jobs_ice.txt`
+   (13 tasks) and `jobs_smoke.txt`, `cost_table.md`, README; analysis `examples/ice/analyse_honeycomb.jl`.
+   Tested locally: dry runs of every task type, and both smoke tasks through the real script on the local
+   GPU (D = 4 reproduced exactly). Before submitting, update `jobs_ice.txt`: variational χ_opt = 2D² (the
+   list has it) — and expect ~1 accepted step per 10 minutes only on this card; on an H100 far more.
+5. **Engineering found overnight** (all committed): the optimiser's step budget must use warm evaluation
+   times (the first evaluation of a GPU run compiles for ~130 s); steps ≤ 0.01 and CTM ≤ 100 iterations
+   per evaluation (a 0.05 step left the CTM unconverged after 400); start each line search near the last
+   accepted step; stop when 3 steps gain < 1e-7 in RQ; the production driver's chunk must shrink to fit
+   its budget; two GPU processes on the 8-GB card stall each other (CUDA.jl's allocation retries) — one
+   at a time.
+
+---
+
 ## Ground rules (the user's standing instructions)
 
 * **Commit on FixesV2; never push** — the user pushes. Commit messages end with

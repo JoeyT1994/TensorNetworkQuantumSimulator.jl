@@ -23,4 +23,4 @@ D,chi,method,chi_opt,w_h,lnF_I,xi,lnf,note
 4,32,variational,32,1.50745395200,-5.423765e-06,4.48237,+2.9928e-06,lnf chi-unconverged
 4,64,variational,32,1.50745474151,-5.404187e-06,4.80276,-1.9908e-06,35 its stagnant
 5,32,variational,32,1.50745201923,-3.072615e-06,4.11921,+1.7442e-06,28 its stagnant (not the D=5 optimum); lnf chi-unconverged
-5,64,variational,32,1.50745302528,-3.044507e-06,4.40076,,
+5,64,variational,32,1.50745302528,-3.044507e-06,4.40076,-3.3857e-06,
