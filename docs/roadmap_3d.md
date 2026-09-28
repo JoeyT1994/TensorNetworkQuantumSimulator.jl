@@ -5,6 +5,12 @@ synthesis of a literature survey (methods, targets; arXiv IDs checked against ab
 survey, Xu–Lin–Zhang's Table 3 checked directly), an inventory of this library, and what the ice and
 Yang–Lee campaigns taught us. Items marked **(ours)** are our own reasoning, not established results.*
 
+*Revised 2026-09-28 by [`campaign_3d.md`](campaign_3d.md). It covers the precision actually reachable (D ≈ 10
+at χ = 2D² is the single-GPU ceiling for the ice sandwich; w_h is most likely good to 6–7 d.p., not 8), the
+ice gap measured directly with gates before any cluster time, and the targets re-ranked by whether their
+boundary states are gapped. Where the two documents differ, campaign_3d.md supersedes §4.1's "What settles
+it" and §5.*
+
 ---
 
 ## 1. Where we stand, in one paragraph
@@ -108,6 +114,9 @@ limitation); direct 3D CTMRG beyond teaching and cross-checks; 3D universal expo
   device-agnostic, restartable); L1 makes D = 12 a few GPU-days. Checks: S_sym (inversion-symmetric
   restriction, the other half of the Cauchy–Schwarz relation), the variational w_h, stacking-disordered
   mixtures. Competition: the XLZ group names other ice phases as their next step.
+  *(2026-09-28: revised. The sandwich at χ = 2D² does not fit one GPU beyond D ≈ 10, so absolute
+  entropies to 3e-7 are unlikely. The gap is to be measured directly — −ln F_I and 2(S_h − S_sym) — after
+  local gates. See campaign_3d.md §2–3.)*
 
 ### 4.2 The 3D Yang–Lee edge: the first lattice determination of its universal location
 
@@ -156,7 +165,8 @@ HOTRG/MC.
    option; Z2 blocks for the ice networks; a Slurm job-array wrapper around `honeycomb_prod.jl` (one (D, χ,
    kind) per GPU). Ask the user before the first cluster run.
 3. **First campaign (cluster).** Ice D = 8–14, χ ∈ {D², 1.5D², 2D²}, all three networks + S_sym;
-   ξ-collapse; paper-grade error budget for S_h, S_c and the gap.
+   ξ-collapse; paper-grade error budget for S_h, S_c and the gap. *(2026-09-28: now D = 5–10 after gates
+   G0–G2, with the interface-tension target alongside; see campaign_3d.md §3.4–5.)*
 4. **Second campaign.** The Yang–Lee edge line with the fold solver at D = 4–12 (real signed
    formulation if it holds up), monomer–dimer validation; then 4.5 or 4.3.
 

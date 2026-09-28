@@ -6,6 +6,15 @@ dated; where a number lives in another doc, that doc has the detail.*
 Where this can go — the literature, the levers ranked, the targets ranked, and a sequence:
 [`roadmap_3d.md`](roadmap_3d.md).
 
+**What precision is reachable, and what to aim at (2026-09-28): [`campaign_3d.md`](campaign_3d.md).**
+- Ice w_h to 8 d.p. is out of reach: D ≈ 10 at χ = 2D² is the single-GPU ceiling, and convergence is
+  algebraic in ξ.
+- The Ih–Ic gap is to be measured directly: −ln F_I, and 2(S_h − S_sym) from an inversion-symmetric ansatz.
+- Local gates come first: G0 the symmetric ansatz, G1 larger exact tori (they give ~3e-7 against the PEPS's
+  ~2e-6), G2 implicit gradients.
+- Targets re-ranked: ice, the Yang–Lee edge location, and the 3D Ising interface tension as the ± fixed-point
+  overlap (new, low risk), then gauge–Higgs and complex-field Potts.
+
 ---
 
 ## Morning summary — overnight 2026-09-27/28 (local machine only; nothing pushed)
@@ -160,8 +169,13 @@ outputs and every checkpoint stay in the old scratchpad (`…\scratchpad\ice\`):
 its CTM checkpoints at χ_opt and 2χ_opt, `summary.csv`, `residual.csv`). Any of it resumes with the
 committed drivers (same OUT). Not done locally: BP-SU D = 9 sandwich; variational D = 6+.
 
-**Next.** (1) The first cluster campaign (`examples/ice/cluster/jobs_ice.txt`): variational optima at
-D = 5–8 with χ_opt = 2D², evaluated at 2χ_opt; BP-SU D = 9–11 and residuals for the record; (2) the
+**Next — revised 2026-09-28 ([`campaign_3d.md`](campaign_3d.md) §3.4).** Before any cluster time, the local
+gates: G0, an inversion-symmetric ansatz for 2(S_h − S_sym) against −ln F_I at D = 2–4; G1, exact tori
+4 × 5 and 4 × 6, and a zero-flux-sector product for 5 × 6 and 4 × 8, to resolve the torus ~3e-7 against the
+PEPS ~2e-6; G2, implicit gradients. Then the list below, with D up to 10.
+
+**Next (as of the morning of 2026-09-28).** (1) The first cluster campaign
+(`examples/ice/cluster/jobs_ice.txt`): variational optima at D = 5–8 with χ_opt = 2D², evaluated at 2χ_opt; BP-SU D = 9–11 and residuals for the record; (2) the
 ξ-extrapolation of w_h and ln F_I (`analyse_honeycomb.jl`); (3) S_sym at the same D (the inversion-
 symmetric restriction) as the independent check of the gap; (4) a better optimiser (implicit
 differentiation of the CTM fixed point for gradients below the current ~1e-4–1e-3 floor); (5) Z2 block
