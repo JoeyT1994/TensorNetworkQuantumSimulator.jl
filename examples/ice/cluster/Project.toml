@@ -1,0 +1,10 @@
+[deps]
+Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+TensorNetworkQuantumSimulator = "4de3b72a-362e-43dd-83ff-3f381eda9f9c"
+
+[sources]
+TensorNetworkQuantumSimulator = {path = "../../.."}
+
+[compat]
+julia = "1.11"

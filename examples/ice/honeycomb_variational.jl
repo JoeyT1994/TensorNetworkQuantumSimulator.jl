@@ -146,13 +146,16 @@ function hoptimize!(ck, S; cfg, budget, gtol, ftol, maxit, max_step, memory = 10
     x = pack(Xh, Yh); f = S.f; g = S.g; it = S.it; hist = S.hist; Sm = S.Sm; Ym = S.Ym; ρ = S.ρ
     P = get(S, :P, nothing); usemetric = cfg.precondition
     icn = isnothing(S.icn) ? nothing : vdev(S.icn); ics = isnothing(S.ics) ? nothing : vdev(S.ics)
-    nfail = S.nfail; status = S.status; lastdur = S.lastdur
+    nfail = S.nfail; status = S.status; lastdur = S.lastdur; evaldur = get(S, :evaldur, 0.0)
     save() = vatomic(ck, (; Xh = unpack(x)[1], Yh = unpack(x)[2], f, g, it, hist, Sm, Ym, ρ, icn = vhost(icn),
-                          ics = vhost(ics), nfail, status, lastdur, χ = cfg.χ, P))
+                          ics = vhost(ics), nfail, status, lastdur, χ = cfg.χ, P, evaldur))
     if isnan(f)                                     # the first evaluation (BP-SU state)
+        te = time()
         f, gX, gY, icn, ics, _, P = hevaluate(unpack(x)..., ix, cfg; metric = usemetric)
+        evaldur = 0.5 * (time() - te)                 # a cold evaluation, with compilation: overcounts
         g = tang(pack(gX, gY), x); push!(hist, f)
         @printf("  start RQ = %.12f (w_h %.10f), |g| = %.2e  (%.0f s)\n", f, exp(f / 2), norm(g), time() - t0)
+        flush(stdout)
         save()
     end
     while status === :running
@@ -161,7 +164,7 @@ function hoptimize!(ck, S; cfg, budget, gtol, ftol, maxit, max_step, memory = 10
         if length(hist) > 10 && hist[end] - hist[end - 10] < ftol
             status = :stagnant; break
         end
-        time() - t0 + 1.5 * lastdur > budget && break
+        time() - t0 + max(1.5 * lastdur, 2.0 * evaldur) > budget && break   # a step is ≥ 2 evaluations
         ts = time()
         q = copy(g); α = zeros(length(Sm))           # two-loop recursion on −f
         for i in length(Sm):-1:1
@@ -177,16 +180,24 @@ function hoptimize!(ck, S; cfg, budget, gtol, ftol, maxit, max_step, memory = 10
             empty!(Sm); empty!(Ym); empty!(ρ); d = tang(precond(g, P), x)
             dot(d, g) > 0 || (d = g)
         end
-        a = min(1.0, max_step / norm(d)); ok = false; nct = 0
+        a = min(1.0, max_step / norm(d)); ok = false; nct = 0; aborted = false
         local xn, fn, gXn, gYn, icnn, icsn, Pn
-        for _ in 1:8
+        for trial in 1:8
+            if trial > 1 && time() - t0 + 1.2 * evaldur > budget   # the next trial would not fit
+                aborted = true; break
+            end
             xn = renorm(x + a * d)
+            te = time()
             fn, gXn, gYn, icnn, icsn, nc, Pn = hevaluate(unpack(xn)..., ix, cfg; initn = icn, inits = ics, metric = usemetric)
+            evaldur = time() - te; save()             # the timing survives a kill mid-search
             nct += nc
             if fn >= f + 1.0e-4 * a * dot(d, g)
                 ok = true; break
             end
             a /= 2
+        end
+        if aborted                                   # out of budget inside the line search: resume later
+            save(); break
         end
         if !ok                                       # consecutive failures: reset → cold restart → the floor
             nfail += 1
