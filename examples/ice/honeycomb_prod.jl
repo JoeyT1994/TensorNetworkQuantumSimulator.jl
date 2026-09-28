@@ -73,19 +73,28 @@ function run_prod()
         its = isnothing(prev) ? 0 : prev.its
         conv = false; lnκ = NaN; chg = NaN
         sperit = isnothing(prev) ? 0.0 : get(prev, :sperit, 0.0)
-        lastdur = CHUNK * sperit                                   # the next chunk's expected length
-        while its < MAXIT && time() - t0 + lastdur < BUDGET
+        ran = false
+        while its < MAXIT
+            # the chunk shrinks to what fits the budget; the first chunk of a run always takes ≥ 1
+            # iteration (a stale s/iteration from an older, slower run must not stall a job forever)
+            left = BUDGET - (time() - t0)
+            chunk = sperit > 0 ? min(CHUNK, floor(Int, left / sperit)) : CHUNK
+            if chunk < 1
+                ran && break
+                chunk = 1
+            end
+            ran = true
             tc = time()
             empty!(T.CTM_SVD_STATS)
             ic = with_logger(NullLogger()) do
                 # miniter = 1 on a resumed chunk: `update` never reports convergence before miniter
                 # iterations, so CHUNK = 1 with the default 2 would never converge
                 T.update(T.InfiniteCTM2D(site, legs, χ; init = ic, boundary = sv, svd_oversample = OVERSAMPLE);
-                         tolerance = TOL, maxiter = CHUNK, miniter = isnothing(ic) ? 2 : 1, convergence = CONV)
+                         tolerance = TOL, maxiter = chunk, miniter = isnothing(ic) ? 2 : 1, convergence = CONV)
             end
             st = ic.stats[]
             its += st.iterations; conv = st.converged && its >= MINITS; chg = st.change
-            lastdur = time() - tc; sperit = lastdur / st.iterations
+            sperit = (time() - tc) / st.iterations
             lnκ = T.cvm_freenergy(ic)
             atomic_serialize(ck, (; ic = tohost(ic), its, converged = conv, lnk = lnκ, change = chg, sperit))
             # dense pairs: the subspace gate declined (small n — fine) or the subspace SVD bailed (flag)
