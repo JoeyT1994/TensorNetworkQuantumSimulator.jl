@@ -15,6 +15,12 @@ Where this can go — the literature, the levers ranked, the targets ranked, and
 - Targets re-ranked: ice, the Yang–Lee edge location, and the 3D Ising interface tension as the ± fixed-point
   overlap (new, low risk), then gauge–Higgs and complex-field Potts.
 
+**3D three-state Potts at zero field (2026-09-28):** [`boundary_peps.md`](boundary_peps.md), "3D three-state
+Potts". A two-branch scan (ordered and disordered continuations, `examples/potts3d_boundary_peps.jl`) gives,
+at D = 3, β_t = 0.550408 (MC 0.550565) and latent heat Q = 0.1891 (MC 0.16160; the tensor product
+variational approach 0.228). D = 4 on the GPU is running. This is the coexistence solver target 4 asks for,
+and the real-field anchor of target 5.
+
 ---
 
 ## Morning summary — overnight 2026-09-27/28 (local machine only; nothing pushed)

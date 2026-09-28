@@ -407,6 +407,66 @@ interrupted and restarted from the fixed-spin seed): |g| = 1.9e-4 at the cap.
 * Near β_c the optimiser, not the contraction, is the limit: D = 3 needed more than 150
   iterations from β = 0.24 down, as Vanderstraeten et al. found for D = 4.
 
+**Converged near β_c (2026-09-28).** The same script with the preconditioned L-BFGS and adaptive
+CTMRG tolerance, the cap at 1000, every point to |g| < 1e-6 except β = 0.2217 (6e-6 at D = 3, 8e-6
+at D = 4) and, at D = 4, 0.221 (9e-6).
+The first β climbs D = 2 → 3 (→ 4). D = 4, χ = 48 ran on the GPU. m − m_MC:
+
+| β | D = 3, χ = 24 | D = 4, χ = 48 |
+|---|---|---|
+| 0.24 | 1.4e-5 | 1.2e-5 |
+| 0.235 | 1.9e-5 | 2.0e-5 |
+| 0.23 | 3.0e-5 | 3.2e-5 |
+| 0.2275 | 5.0e-5 | 3.1e-5 |
+| 0.225 | 8.9e-5 | 4.2e-5 |
+| 0.2235 | 3.1e-4 | 1.4e-4 |
+| 0.2225 | 1.5e-3 | 4.3e-4 |
+| 0.2217 | m = 0.144 against 0.105 | m = 0.126 |
+| 0.221 | m = 5e-6 | m = 2.8e-4 |
+
+f(D = 4) ≥ f(D = 3) at every β. Both transitions lie between β = 0.221 and 0.2217 (β_c = 0.22165).
+Per point: D = 3 on 8 CPU threads 7–67 min, D = 4 on the A6000 7–165 min, the longest at β_c.
+
+## 3D three-state Potts: the first-order transition (2026-09-28)
+
+`potts3d_site(β; q)` builds the cubic q-state Potts site, H = −J Σ δ(s_i, s_j): the q-state delta
+with the symmetric √W on each leg, W = exp(βJ δ) = (e^{βJ} − 1) I + 𝟙𝟙ᵀ. It returns two impurities:
+⟨δ(s, 1)⟩ for the order parameter m = (q⟨δ⟩ − 1)/(q − 1), and the exact ∂site/∂β, whose ratio is
+∂ ln κ/∂β at the variational optimum (Hellmann–Feynman). That gives the energy per site e with no
+finite differences. Checks: at q = 2 against Ising at β/2 (ln κ_P = ln κ_I + 3β/2), 4e-15 in ln κ and
+3e-10 in m; the energy impurity against a 4-point difference of f(A; β) at fixed A, 3e-12.
+
+`examples/potts3d_boundary_peps.jl` follows one branch per run, each point warm-started from the
+last:
+
+* the ordered branch, from a fixed-spin seed at high β, downwards;
+* the disordered branch, from the Z₃-symmetric uniform seed at low β, upwards.
+
+Each branch follows its metastable continuation until it leaves its phase. Where the two free
+energies cross is β_t(D); the jumps in e and m there are the latent heat and the order-parameter
+discontinuity, all at infinite size. Monte Carlo has to tunnel between the phases instead.
+
+| | β_t | latent heat Q | m jump |
+|---|---|---|---|
+| Monte Carlo, Janke & Villanova, Nucl. Phys. B 489, 679 (1997) | 0.550565(10) | 0.16160(47) | |
+| tensor product variational approach, Gendiar & Nishino, cond-mat/0102425 | 0.5496 (−0.18%) | 0.228 (+41%) | |
+| boundary PEPS D = 3, χ = 27, grid 0.001 | 0.550370 | 0.1792 | 0.401 |
+| boundary PEPS D = 3, χ = 27, grid 0.0002 | **0.550408 (−0.029%)** | **0.1891 (+17%)** | 0.415 |
+
+Q is interpolated linearly in β between grid points. The ordered branch's energy is steep near β_t
+(e from −1.7315 to −1.7991 over 0.550–0.551), so the coarse grid understated Q; the fine grid
+(0.5500–0.5512) is the number to quote.
+
+* The metastable window at D = 3: the ordered branch survives down to β = 0.550 (m = 0.37) and
+  collapses at 0.549; the disordered branch survives up to 0.5525 and orders at 0.555.
+* The disordered branch orders into ANY of the three states. Ordering into state 2 or 3 reads
+  m = −m₀/2 on the state-1 impurity (β = 0.555: m = −0.277 = −0.554/2, f equal to the ordered
+  branch's to 1e-9), so the branch test is on |m|.
+* D = 4, χ = 48 (GPU): the ordered branch, per point, 1.0–1.8 h so far; f exceeds D = 3's by
+  9e-7 at β = 0.565 and 5e-6 at 0.555. The disordered branch's first point, from the vacuum, took 4 h
+  and hit the 1000-iteration cap at |g| = 1.3e-6, at the gradient's noise floor. Its later points
+  warm-start. RESULTS PENDING.
+
 ## Costs
 
 * D = 2, χ = 16: one evaluation (two 2D CTMRG runs plus four one-site environments) is ~0.5 s
