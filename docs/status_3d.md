@@ -152,21 +152,20 @@ The question: is Onsager's S_h ≥ S_c strict? Kolafa's MC and Xu–Lin–Zhang'
 states) and needs χ ≥ D². BP simple update is not variational; a variational pass from it recovers
 most of the w_h gap at small D (`honeycomb_variational.jl`).
 
-**Data at handoff.** Nothing is running. D = 9 ⟨ψ|ψ⟩ is converged (ln κ = −80.9126915037528, CPU);
-the D = 8 sandwich converged on the local GPU (w_h above). Outputs and every checkpoint are in
-`…\scratchpad\ice\prod\` (`summary.csv`, `results.csv`, `ctm_D<D>_chi<χ>_<kind>.jls`,
-`su_D<D>.jls` for D = 6–10, 12, lane logs). Partial: D = 9 ⟨Iψ|ψ⟩ at a few iterations (CPU checkpoint);
-D = 9 ⟨Iψ|M|ψ⟩ not started — both fit the local GPU now (`DEVICE=gpu`). Resume any of them
-with the committed driver:
+**Data (2026-09-28 morning).** All numbers are in `examples/ice/results_honeycomb.csv`; the raw
+outputs and every checkpoint stay in the old scratchpad (`…\scratchpad\ice\`):
+`prod\` — BP-SU states `su_D<D>.jls` (D = 3–10, 12), CTM checkpoints `ctm_D<D>_chi<χ>_<kind>.jls`,
+`summary.csv`, `residual.csv`, lane logs; `var\` — optimiser checkpoints `var_D<D>_chi<χ>.jls`
+(D = 3 at χ 18, 4 at 32, 5 at 32 and a partial 5 at 50) and per optimum `eval_D<D>_chi<χ>\` (the state,
+its CTM checkpoints at χ_opt and 2χ_opt, `summary.csv`, `residual.csv`). Any of it resumes with the
+committed drivers (same OUT). Not done locally: BP-SU D = 9 sandwich; variational D = 6+.
 
-    OUT=<that prod dir> D=9 CHI=81 KINDS=inv CHUNK=2 DEVICE=gpu \
-      julia --project=<env> examples/ice/honeycomb_prod.jl       # or examples/ice/honeycomb_lane.sh
-
-**Next.** (1) D = 8–12 (χ ≥ D², and 1.5D² checks) on GPUs — `honeycomb_prod.jl` with `DEVICE=gpu` as a job
-array over (D, χ, kind); CUDA path validated on the local RTX 3070 (identical to 13 digits); (2) the
-ξ-extrapolation of w_h and ln F_I (finite-correlation-length scaling; the boundary state is gapless);
-(3) S_sym at the same D (the inversion-symmetric restriction) as the independent check of the gap;
-(4) Z2 block sparsity in the CTM.
+**Next.** (1) The first cluster campaign (`examples/ice/cluster/jobs_ice.txt`): variational optima at
+D = 5–8 with χ_opt = 2D², evaluated at 2χ_opt; BP-SU D = 9–11 and residuals for the record; (2) the
+ξ-extrapolation of w_h and ln F_I (`analyse_honeycomb.jl`); (3) S_sym at the same D (the inversion-
+symmetric restriction) as the independent check of the gap; (4) a better optimiser (implicit
+differentiation of the CTM fixed point for gradients below the current ~1e-4–1e-3 floor); (5) Z2 block
+sparsity in the CTM.
 
 ---
 
