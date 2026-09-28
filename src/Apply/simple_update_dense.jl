@@ -13,11 +13,11 @@ function _scratch_slot(own::AbstractArray, allocator)
     return TO.tensoralloc(ttype, (length(own),), Val(true), allocator)
 end
 
-# cuTENSOR 2.7 rejects some operations on more than 2^31 elements whose last extent has no small
-# factor (e.g. 983), so outputs are written in blocks along their last axis that stay below that.
+# cuTENSOR 2.7 rejects permutations from 2^30 elements (contractions from 2^31) when the last extent
+# has no small factor (e.g. 317, 983), so outputs are written in blocks below 2^30 along that axis.
 function _blocks(dst)
     n = size(dst, ndims(dst))
-    return Iterators.partition(1:n, max(1, typemax(Int32) ÷ (length(dst) ÷ n)))
+    return Iterators.partition(1:n, max(1, (2^30 - 1) ÷ (length(dst) ÷ n)))
 end
 
 function _step!(dst, A, pA, B, pB, pAB, backend, allocator)
