@@ -200,11 +200,14 @@ value is 0; ln κ jumping by O(1)). Seeding every state leg with e₁, the domin
 | 5 | 50 | 2.037 | 1.5073588 | −4.738e-6 |
 | 6 | 36 | 2.359 | 1.5074139 | −5.190e-6 |
 | 7 | 49 | 2.396 | 1.5074191 | −4.740e-6 |
-| 8 | 64 | 2.509 | (not run: the sandwich) | −4.840e-6 |
+| 8 | 64 | 2.509 | 1.5074212 (sandwich on the local GPU) | −4.840e-6 |
 
-* w_h rises with D except at D = 5 (SU is not variational), and is 4e-5 below Xu–Lin–Zhang and Kolafa
-  at D = 7 — still below the cell-PEPS variational D = 3 value (1.5074448). A variational pass from the
-  BP-SU state recovers most of the gap at small D (D = 2: 1.5071868 → 1.5073761; D = 3: → 1.5074106,
+* w_h rises with D except at D = 5 (SU is not variational), and is 3.7e-5 below Xu–Lin–Zhang and
+  4.6e-5 below Kolafa at D = 8 — still below the cell-PEPS variational D = 3 value (1.5074448). The
+  increments shrink (+5.2e-6 from D = 6 to 7, +2.1e-6 from 7 to 8) far faster than the gap: at the D
+  reachable, BP simple update will not deliver the absolute w_h — that needs the variational refinement
+  (or D well beyond 12). Its ln F_I is flat; whether the BP bias cancels in F_I is the open question.
+  A variational pass from the BP-SU state recovers most of the gap at small D (D = 2: 1.5071868 → 1.5073761; D = 3: → 1.5074106,
   not fully converged), so the finite-D error is the truncation's BP metric, not the ansatz.
 * ln F_I settles into −4.7…−5.2e-6 per cell from D = 4 to 8, i.e. S_h − S_c ≈ 2.4–2.6e-6 per molecule if
   it survives D → ∞ — nonzero, and at the size of Kolafa's error bars. Not yet decisive: F_I is first

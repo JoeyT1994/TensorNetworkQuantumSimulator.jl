@@ -13,7 +13,8 @@ OUT=${OUT:-ice_prod}; mkdir -p "$OUT"
 for job in "$@"; do
   set -- $job
   for attempt in $(seq 1 100); do
-    D=$1 CHI=$2 KINDS=$3 CHUNK=$4 TOL=${5:-1e-11} OUT=$OUT BLASN=${BLASN:-6} BUDGET=560 \
+    if [ -n "$5" ]; then export TOL=$5; else unset TOL; fi      # else the driver's default for its CONV
+    D=$1 CHI=$2 KINDS=$3 CHUNK=$4 OUT=$OUT BLASN=${BLASN:-6} BUDGET=560 \
       timeout 598 julia "$DIR/honeycomb_prod.jl" > "$OUT/$TAG.last" 2>&1
     rc=$?
     grep -v "Warning\|@ Tensor\|^\s*$" "$OUT/$TAG.last" >> "$OUT/$TAG.log"

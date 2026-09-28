@@ -95,11 +95,12 @@ The question: is Onsager's S_h ≥ S_c strict? Kolafa's MC and Xu–Lin–Zhang'
   | D | 4 | 5 | 6 | 7 | 8 |
   |---|---|---|---|---|---|
   | ξ | 1.86 | 1.92 | 2.36 | 2.40 | 2.51 |
-  | w_h | 1.5073816 | 1.5073565 | 1.5074139 | 1.5074191 | — |
+  | w_h | 1.5073816 | 1.5073565 | 1.5074139 | 1.5074191 | 1.5074212 |
   | ln F_I per cell | −5.10e-6 | −4.83e-6 | −5.19e-6 | −4.74e-6 | −4.84e-6 |
 
   ln F_I is flat at ≈ −5e-6 per cell from D = 4 to 8 (S_h − S_c ≈ 2.4–2.6e-6 per molecule if it
-  survives D → ∞); w_h is still 4e-5 below the literature at D = 7; ξ grows slowly with D.
+  survives D → ∞); w_h is still 3.7e-5 below the literature at D = 8 with shrinking increments (+2.1e-6
+  from D = 7): absolute entropies need the variational refinement; ξ grows slowly with D.
 * **U(1) is broken by the boundary state** (any update): a zero-flux U(1) PEPS has no finite-D fixed
   point — its virtual charge (the flux through the ribbon under a bond) random-walks, ⟨q²⟩ +0.33 per
   bilayer. Only the arrow-reversal Z2 is exact. The boundary state looks gapless (ξ grows with D).
@@ -108,14 +109,14 @@ The question: is Onsager's S_h ≥ S_c strict? Kolafa's MC and Xu–Lin–Zhang'
 states) and needs χ ≥ D². BP simple update is not variational; a variational pass from it recovers
 most of the w_h gap at small D (`honeycomb_variational.jl`).
 
-**Running at handoff.** Lane A (`ice_prodlane.sh` in the old scratchpad, same code as the committed
-driver) is computing D = 9 ⟨ψ|ψ⟩ (χ = 81) and stops by itself after it. Its output and every
-checkpoint are in `…\scratchpad\ice\prod\` (`summary.csv`, `results.csv`, `ctm_D<D>_chi<χ>_<kind>.jls`,
-`su_D<D>.jls` for D = 6–10, 12, lane logs). Partial: D = 8 ⟨Iψ|M|ψ⟩ at 4 iterations (≈ 470 s per
-iteration here — does not fit ten-minute runs), D = 9 ⟨Iψ|ψ⟩ at a few iterations. Resume any of them
+**Data at handoff.** Nothing is running. D = 9 ⟨ψ|ψ⟩ is converged (ln κ = −80.9126915037528, CPU);
+the D = 8 sandwich converged on the local GPU (w_h above). Outputs and every checkpoint are in
+`…\scratchpad\ice\prod\` (`summary.csv`, `results.csv`, `ctm_D<D>_chi<χ>_<kind>.jls`,
+`su_D<D>.jls` for D = 6–10, 12, lane logs). Partial: D = 9 ⟨Iψ|ψ⟩ at a few iterations (CPU checkpoint);
+D = 9 ⟨Iψ|M|ψ⟩ not started — both fit the local GPU now (`DEVICE=gpu`). Resume any of them
 with the committed driver:
 
-    OUT=<that prod dir> D=9 CHI=81 KINDS=inv CHUNK=1 TOL=1e-9 \
+    OUT=<that prod dir> D=9 CHI=81 KINDS=inv CHUNK=2 DEVICE=gpu \
       julia --project=<env> examples/ice/honeycomb_prod.jl       # or examples/ice/honeycomb_lane.sh
 
 **Next.** (1) D = 8–12 (χ ≥ D², and 1.5D² checks) on GPUs — `honeycomb_prod.jl` with `DEVICE=gpu` as a job
