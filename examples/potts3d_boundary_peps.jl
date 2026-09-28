@@ -39,7 +39,10 @@ const BETAS = haskey(ENV, "PT_BETAS") ? parse.(Float64, split(ENV["PT_BETAS"], "
 const MAXITER = parse(Int, get(ENV, "PT_MAXITER", "1000"))
 const GTOL = 1.0e-6
 const CTM_TOL = 1.0e-10
-const MJUMP = 0.1                  # a branch has left its phase once m crosses this
+# A branch has left its phase once |m| crosses this. m reads (q⟨δ(s, 1)⟩ − 1)/(q − 1): ordering into
+# another state gives m = −m₀/(q − 1), so the disordered branch is tested on |m| (measured: at D = 3 it
+# ordered into state 2 or 3 at β = 0.555, m = −0.277 = −0.554/2, and a test on m alone missed it).
+const MJUMP = 0.1
 outfile(branch) = "$(TAG)_D$(D)_chi$(CHI)_$(branch).csv"
 
 device(x) = GPU ? adapt(CuArray, x) : x
@@ -83,7 +86,7 @@ for β in BETAS
     open(outfile(BRANCH), "a") do io
         println(io, join((β, f, m, e, bp.gnorm, length(bp.history) - 1, t), ","))
     end
-    left = BRANCH == "ordered" ? m < MJUMP : m > MJUMP
+    left = BRANCH == "ordered" ? m < MJUMP : abs(m) > MJUMP
     left && (println("  the $BRANCH branch has left its phase at β = $β (m = $m): stopping"); break)
     global prev = bp
 end
@@ -92,15 +95,22 @@ end
 function readbranch(branch)
     isfile(outfile(branch)) || return nothing
     rows = [parse.(Float64, split(l, ",")) for l in readlines(outfile(branch))[2:end]]
-    keep = [r for r in rows if (branch == "ordered" ? r[3] >= MJUMP : r[3] <= MJUMP)]
+    keep = [r for r in rows if (branch == "ordered" ? r[3] >= MJUMP : abs(r[3]) <= MJUMP)]
     isempty(keep) && return nothing
     sort!(keep; by = first)
     return keep
 end
-lerp(xs, ys, x) = (i = findlast(<=(x), xs); (isnothing(i) || i == length(xs)) ? NaN :
-                   ys[i] + (ys[i + 1] - ys[i]) * (x - xs[i]) / (xs[i + 1] - xs[i]))
-ord, dis = readbranch("ordered"), readbranch("disordered")
-if !isnothing(ord) && !isnothing(dis)
+function lerp(xs, ys, x)
+    i = findlast(<=(x), xs)
+    isnothing(i) && return NaN
+    xs[i] == x && return ys[i]
+    i == length(xs) && return NaN
+    return ys[i] + (ys[i + 1] - ys[i]) * (x - xs[i]) / (xs[i + 1] - xs[i])
+end
+# (a function, so the loop's assignments are not lost to top-level soft scope)
+function report_crossing()
+    ord, dis = readbranch("ordered"), readbranch("disordered")
+    (isnothing(ord) || isnothing(dis)) && return nothing
     bo = first.(ord); bd = first.(dis)
     grid = sort(unique(vcat(bo, bd)))
     common = [b for b in grid if bo[1] <= b <= bo[end] && bd[1] <= b <= bd[end]]
@@ -121,4 +131,6 @@ if !isnothing(ord) && !isnothing(dis)
         @printf("\nD = %d, χ = %d: β_t = %.6f (MC 0.550565), latent heat Q = %.5f (MC 0.16160, TPVA 0.228), m jump %.5f\n",
                 D, CHI, bt, ed - eo, mo)
     end
+    return bt
 end
+report_crossing()
