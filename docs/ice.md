@@ -207,7 +207,8 @@ value is 0; ln κ jumping by O(1)). Seeding every state leg with e₁, the domin
   increments shrink (+5.2e-6 from D = 6 to 7, +2.1e-6 from 7 to 8) far faster than the gap: at the D
   reachable, BP simple update will not deliver the absolute w_h — that needs the variational refinement
   (or D well beyond 12). Its ln F_I is flat; whether the BP bias cancels in F_I is the open question.
-  A variational pass from the BP-SU state recovers most of the gap at small D (D = 2: 1.5071868 → 1.5073761; D = 3: → 1.5074106,
+  A variational pass from the BP-SU state recovers most of the gap at small D (D = 2: 1.5071868 →
+  1.5073761; D = 3: → 1.5074106,
   not fully converged), so the finite-D error is the truncation's BP metric, not the ansatz.
 * ln F_I settles into −4.7…−5.2e-6 per cell from D = 4 to 8, i.e. S_h − S_c ≈ 2.4–2.6e-6 per molecule if
   it survives D → ∞ — nonzero, and at the size of Kolafa's error bars. Not yet decisive: F_I is first
