@@ -63,7 +63,8 @@
 # χ⁵D entries and costs ~O(χ⁷D) to form; each plane pair costs O(χ⁷D) more (the QR, or `b aᵀ`).
 # There are ~26·L³ blocks, the E and T of χ⁴ and χ⁴D entries. Region contractions for `F`: a
 # vertex region is a closed shell of 26 blocks (a sphere) whose balanced separators cut ~8 legs,
-# so its exact contraction needs ~χ⁸ memory — the practical ceiling on χ for the CVM free energy.
+# so its exact contraction needs at least ~χ⁸ memory — measured ~χ¹⁰–χ¹² (the belt between the caps
+# carries 10 χ-legs; docs/ctmrg3d.md "The ceiling") — the practical ceiling on χ for the CVM free energy.
 
 using LinearAlgebra: LinearAlgebra, sylvester
 

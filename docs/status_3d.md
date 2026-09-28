@@ -3,6 +3,8 @@
 *Written 2026-09-27 (evening) for the next agent. Branch `FixesV2`. Everything below is measured and
 dated; where a number lives in another doc, that doc has the detail.*
 
+Where this can go — the literature, the levers ranked, the targets ranked, and a sequence:
+[`roadmap_3d.md`](roadmap_3d.md).
 
 ---
 
@@ -140,6 +142,11 @@ array over (D, χ, kind); CUDA path validated on the local RTX 3070 (identical t
   and a converged residual, not a stalled |g|.
 * **Julia parse traps**: `(a, b = f(); …)` and `(e.ls, e.ln = …)` parse as named tuples — use blocks or
   functions; `@__FILE__ && main()` needs `(@__FILE__)`.
+
+**Possibly stale, not yet checked:** `docs/src/advanced.md` says GPU execution "is not yet validated",
+while `test/test_gpu_paths.jl` covers BP, CTM, `InfiniteCTM2D` and the boundary-PEPS solvers on CUDA
+(and the ice driver's CUDA path matched the CPU to 13 digits on the local RTX 3070). Re-run
+`test_gpu_paths.jl` on hardware before editing the user-facing page.
 
 ---
 

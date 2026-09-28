@@ -149,7 +149,8 @@ from it (ln κ jumping by O(1)) and converged in 20–40 iterations from e₁, t
 on every state leg (examples/ice/honeycomb.jl). `init` — a
 previously updated `InfiniteCTM2D` with the same `maxdim` and leg dimensions — warm-starts the
 iteration from its state (for a slowly changing site, e.g. inside an optimisation). Other
-keywords as for [`CTMOptions`](@ref); `projector = :cut` only.
+keywords as for [`CTMOptions`](@ref): `projector = :cut` (default) or `:cycle` (the four pairs
+from the plaquette's corner cycle; tested in test_ctm2dinfinite.jl).
 """
 struct InfiniteCTM2D
     site::Vector{Any}                    # layer tensors
