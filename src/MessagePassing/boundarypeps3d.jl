@@ -284,6 +284,10 @@ dimension `D`, both terms contracted by [`InfiniteCTM2D`](@ref) at `maxdim`. For
   networks only: complex ones are always unmixed (mixing stalled them).
 * `precondition` — L-BFGS with the norm metric `(N + precondition_shift·λ_max)⁻¹` as its initial
   inverse Hessian (a natural-gradient step); `false` gives the plain `γ I`.
+* `miniter` — iterations before `gtol` may stop the run; 20 by default when `init` is a smaller-D
+  `BoundaryPEPS`. An embedded optimum is nearly stationary — its padded directions carry only the
+  `noise` — so without it the run stopped at once: a D = 2 → 3 → 4 climb at β = 0.24 ended at the
+  D = 2 free energy, below a directly optimised D = 3 (0.80339438 against 0.80339462).
 * `adaptive_tolerance` — converge the 2D environments to `1e-2·|g|`, clamped to
   `[ctm_tolerance, 1e-6]`, rather than always to `ctm_tolerance`.
 
@@ -299,6 +303,7 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
                        ls_max::Integer = 12, precondition::Bool = true, precondition_shift::Real = 1.0e-2,
                        adaptive_tolerance::Bool = true, ctm_anderson::Integer = 0, callback = nothing,
                        time_limit::Real = Inf,
+                       miniter::Integer = (init isa BoundaryPEPS && dim(init.Alegs[1]) < D) ? 20 : 0,
                        verbose::Bool = false, kwargs...)
     D >= 1 || throw(ArgumentError("D must be ≥ 1, got $D"))
     length(legs) == 6 || throw(ArgumentError("legs must be the six legs (x⁻, x⁺, y⁻, y⁺, z⁻, z⁺)"))
@@ -352,7 +357,7 @@ function boundary_peps(site, legs, D::Integer; maxdim::Integer, init = nothing, 
     gnorm = norm(g)
     for it in 1:maxiter
         gnorm = norm(g)
-        gnorm < gtol && (verbose && println("boundary_peps: |g| = $gnorm below gtol"); break)
+        (gnorm < gtol && it > miniter) && (verbose && println("boundary_peps: |g| = $gnorm below gtol"); break)
         time() - tstart > time_limit && (verbose && println("boundary_peps: time limit"); break)
         # two-loop recursion, H₀ = γ P⁻¹
         q = copy(g); αs = zeros(length(Ss))

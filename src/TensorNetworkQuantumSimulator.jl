@@ -98,6 +98,7 @@ export
     site_ratio,
     ising3d_site,
     ice_site,
+    potts3d_site,
     InfiniteCTM2D,
     ising2d_site,
     site_environment,

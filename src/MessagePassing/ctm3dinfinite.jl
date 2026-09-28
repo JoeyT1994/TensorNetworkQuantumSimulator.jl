@@ -515,3 +515,46 @@ function ice_site()
     end
     return from_array(W, legs...), legs
 end
+
+"""
+    potts3d_site(β; q = 3, J = 1.0, legs = nothing) -> (site, legs, order, energy)
+
+The cubic-lattice q-state Potts model's site tensor, `H = −J Σ δ(s_i, s_j)`: the q-state delta
+tensor with the symmetric square root of each bond's Boltzmann matrix `W = exp(βJ δ)` on its six
+legs `(x⁻, x⁺, y⁻, y⁺, z⁻, z⁺)` (fresh ones unless `legs` is given — pass the same legs to put sites at
+several β on common legs). Also returns two impurities for [`site_ratio`](@ref):
+
+* `order` — the delta restricted to state 1: its ratio is `⟨δ(s, 1)⟩`, and the order parameter is
+  `m = (q ⟨δ(s, 1)⟩ − 1)/(q − 1)`.
+* `energy` — `∂site/∂β`, exact: its ratio is `∂ ln κ/∂β = 3J⟨δ⟩` at a variational optimum
+  (Hellmann–Feynman), so the energy per site is `e = −site_ratio(·, energy)`.
+
+`W = (e^{βJ} − 1)·I + 𝟙𝟙ᵀ` has eigenvalue `e^{βJ} − 1 + q` on the uniform vector and `e^{βJ} − 1` on its
+complement, so its square root and that root's β-derivative are closed-form.
+"""
+function potts3d_site(β::Real; q::Integer = 3, J::Real = 1.0, legs = nothing)
+    q >= 2 || throw(ArgumentError("q must be ≥ 2, got $q"))
+    β * J >= 0 || throw(ArgumentError("potts3d_site takes ferromagnetic couplings, got βJ = $(β * J)"))
+    legs = isnothing(legs) ? Tuple(new_index(q; tags = "p3,$n") for n in ("xm", "xp", "ym", "yp", "zm", "zp")) :
+        Tuple(legs)
+    all(l -> dim(l) == q, legs) || throw(ArgumentError("the legs must all have dimension q = $q"))
+    K = β * J
+    P = fill(1.0 / q, q, q); Q = Matrix{Float64}(I, q, q) - P
+    λu, λc = expm1(K) + q, expm1(K)
+    M = sqrt(λu) * P + sqrt(λc) * Q                                   # √W
+    dM = (J * exp(K) / 2) * (P / sqrt(λu) + (λc > 0 ? Q / sqrt(λc) : zero(Q)))   # ∂√W/∂β
+    function delta(states)
+        A = zeros(ntuple(_ -> q, 6))
+        for s in states
+            A[fill(s, 6)...] = 1
+        end
+        return from_array(A, legs...)
+    end
+    dress(t, mats) = (for (n, l) in enumerate(legs)
+                          t = replaceind(from_array(mats[n], l, prime(l)) * t, prime(l), l)
+                      end; t)
+    site = dress(delta(1:q), fill(M, 6))
+    order = dress(delta(1:1), fill(M, 6))
+    energy = sum(dress(delta(1:q), [k == n ? dM : M for k in 1:6]) for n in 1:6)
+    return site, legs, order, energy
+end
