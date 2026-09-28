@@ -17,7 +17,8 @@
 #
 # ENV: D (3), CHI (2D²), DEVICE (cpu | gpu), OUT ("ice_var"), BUDGET (s, 540), SUDIR (a directory with the
 # BP-SU su_D<D>.jls to start from; else built), GTOL (1e-8), FTOL (1e-11), MAXIT (500), TOL (2e-14),
-# POLISH (3), MAXSTEP (0.05), GRADCHECK (0 | 1: a finite-difference check at the start), BLASN (4).
+# MAXSTEP (0.01: at D = 4 a 0.05 step left the CTM unconverged after 400 iterations; 0.0125 took 24–31),
+# POLISH (3), GRADCHECK (0 | 1: a finite-difference check at the start), BLASN (4).
 #
 # Measured (CPU, 2026-09-27, the pre-resumable version): D = 2, χ = 16 from 1.5071868 (BP-SU) to 1.5073761
 # in 22 iterations; D = 3, χ = 18 to 1.5074106 (|g| 6e-5, not converged). ln F_I at the D = 2 optimum
@@ -70,7 +71,7 @@ Base.@kwdef struct VCfg
     χ::Int
     tol::Float64 = 2.0e-14
     polish::Int = 3
-    maxiter::Int = 400
+    maxiter::Int = 100                              # per evaluation: a trial the CTM cannot settle is rejected, not waited for
     precondition::Bool = true
     oversample::Int = 0                             # 0: ceil(1.3χ)
 end
@@ -146,13 +147,23 @@ function hoptimize!(ck, S; cfg, budget, gtol, ftol, maxit, max_step, memory = 10
     x = pack(Xh, Yh); f = S.f; g = S.g; it = S.it; hist = S.hist; Sm = S.Sm; Ym = S.Ym; ρ = S.ρ
     P = get(S, :P, nothing); usemetric = cfg.precondition
     icn = isnothing(S.icn) ? nothing : vdev(S.icn); ics = isnothing(S.ics) ? nothing : vdev(S.ics)
-    nfail = S.nfail; status = S.status; lastdur = S.lastdur; evaldur = get(S, :evaldur, 0.0)
+    nfail = S.nfail; status = S.status; lastdur = S.lastdur
+    evaldur = get(S, :evalwarm, 0.0); nrun = 0               # WARM evaluation time; evaluations this run
+    lasttrials = 2                                 # evaluations the last line search needed
+    function timed!(t)                             # the first evaluation of a run compiles: never the estimate
+        nrun += 1
+        if nrun > 1
+            evaldur = t
+        elseif evaldur == 0
+            evaldur = 0.3 * t
+        end
+    end
     save() = vatomic(ck, (; Xh = unpack(x)[1], Yh = unpack(x)[2], f, g, it, hist, Sm, Ym, ρ, icn = vhost(icn),
-                          ics = vhost(ics), nfail, status, lastdur, χ = cfg.χ, P, evaldur))
+                          ics = vhost(ics), nfail, status, lastdur, χ = cfg.χ, P, evalwarm = evaldur))
     if isnan(f)                                     # the first evaluation (BP-SU state)
         te = time()
         f, gX, gY, icn, ics, _, P = hevaluate(unpack(x)..., ix, cfg; metric = usemetric)
-        evaldur = 0.5 * (time() - te)                 # a cold evaluation, with compilation: overcounts
+        timed!(time() - te)
         g = tang(pack(gX, gY), x); push!(hist, f)
         @printf("  start RQ = %.12f (w_h %.10f), |g| = %.2e  (%.0f s)\n", f, exp(f / 2), norm(g), time() - t0)
         flush(stdout)
@@ -164,7 +175,7 @@ function hoptimize!(ck, S; cfg, budget, gtol, ftol, maxit, max_step, memory = 10
         if length(hist) > 10 && hist[end] - hist[end - 10] < ftol
             status = :stagnant; break
         end
-        time() - t0 + max(1.5 * lastdur, 2.0 * evaldur) > budget && break   # a step is ≥ 2 evaluations
+        time() - t0 + 1.1 * max(2, lasttrials) * evaldur > budget && break   # the last search's trials, warm
         ts = time()
         q = copy(g); α = zeros(length(Sm))           # two-loop recursion on −f
         for i in length(Sm):-1:1
@@ -189,7 +200,8 @@ function hoptimize!(ck, S; cfg, budget, gtol, ftol, maxit, max_step, memory = 10
             xn = renorm(x + a * d)
             te = time()
             fn, gXn, gYn, icnn, icsn, nc, Pn = hevaluate(unpack(xn)..., ix, cfg; initn = icn, inits = ics, metric = usemetric)
-            evaldur = time() - te; save()             # the timing survives a kill mid-search
+            timed!(time() - te); save()               # the timing survives a kill mid-search
+            lasttrials = trial
             nct += nc
             if fn >= f + 1.0e-4 * a * dot(d, g)
                 ok = true; break
@@ -264,7 +276,7 @@ function main()
         status, Xo, Yo, f, gn, it = hoptimize!(ck, S; cfg, budget, gtol = parse(Float64, get(ENV, "GTOL", "1e-8")),
                                                ftol = parse(Float64, get(ENV, "FTOL", "1e-11")),
                                                maxit = parse(Int, get(ENV, "MAXIT", "500")),
-                                               max_step = parse(Float64, get(ENV, "MAXSTEP", "0.05")))
+                                               max_step = parse(Float64, get(ENV, "MAXSTEP", "0.01")))
     else
         status, Xo, Yo, f, gn, it = S.status, S.Xh, S.Yh, S.f, norm(S.g), S.it
     end
