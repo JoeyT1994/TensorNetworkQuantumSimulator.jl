@@ -142,7 +142,11 @@ whose two sides of an interface differ, `:isometric` is UNSTABLE here: the norm 
 PEPS read the right ln κ at iteration 9 and ln κ = −5.0 instead of 2.03 by iteration 600, while
 `:biorth` converged in 18 — the reverse of the 3D engine, whose mirror-symmetric plane pairs need
 `:isometric`. `boundary` is the seed's vector on every raw leg
-of a half-line (default all ones; a vector of vectors gives one per layer leg). `init` — a
+of a half-line (default all ones; a vector of vectors gives one per layer leg). The seed must overlap
+the dominant environment: for PEPS in the Vidal (BP) gauge, whose basis states carry symmetry signs,
+all ones can sit in the wrong sector — overlap networks of a simple-update ice state never converged
+from it (ln κ jumping by O(1)) and converged in 20–40 iterations from e₁, the dominant basis vector,
+on every state leg (examples/ice/honeycomb.jl). `init` — a
 previously updated `InfiniteCTM2D` with the same `maxdim` and leg dimensions — warm-starts the
 iteration from its state (for a slowly changing site, e.g. inside an optimisation). Other
 keywords as for [`CTMOptions`](@ref); `projector = :cut` only.
@@ -799,6 +803,9 @@ via `init`) until the signal falls below `tolerance`:
 * `:lnkappa` — `|Δ ln κ| ≤ tolerance · max(1, |ln κ|)`. ln κ is stationary at the fixed point and
   settles long before the environment: stopping on it left Yang's magnetisation 5e-7 off and
   environment gradients 1e-7 off (K = 0.5, χ = 16), against 3e-16 and 1e-9 converged.
+
+Convergence is never reported before `miniter` iterations: a long run chunked into checkpointed
+calls with `maxiter = 1` (warm-started through `init`) needs `miniter = 1`, or it never converges.
 
 `anderson = m > 0` mixes the last `m` iterates (type-II Anderson acceleration, from iteration
 `anderson_start`); the fixed point is unchanged. `ic.stats[]` records the iterations, the final

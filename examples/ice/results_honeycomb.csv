@@ -1,0 +1,17 @@
+# Hexagonal ice, honeycomb BP simple update (grand canonical, Vidal gauge) + infinite CTMRG, local i9 CPU, 2026-09-27.
+# w_h = exp(RQ/2) per molecule, RQ = ln k<I psi|M|psi> - ln k<psi|psi> per cell (a lower bound on 2 ln W(Ih) at converged chi);
+# lnF_I = ln k<I psi|psi> - ln k<psi|psi> per cell (S_h - S_c ~ -lnF_I per cell); xi = correlation length of <psi|psi> (cells).
+# References: cell-PEPS variational D=2 1.5073953, D=3 1.5074448 (docs/ice.md); Xu-Lin-Zhang 1.5074584; Kolafa MC 1.5074674(38).
+# D=8: w_h missing — the <I psi|M|psi> CTM (chi=64) does not fit 10-minute runs locally (checkpoint at 4 iterations: docs/status_3d.md).
+D,chi,w_h,lnF_I,xi,source
+2,4,1.507100961,-1.445e-05,1.0521,ice_hsu_scale
+2,8,1.507186597,-1.433e-05,1.1704,ice_hsu_scale
+3,9,1.507277157,-7.058e-06,1.2593,ice_prod
+3,18,1.507279118,-7.057e-06,1.3107,ice_hsu_scale
+4,16,1.507381602,-5.102e-06,1.8629,ice_hsu_scale
+4,32,1.507383473,-5.165e-06,1.9732,ice_hsu_scale
+5,25,1.507356531,-4.831e-06,1.9218,ice_hsu_scale
+5,50,1.507358767,-4.738e-06,2.0373,ice_hsu_scale
+6,36,1.50741385052,-5.190109e-06,2.35930,ice_prod
+7,49,1.50741910861,-4.740235e-06,2.39589,ice_prod
+8,64,,-4.839575e-06,2.50901,ice_prod (norm + inv only)

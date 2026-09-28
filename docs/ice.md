@@ -155,12 +155,86 @@ the 4 × 4 torus's 3.3e-7, so at D ≤ 3 the PEPS's inversion asymmetry is mostl
 What the estimator buys: the gap from one variational, well-conditioned state (the hexagonal
 maximum) and an overlap, not from the soft cubic stationary point.
 
+## Honeycomb formulation: BP simple update + CTMRG (2026-09-27)
+
+Code: `examples/ice/` (`honeycomb.jl` the machinery, `honeycomb_prod.jl` the restartable production
+driver, `honeycomb_lane.sh`, `honeycomb_u1.jl`, `honeycomb_variational.jl`; tests in
+`test/test_ice_honeycomb.jl`; the numbers in `examples/ice/results_honeycomb.csv`).
+
+**The coordination-4 formulation.** Every O is its own tensor. The bilayer M is a bond-2 PEPO on the
+honeycomb (V_a: vertical bond in + 3 in-plane; V_b: 3 in-plane + vertical bond out), and hexagonal
+stacking returns to the same honeycomb with the sublattices swapped — the inversion I — so the power
+method iterates the symmetric I M. The boundary state is a honeycomb PEPS, X (with the physical
+vertical leg) and Y, weights on the three bond types. Grouped into cells it is a sub-ansatz of the
+cell PEPS above at the same D (the intra-cell bond is D, not free), but it is built by BP simple
+update in seconds, and D reaches the tens: the D = 12 state converges in ~1 minute, discarding 9e-18.
+
+**BP simple update.** Apply M exactly (bonds D → 2D), bring the enlarged state to the Vidal (= BP)
+gauge by identity updates, truncate each bond by an SVD in that gauge, re-gauge. The Vidal gauge
+reproduces the library's `BeliefPropagationCache` + `symmetric_gauge` bond spectra to 1e-10.
+Truncating in a stale (non-canonical) gauge — the first attempt — broke the C3 and arrow-reversal
+symmetries and made w fall with D. As D → ∞ nothing is truncated and the state is exact; at finite
+D the BP weights are a poor guide to what matters (below).
+
+**The networks.** ⟨ψ|ψ⟩, ⟨Iψ|ψ⟩ (the inverted bra), ⟨Iψ|M|ψ⟩, and ⟨Rψ|ψ⟩ (R reverses every vertical
+arrow — exactly ⟨ψ|ψ⟩, a check). RQ = ln κ⟨Iψ|M|ψ⟩ − ln κ⟨ψ|ψ⟩ is the Rayleigh quotient of I M (a
+lower bound on 2 ln W(Ih) per cell), ln F_I = ln κ⟨Iψ|ψ⟩ − ln κ⟨ψ|ψ⟩. The sandwich equals the library's
+`ice_site` cell-PEPS evaluation of the same state to 1e-15. In the inverted networks the ket's X and
+the bra's Y both point to −x/−y, so each network is a 2-layer site of 3-leg tensors on fused legs
+(raw bond D², and 2D² for the sandwich) — values identical to the layered networks to 1e-14.
+
+**The CTM seed.** `InfiniteCTM2D`'s default all-ones boundary vector mixes the Z2 sectors of the Vidal
+basis; on the overlap networks the CTM then never converges (ln F_R = +0.31 at D = 3 where the exact
+value is 0; ln κ jumping by O(1)). Seeding every state leg with e₁, the dominant Vidal basis vector
+(ones on a PEPO leg), every network converges in 20–40 iterations and ln F_R = 0 to 1e-14 at every D.
+
+**Results** (χ = D² unless noted; `results_honeycomb.csv`):
+
+| D | χ | ξ | w_h | ln F_I per cell |
+|---|---|---|---|---|
+| 2 | 8 | 1.170 | 1.5071866 | −1.433e-5 |
+| 3 | 9 | 1.259 | 1.5072772 | −7.058e-6 |
+| 4 | 16 | 1.863 | 1.5073816 | −5.102e-6 |
+| 4 | 32 | 1.973 | 1.5073835 | −5.165e-6 |
+| 5 | 25 | 1.922 | 1.5073565 | −4.831e-6 |
+| 5 | 50 | 2.037 | 1.5073588 | −4.738e-6 |
+| 6 | 36 | 2.359 | 1.5074139 | −5.190e-6 |
+| 7 | 49 | 2.396 | 1.5074191 | −4.740e-6 |
+| 8 | 64 | 2.509 | (not run: the sandwich) | −4.840e-6 |
+
+* w_h rises with D except at D = 5 (SU is not variational), and is 4e-5 below Xu–Lin–Zhang and Kolafa
+  at D = 7 — still below the cell-PEPS variational D = 3 value (1.5074448). A variational pass from the
+  BP-SU state recovers most of the gap at small D (D = 2: 1.5071868 → 1.5073761; D = 3: → 1.5074106,
+  not fully converged), so the finite-D error is the truncation's BP metric, not the ansatz.
+* ln F_I settles into −4.7…−5.2e-6 per cell from D = 4 to 8, i.e. S_h − S_c ≈ 2.4–2.6e-6 per molecule if
+  it survives D → ∞ — nonzero, and at the size of Kolafa's error bars. Not yet decisive: F_I is first
+  order in the state error (at D = 2 it ranges −1.4e-5 … −6.3e-5 across BP-SU, the honeycomb optimum
+  and the cell optimum), and it needs χ ≥ D² (D = 6: −1.53e-5 at χ = 16, −5.32e-6 at 24, −5.19e-6 at 36).
+* ξ grows with D (and with χ at fixed D): the boundary state looks gapless, so convergence in D is
+  algebraic and wants a finite-correlation-length extrapolation (as for the Yang–Lee folds), with ξ
+  growing slowly — the states added from D = 6 on carry BP weights ≲ 1e-5.
+
+**U(1) does not help — the boundary state breaks it.** The ice rules conserve flux, and a U(1)
+boundary PEPS (zero-flux start, blockwise QR/SVD, charges conserved to 1e-16, ±q multiplets never
+split; `honeycomb_u1.jl`) has no finite-D fixed point: the virtual charge is the in-plane flux through
+the semi-infinite vertical ribbon under the bond, a plain sum over layers, and it random-walks —
+⟨q²⟩ = 0.97, 1.22, 1.55, 1.88 exactly over the first four bilayers, still +0.33 per bilayer at n = 40
+with D = 40. At fixed D the charge support widens with D (±2 at D = 6, ±8 at D = 20, ~one state per
+sector) and the weights never settle. The grand-canonical state (from the product state, a
+superposition of flux sectors) is the efficient one; only the arrow-reversal Z2 survives (exact, in
+diagonal signs on the Vidal basis). This holds for any update, simple or full. The zero-flux
+eigenvector is its projection onto Φ = 0, with the same free energy per site; its broken U(1) is
+consistent with the gapless (Coulomb-phase) boundary state.
+
+**Costs** (local i9, per CTM iteration near convergence, ~35–40 iterations to converge; χ = D²):
+⟨ψ|ψ⟩ 2–4 s (D = 6), ~6 s (D = 7), ~30 s (D = 8); the sandwich ~4× that (raw bond 2D²): 10–25 s,
+50–100 s, 300–470 s. ~χ³r² ≈ D¹⁰. The D = 8 sandwich does not fit ten-minute runs here; the CUDA path
+(`DEVICE=gpu`) reproduces the CPU to 13 digits.
+
 ## What it needs
 
-* D = 4–6: the differences sought are ≲ 1e-6 and the D = 2 → 3 step is 5e-5. On the GPU cluster
-  (docs/boundary_peps.md, "Costs"), and with the ice-specific savings still unused: real arithmetic
-  already; U(1) block sparsity from the conserved vertical flux of the ice rules; a honeycomb-native
-  contraction of the factorised cell.
+* D ≥ 8 with χ ≥ D², on the GPU cluster: `honeycomb_prod.jl` as a job array over (D, χ). Then
+  the ξ-extrapolation of w_h and ln F_I. Z2 block sparsity is available (U(1) is not, above).
 * A better hexagonal estimator at finite D: ln σ_max from two independent states,
   max ⟨L|M|R⟩/(|L||R|) (single-layer sandwich, no I M negative-eigenvalue penalty), or Xu–Lin–Zhang's
   M Mᵀ (bond 4D²).
