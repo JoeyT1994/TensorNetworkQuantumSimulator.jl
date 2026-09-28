@@ -1,18 +1,25 @@
-# Hexagonal ice, honeycomb BP simple update (grand canonical, Vidal gauge) + infinite CTMRG, local i9 CPU, 2026-09-27.
-# w_h = exp(RQ/2) per molecule, RQ = ln k<I psi|M|psi> - ln k<psi|psi> per cell (a lower bound on 2 ln W(Ih) at converged chi);
+# Hexagonal ice on the honeycomb (docs/ice.md), local machine (i9 CPU, RTX 3070), 2026-09-27/28.
+# method: BP-SU = BP simple update (grand canonical, Vidal gauge); variational = RQ maximised by L-BFGS from BP-SU
+#   (optimised at chi_opt, evaluated at chi; stopped at the gradient's practical noise floor).
+# w_h = exp(RQ/2) per molecule, RQ = ln k<I psi|M|psi> - ln k<psi|psi> per cell (a lower bound on 2 ln W(Ih) at converged chi).
 # lnF_I = ln k<I psi|psi> - ln k<psi|psi> per cell (S_h - S_c ~ -lnF_I per cell); xi = correlation length of <psi|psi> (cells).
-# References: cell-PEPS variational D=2 1.5073953, D=3 1.5074448 (docs/ice.md); Xu-Lin-Zhang 1.5074584; Kolafa MC 1.5074674(38).
-# D=8: <psi|psi>, <I psi|psi> on CPU (environment convergence); <I psi|M|psi> on the local RTX 3070 (lnkappa convergence, oversample 1.3chi).
-# D=9: <psi|psi> converged (ln k -80.9126915037528); <I psi|psi> and <I psi|M|psi> not run.
-D,chi,w_h,lnF_I,xi,source
-2,4,1.507100961,-1.445e-05,1.0521,ice_hsu_scale
-2,8,1.507186597,-1.433e-05,1.1704,ice_hsu_scale
-3,9,1.507277157,-7.058e-06,1.2593,ice_prod
-3,18,1.507279118,-7.057e-06,1.3107,ice_hsu_scale
-4,16,1.507381602,-5.102e-06,1.8629,ice_hsu_scale
-4,32,1.507383473,-5.165e-06,1.9732,ice_hsu_scale
-5,25,1.507356531,-4.831e-06,1.9218,ice_hsu_scale
-5,50,1.507358767,-4.738e-06,2.0373,ice_hsu_scale
-6,36,1.50741385052,-5.190109e-06,2.35930,ice_prod
-7,49,1.50741910861,-4.740235e-06,2.39589,ice_prod
-8,64,1.5074212362,-4.839575e-06,2.50901,ice_prod (sand on GPU)
+# lnf = 2 RQ(A) - RQ(A^2) per cell (A = I M): the eigenvector residual, <= 0, 0 iff an eigenvector; positive = <M psi|M psi> not converged in chi.
+# References: cell-PEPS variational D=2 1.5073953, D=3 1.5074448 (chi 32); Xu-Lin-Zhang raw D=7 chi=150 w_h 1.5074584, w_c 1.5074533; Kolafa MC 1.5074674(38).
+D,chi,method,chi_opt,w_h,lnF_I,xi,lnf,note
+2,4,BP-SU,,1.507100961,-1.445e-05,1.0521,,
+2,8,BP-SU,,1.507186597,-1.433e-05,1.1704,,
+3,9,BP-SU,,1.507277157,-7.058e-06,1.2593,-8.2632e-05,
+3,18,BP-SU,,1.507279118,-7.057e-06,1.3107,,
+4,16,BP-SU,,1.507381602,-5.102e-06,1.8629,-2.3840e-05,
+4,32,BP-SU,,1.507383473,-5.165e-06,1.9732,,
+5,25,BP-SU,,1.507356531,-4.831e-06,1.9218,-3.7003e-05,
+5,50,BP-SU,,1.507358767,-4.738e-06,2.0373,,
+6,36,BP-SU,,1.50741385052,-5.190109e-06,2.35930,-1.1463e-05,
+7,49,BP-SU,,1.50741910861,-4.740235e-06,2.39589,-1.1246e-05,
+8,64,BP-SU,,1.5074212362,-4.839575e-06,2.50901,,sandwich on GPU
+3,18,variational,18,1.50741058938,-4.249735e-06,2.09744,-3.0959e-05,23 its noise floor
+3,36,variational,18,1.50741061926,-4.249567e-06,2.16002,-3.1879e-05,
+4,32,variational,32,1.50745395200,-5.423765e-06,4.48237,+2.9928e-06,lnf chi-unconverged
+4,64,variational,32,1.50745474151,-5.404187e-06,4.80276,-1.9908e-06,35 its stagnant
+5,32,variational,32,1.50745201923,-3.072615e-06,4.11921,+1.7442e-06,28 its stagnant (not the D=5 optimum); lnf chi-unconverged
+5,64,variational,32,1.50745302528,-3.044507e-06,4.40076,,

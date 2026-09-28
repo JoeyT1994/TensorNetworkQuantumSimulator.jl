@@ -1,7 +1,7 @@
 # Collect and extrapolate the honeycomb ice results: summary.csv (RQ → w_h, ln F_I, ξ) and residual.csv
 # (ln f = 2RQ(A) − RQ(A²)) from any number of run directories — a BP simple-update directory
 # (honeycomb_prod.jl) or a variational evaluation directory (eval_D<D>_chi<χ>, whose su file records the
-# optimiser's status) — plus the committed baseline examples/ice/results_honeycomb.csv. Rows are
+# optimiser's status) — plus the committed table examples/ice/results_honeycomb.csv (both methods). Rows are
 # de-duplicated per (method, D, χ) (the last one wins). Then, per method, at the largest χ of each D:
 # w_h = w∞ + a ξ^−p (p = 2, 3) and ln F_I = c∞ + b ξ^−p (p = 1, 2), least squares over the last 3 and
 # last 4 D — the spread across these fits is the (rough) extrapolation uncertainty.
@@ -20,10 +20,13 @@ function collect_rows(dirs)
     rows = Dict{Tuple{String, Int, Int}, Dict{Symbol, Any}}()
     row!(m, D, χ) = get!(rows, (m, D, χ), Dict{Symbol, Any}(:method => m, :D => D, :chi => χ))
     base = joinpath(@__DIR__, "results_honeycomb.csv")
-    for r in readcsv(base)
-        r[1] == "D" && continue
-        d = row!("BP-SU", parse(Int, r[1]), parse(Int, r[2]))
-        isnan(num(r[3])) || (d[:w] = num(r[3])); d[:lnF] = num(r[4]); d[:xi] = num(r[5])
+    for r in readcsv(base)                                     # D,chi,method,chi_opt,w_h,lnF_I,xi,lnf,note
+        (r[1] == "D" || length(r) < 8) && continue
+        d = row!(String(strip(r[3])), parse(Int, r[1]), parse(Int, r[2]))
+        isnan(num(r[5])) || (d[:w] = num(r[5]))
+        d[:lnF] = num(r[6]); d[:xi] = num(r[7])
+        isnan(num(r[8])) || (d[:lnf] = num(r[8]))
+        length(r) >= 9 && !isempty(strip(r[9])) && (d[:status] = strip(r[9]))
     end
     for dir in dirs
         m = occursin("eval_", basename(normpath(dir))) ? "variational" : "BP-SU"
