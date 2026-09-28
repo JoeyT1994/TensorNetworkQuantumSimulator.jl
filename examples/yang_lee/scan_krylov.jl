@@ -6,34 +6,48 @@
 # u = √(θ_f − θ) once a fold estimate exists (A ≈ A_f − a u near the fold). Resumable: atomic
 # checkpoint after every point; a point cut off by the run's budget resumes from its partial state and
 # trust radius, and one whose resume gains < 20 % in |g| counts as failed.
-# Env: BETA, D (3), CHI (24), THF2 (the D = 2 fold), VSTOP (5e-3), BUDGET (380 s per run).
+# Env: BETA, D (3), CHI (24), THF2 (the D = 2 fold), VSTOP (5e-3), BUDGET (380 s per run), GPU (1: run on the
+# device; checkpoints stay on the host, so a run can resume on either).
 using TensorNetworkQuantumSimulator, Printf, LinearAlgebra, Serialization
 using Logging: NullLogger, with_logger
 BLAS.set_num_threads(1)
 const T = TensorNetworkQuantumSimulator
+const GPU = get(ENV, "GPU", "0") == "1"
+if GPU
+    using CUDA, Adapt
+end
+dev(x) = (GPU && !isnothing(x)) ? adapt(CuArray, x) : x
+host(x) = (GPU && !isnothing(x)) ? adapt(Array, x) : x
 const β = parse(Float64, ENV["BETA"])
 const D = parse(Int, get(ENV, "D", "3"))
 const CHI = parse(Int, get(ENV, "CHI", "24"))
 const THF2 = parse(Float64, ENV["THF2"])
 const VSTOP = parse(Float64, get(ENV, "VSTOP", "5e-3"))
+# The real start at θ = 0: its last stage's L-BFGS limits. At D ≥ 4 the defaults (150 iterations,
+# 200 s) left |g| = 3.7e-4 at β = 0.21, and the first Newton–Krylov point had not converged after 65 minutes.
+const T0ITER = parse(Int, get(ENV, "T0ITER", "150"))
+const T0LIMIT = parse(Float64, get(ENV, "T0LIMIT", "200"))
 const BUDGET = parse(Float64, get(ENV, "BUDGET", "380"))  # + load (~100 s) + one block and the trials
 const TOL, NOISE = 1.0e-6, 5.0e-6                  # |g| ≲ 1e-6 gives m to ~1e-6 at D = 3; near the fold |g| floors at 3–4e-6
 const GROWTH, MAXSTEP, FIRST = 1.3, 0.1, 0.1
 const TAG = "ylk3_beta$(β)_D$(D)_chi$(CHI)"
 const CKPT, OUT = TAG * ".jls", TAG * ".csv"
 quiet(f) = with_logger(f, NullLogger())
-checkpoint(S) = (serialize(CKPT * ".tmp", S); mv(CKPT * ".tmp", CKPT; force = true))
+hostify(S) = merge(S, (; cur = host(S.cur), prev = host(S.prev), partial = host(S.partial)))
+devify(S) = merge(S, (; cur = dev(S.cur), prev = dev(S.prev), partial = dev(S.partial)))
+checkpoint(S) = (serialize(CKPT * ".tmp", hostify(S)); mv(CKPT * ".tmp", CKPT; force = true))
 t0 = time()
 left() = BUDGET - (time() - t0)
 
 if isfile(CKPT)
-    S = deserialize(CKPT)
+    S = devify(deserialize(CKPT))
 else
     s0, legs, _ = ising3d_site(β)
+    s0 = dev(s0)
     bp = nothing
     for dd in 2:D                                     # D = 2 at χ = 16, then D at χ = CHI (embedded)
         global bp = quiet(() -> boundary_peps(s0, legs, dd; maxdim = dd == D ? CHI : 16, init = bp,
-                                                gtol = 1.0e-6, maxiter = dd == D ? 150 : 300, time_limit = 200))
+                                                gtol = 1.0e-6, maxiter = dd == D ? T0ITER : 300, time_limit = T0LIMIT))
     end
     @printf("θ = 0: D = %d χ = %d f = %.12f |g| = %.1e (%.0f s)\n", D, CHI, cvm_freenergy(bp), bp.gnorm, time() - t0)
     open(io -> println(io, "beta,D,chi,theta,f,m_imag,m_real,xi,evals,residual,converged,seconds,theta_fold"), OUT, "w")
@@ -56,7 +70,7 @@ function predict(θ)
 end
 function on(θ)
     x = ising3d_site(β; h = im * θ / β)
-    return T.replaceinds(x[1], collect(x[2]), collect(legs)), T.replaceinds(x[3], collect(x[2]), collect(legs))
+    return dev(T.replaceinds(x[1], collect(x[2]), collect(legs))), dev(T.replaceinds(x[3], collect(x[2]), collect(legs)))
 end
 done() = isfinite(θfold) && (θfold - θc) / θfold < VSTOP
 while !done() && left() > 30
