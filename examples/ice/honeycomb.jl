@@ -189,11 +189,21 @@ end
 #   :norm/:rev  A = X·X̄ (over p), B = Y·Ȳ, c = (k1, b1)
 #   :inv        A = X ⊗ Ȳ_inv, B = Y ⊗ X̄_inv, c = (p, k1, b1)
 #   :sand       as :inv with the ket enlarged by M (bond 2D), the physical leg summed inside B
-# Returns (layers, legs, boundary): the seed e₁ ⊗ e₁ (with ones on the PEPO part).
+#   :mnorm      ⟨Mψ|Mψ⟩ = ⟨ψ|(I M)²|ψ⟩ (Mᵀ M = (I M)²): the :norm network of the enlarged state, whose
+#               physical leg sits on the b tensor — for the eigenvector residual
+#               ln f = 2 RQ(A) − RQ(A²) = 2 ln κ(:sand) − ln κ(:mnorm) − ln κ(:norm) ≤ 0 (0 iff an eigenvector)
+# Returns (layers, legs, boundary): the seed e₁ ⊗ e₁ (with ones on the PEPO part). `paired_abs` takes the
+# √w-absorbed tensors directly.
 fuse(a, groups...) = reshape(permutedims(a, reduce(vcat, collect.(groups))), (prod(size(a, i) for i in g) for g in groups)...)
-function paired(X, Y, w; kind = :norm)
-    Xh, Yh = absorbed(X, Y, w)
+paired(X, Y, w; kind = :norm) = paired_abs(absorbed(X, Y, w)...; kind)
+function paired_abs(Xh, Yh; kind = :norm)
     D = size(Xh, 2)
+    if kind === :mnorm
+        Kx, Ky = apply_bilayer(Xh, Yh)
+        site, legs, _ = paired_abs(permutedims(Ky, (4, 1, 2, 3)), Kx; kind = :norm)
+        v = zeros(2D); v[1] = 1; v[D + 1] = 1                                  # e₁ ⊗ ones(2) per enlarged leg
+        return site, legs, [kron(v, v)]
+    end
     e11 = [1.0; zeros(D^2 - 1)]
     if kind in (:norm, :rev)
         Xb = kind === :rev ? Xh[[2, 1], :, :, :] : Xh
@@ -211,7 +221,7 @@ function paired(X, Y, w; kind = :norm)
         B = fuse(reshape(reshape(Ky, :, 2) * reshape(Xh, 2, :), E, E, E, D, D, D), (1, 4), (2, 5), (3, 6))
         sv = zeros(E * D); sv[1] = 1; sv[D + 1] = 1                           # (e₁ ⊗ ones(2)) ⊗ e₁
     else
-        throw(ArgumentError("kind must be :norm, :rev, :inv or :sand"))
+        throw(ArgumentError("kind must be :norm, :rev, :inv, :sand or :mnorm"))
     end
     c = T.new_index(size(A, 1); tags = "c")
     xm, xp = T.new_index(size(A, 2); tags = "x-"), T.new_index(size(A, 2); tags = "x+")

@@ -6,7 +6,8 @@
 # checkpoint after every chunk: environment, iterations, converged, ln κ, s/iteration), a row in
 # results.csv per converged network, xi_D<D>_chi<χ>.jls (ξ of ⟨ψ|ψ⟩), and a row in summary.csv
 # (RQ → w_h = exp(RQ/2), ln F_I, ξ) once all three networks of (D, χ) are converged — whichever run
-# converges the last one writes it, so the kinds can run in separate lanes.
+# converges the last one writes it, so the kinds can run in separate lanes. KINDS may add `mnorm`
+# (⟨Mψ|Mψ⟩, raw bond 4D²): then residual.csv gets ln f = 2RQ(A) − RQ(A²), the eigenvector residual.
 #
 # ENV: D (4), CHI (D²), KINDS ("norm,inv,sand"), CHUNK (CTM iterations per checkpoint, 5), BUDGET (s, 540:
 # a chunk starts only if its expected length fits), CONV (lnkappa | environment), TOL (lnkappa: 2e-14,
@@ -57,7 +58,7 @@ function run_prod()
         atomic_serialize(sufile, (X, Y, w, suinfo))
         @printf("D = %d: SU %d bilayers, Δw %.1e, discarded %.1e (%.1f s)\n", D, suinfo.steps, suinfo.δ, suinfo.err, time() - ts)
     end
-    done = Dict{Symbol, Float64}()
+    done = Dict{Symbol, Float64}(); newly = Symbol[]                 # rows only when something converged now
     for kind in KINDS
         ck = joinpath(OUT, "ctm_D$(D)_chi$(χ)_$(kind).jls")
         prev = isfile(ck) ? deserialize(ck) : nothing
@@ -95,7 +96,7 @@ function run_prod()
             conv && break
         end
         if conv
-            done[kind] = lnκ
+            done[kind] = lnκ; push!(newly, kind)
             open(joinpath(OUT, "results.csv"), "a") do io
                 println(io, join((D, χ, kind, @sprintf("%.14f", lnκ), its, @sprintf("%.1e", chg), DEVICE), ","))
             end
@@ -111,20 +112,28 @@ function run_prod()
             break
         end
     end
-    for k in (:norm, :inv, :sand)                                   # networks other lanes converged
+    for k in (:norm, :inv, :sand, :mnorm)                           # networks other lanes converged
         f = joinpath(OUT, "ctm_D$(D)_chi$(χ)_$(k).jls")
         if !haskey(done, k) && isfile(f)
             c = deserialize(f)
             c.converged && (done[k] = c.lnk)
         end
     end
-    if all(k -> haskey(done, k), (:norm, :inv, :sand))
+    if !isempty(newly) && all(k -> haskey(done, k), (:norm, :inv, :sand))
         rq = done[:sand] - done[:norm]; lf = done[:inv] - done[:norm]
         xf = joinpath(OUT, "xi_D$(D)_chi$(χ).jls"); ξ = isfile(xf) ? deserialize(xf) : NaN
         @printf("SUMMARY D = %d χ = %d: RQ = %.12f  w_h = %.10f  ln F_I = %+.5e  ξ = %.4f\n", D, χ, rq, exp(rq / 2), lf, ξ)
         open(joinpath(OUT, "summary.csv"), "a") do io
             println(io, join((D, χ, @sprintf("%.14f", rq), @sprintf("%.11f", exp(rq / 2)), @sprintf("%.6e", lf),
                               @sprintf("%.5f", ξ), DEVICE), ","))
+        end
+    end
+    if !isempty(newly) && all(k -> haskey(done, k), (:norm, :sand, :mnorm))   # the eigenvector residual
+        rq = done[:sand] - done[:norm]; rq2 = done[:mnorm] - done[:norm]
+        @printf("RESIDUAL D = %d χ = %d: RQ(A) = %.12f  RQ(A²) = %.12f  ln f = 2RQ − RQ₂ = %+.5e per cell\n", D, χ,
+                rq, rq2, 2rq - rq2)
+        open(joinpath(OUT, "residual.csv"), "a") do io
+            println(io, join((D, χ, @sprintf("%.14f", rq), @sprintf("%.14f", rq2), @sprintf("%.6e", 2rq - rq2), DEVICE), ","))
         end
     end
     @printf("elapsed %.0f s\n", time() - t0)
