@@ -42,7 +42,12 @@ is SI-CTMRG's idea. What remains is (a) making sure the device path never falls 
 enlarged quadrant (it does on graded data and on subspace bail-outs, docs/boundary_peps.md), (b) a
 QR-based projector option (QR-CTMRG for c4v networks: 3D Ising at zero field, the Yang–Lee sandwich is
 c4v), (c) profiling on an H100 before believing any estimate. Because the cost is ~D¹⁰, ×100 buys ~+50 %
-in D: D ≈ 8 → 12. That is the entry ticket for everything in §4.
+in D: D ≈ 8 → 12. That is the entry ticket for everything in §4. *Measured 2026-09-27 on the local card
+(status_3d.md "GPU readiness"): two settings decide whether large D works at all — enough
+subspace oversampling (~1.3χ; else the sandwich's pairs fall to the O((χr)³) dense route, 19× slower
+at D = 7) and `convergence = :lnkappa` (else a 16D⁸ site environment is formed every iteration);
+the remaining memory term (~χ²r²) caps a single H100 at D ≈ 11 for the sandwich until the subspace
+block is column-batched.*
 
 **L2. Fewer, cheaper networks: nesting (D¹⁰ → ~D⁹, and memory D⁸ → D⁷).** Two forms:
 * *Split CTMRG* everywhere (ket and bra never fused inside the enlarged corner). We have it for the

@@ -9,8 +9,17 @@
 # converges the last one writes it, so the kinds can run in separate lanes.
 #
 # ENV: D (4), CHI (D²), KINDS ("norm,inv,sand"), CHUNK (CTM iterations per checkpoint, 5), BUDGET (s, 540:
-# a chunk starts only if its expected length fits), TOL (1e-11; 1e-9 suffices for ln κ to ~1e-13),
-# MAXIT (600), DEVICE (cpu | gpu: CUDA, FP64), BLASN (4), OUT ("ice_prod").
+# a chunk starts only if its expected length fits), CONV (lnkappa | environment), TOL (lnkappa: 2e-14,
+# relative to |ln κ| ≈ 50–100, i.e. ~1e-12 per iteration; environment: 1e-9 gives ln κ to ~1e-13), MINITS (15),
+# MAXIT (600), DEVICE (cpu | gpu: CUDA, FP64), BLASN (4), OUT ("ice_prod"), SVD_OVERSAMPLE (ceil(1.3χ)).
+#
+# THE PROJECTOR'S OVERSAMPLING. Each pair is a subspace SVD of k = χ columns plus an oversampling block;
+# when it cannot converge (a flat spectrum near k — the sandwich at χ = D² has one) it BAILS OUT to the
+# dense route, which forms and factorises the n × n enlarged quadrant (n = χ·r): O(n³), and at large D
+# ruinous (n ≈ 41 000 at D = 12). With the library default (16) the D = 6 sandwich bailed on 5 of 12
+# pairs and the D = 7 one on 2 of 8: 177 s per iteration on the RTX 3070 against 9.2 s with 64 (1.3χ),
+# every pair split, ln κ identical to 10 digits (2026-09-27). Every chunk logs its split/dense counts —
+# a dense pair in production is a bug to chase, not noise.
 #
 # Costs measured on the local i9 (2026-09-27, s per CTM iteration, near convergence; early ones up to
 # ~2× more): ⟨ψ|ψ⟩ D = 6 χ = 36 ~2–4, D = 7 χ = 49 ~6, D = 8 χ = 64 ~30; ⟨Iψ|Mψ⟩ (raw leg 2D², ~4× the
@@ -31,8 +40,11 @@ BLAS.set_num_threads(parse(Int, get(ENV, "BLASN", "4")))
 const D = parse(Int, get(ENV, "D", "4")); const χ = parse(Int, get(ENV, "CHI", string(D^2)))
 const KINDS = Symbol.(split(get(ENV, "KINDS", "norm,inv,sand"), ","))
 const CHUNK = parse(Int, get(ENV, "CHUNK", "5")); const BUDGET = parse(Float64, get(ENV, "BUDGET", "540"))
-const TOL = parse(Float64, get(ENV, "TOL", "1e-11")); const MAXIT = parse(Int, get(ENV, "MAXIT", "600"))
+const CONV = Symbol(get(ENV, "CONV", "lnkappa"))
+const TOL = parse(Float64, get(ENV, "TOL", CONV === :lnkappa ? "2e-14" : "1e-9")); const MAXIT = parse(Int, get(ENV, "MAXIT", "600"))
+const MINITS = parse(Int, get(ENV, "MINITS", "15"))           # no convergence before (the seed's rank still grows)
 const OUT = get(ENV, "OUT", "ice_prod"); mkpath(OUT)
+const OVERSAMPLE = parse(Int, get(ENV, "SVD_OVERSAMPLE", string(max(16, ceil(Int, 1.3χ)))))
 
 function run_prod()
     t0 = time()
@@ -62,19 +74,23 @@ function run_prod()
         lastdur = CHUNK * sperit                                   # the next chunk's expected length
         while its < MAXIT && time() - t0 + lastdur < BUDGET
             tc = time()
+            empty!(T.CTM_SVD_STATS)
             ic = with_logger(NullLogger()) do
                 # miniter = 1 on a resumed chunk: `update` never reports convergence before miniter
                 # iterations, so CHUNK = 1 with the default 2 would never converge
-                T.update(T.InfiniteCTM2D(site, legs, χ; init = ic, boundary = sv); tolerance = TOL, maxiter = CHUNK,
-                         miniter = isnothing(ic) ? 2 : 1)
+                T.update(T.InfiniteCTM2D(site, legs, χ; init = ic, boundary = sv, svd_oversample = OVERSAMPLE);
+                         tolerance = TOL, maxiter = CHUNK, miniter = isnothing(ic) ? 2 : 1, convergence = CONV)
             end
             st = ic.stats[]
-            its += st.iterations; conv = st.converged; chg = st.change
+            its += st.iterations; conv = st.converged && its >= MINITS; chg = st.change
             lastdur = time() - tc; sperit = lastdur / st.iterations
             lnκ = T.cvm_freenergy(ic)
             atomic_serialize(ck, (; ic = tohost(ic), its, converged = conv, lnk = lnκ, change = chg, sperit))
-            @printf("  D = %d χ = %d %-4s: %4d its, ln κ = %+.13f, Δ %.1e%s  (%.1f s/it)\n", D, χ, kind, its, lnκ, chg,
-                    conv ? " CONVERGED" : "", sperit)
+            # dense pairs: the subspace gate declined (small n — fine) or the subspace SVD bailed (flag)
+            nsplit = get(T.CTM_SVD_STATS, :i2_split, 0); nbail = get(T.CTM_SVD_STATS, :i2_split_bail, 0)
+            @printf("  D = %d χ = %d %-4s: %4d its, ln κ = %+.13f, Δ %.1e%s  (%.1f s/it; pairs %d split, %d dense%s)\n",
+                    D, χ, kind, its, lnκ, chg, conv ? " CONVERGED" : "", sperit, nsplit, 4st.iterations - nsplit,
+                    nbail > 0 ? ", $nbail BAIL-OUTS — raise SVD_OVERSAMPLE" : "")
             flush(stdout)
             conv && break
         end

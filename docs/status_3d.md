@@ -126,6 +126,38 @@ array over (D, χ, kind); CUDA path validated on the local RTX 3070 (identical t
 
 ---
 
+## GPU readiness (2026-09-27, measured on the local RTX 3070 — FP64 ~1/64 rate, 8 GB)
+
+`examples/ice/honeycomb_profile.jl` (s per warm CTM iteration, the pair route taken, optional
+`CUDA.@profile` breakdown; working set by `JULIA_CUDA_HARD_MEMORY_LIMIT`).
+
+* **Correct.** `test/test_gpu_paths.jl` 20/20 on the card (so the "not yet validated" warning in
+  `docs/src/advanced.md` is stale — updated). The ice driver on GPU reproduces the CPU summaries exactly.
+  With `CUDA.allowscalar(false)` nothing falls back to the host.
+* **The pair route.** With the library's default `svd_oversample = 16` the ⟨Iψ|M|ψ⟩ pairs BAIL OUT of
+  the subspace SVD (flat spectrum at χ = D²) to the dense route, which forms the n × n quadrant
+  (n = χr): 5 of 12 pairs at D = 6, 2 of 8 at D = 7 — **177 s per iteration at D = 7 against 9.2 s with
+  `svd_oversample = 64` (1.3χ)**, every pair split, ln κ identical to 10 digits. At D = 12 (n ≈ 41 000) one
+  bail-out would stall a job. The driver now defaults to ceil(1.3χ) and logs split/dense/bail-out counts
+  per chunk ("BAIL-OUTS — raise SVD_OVERSAMPLE"). This also explains the 300–470 s/it CPU D = 8 sandwich.
+* **Memory.** `update`'s default `convergence = :environment` contracts the site environment with all
+  four raw legs open — r⁴ = 16D⁸ doubles for the sandwich: 0.2 GB (D = 6), 0.7 GB (D = 7), ~13 GB (D = 10),
+  ~55 GB (D = 12) — the largest single allocation. `convergence = :lnkappa` (the driver's default now,
+  TOL 2e-14 relative, MINITS 15) never forms it: D = 5 reproduced to 1e-12 in ln κ, identical w_h, ln F_I,
+  ξ, in ~25 % fewer iterations. Then the D = 7 sandwich fits in 1.5 GiB and **D = 8 in 5 GiB**. The
+  remaining large term is the pair's subspace block, ~2.3χ²r² doubles (still ~D⁸): ~7 GB (D = 10), ~16 GB
+  (D = 11), ~32 GB (D = 12) for the sandwich, a working set of a few times that — D ≤ 11 on an 80-GB H100,
+  D = 12 on an H200, beyond that batch the block's columns (an easy engine change).
+* **Speed (3070, FP64).** Norm / sandwich s per iteration: D = 6 0.57 / 2.3, D = 7 5.9 / 6.8, D = 8 — / 25.5
+  (CPU: 2–4 / 10–25, ~6 / 50–100, ~30 / 300–470). At D = 6 the GPU is busy ~65 % of an iteration: ~8 000
+  tiny host→device copies, ~13 000 kernel launches, ~500 stream syncs per iteration, and the small SVDs
+  run latency-bound in cuSOLVER (thousands of `lasr`/`ormtr` kernels). On an H100 (~100–200× the 3070's
+  FP64) that host overhead dominates up to D ≈ 9 and is negligible from D ≈ 10. Rough H100 estimate
+  (±3×): sandwich ~2–3 s/it at D = 10, ~10–15 s/it at D = 12; 20–40 iterations per network.
+* **Before large D, worth doing:** small factorisations on the host (or batched Jacobi), fewer host
+  round-trips per contraction, column batching of the subspace block.
+* **Locally now:** D = 8 w_h on the 3070 is ~15 minutes in chunks (`DEVICE=gpu`), no longer out of reach.
+
 ## Lessons that cost time (keep)
 
 * **The CTM seed.** `InfiniteCTM2D`'s default all-ones seed fails on overlap networks of Vidal-gauge
@@ -143,10 +175,10 @@ array over (D, χ, kind); CUDA path validated on the local RTX 3070 (identical t
 * **Julia parse traps**: `(a, b = f(); …)` and `(e.ls, e.ln = …)` parse as named tuples — use blocks or
   functions; `@__FILE__ && main()` needs `(@__FILE__)`.
 
-**Possibly stale, not yet checked:** `docs/src/advanced.md` says GPU execution "is not yet validated",
+**Checked 2026-09-27 (see "GPU readiness"):** `docs/src/advanced.md` said GPU execution "is not yet validated",
 while `test/test_gpu_paths.jl` covers BP, CTM, `InfiniteCTM2D` and the boundary-PEPS solvers on CUDA
-(and the ice driver's CUDA path matched the CPU to 13 digits on the local RTX 3070). Re-run
-`test_gpu_paths.jl` on hardware before editing the user-facing page.
+(and the ice driver's CUDA path matched the CPU to 13 digits on the local RTX 3070). The test file
+passed 20/20 on the RTX 3070 and the page was updated.
 
 ---
 
