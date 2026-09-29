@@ -3,6 +3,51 @@
 *Written 2026-09-27 (evening) for the next agent. Branch `FixesV2`. Everything below is measured and
 dated; where a number lives in another doc, that doc has the detail.*
 
+## Morning summary — overnight 2026-09-28/29 (local only: the A6000 and the workstation CPUs)
+
+**1. Yang–Lee edge, D = 4, χ = 48** (`examples/yang_lee/scan_krylov.jl`, now with `GPU=1`).
+- **β = 0.21: done.** 13 points to v = 0.012 of the fold, ξ at every point (2.4 → 5.2).
+  Data: `examples/yang_lee/data/ylk3_beta0.21_D4_chi48.csv`.
+- **β = 0.20: not finished.** It reached v = 0.056 (θ = 0.0155) on 8 CPU threads at 1–3 h per point. It moved to the
+  GPU at 06:40 and is still running (checkpoint `ylk3_beta0.2_D4_chi48.jls` in the session scratchpad).
+- **The finding:** at β = 0.21 the D = 4 fold is 0.0063139, the same as D = 3's 0.0063160 (−0.03 %), where D = 2 → 3
+  moved it +5.5 %. ξ at the fold still grew 11 % (4.70 → 5.20). So θ_c − θ_f ∝ ξ_f^−2.785 does not hold across
+  D = 2, 3, 4, and the D = 2, 3 extrapolation (ζ_c ≈ 1.61–1.62) is withdrawn. The t → 0 limit now spans ζ_c = 1.64–1.69
+  and |z_c| = 2.46–2.53, against the FRG 2.43(4). Detail and three explanations: docs/yang_lee.md, "D = 4 edge map
+  at β = 0.21". A χ = 64 re-convergence of the last two points is running on the CPU (explanation 1: χ = 48 short).
+
+**2. Three-state Potts at D = 4, χ = 48: no crossing yet.**
+- **Ordered branch, GPU:** β = 0.565 → 0.551 (coarse grid), then 0.5508 on the fine grid.
+  - At β = 0.551, e = −1.7895 against D = 3's −1.7991: the ordered energy falls in magnitude with D, which is the
+    direction that lowers Q.
+  - Near β_t every point runs into the 1000-iteration cap at |g| = 4–6e-6, the gradient's noise floor at this χ. Points
+    near the crossing take 3.7–7 h each.
+- **Disordered branch, CPU (16 threads):** still on its first point, a cold D = 4 climb at β = 0.550, 13 h in.
+- β_t(D = 4) and Q(D = 4) need both branches on the fine grid. Expect this to take the next day or two at this rate.
+
+**What went wrong overnight, and the fixes (all committed):**
+- **GPU memory.** Two jobs on the A6000 ran it out of memory three times. CUDA.jl's pools do not return memory, and
+  `JULIA_CUDA_SOFT_MEMORY_LIMIT` did not hold them (a 16 GB cap reached 24 GB). One crash went unnoticed for 2.5 h:
+  the log watcher filtered it out.
+  - `_bp_evaluate` now runs the norm and sandwich environments one after the other on a GPU. Concurrently, their
+    working sets added and each task opened its own stream: one crash was out of memory in cuStreamCreate, one a
+    segfault in cuStreamIsCapturing.
+  - The Yang–Lee maps run as a loop of 30-minute resumable chunks, so a crash costs one chunk, and the driver's
+    cut-off/resume step control works as designed.
+- **The θ = 0 start.** With the old 200 s limit on the real start (|g| = 3.7e-4) the first D = 4 point had not converged
+  after 65 min. `T0ITER`/`T0LIMIT` fix that: a converged start, then 5–13 min per point away from the fold.
+- **The coarse Potts ordered run was stopped** at β = 0.550 (35 min into that point) to free the GPU. It was replaced
+  by the fine-grid run above.
+
+**Next:**
+1. The χ = 64 check. If Im m moves by ≫ 1e-5 near the fold, redo the D = 4 fold at χ = 64.
+2. Finish β = 0.20 at D = 4 on the GPU.
+3. Only then D = 5 — the cluster, or a free GPU.
+4. For Potts, raise χ (64) so the gradient's noise floor drops below the gtol, or accept |g| ≈ 5e-6 with a time cap per
+   point.
+
+---
+
 Where this can go — the literature, the levers ranked, the targets ranked, and a sequence:
 [`roadmap_3d.md`](roadmap_3d.md).
 
