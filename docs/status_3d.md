@@ -25,14 +25,17 @@ dated; where a number lives in another doc, that doc has the detail.*
 - **The open question is χ.** A χ = 64 re-convergence of the last two β = 0.21 points is running on the CPU. If Im m moves
   by ≫ 1e-5, χ = 48 is short near the fold, and both D = 4 folds need redoing at χ = 64.
 
-**2. Three-state Potts at D = 4, χ = 48: no crossing yet.**
-- **Ordered branch, GPU:** β = 0.565 → 0.551 (coarse grid), then 0.5508 on the fine grid.
-  - At β = 0.551, e = −1.7895 against D = 3's −1.7991: the ordered energy falls in magnitude with D, which is the
-    direction that lowers Q.
-  - Near β_t every point runs into the 1000-iteration cap at |g| = 4–6e-6, the gradient's noise floor at this χ. Points
-    near the crossing take 3.7–7 h each.
-- **Disordered branch, CPU (16 threads):** still on its first point, a cold D = 4 climb at β = 0.550, 13 h in.
-- β_t(D = 4) and Q(D = 4) need both branches on the fine grid. Expect this to take the next day or two at this rate.
+**2. Three-state Potts at D = 4, χ = 48: ordered branch done; a preliminary crossing.**
+- **Ordered branch, GPU: finished (2026-09-29, 16:45).** β = 0.565 → 0.551 (coarse), then 0.5508, 0.5506, 0.5504 on the
+  fine grid, 1–7 h per point. At 0.5502 it collapsed to m = 0.002. That is the end of the ordered window at D = 4,
+  narrower than D = 3's.
+- **Preliminary: β_t(D = 4) ≈ 0.55050 (MC 0.550565, D = 3 0.550408) and Q(D = 4) ≈ 0.170 (MC 0.1616, D = 3 0.189).**
+  This comes from tangent extrapolation of the collapsed 0.5502 point (|g| = 2e-5) against the ordered 0.5504/0.5506
+  rows. Both numbers move toward Monte Carlo with D. Q is uncertain by about ±0.01. Table and caveats:
+  boundary_peps.md, "3D three-state Potts".
+- **Still running, to bracket the crossing directly:**
+  - disordered, GPU: β = 0.5504 → 0.5512, from a cold D = 3 → 4 climb, started 16:55;
+  - disordered, CPU (16 threads): from β = 0.550, still on its first cold point after 23 h.
 
 **What went wrong overnight, and the fixes (all committed):**
 - **GPU memory.** Two jobs on the A6000 ran it out of memory three times. CUDA.jl's pools do not return memory, and

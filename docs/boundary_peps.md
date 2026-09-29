@@ -465,7 +465,28 @@ Q is interpolated linearly in β between grid points. The ordered branch's energ
 * D = 4, χ = 48 (GPU): the ordered branch, per point, 1.0–1.8 h so far; f exceeds D = 3's by
   9e-7 at β = 0.565 and 5e-6 at 0.555. The disordered branch's first point, from the vacuum, took 4 h
   and hit the 1000-iteration cap at |g| = 1.3e-6, at the gradient's noise floor. Its later points
-  warm-start. RESULTS PENDING.
+  warm-start.
+* D = 4, χ = 48, fine grid (2026-09-29). The ordered branch, on the GPU, warm-started from β = 0.551
+  (coarse):
+
+  | β | f = ln κ | m | e | \|g\| | iters | time |
+  |---|---|---|---|---|---|---|
+  | 0.5508 | 1.7708280100 | 0.4226 | −1.77732 | 3.8e-6 | 1000 (cap) | 7.0 h |
+  | 0.5506 | 1.7704739758 | 0.4052 | −1.76265 | 4.0e-6 | 888 | 5.9 h |
+  | 0.5504 | 1.7701233048 | 0.3796 | −1.74270 | 1.0e-6 | 165 | 1.1 h |
+  | 0.5502 | 1.7698241129 | 0.0020 | −1.58318 | 2.0e-5 | 489 | 4.3 h |
+
+  At β = 0.5502 the ordered state collapsed onto the disordered branch, so the ordered metastable
+  window at D = 4 ends between 0.5502 and 0.5504, narrower than D = 3's (which survived to 0.550).
+  The 0.5502 row is a disordered point, but a loosely converged one (|g| = 2e-5).
+  **Preliminary crossing:** continue each branch along its tangent, df/dβ = −e (checked against the
+  ordered rows: the finite difference 1.7535 matches −ē = 1.7527). Then
+  f_dis − f_ord = +1.7e-5 at β = 0.5504 and falls at 0.170 per unit β. That puts the crossing at
+  **β_t(D = 4) ≈ 0.55050** (−0.012 % from MC), with **Q(D = 4) ≈ 0.170** (+5 %) and an m jump of
+  about 0.38. Both move from D = 3 towards Monte Carlo. This is an extrapolation from one side of
+  the crossing, off a loosely converged point, and the ordered e changes by 0.02 per 0.0002 in β,
+  so Q is uncertain by about ±0.01. Disordered runs on the fine grid are going on the GPU
+  (β = 0.5504–0.5512) and the CPU (from 0.550), to bracket the crossing directly.
 
 ## Costs
 
