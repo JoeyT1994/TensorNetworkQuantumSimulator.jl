@@ -52,7 +52,7 @@ dated; where a number lives in another doc, that doc has the detail.*
 1. The χ = 64 check. If Im m moves by ≫ 1e-5 near the fold, redo the D = 4 folds at χ = 64.
 2. If χ = 48 holds, the folds have stalled in D at ξ ≈ 4–5. Then the question is whether D = 5 moves them at all — the
    cluster, or a free GPU — and a third β (0.215) sharpens the t → 0 limit more than a fifth D.
-4. For Potts, raise χ (64) so the gradient's noise floor drops below the gtol, or accept |g| ≈ 5e-6 with a time cap per
+3. For Potts, raise χ (64) so the gradient's noise floor drops below the gtol, or accept |g| ≈ 5e-6 with a time cap per
    point.
 
 ---
