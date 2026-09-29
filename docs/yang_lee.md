@@ -302,8 +302,29 @@ Three explanations, in the order to test them:
    The six-point fit reads low when it stops far out (measured 0.15–0.35 % low at v ≈ 0.01 on the D = 2 maps), so D = 3's
    true fold could lie a little higher. That would make the D = 3 → 4 shift negative, which would favour 1.
 
-Re m drifts to 1–4e-5 over the last four points — the residual floor near a fold. At β = 0.20 the D = 4 map is still
-at v = 0.056 (the CPU half of the night; moved to the GPU at 06:40).
+Re m drifts to 1–4e-5 over the last four points — the residual floor near a fold.
+
+**β = 0.20, D = 4 (the same morning).** On 8 CPU threads to v = 0.056 (1–3 h per point), then on the GPU from 06:40
+(30 min per point) to v = 0.012 at θ = 0.016777, ξ = 3.96. Data `examples/yang_lee/data/ylk3_beta0.2_D4_chi48.csv`.
+The same thing happens:
+
+| | θ_f D = 3 | θ_f D = 4 | shift | ξ_f D = 3 → 4 |
+|---|---|---|---|---|
+| β = 0.20 (t = 0.098) | 0.0170106 | 0.0169843 | −0.16 % | 3.73 → 3.96 |
+| β = 0.21 (t = 0.053) | 0.0063160 | 0.0063139 | −0.03 % | 4.70 → 5.20 |
+
+At both temperatures the fold stays put from D = 3 to D = 4 (or slips slightly) while ξ grows, so ξ_f^−2.785 scaling
+does not describe D ≥ 3. The t → 0 limit through the two β (ζ = ζ_c + a t^{ων}):
+
+| treatment of θ_c(β) | ζ(0.098), ζ(0.053) | ζ_c | \|z_c\| |
+|---|---|---|---|
+| ξ fit through D = 2, 3, 4 | 1.6157, 1.6212 | 1.636 | 2.449 |
+| ξ fit through D = 3, 4 | 1.6320, 1.6351 | 1.643 | 2.460 |
+| the D = 4 fold taken as converged | 1.6231, 1.6340 | 1.663 | 2.49 |
+| FRG (Johnson, Rennecke & Skokov) | | 1.621(4) | 2.43(4) |
+
+All three lie 1–2.5 % above the FRG. That is consistent within the spread between treatments, but not a controlled
+number until the χ = 64 check says whether χ = 48 is converged at the fold.
 
 ### Assessment
 
