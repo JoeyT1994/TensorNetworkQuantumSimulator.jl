@@ -157,7 +157,10 @@ function _bp_evaluate(A, ctx, init_n, init_s, tol = ctx.ctm_tolerance)
                      tolerance = tol, maxiter = ctx.ctm_maxiter, anderson = isnothing(init_n) ? 0 : am)
     run_s() = update(InfiniteCTM2D(sl, slegs, ctx.maxdim; init = init_s, ctx.ctm_kwargs...);
                      tolerance = tol, maxiter = ctx.ctm_maxiter, anderson = isnothing(init_s) ? 0 : am)
-    if Threads.nthreads() > 1
+    # Concurrently on the CPU only. On a GPU the two updates' working sets add up and each task
+    # opens its own stream: two local Yang–Lee runs sharing an A6000 with a Potts run died there, out
+    # of memory in cuStreamCreate and with a segfault in cuStreamIsCapturing (2026-09-28).
+    if Threads.nthreads() > 1 && datatype(A) <: Array
         tn = Threads.@spawn run_n()
         ls = run_s()
         ln = fetch(tn)
