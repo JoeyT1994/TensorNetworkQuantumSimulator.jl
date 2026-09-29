@@ -8,13 +8,22 @@ dated; where a number lives in another doc, that doc has the detail.*
 **1. Yang–Lee edge, D = 4, χ = 48** (`examples/yang_lee/scan_krylov.jl`, now with `GPU=1`).
 - **β = 0.21: done.** 13 points to v = 0.012 of the fold, ξ at every point (2.4 → 5.2).
   Data: `examples/yang_lee/data/ylk3_beta0.21_D4_chi48.csv`.
-- **β = 0.20: not finished.** It reached v = 0.056 (θ = 0.0155) on 8 CPU threads at 1–3 h per point. It moved to the
-  GPU at 06:40 and is still running (checkpoint `ylk3_beta0.2_D4_chi48.jls` in the session scratchpad).
-- **The finding:** at β = 0.21 the D = 4 fold is 0.0063139, the same as D = 3's 0.0063160 (−0.03 %), where D = 2 → 3
-  moved it +5.5 %. ξ at the fold still grew 11 % (4.70 → 5.20). So θ_c − θ_f ∝ ξ_f^−2.785 does not hold across
-  D = 2, 3, 4, and the D = 2, 3 extrapolation (ζ_c ≈ 1.61–1.62) is withdrawn. The t → 0 limit now spans ζ_c = 1.64–1.69
-  and |z_c| = 2.46–2.53, against the FRG 2.43(4). Detail and three explanations: docs/yang_lee.md, "D = 4 edge map
-  at β = 0.21". A χ = 64 re-convergence of the last two points is running on the CPU (explanation 1: χ = 48 short).
+- **β = 0.20: done.** On 8 CPU threads to v = 0.056 at 1–3 h per point, then on the GPU from 06:40 at 30 min per point,
+  to v = 0.012. Data: `examples/yang_lee/data/ylk3_beta0.2_D4_chi48.csv`.
+- **The finding: the fold stays put from D = 3 to D = 4 at both β**, while ξ at the fold keeps growing:
+
+  | | θ_f D = 3 | θ_f D = 4 | shift | ξ_f D = 3 → 4 |
+  |---|---|---|---|---|
+  | β = 0.20 (t = 0.098) | 0.0170106 | 0.0169843 | −0.16 % | 3.73 → 3.96 |
+  | β = 0.21 (t = 0.053) | 0.0063160 | 0.0063139 | −0.03 % | 4.70 → 5.20 |
+
+  - D = 2 → 3 had moved the fold +1.6 % and +5.5 %, so θ_c − θ_f ∝ ξ_f^−2.785 does not describe D ≥ 3.
+  - The D = 2, 3 extrapolation (ζ_c ≈ 1.61–1.62) is withdrawn.
+  - Over three treatments of θ_c, the t → 0 limit gives ζ_c = 1.636–1.663 and |z_c| = 2.45–2.49, 1–2.5 % above the
+    FRG 2.43(4). That is consistent, but not a controlled number.
+  - Detail: docs/yang_lee.md, "D = 4 edge map at β = 0.21" and the β = 0.20 part after it.
+- **The open question is χ.** A χ = 64 re-convergence of the last two β = 0.21 points is running on the CPU. If Im m moves
+  by ≫ 1e-5, χ = 48 is short near the fold, and both D = 4 folds need redoing at χ = 64.
 
 **2. Three-state Potts at D = 4, χ = 48: no crossing yet.**
 - **Ordered branch, GPU:** β = 0.565 → 0.551 (coarse grid), then 0.5508 on the fine grid.
@@ -40,9 +49,9 @@ dated; where a number lives in another doc, that doc has the detail.*
   by the fine-grid run above.
 
 **Next:**
-1. The χ = 64 check. If Im m moves by ≫ 1e-5 near the fold, redo the D = 4 fold at χ = 64.
-2. Finish β = 0.20 at D = 4 on the GPU.
-3. Only then D = 5 — the cluster, or a free GPU.
+1. The χ = 64 check. If Im m moves by ≫ 1e-5 near the fold, redo the D = 4 folds at χ = 64.
+2. If χ = 48 holds, the folds have stalled in D at ξ ≈ 4–5. Then the question is whether D = 5 moves them at all — the
+   cluster, or a free GPU — and a third β (0.215) sharpens the t → 0 limit more than a fifth D.
 4. For Potts, raise χ (64) so the gradient's noise floor drops below the gtol, or accept |g| ≈ 5e-6 with a time cap per
    point.
 
