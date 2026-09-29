@@ -255,6 +255,56 @@ singular Jacobian), and a time limit that also cut the trials discarded each run
 continuations resumed the same point for 45 minutes at a fixed |g|. The trials in a built subspace
 now always run; resumed points keep their trust radius.
 
+### D = 4 edge map at β = 0.21, and the ξ extrapolation (2026-09-29)
+
+`scan_krylov.jl` with `GPU=1`, D = 4, χ = 48, on the local A6000. The run started from a fully converged real
+state (`T0ITER = 1000`, `T0LIMIT = 7200`: |g| = 9.2e-7 at θ = 0 after 45 min). With the old 200 s θ = 0 stage it
+started at |g| = 3.7e-4, and the first Newton–Krylov point had not converged after 65 min. Later points took
+5–13 min far from the fold and 1–2 h near it, in 30-minute resumable chunks. 13 points, θ = 0.0006 to 0.006236;
+data `examples/yang_lee/data/ylk3_beta0.21_D4_chi48.csv`.
+
+| θ | Im m | Re m | ξ | \|g\| |
+|---|---|---|---|---|
+| 0.005391 | 0.29106 | +5e-7 | 3.287 | 6.7e-7 |
+| 0.005712 | 0.32869 | −4e-6 | 3.590 | 2.0e-6 |
+| 0.005912 | 0.35962 | −5e-6 | 3.916 | 1.1e-6 |
+| 0.006040 | 0.38529 | −1.4e-5 | 4.255 | 1.5e-6 |
+| 0.006129 | 0.40808 | −2.2e-5 | 4.605 | 3.0e-6 |
+| 0.006192 | 0.42848 | −1.0e-5 | 4.935 | 4.8e-6 |
+| 0.006236 | 0.44705 | +3.6e-5 | 5.203 | 3.7e-6 |
+
+The six-point fold fit (`examples/yang_lee/fold_xi_scaling.jl`, the same fit as `analyse_maps.jl`), the last point
+at v = 0.012:
+
+| β = 0.21 (t = 0.0526) | θ_f | ξ_f (last point with v ≥ 1e-2) | ζ_eff |
+|---|---|---|---|
+| D = 2 | 0.0059898 | 2.73 | 1.6821 |
+| D = 3 | 0.0063160 | 4.70 | 1.6336 |
+| D = 4 | 0.0063139 | 5.20 | 1.6340 |
+
+**The fold did not move from D = 3 to D = 4** (−0.03 %), against +5.5 % from D = 2 to D = 3, while ξ at the fold
+grew by 11 %. So θ_c − θ_f ∝ ξ_f^−2.785 does not hold across D = 2, 3, 4:
+
+* the fit through all three gives θ_c = 0.006392 and ζ(θ_c) = 1.6212;
+* the fit through D = 3 and 4 puts θ_c at 0.006307, BELOW the D = 4 fold, which is unphysical.
+
+The D = 2, 3 illustration above (ζ_c ≈ 1.61–1.62, |z_c| ≈ 2.44) rested on that scaling, and is withdrawn until
+this is understood. With β = 0.20 at D = 2, 3 only, the t → 0 limit reads ζ_c = 1.641 (all D) or 1.691 (two largest
+D), |z_c| = 2.46 or 2.53 against the FRG 2.43(4). That spread is the current uncertainty, not an error bar.
+
+Three explanations, in the order to test them:
+
+1. **χ = 48 is not enough at D = 4 near the fold.** χ/D² = 3, against 2.7 at D = 3, and ξ is 5 there. Test:
+   re-converge the last three points at χ = 64 from the χ = 48 states.
+2. **The fold has converged in D at this β**, and the D = 2 → 3 shift was the whole finite-D correction. Then θ_c ≈
+   0.00632 at t = 0.053, and ζ(t) is 1.634 there.
+3. **D = 3's recorded fold is biased.** It was fitted from points stopping at v ≈ 0.013–0.016, against D = 4's 0.012.
+   The six-point fit reads low when it stops far out (measured 0.15–0.35 % low at v ≈ 0.01 on the D = 2 maps), so D = 3's
+   true fold could lie a little higher. That would make the D = 3 → 4 shift negative, which would favour 1.
+
+Re m drifts to 1–4e-5 over the last four points — the residual floor near a fold. At β = 0.20 the D = 4 map is still
+at v = 0.056 (the CPU half of the night; moved to the GPU at 06:40).
+
 ### Assessment
 
 What works: the stationary bilinear boundary PEPS follows the analytic continuation of the dominant

@@ -17,6 +17,7 @@ const RCHI_G = 1.497; const BETAC = 0.2216544; const BC = 1.395; const OMEGANU =
 const P = 3 - 0.215
 const ZETA_FRG, Z_FRG = 1.621, 2.43
 const DIR = get(ENV, "DIR", ".")
+const VMAX = parse(Float64, get(ENV, "VMAX", "0.02"))
 
 # (β, D) => (θ_f, ξ_f at v ≥ 1e-2, χ) from docs/yang_lee.md ("Results" and "D = 3 edge maps").
 # D = 3's χ equals D = 2's to 0.1–0.6 %; it is backed out of the recorded ζ_eff.
@@ -75,7 +76,9 @@ end
 println("\nθ_c from θ_f = θ_c − a ξ_f^−$(P) (per β):")
 ests = Dict{Float64, Any}()
 for β in sort(unique(first.(collect(keys(data)))))
-    Ds = sort([k[2] for k in keys(data) if k[1] == β && isfinite(data[k].ξ)])
+    # a map enters only once it has come within VMAX of its fold: the six-point fit from farther out is
+    # biased low (β = 0.20, D = 4 at v = 0.079 read 0.01608, below the D = 2 fold)
+    Ds = sort([k[2] for k in keys(data) if k[1] == β && isfinite(data[k].ξ) && !(data[k].vlast > VMAX)])
     length(Ds) < 2 && continue
     x = [data[(β, D)].ξ^(-P) for D in Ds]; y = [data[(β, D)].θf for D in Ds]
     fit(idx) = (M = [ones(length(idx)) -x[idx]]; c = M \ y[idx]; c[1])
