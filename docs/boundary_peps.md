@@ -521,6 +521,13 @@ Q is interpolated linearly in β between grid points. The ordered branch's energ
   | boundary PEPS D = 3, χ = 27 | 0.550408 (−0.029 %) | 0.1891 (+17 %) |
   | boundary PEPS D = 4, χ = 48 | **0.550505 (−0.011 %)** | **0.1678 (+3.8 %)** |
 
+  - **Check with a third row.** The disordered branch at 0.5508 (31 min): f = 1.7707753815,
+    e = −1.58769, |g| = 7.8e-6. That puts f_ord − f_dis at +5.26e-5.
+  - Quadratic interpolation through the three rows (0.5504, 0.5506, 0.5508) gives
+    β_t = 0.550507 and Q = 0.1686; e_ord's curvature adds +0.0008 to Q.
+  - So **β_t(D = 4) = 0.550506(2), Q(D = 4) = 0.168(1)**. The spread between the linear and quadratic
+    readings is taken as the interpolation error.
+
   From D = 3 to D = 4, β_t moves 62 % of the way to Monte Carlo, and Q's error drops from 17 % to
   3.8 %. The remaining discrepancy is of the size of the finite-D bias. The ordered side is the
   cruder: it sits at the gradient's noise floor (|g| ≈ 4e-6) and grows steep near its spinodal.

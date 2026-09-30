@@ -35,6 +35,8 @@ dated; where a number lives in another doc, that doc has the detail.*
 
 - Both branches have converged points at β = 0.5504 and 0.5506, on either side of the crossing. Everything is
   interpolated linearly between those two rows. Detail: boundary_peps.md, "3D three-state Potts".
+  - A third disordered row, at 0.5508, allows a quadratic interpolation: β_t = 0.550507, Q = 0.1686.
+  - Quoted with the interpolation error: **β_t = 0.550506(2), Q = 0.168(1)**.
 - **Ordered branch (GPU): finished at 16:45.** It ran 0.565 → 0.551 on the coarse grid, then 0.5508 → 0.5504 on the fine
   grid, at 1–7 h per point. At 0.5502 it collapsed to m = 0.002, so its metastable window is narrower than at D = 3.
 - **Disordered branch (GPU, not the CPU as the goal said).**
