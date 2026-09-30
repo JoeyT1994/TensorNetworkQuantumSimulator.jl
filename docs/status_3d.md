@@ -25,20 +25,27 @@ dated; where a number lives in another doc, that doc has the detail.*
 - **The open question is χ.** A χ = 64 re-convergence of the last two β = 0.21 points is running on the CPU. If Im m moves
   by ≫ 1e-5, χ = 48 is short near the fold, and both D = 4 folds need redoing at χ = 64.
 
-**2. Three-state Potts at D = 4, χ = 48: ordered branch done; a preliminary crossing.**
-- **Ordered branch, GPU: finished (2026-09-29, 16:45).** β = 0.565 → 0.551 (coarse), then 0.5508, 0.5506, 0.5504 on the
-  fine grid, 1–7 h per point. At 0.5502 it collapsed to m = 0.002. That is the end of the ordered window at D = 4,
-  narrower than D = 3's.
-- **Preliminary: β_t(D = 4) ≈ 0.55050 (MC 0.550565, D = 3 0.550408) and Q(D = 4) ≈ 0.170 (MC 0.1616, D = 3 0.189).**
-  This comes from tangent extrapolation of the collapsed 0.5502 point (|g| = 2e-5) against the ordered 0.5504/0.5506
-  rows. Both numbers move toward Monte Carlo with D. Q is uncertain by about ±0.01. Table and caveats:
-  boundary_peps.md, "3D three-state Potts".
-- **Update (21:20): the GPU disordered point at β = 0.5504 converged** (f = 1.7701409, e = −1.5846). That is 2e-7
-  from the tangent prediction, and it is above the ordered f, so the crossing is above 0.5504. New numbers:
-  **β_t(D = 4) = 0.550504 and Q(D = 4) = 0.169** (MC 0.550565, 0.1616).
-- **Still running, to bracket the crossing directly:**
-  - disordered, GPU: next point β = 0.5506, warm-started; then 0.5508 → 0.5512;
-  - disordered, CPU (16 threads): from β = 0.550, still on its first cold point after 23 h.
+**2. Three-state Potts at D = 4, χ = 48: done. β_t = 0.550505, Q = 0.1678.**
+
+| | β_t | Q |
+|---|---|---|
+| Monte Carlo (Janke–Villanova) | 0.550565(10) | 0.16160(47) |
+| D = 3, χ = 27 | 0.550408 (−0.029 %) | 0.1891 (+17 %) |
+| **D = 4, χ = 48** | **0.550505 (−0.011 %)** | **0.1678 (+3.8 %)** |
+
+- Both branches have converged points at β = 0.5504 and 0.5506, on either side of the crossing. Everything is
+  interpolated linearly between those two rows. Detail: boundary_peps.md, "3D three-state Potts".
+- **Ordered branch (GPU): finished at 16:45.** It ran 0.565 → 0.551 on the coarse grid, then 0.5508 → 0.5504 on the fine
+  grid, at 1–7 h per point. At 0.5502 it collapsed to m = 0.002, so its metastable window is narrower than at D = 3.
+- **Disordered branch (GPU, not the CPU as the goal said).**
+  - The CPU run's first point, a cold D = 3 → 4 climb at β = 0.550, had not converged after 27 h. That is at 16 threads,
+    on a workstation shared with two other jobs.
+  - Once the ordered run freed the A6000, a GPU disordered run started at 16:55. Its first point, at β = 0.5504, took
+    4.1 h cold; the one at 0.5506 took 25 min warm-started.
+  - The collapsed ordered point at 0.5502 had predicted the disordered f at 0.5504 to within 2e-7.
+- Still running, as cross-checks only:
+  - the GPU disordered run continues through 0.5508 → 0.5512;
+  - the CPU disordered run is still on β = 0.550.
 
 **What went wrong overnight, and the fixes (all committed):**
 - **GPU memory.** Two jobs on the A6000 ran it out of memory three times. CUDA.jl's pools do not return memory, and

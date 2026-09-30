@@ -451,7 +451,8 @@ discontinuity, all at infinite size. Monte Carlo has to tunnel between the phase
 | Monte Carlo, Janke & Villanova, Nucl. Phys. B 489, 679 (1997) | 0.550565(10) | 0.16160(47) | |
 | tensor product variational approach, Gendiar & Nishino, cond-mat/0102425 | 0.5496 (−0.18%) | 0.228 (+41%) | |
 | boundary PEPS D = 3, χ = 27, grid 0.001 | 0.550370 | 0.1792 | 0.401 |
-| boundary PEPS D = 3, χ = 27, grid 0.0002 | **0.550408 (−0.029%)** | **0.1891 (+17%)** | 0.415 |
+| boundary PEPS D = 3, χ = 27, grid 0.0002 | 0.550408 (−0.029%) | 0.1891 (+17%) | 0.415 |
+| boundary PEPS D = 4, χ = 48, grid 0.0002 | **0.550505 (−0.011%)** | **0.1678 (+3.8%)** | 0.393 |
 
 Q is interpolated linearly in β between grid points. The ordered branch's energy is steep near β_t
 (e from −1.7315 to −1.7991 over 0.550–0.551), so the coarse grid understated Q; the fine grid
@@ -498,6 +499,31 @@ Q is interpolated linearly in β between grid points. The ordered branch's energ
     **Q(D = 4) = 0.169** (+4.5 %, against D = 3's +17 %), with an m jump of 0.393.
   - Once the disordered point at 0.5506 lands, both branches bracket the crossing and these
     numbers become a pure interpolation.
+* **The crossing, bracketed (2026-09-29, 21:50).** The disordered branch at β = 0.5506, warm-started
+  on the GPU from 0.5504, took 25 min: f = 1.7704580021, m = −0.0013, e = −1.58612, |g| = 2.1e-5.
+
+  | β | f_ord | f_dis | f_ord − f_dis | e_ord | e_dis |
+  |---|---|---|---|---|---|
+  | 0.5504 | 1.7701233048 | 1.7701409290 | −1.762e-5 | −1.74270 | −1.58462 |
+  | 0.5506 | 1.7704739758 | 1.7704580021 | +1.597e-5 | −1.76265 | −1.58612 |
+
+  - Consistency: the disordered finite difference, 1.5854, matches −ē = 1.5854.
+  - Everything interpolated linearly in β between the two rows:
+    **β_t(D = 4) = 0.550505** (−0.011 % from MC), **Q(D = 4) = 0.1678** (+3.8 %), m jump 0.393.
+  - The previous estimates, from tangents, were 0.550504 and 0.169. The crossing sits at 52 % of
+    the interval, so what is left is the error of linear interpolation over 0.0002.
+  - For Q that is the ordered energy's curvature: e_ord changes by 0.0200 over 0.5504–0.5506,
+    against 0.0147 over 0.5506–0.5508. From that curvature, the error in Q is ~1e-3.
+
+  | | β_t | Q |
+  |---|---|---|
+  | Monte Carlo | 0.550565(10) | 0.16160(47) |
+  | boundary PEPS D = 3, χ = 27 | 0.550408 (−0.029 %) | 0.1891 (+17 %) |
+  | boundary PEPS D = 4, χ = 48 | **0.550505 (−0.011 %)** | **0.1678 (+3.8 %)** |
+
+  From D = 3 to D = 4, β_t moves 62 % of the way to Monte Carlo, and Q's error drops from 17 % to
+  3.8 %. The remaining discrepancy is of the size of the finite-D bias. The ordered side is the
+  cruder: it sits at the gradient's noise floor (|g| ≈ 4e-6) and grows steep near its spinodal.
 
 ## Costs
 
