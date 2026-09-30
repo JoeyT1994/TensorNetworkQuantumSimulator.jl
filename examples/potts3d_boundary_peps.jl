@@ -20,7 +20,10 @@
 # Environment: PT_BRANCH, PT_D, PT_CHI, PT_GPU=1, PT_BETAS (comma-separated, in scan order),
 # PT_MAXITER, PT_TAG (output prefix), PT_SAVE=1 (serialize each β's state, on the host, to
 # $(TAG)_D$(D)_chi$(CHI)_$(branch)_beta$(β).jls), PT_INIT=file.jls (warm-start the first β from a saved
-# state instead of climbing D = q → D; a smaller-D state is embedded, e.g. a D = 4 state seeding D = 5).
+# state instead of climbing D = q → D; a smaller-D state is embedded, e.g. a D = 4 state seeding D = 5),
+# PT_BUDGET (seconds; on running out the unfinished β is saved as ..._partial.jls and the run exits,
+# printing "(budget"). With PT_SAVE=1 a rerun resumes: finished β are read back, an unfinished one
+# continues from its partial state (the L-BFGS memory restarts).
 
 using TensorNetworkQuantumSimulator
 using Printf, Serialization
@@ -41,6 +44,7 @@ const BETAS = haskey(ENV, "PT_BETAS") ? parse.(Float64, split(ENV["PT_BETAS"], "
 const MAXITER = parse(Int, get(ENV, "PT_MAXITER", "1000"))
 const SAVE = get(ENV, "PT_SAVE", "0") == "1"
 const INIT = get(ENV, "PT_INIT", "")
+const BUDGET = parse(Float64, get(ENV, "PT_BUDGET", "Inf"))
 const GTOL = 1.0e-6
 const CTM_TOL = 1.0e-10
 # A branch has left its phase once |m| crosses this. m reads (q⟨δ(s, 1)⟩ − 1)/(q − 1): ordering into
@@ -54,10 +58,15 @@ host(x) = GPU ? adapt(Array, x) : x
 chi_for(d) = max(8, ceil(Int, CHI * d^2 / D^2))
 order_parameter(bp, o) = (Q * real(site_ratio(bp, o)) - 1) / (Q - 1)
 
+statefile(β) = "$(TAG)_D$(D)_chi$(CHI)_$(BRANCH)_beta$(β).jls"
+partialfile(β) = "$(TAG)_D$(D)_chi$(CHI)_$(BRANCH)_beta$(β)_partial.jls"
+const DEADLINE = time() + BUDGET
+
 redirect_stderr(stdout)
 println("3D q=$Q Potts, $BRANCH branch: D = $D, χ = $CHI, maxiter = $MAXITER, threads = $(Threads.nthreads()), ",
-        GPU ? "GPU" : "CPU")
-open(outfile(BRANCH), "w") do io
+        GPU ? "GPU" : "CPU", isfinite(BUDGET) ? ", budget $(round(Int, BUDGET)) s" : "")
+# with PT_SAVE=1 a rerun resumes: finished β are read back from disk, so the CSV is kept
+(SAVE && isfile(outfile(BRANCH))) || open(outfile(BRANCH), "w") do io
     println(io, "beta,f,m,e,gnorm,iters,seconds")
 end
 @printf("%8s %14s %12s %12s %10s %6s %8s\n", "β", "f = ln κ", "m", "e", "|g|", "iters", "s")
@@ -66,33 +75,64 @@ flush(stdout)
 boundary = BRANCH == "ordered" ? [1.0; zeros(Q - 1)] : ones(Q)
 global prev = isempty(INIT) ? nothing : device(deserialize(INIT))
 isempty(INIT) || println("  warm start from $INIT")
+function csvrow(β)
+    for l in readlines(outfile(BRANCH))[2:end]
+        r = parse.(Float64, split(l, ",")); r[1] == β && return r
+    end
+    return nothing
+end
 for β in BETAS
+    # resume: a finished β is on disk (its state and its CSV row)
+    if SAVE && isfile(statefile(β)) && !isnothing(csvrow(β))
+        m = csvrow(β)[3]
+        println("  β = $β: done in an earlier run (m = $m), read from $(statefile(β))"); flush(stdout)
+        (BRANCH == "ordered" ? m < MJUMP : abs(m) > MJUMP) && (println("  the $BRANCH branch has left its phase at β = $β: stopping"); break)
+        global prev = device(deserialize(statefile(β)))
+        continue
+    end
     site0, legs, o0, e0 = potts3d_site(β; q = Q)
     site = device(site0); o = device(o0); en = device(e0)
+    # an unfinished β from an earlier run continues from its partial state (possibly at a smaller D)
+    init = (SAVE && isfile(partialfile(β))) ? device(deserialize(partialfile(β))) : prev
+    init === prev || (println("  β = $β: continuing from $(partialfile(β))"); flush(stdout))
+    global climbed = true
     t = @elapsed begin
-        if isnothing(prev)
+        if isnothing(init)
             # climb D = q, …, D at this β (from D = q the seed T|b⟩ embeds without truncation)
             d0 = min(Q, D)
             global bp = boundary_peps(site, legs, d0; maxdim = chi_for(d0), boundary, maxiter = MAXITER,
-                                      gtol = GTOL, ctm_tolerance = CTM_TOL)
+                                      gtol = GTOL, ctm_tolerance = CTM_TOL, time_limit = DEADLINE - time())
             for d in (d0 + 1):D
+                time() > DEADLINE && (global climbed = false; break)
                 println("  first β: D = $(d - 1) done (f = $(bp.lnkappa), m = $(order_parameter(bp, o))), embedding into D = $d")
                 flush(stdout)
                 global bp = boundary_peps(site, legs, d; maxdim = chi_for(d), init = bp, maxiter = MAXITER,
-                                          gtol = GTOL, ctm_tolerance = CTM_TOL)
+                                          gtol = GTOL, ctm_tolerance = CTM_TOL, time_limit = DEADLINE - time())
             end
         else
-            global bp = boundary_peps(site, legs, D; maxdim = CHI, init = prev, maxiter = MAXITER,
-                                      gtol = GTOL, ctm_tolerance = CTM_TOL)
+            global bp = boundary_peps(site, legs, D; maxdim = CHI, init, maxiter = MAXITER,
+                                      gtol = GTOL, ctm_tolerance = CTM_TOL, time_limit = DEADLINE - time())
         end
+    end
+    # out of budget and neither converged nor at the iteration cap (a NaN |g|, from a run cut before its
+    # first step, counts as unconverged), or the climb stopped short of D
+    if time() > DEADLINE && (!climbed || (!(bp.gnorm < GTOL) && length(bp.history) - 1 < MAXITER))
+        if SAVE
+            serialize(partialfile(β) * ".tmp", host(bp)); mv(partialfile(β) * ".tmp", partialfile(β); force = true)
+        end
+        println("  (budget: β = $β unfinished", climbed ? "" : " (climb short of D)", ", |g| = $(bp.gnorm)",
+                SAVE ? "; saved to $(partialfile(β)))" : ")")
+        exit(0)
     end
     f = cvm_freenergy(bp); m = order_parameter(bp, o); e = -real(site_ratio(bp, en))
     @printf("%8.4f %14.10f %12.8f %12.8f %10.2e %6d %8.1f\n", β, f, m, e, bp.gnorm, length(bp.history) - 1, t)
     flush(stdout)
+    if SAVE
+        serialize(statefile(β) * ".tmp", host(bp)); mv(statefile(β) * ".tmp", statefile(β); force = true)
+    end
     open(outfile(BRANCH), "a") do io
         println(io, join((β, f, m, e, bp.gnorm, length(bp.history) - 1, t), ","))
     end
-    SAVE && serialize("$(TAG)_D$(D)_chi$(CHI)_$(BRANCH)_beta$(β).jls", host(bp))
     left = BRANCH == "ordered" ? m < MJUMP : abs(m) > MJUMP
     left && (println("  the $BRANCH branch has left its phase at β = $β (m = $m): stopping"); break)
     global prev = bp

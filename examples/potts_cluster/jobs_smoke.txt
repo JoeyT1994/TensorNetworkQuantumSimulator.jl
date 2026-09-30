@@ -1,0 +1,7 @@
+# Smoke test (~15–30 min on one GPU, most of it compilation): cold D = 3, χ = 27 points with known answers
+# (the local CPU scans, 2026-09-28):
+#   ordered    β = 0.56:  f = 1.7884857643, m = 0.61858, e = −2.01465
+#   disordered β = 0.545: f = 1.7616456092, m ≈ 0,      e = −1.55388
+# Agreement to ~1e-7 in f (the gtol is 1e-6) means the environment, the GPU and resume-on-disk all work.
+ordered    3 27 0.56  - smoke
+disordered 3 27 0.545 - smoke

@@ -1,0 +1,17 @@
+# The D = 5 Potts campaign (docs/boundary_peps.md, "3D three-state Potts"). One line per GPU task:
+#   BRANCH D CHI BETAS INIT TAG
+# BETAS in scan order (the ordered branch downwards, the disordered upwards); INIT a saved state (relative
+# to this directory; "-" for a cold climb D = 3 → D at the first β); χ = 3D².
+# The D = 4 crossing lies at 52 % of 0.5504–0.5506; these grids bracket it with one point to spare.
+# First wave: cold climbs (D = 3 → 4 → 5 at the first β, then warm starts).
+disordered 5 75 0.5504,0.5506,0.5508 - d5
+ordered    5 75 0.5508,0.5506,0.5504 - d5
+# The same, seeded from the local D = 4, χ = 64 states once they exist (copy them into seeds/; a D = 4 state
+# is embedded into D = 5 with 20 forced L-BFGS iterations) — cheaper than the climb, use one or the other:
+# disordered 5 75 0.5504,0.5506,0.5508 seeds/chi64_D4_chi64_disordered_beta0.5504.jls d5
+# ordered    5 75 0.5508,0.5506,0.5504 seeds/chi64_D4_chi64_ordered_beta0.5508.jls    d5
+# Second wave, once the D = 5 states exist (copy runs/d5_*_beta*.jls to seeds/):
+# disordered 5 100 0.5504,0.5506 seeds/d5_D5_chi75_disordered_beta0.5504.jls d5x
+# ordered    5 100 0.5506,0.5504 seeds/d5_D5_chi75_ordered_beta0.5506.jls    d5x
+# disordered 6 108 0.5504,0.5506,0.5508 seeds/d5_D5_chi75_disordered_beta0.5504.jls d6
+# ordered    6 108 0.5508,0.5506,0.5504 seeds/d5_D5_chi75_ordered_beta0.5508.jls    d6
