@@ -18,10 +18,12 @@
 # Hellmann–Feynman at the variational optimum), f = ln κ per site.
 #
 # Environment: PT_BRANCH, PT_D, PT_CHI, PT_GPU=1, PT_BETAS (comma-separated, in scan order),
-# PT_MAXITER, PT_TAG (output prefix).
+# PT_MAXITER, PT_TAG (output prefix), PT_SAVE=1 (serialize each β's state, on the host, to
+# $(TAG)_D$(D)_chi$(CHI)_$(branch)_beta$(β).jls), PT_INIT=file.jls (warm-start the first β from a saved
+# state instead of climbing D = q → D; a smaller-D state is embedded, e.g. a D = 4 state seeding D = 5).
 
 using TensorNetworkQuantumSimulator
-using Printf
+using Printf, Serialization
 const GPU = get(ENV, "PT_GPU", "0") == "1"
 if GPU
     using CUDA, Adapt
@@ -37,6 +39,8 @@ const DEFAULT_BETAS = BRANCH == "ordered" ?
     [0.535, 0.54, 0.545, 0.5475, 0.549, 0.55, 0.551, 0.5525, 0.555, 0.5575, 0.56]
 const BETAS = haskey(ENV, "PT_BETAS") ? parse.(Float64, split(ENV["PT_BETAS"], ",")) : DEFAULT_BETAS
 const MAXITER = parse(Int, get(ENV, "PT_MAXITER", "1000"))
+const SAVE = get(ENV, "PT_SAVE", "0") == "1"
+const INIT = get(ENV, "PT_INIT", "")
 const GTOL = 1.0e-6
 const CTM_TOL = 1.0e-10
 # A branch has left its phase once |m| crosses this. m reads (q⟨δ(s, 1)⟩ − 1)/(q − 1): ordering into
@@ -46,6 +50,7 @@ const MJUMP = 0.1
 outfile(branch) = "$(TAG)_D$(D)_chi$(CHI)_$(branch).csv"
 
 device(x) = GPU ? adapt(CuArray, x) : x
+host(x) = GPU ? adapt(Array, x) : x
 chi_for(d) = max(8, ceil(Int, CHI * d^2 / D^2))
 order_parameter(bp, o) = (Q * real(site_ratio(bp, o)) - 1) / (Q - 1)
 
@@ -59,7 +64,8 @@ end
 flush(stdout)
 
 boundary = BRANCH == "ordered" ? [1.0; zeros(Q - 1)] : ones(Q)
-global prev = nothing
+global prev = isempty(INIT) ? nothing : device(deserialize(INIT))
+isempty(INIT) || println("  warm start from $INIT")
 for β in BETAS
     site0, legs, o0, e0 = potts3d_site(β; q = Q)
     site = device(site0); o = device(o0); en = device(e0)
@@ -86,6 +92,7 @@ for β in BETAS
     open(outfile(BRANCH), "a") do io
         println(io, join((β, f, m, e, bp.gnorm, length(bp.history) - 1, t), ","))
     end
+    SAVE && serialize("$(TAG)_D$(D)_chi$(CHI)_$(BRANCH)_beta$(β).jls", host(bp))
     left = BRANCH == "ordered" ? m < MJUMP : abs(m) > MJUMP
     left && (println("  the $BRANCH branch has left its phase at β = $β (m = $m): stopping"); break)
     global prev = bp
