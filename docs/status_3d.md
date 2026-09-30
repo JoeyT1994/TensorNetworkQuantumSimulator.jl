@@ -45,9 +45,9 @@ dated; where a number lives in another doc, that doc has the detail.*
   - Once the ordered run freed the A6000, a GPU disordered run started at 16:55. Its first point, at β = 0.5504, took
     4.1 h cold; the one at 0.5506 took 25 min warm-started.
   - The collapsed ordered point at 0.5502 had predicted the disordered f at 0.5504 to within 2e-7.
-- Still running, as cross-checks only:
-  - the GPU disordered run continues through 0.5508 → 0.5512;
-  - the CPU disordered run is still on β = 0.550.
+- Still running, as a cross-check only: the GPU disordered run, now past 0.5508, heading to 0.5512.
+- The CPU disordered run was stopped at 22:40, still on its first point after 29 h. The GPU run had made it redundant,
+  and it was taking cores from the χ = 64 Yang–Lee check.
 
 **What went wrong overnight, and the fixes (all committed):**
 - **GPU memory.** Two jobs on the A6000 ran it out of memory three times. CUDA.jl's pools do not return memory, and
