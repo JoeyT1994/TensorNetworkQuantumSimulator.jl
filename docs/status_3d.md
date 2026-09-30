@@ -22,8 +22,12 @@ dated; where a number lives in another doc, that doc has the detail.*
   - Over three treatments of θ_c, the t → 0 limit gives ζ_c = 1.636–1.663 and |z_c| = 2.45–2.49, 1–2.5 % above the
     FRG 2.43(4). That is consistent, but not a controlled number.
   - Detail: docs/yang_lee.md, "D = 4 edge map at β = 0.21" and the β = 0.20 part after it.
-- **The open question is χ.** A χ = 64 re-convergence of the last two β = 0.21 points is running on the CPU. If Im m moves
-  by ≫ 1e-5, χ = 48 is short near the fold, and both D = 4 folds need redoing at χ = 64.
+- **The χ question is answered: χ = 48 is converged at the fold.** At β = 0.21, θ = 0.0061915 (v = 1.9 %), χ = 64 moves
+  Im m by −3.5e-5. That is equivalent to shifting θ by 1e-7 (0.0015 %), 20× below the D = 3 → 4 shift. ξ grows 2 %
+  (4.935 → 5.031).
+  - The run is a GPU copy of the check, 1.5 h. The CPU copy, 18 h into its first point, was stopped.
+  - The last point (v = 1.2 %) is still running on the GPU.
+  - So the stalled fold is not a χ artefact. Detail: yang_lee.md, "The χ = 64 check".
 
 **2. Three-state Potts at D = 4, χ = 48: done. β_t = 0.550505, Q = 0.1678.**
 
@@ -64,7 +68,7 @@ dated; where a number lives in another doc, that doc has the detail.*
   by the fine-grid run above.
 
 **Next:**
-1. The χ = 64 check. If Im m moves by ≫ 1e-5 near the fold, redo the D = 4 folds at χ = 64.
+1. The χ = 64 check is done: χ = 48 holds at the fold, so no redo is needed.
 2. If χ = 48 holds, the folds have stalled in D at ξ ≈ 4–5. Then the question is whether D = 5 moves them at all — the
    cluster, or a free GPU — and a third β (0.215) sharpens the t → 0 limit more than a fifth D.
 3. For Potts, raise χ (64) so the gradient's noise floor drops below the gtol, or accept |g| ≈ 5e-6 with a time cap per

@@ -326,6 +326,23 @@ does not describe D ≥ 3. The t → 0 limit through the two β (ζ = ζ_c + a t
 All three lie 1–2.5 % above the FRG. That is consistent within the spread between treatments, but not a controlled
 number until the χ = 64 check says whether χ = 48 is converged at the fold.
 
+**The χ = 64 check (2026-09-30).** Setup:
+- β = 0.21, D = 4, the second-to-last map point, θ = 0.0061915 (v = 1.9 %).
+- Newton–Krylov re-converged at χ = 64 from the χ = 48 state, on the A6000: 128 evaluations, 1.5 h, |g| = 3.1e-6.
+
+| | Im m | ξ |
+|---|---|---|
+| χ = 48 | 0.42848349 | 4.935 |
+| χ = 64 | 0.42844862 | 5.031 |
+
+- **Im m** moves by −3.5e-5. The map's slope there is dIm m/dθ ≈ 365, so that is a θ-equivalent shift of 1e-7 (0.0015 %).
+  That is 20× smaller than the D = 3 → 4 fold shift at this β. **The fold is converged in χ at χ = 48**, which
+  rules out explanation 1 above.
+- **ξ** grows by 2 % with χ, so ξ_f at χ = 48 is a slight underestimate. That cannot rescue the ξ_f^−2.785 law:
+  ξ_f grows 11 % from D = 3 to D = 4 while the fold does not move.
+- What is left is explanation 2, the fold converged in D, or 3, a biased D = 3 fold. With explanation 2, the D = 4
+  fold stands as θ_c, and ζ_c = 1.663, |z_c| = 2.49 (the last row of the table).
+
 ### Assessment
 
 What works: the stationary bilinear boundary PEPS follows the analytic continuation of the dominant
