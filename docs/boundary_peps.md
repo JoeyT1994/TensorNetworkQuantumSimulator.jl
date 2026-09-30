@@ -487,6 +487,17 @@ Q is interpolated linearly in β between grid points. The ordered branch's energ
   the crossing, off a loosely converged point, and the ordered e changes by 0.02 per 0.0002 in β,
   so Q is uncertain by about ±0.01. Disordered runs on the fine grid are going on the GPU
   (β = 0.5504–0.5512) and the CPU (from 0.550), to bracket the crossing directly.
+* **The disordered branch at β = 0.5504**, GPU, cold D = 3 → 4 climb (D = 3: f = 1.7700972), 4.1 h:
+  f = 1.7701409290, m = −0.0011, e = −1.58462, |g| = 1.1e-5.
+  - The tangent from the collapsed 0.5502 point had predicted 1.7701407. The measurement
+    agrees to 2e-7, which confirms that the 0.5502 point was on the disordered branch.
+  - f_dis − f_ord = +1.76e-5 at 0.5504, so the disordered phase is stable there.
+  - Crossing: the ordered branch linear between 0.5504 and 0.5506, the disordered branch on
+    its tangent for 1e-4.
+    **β_t(D = 4) = 0.550504** (−0.011 % from MC, against D = 3's −0.029 %) and
+    **Q(D = 4) = 0.169** (+4.5 %, against D = 3's +17 %), with an m jump of 0.393.
+  - Once the disordered point at 0.5506 lands, both branches bracket the crossing and these
+    numbers become a pure interpolation.
 
 ## Costs
 

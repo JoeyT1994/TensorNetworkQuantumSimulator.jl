@@ -33,8 +33,11 @@ dated; where a number lives in another doc, that doc has the detail.*
   This comes from tangent extrapolation of the collapsed 0.5502 point (|g| = 2e-5) against the ordered 0.5504/0.5506
   rows. Both numbers move toward Monte Carlo with D. Q is uncertain by about ±0.01. Table and caveats:
   boundary_peps.md, "3D three-state Potts".
+- **Update (21:20): the GPU disordered point at β = 0.5504 converged** (f = 1.7701409, e = −1.5846). That is 2e-7
+  from the tangent prediction, and it is above the ordered f, so the crossing is above 0.5504. New numbers:
+  **β_t(D = 4) = 0.550504 and Q(D = 4) = 0.169** (MC 0.550565, 0.1616).
 - **Still running, to bracket the crossing directly:**
-  - disordered, GPU: β = 0.5504 → 0.5512, from a cold D = 3 → 4 climb, started 16:55;
+  - disordered, GPU: next point β = 0.5506, warm-started; then 0.5508 → 0.5512;
   - disordered, CPU (16 threads): from β = 0.550, still on its first cold point after 23 h.
 
 **What went wrong overnight, and the fixes (all committed):**
