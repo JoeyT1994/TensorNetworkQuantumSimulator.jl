@@ -26,7 +26,7 @@ dated; where a number lives in another doc, that doc has the detail.*
   Im m by −3.5e-5. That is equivalent to shifting θ by 1e-7 (0.0015 %), 20× below the D = 3 → 4 shift. ξ grows 2 %
   (4.935 → 5.031).
   - The run is a GPU copy of the check, 1.5 h. The CPU copy, 18 h into its first point, was stopped.
-  - The last point (v = 1.2 %) is still running on the GPU.
+  - The last point (v = 1.2 %) agrees: ΔIm m = −2.4e-5, ξ 5.203 → 5.323 (1.6 h on the GPU, finished 03:50).
   - So the stalled fold is not a χ artefact. Detail: yang_lee.md, "The χ = 64 check".
 
 **2. Three-state Potts at D = 4, χ = 48: done. β_t = 0.550505, Q = 0.1678.**

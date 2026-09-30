@@ -332,8 +332,13 @@ number until the χ = 64 check says whether χ = 48 is converged at the fold.
 
 | | Im m | ξ |
 |---|---|---|
-| χ = 48 | 0.42848349 | 4.935 |
-| χ = 64 | 0.42844862 | 5.031 |
+| θ = 0.0061915 (v = 1.9 %), χ = 48 | 0.42848349 | 4.935 |
+| θ = 0.0061915 (v = 1.9 %), χ = 64 | 0.42844862 | 5.031 |
+| θ = 0.0062360 (v = 1.2 %), χ = 48 | 0.44705229 | 5.203 |
+| θ = 0.0062360 (v = 1.2 %), χ = 64 | 0.44702831 | 5.323 |
+
+The last point (130 evaluations, 1.6 h, |g| = 3.2e-6, Re m = 7e-5) moves by −2.4e-5, less than the one before it,
+at a steeper slope (≳ 420). That is a θ-equivalent shift of ≲ 6e-8.
 
 - **Im m** moves by −3.5e-5. The map's slope there is dIm m/dθ ≈ 365, so that is a θ-equivalent shift of 1e-7 (0.0015 %).
   That is 20× smaller than the D = 3 → 4 fold shift at this β. **The fold is converged in χ at χ = 48**, which
