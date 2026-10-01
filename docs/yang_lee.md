@@ -348,6 +348,47 @@ at a steeper slope (≳ 420). That is a θ-equivalent shift of ≲ 6e-8.
 - What is left is explanation 2, the fold converged in D, or 3, a biased D = 3 fold. With explanation 2, the D = 4
   fold stands as θ_c, and ζ_c = 1.663, |z_c| = 2.49 (the last row of the table).
 
+### The Bethe estimator against the Hermitian one (2026-10-01)
+
+T in an imaginary field is complex symmetric, not Hermitian. On the same boundary state R, compare two estimators:
+- **Bethe** (two-sided, bilinear): f_B = ln κ⟨Rᵀ|T|R⟩ − ln κ⟨Rᵀ|R⟩. It is stationary at T's dominant eigenvector, so its
+  error is O(ε²).
+- **Hermitian** (conjugated bra): f_H = ln κ⟨R̄|T|R⟩ − ln κ⟨R̄|R⟩. It is not stationary, so its error is O(ε).
+
+The script is `examples/yang_lee/bethe_vs_hermitian.jl`. Run: 3D Ising, β = 0.21, D = 2, χ = 16, CPU, 2D level `:cut`.
+
+**On converged Bethe states:**
+
+| θ | f_B | f_H | f_B − f_H | Im m (Bethe impurity) | Im m (Hermitian impurity) |
+|---|---|---|---|---|---|
+| 0.002 | 0.767266821 | 0.767247630 | 1.9e-5 | 0.0862 | 0.0123 |
+| 0.004 | 0.766996804 | 0.766903400 | 9.3e-5 | 0.1888 | 0.0250 |
+| 0.0055 | 0.766631152 | 0.766368749 | 2.6e-4 | 0.3146 | 0.0355 |
+
+- The Hermitian impurity ⟨R̄|M|R⟩/⟨R̄|R⟩ is not the eigenvalue's derivative: it is 7–9× off.
+- The Bethe Im m is consistent with d Re f_B/dθ (section below).
+
+**Stationarity**, at θ = 0.0055 (v = 8 % from the D = 2 fold): R = R* + ηX, with X a random C4v-symmetric direction of
+norm |R*|:
+
+| η | \|Δf_B\| | \|Δf_H\| | ratio |
+|---|---|---|---|
+| 1e-1 | 3.69e-5 | 1.10e-3 | 30 |
+| 3e-2 | 5.23e-6 | 2.21e-4 | 42 |
+| 1e-2 | 8.42e-7 | 6.35e-5 | 75 |
+| 3e-3 | 8.37e-8 | 1.80e-5 | 215 |
+| 1e-3 | 9.53e-9 | 5.89e-6 | 620 |
+| 3e-4 | 8.56e-10 | 1.76e-6 | 2050 |
+| 1e-4 | 9.25e-11 | 5.84e-7 | 6300 |
+
+- Local slopes over the last three decades: **2.0 for Bethe, 1.0 for Hermitian**.
+- No linear floor from the 2D level (`:cut`, non-stationary for this non-Hermitian network) appears down to
+  1e-10. Its first-order term lies below that here.
+- The impurity Im m moves linearly for both (only f is stationary).
+
+**Truncation (in progress):** both estimators on D = 3, χ = 24 states at the same θ, against D = 2 and later D = 4 —
+the real-world ε² vs ε.
+
 ### Bethe consistency, and the fold fit's systematic (2026-10-01)
 
 **The estimators agree.**
