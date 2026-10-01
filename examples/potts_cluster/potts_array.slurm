@@ -26,7 +26,8 @@ WALL_S=${WALL_S:-172800}; MARGIN_S=${MARGIN_S:-900}
 TASK=${SLURM_ARRAY_TASK_ID:?"run as an array task (or set SLURM_ARRAY_TASK_ID)"}
 LINE=$(bash "$REPO/examples/ice/cluster/jobs.sh" line "$JOBS" "$TASK")
 [ -z "$LINE" ] && { echo "task $TASK: no such job line"; exit 1; }
-read -r BRANCH D CHI BETAS INIT TAG <<< "$LINE"
+read -r BRANCH D CHI BETAS INIT TAG MAXITER <<< "$LINE"
+MAXITER=${MAXITER:-1000}                   # optional 7th column
 # the repo's own environment, as on the workstation (home and the depot are shared with the cluster).
 # Not the ice kit's pinned one: its Manifest is stale against the repo (2026-09-30: LogExpFunctions).
 export JULIA_PROJECT="$REPO"
@@ -34,7 +35,7 @@ INITPATH=""; [ "$INIT" != "-" ] && INITPATH=$(cd "$KIT" && realpath "$INIT")
 BUDGET=$((WALL_S - MARGIN_S - 120))        # 120 s for Julia to load
 # the juliaup launcher is unreliable here: default to the pinned binary in the (shared) home, else `julia`
 JL=${JULIA:-$HOME/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia}; [ -x "$JL" ] || JL=julia
-CMD=(env PT_BRANCH=$BRANCH PT_D=$D PT_CHI=$CHI PT_BETAS=$BETAS PT_TAG=$TAG PT_GPU=1 PT_SAVE=1
+CMD=(env PT_BRANCH=$BRANCH PT_D=$D PT_CHI=$CHI PT_BETAS=$BETAS PT_TAG=$TAG PT_GPU=1 PT_SAVE=1 PT_MAXITER=$MAXITER
      PT_INIT=$INITPATH PT_BUDGET=$BUDGET "$JL" --startup-file=no -t 4 "$REPO/examples/potts3d_boundary_peps.jl")
 echo "$(date) task $TASK on $(hostname): $LINE"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader

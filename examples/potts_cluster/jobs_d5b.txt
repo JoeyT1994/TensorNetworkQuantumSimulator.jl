@@ -1,0 +1,8 @@
+# D = 5 follow-up (2026-10-01): points AT the crossing.
+#   BRANCH D CHI BETAS INIT TAG MAXITER
+# The first wave (d5) gave f_ord − f_dis = +9.16e-6 at 0.5506 and +4.51e-5 at 0.5508. The ordered branch
+# collapsed between 0.5504 and 0.5506, so β_t ≈ 0.550548 came from extrapolating it. These lines take the
+# ordered branch down from its 0.5506 state into the crossing (it stops if it collapses), and put the
+# disordered branch at the same β, so that β_t and Q come from interpolation.
+ordered    5 75 0.5505,0.55045 runs/d5_D5_chi75_ordered_beta0.5506.jls    d5b 3000
+disordered 5 75 0.5505,0.55045 runs/d5_D5_chi75_disordered_beta0.5504.jls d5b 3000

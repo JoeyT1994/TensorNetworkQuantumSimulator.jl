@@ -453,6 +453,7 @@ discontinuity, all at infinite size. Monte Carlo has to tunnel between the phase
 | boundary PEPS D = 3, χ = 27, grid 0.001 | 0.550370 | 0.1792 | 0.401 |
 | boundary PEPS D = 3, χ = 27, grid 0.0002 | 0.550408 (−0.029%) | 0.1891 (+17%) | 0.415 |
 | boundary PEPS D = 4, χ = 48, grid 0.0002 | **0.550505 (−0.011%)** | **0.1678 (+3.8%)** | 0.393 |
+| boundary PEPS D = 5, χ = 75 (H200, preliminary) | ≈ 0.550548 (−0.003%) | 0.169–0.170 (extrapolated) | ≈ 0.40 |
 
 Q is interpolated linearly in β between grid points. The ordered branch's energy is steep near β_t
 (e from −1.7315 to −1.7991 over 0.550–0.551), so the coarse grid understated Q; the fine grid
@@ -527,6 +528,30 @@ Q is interpolated linearly in β between grid points. The ordered branch's energ
     β_t = 0.550507 and Q = 0.1686; e_ord's curvature adds +0.0008 to Q.
   - So **β_t(D = 4) = 0.550506(2), Q(D = 4) = 0.168(1)**. The spread between the linear and quadratic
     readings is taken as the interpolation error.
+
+* **D = 5, χ = 75 (Rusty H200s, job 7142983, 2026-09-30/10-01; `examples/potts_cluster/`).** Cold D = 3 → 4 → 5
+  climbs, then warm starts. The D = 3 and D = 4 stages reproduced the workstation's f to ≤ 2e-8.
+
+  | β | f_ord | f_dis | f_ord − f_dis | e_ord | e_dis |
+  |---|---|---|---|---|---|
+  | 0.5504 | collapsed: 1.7701479626 (m = 3e-5, \|g\| 3e-6) | 1.7701479170 (\|g\| 7.5e-5, cap) | | | −1.58664 |
+  | 0.5506 | 1.7704745959 | 1.7704654389 | +9.16e-6 | −1.76166 | −1.58843 |
+  | 0.5508 | 1.7708284663 (cap, \|g\| 4.5e-6) | 1.7707833248 | +4.51e-5 | −1.77676 | −1.59038 |
+
+  - **D = 4 → 5 at fixed β.** f_ord moves by +4.6e-7 at 0.5508; f_dis moves by +7.0e-6 at 0.5504. The
+    disordered branch gains more, so the crossing moves up. At 0.5504 the ordered state collapsed onto the
+    disordered branch, and its f agrees with the disordered point's to 5e-8. That confirms the
+    disordered point despite its |g| = 7.5e-5.
+  - **β_t(D = 5) ≈ 0.550548** (−0.003 % from MC): linear in Δf through 0.5506–0.5508 gives 0.550549, the
+    tangent at 0.5506 gives 0.550547.
+  - **The ordered spinodal at D = 5 lies between 0.5504 and 0.5506, within ~1e-4 of β_t.** e_ord is steep
+    there. Extrapolating it to β_t gives Q = 0.169–0.170 (linear and D = 4 curvature), no better than
+    D = 4 even though, at fixed β, Q falls by 0.003 from D = 4 to D = 5.
+  - Across D, the window between the ordered collapse and β_t narrows: ~0.0005 at D = 3, ~0.0002 at
+    D = 4, ≲ 0.00015 at D = 5. Whether the latent heat converges therefore depends on the finite-D
+    ordered branch near its spinodal. This is the open methods question for the headline result.
+  - Follow-up (`jobs_d5b.txt`): ordered and disordered points at 0.5505 and 0.55045, 3000 iterations,
+    so that β_t and Q come from interpolation.
 
   From D = 3 to D = 4, β_t moves 62 % of the way to Monte Carlo, and Q's error drops from 17 % to
   3.8 %. The remaining discrepancy is of the size of the finite-D bias. The ordered side is the
