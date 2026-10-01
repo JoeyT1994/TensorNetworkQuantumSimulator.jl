@@ -99,7 +99,7 @@ Full detail: `docs/boundary_peps.md`.
 | 3, 27 | 0.550408 | 0.1891 | 0.415 | ✅ |
 | 4, 48 | 0.550506(2) | 0.168(1) | 0.393 | ✅ |
 | 4, 64 | | | | 🔄 A6000 (the χ check) |
-| 5, 75 | | | | ⬜ cluster: `examples/potts_cluster/` |
+| 5, 75 | ≈ 0.550548 | 0.169–0.170 (extrapolated; ordered spinodal within 1e-4 of β_t) | ≈ 0.40 | ✅ preliminary (H200); follow-up at the crossing running (`jobs_d5b.txt`) |
 | 5, 100 | | | | ⬜ cluster, second wave |
 | 6, 108 | | | | ⬜ cluster, second wave |
 | Monte Carlo (Janke & Villanova 1997) | 0.550565(10) | 0.16160(47) | | literature |
