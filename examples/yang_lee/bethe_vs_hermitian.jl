@@ -18,6 +18,7 @@ end
 dev(x) = GPU ? adapt(CuArray, x) : x
 host(x) = GPU ? adapt(Array, x) : x
 using Logging: NullLogger, with_logger
+GPU || BLAS.set_num_threads(1)              # CTM sweeps spread over Julia threads (CPU)
 const T = TensorNetworkQuantumSimulator
 redirect_stderr(stdout)
 quiet(f) = with_logger(f, NullLogger())
