@@ -31,7 +31,9 @@ The 3D work does not change it (see "Scope" below).
     extra info message, "CTM runs its sweeps serially while BLAS is multi-threaded". The 2D engine
     (`ctmenvironmentcache.jl:392`, commit 584601b) logs it only when Julia has more than one thread. This is an
     artefact of the threaded run, not a behaviour change. Rerun single-threaded to confirm;
-  - tensors and ctm2dinfinite were still running when this was committed.
+  - total 827/831; tensors (188/188) and ctm2dinfinite (41/41) pass.
+  - The single-threaded rerun of `test_ctmenvironment.jl` writes to
+    `~/3d_runs_2026-10-01/audit/ctmenvironment_t1.out`.
 
 ---
 
