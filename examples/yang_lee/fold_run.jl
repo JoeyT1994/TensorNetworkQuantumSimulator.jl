@@ -9,6 +9,7 @@ const β = parse(Float64, get(ENV, "BETA", "0.2"))
 const D = parse(Int, get(ENV, "D", "2"))
 const χ = parse(Int, get(ENV, "CHI", "16"))
 const THS = parse.(Float64, split(get(ENV, "THS", "0.006,0.011,0.014,0.0155,0.0162"), ","))
+const TLIMIT = parse(Float64, get(ENV, "TLIMIT", "510"))   # seconds for the whole run
 quiet(f) = with_logger(f, NullLogger())
 t0 = time()
 s0, legs, _ = ising3d_site(β)
@@ -52,7 +53,7 @@ m0 = site_ratio(bpof(sb), mag_at(sb.θ))
 path = [(s = 0.0, θ = sb.θ, tθ = tθ, m = imag(m0), rem = real(m0), ξ = first(correlation_length(sb.ls)))]
 s = sb; spos = 0.0; after = 0
 for k in 1:60
-    time() - t0 > 510 && (println("(time)"); break)
+    time() - t0 > TLIMIT && (println("(time)"); break)
     new, J, Gθ = arcstep(site_at, legs, al, bl, B, χ, s, tc, tθ, Δs; noise = 1.0e-7, verbose = false)
     if isnothing(new)
         global Δs /= 2; @printf("  corrector failed: Δs → %.2e\n", Δs); continue
