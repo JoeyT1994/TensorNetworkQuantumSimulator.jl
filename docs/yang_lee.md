@@ -348,6 +348,32 @@ at a steeper slope (≳ 420). That is a θ-equivalent shift of ≲ 6e-8.
 - What is left is explanation 2, the fold converged in D, or 3, a biased D = 3 fold. With explanation 2, the D = 4
   fold stands as θ_c, and ζ_c = 1.663, |z_c| = 2.49 (the last row of the table).
 
+### Bethe consistency, and the fold fit's systematic (2026-10-01)
+
+**The estimators agree.**
+- Both levels are Bethe: the 2D ln κ is the Kikuchi form; the 3D f is ln κ⟨Rᵀ|T|R⟩ − ln κ⟨Rᵀ|R⟩, the two-sided
+  Rayleigh quotient (T is complex symmetric, so the left vector is Rᵀ; `bilinear = true`).
+- The maps read Im m from the one-site impurity, which with `:cut` carries first-order 2D-environment errors.
+- Check: f is analytic in the coupling iθ, so d Re f/dθ = −Im m. Over both D = 4 maps, Δ Re f between
+  consecutive points matches −∫ Im m dθ (cubic quadrature) to 2e-5 – 7e-4 relative, the size of the
+  quadrature error (`scratchpad bethe_consistency.jl`). No estimator bias is visible at that level.
+
+**The fold fit is the weak point.** Fit the fold from Im m (Im m = m_f − A√u + Bu, u = θ_f − θ), or from the
+Bethe f alone (Re f = F₀ + m_f u − (2A/3)u^{3/2} + (B/2)u²), over the last N points:
+
+| β | N = 8 → 5, from Im m | N = 8 → 5, from Re f |
+|---|---|---|
+| 0.21 | 0.0062964 → 0.0063193 (+0.36 %) | 0.0062859 → 0.0063365 (+0.80 %) |
+| 0.20 | 0.0169367 → 0.0170011 (+0.38 %) | 0.0169137 → 0.0170002 (+0.51 %) |
+
+- θ_f climbs as the window closes in on the fold, whichever estimator is used.
+- The window systematic is 0.4–0.8 %. That is 3–25× the D = 3 → 4 shifts above (−0.03 %, −0.16 %), so
+  **"the fold stays put from D = 3 to D = 4" is not established**. The six-point fits of both D compared like
+  with like, but the model's inadequacy at v ≈ 1–2 % need not cancel between them.
+- **Remedy:** the fold located exactly, where the Jacobian of the stationary (Bethe) equations goes singular.
+  Use pseudo-arclength (`fold_pseudoarclength.jl`, D = 2 prototype) or a bordered Newton solve for (c, θ_f)
+  with a null vector. No fit is involved.
+
 ### Assessment
 
 What works: the stationary bilinear boundary PEPS follows the analytic continuation of the dominant
