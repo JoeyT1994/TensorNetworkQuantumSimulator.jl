@@ -257,6 +257,11 @@ now always run; resumed points keep their trust radius.
 
 ### D = 4 edge map at β = 0.21, and the ξ extrapolation (2026-09-29)
 
+> **Revised 2026-10-01** (section "Bethe consistency, and the fold fit's systematic" below). The six-point
+> fold fits used here drift with their window by 0.4–0.8 %, more than the D = 3 → 4 shifts they compare. So
+> "the fold stays put from D = 3 to 4" and the |z_c| range derived from it are not established. The maps and
+> the χ = 64 check stand.
+
 `scan_krylov.jl` with `GPU=1`, D = 4, χ = 48, on the local A6000. The run started from a fully converged real
 state (`T0ITER = 1000`, `T0LIMIT = 7200`: |g| = 9.2e-7 at θ = 0 after 45 min). With the old 200 s θ = 0 stage it
 started at |g| = 3.7e-4, and the first Newton–Krylov point had not converged after 65 min. Later points took
@@ -464,13 +469,22 @@ eigenvector into the imaginary field in 3D, stays on the physical branch (Re m =
 the fold), gives the zero-field susceptibility to 1e-4 of the series away from β_c, and ends in a fold
 that moves up with D: by 0.1 % at t = 0.19, 1.6 % at t = 0.10 and 5.5 % at t = 0.05.
 
-What does not yet: at D ≤ 3 the fold is still mean-field-like (ξ ≈ 3–5 there), so the true Yang–Lee
-regime (ξ → ∞, σ ≈ 0.08) is never entered and σ_eff is a crossover value. The D = 3 maps show that
-the fold's distance below the true edge, not only the t^{ων} corrections, drove the D = 2
-extrapolation to ζ_c = 1.8 ± 0.1: that value is superseded. With D extrapolated from two points
-ζ ≈ 1.61–1.62, consistent with the FRG 1.621(4) but uncontrolled until D ≥ 4.
+The Bethe estimator is what makes this work. On the same states, the Hermitian estimator is first order in the
+state error and misses the edge altogether (section "The Bethe estimator against the Hermitian one").
 
-Next steps, in order of leverage: (1) D = 4 and 5 at t ≈ 0.05–0.10, with ξ at the fold, for
-finite-correlation-length scaling θ_c − θ_f ∝ ξ_f^{−(3−Δ_φ)} (a GPU job: a D = 5 CTM step is 40 s on
-four CPU cores, docs/boundary_peps.md "Costs"); (2) an improved model (Blume–Capel at its improved coupling), removing the
-t^{ων} corrections from the t → 0 limit; (3) σ from that scaling rather than from local exponents.
+What does not yet (2026-10-01):
+- At D ≤ 4 the fold is mean-field-like (ξ ≈ 3–5), so the true Yang–Lee regime (ξ → ∞, σ ≈ 0.08) is never
+  entered.
+- The fold locations behind every extrapolation so far come from window-dependent fits (0.4–0.8 % systematic).
+  The D = 2 extrapolation (ζ_c = 1.8 ± 0.1) and the two-point D = 2, 3 one (1.61–1.62) are superseded. The D = 4
+  range |z_c| = 2.45–2.49 (FRG 2.43(4)) is not a controlled number.
+
+Next steps, in order of leverage:
+1. **Exact folds** at D = 2, 3, 4 (D = 5 on the cluster) for β = 0.20, 0.21 and a third β (0.215):
+   - the pseudo-arclength solver, validated at D = 2;
+   - plus a bordered Newton solve to land on the turn;
+   - plus a resumable GPU port.
+2. θ_c(β) from the exact folds' convergence in D, then ζ(t) → |z_c| with an error bar — the first lattice value.
+3. Validation in the same universality class: the cubic monomer–dimer model at negative activity,
+   z₀ = −0.0520268(2) (Butera–Pernici).
+4. An improved model (Blume–Capel at its improved coupling) to remove the t^{ων} corrections.

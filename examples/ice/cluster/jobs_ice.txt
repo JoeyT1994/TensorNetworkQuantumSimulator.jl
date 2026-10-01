@@ -1,4 +1,4 @@
-# The first ice campaign (docs/status_3d.md, docs/roadmap_3d.md). One line per GPU task:
+# The first ice campaign (docs/ice.md, docs/status_3d.md). One line per GPU task:
 #   MODE D CHI KINDS CHUNK
 #   prod — BP simple-update state + the networks in KINDS (norm, inv, sand, mnorm) → prod/summary.csv, residual.csv
 #   var  — variational optimum from the BP-SU state (KINDS ignored: "-"), then norm,inv,sand,mnorm at the same χ

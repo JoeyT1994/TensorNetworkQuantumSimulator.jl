@@ -597,13 +597,14 @@ Q is interpolated linearly in β between grid points. The ordered branch's energ
   on an A6000 above (D ≥ 4), a D = 5, χ = 72 step is ~2 s, and a data-centre GPU's full-rate Float64
   should do several times better (an estimate, not yet measured).
 
-## Open problems
+## Open problems (revised 2026-10-01)
 
-* D ≥ 4 with Newton–Krylov (n = 110 coordinates at D = 4), where the subspace should matter more,
-  and with the GPU, where concurrent products compete for one device.
-* The complex path of `boundary_peps_krylov` at D ≥ 4: at D = 2 and 3 it matches `boundary_peps_stationary`
-  along continuations towards the Yang–Lee fold (docs/yang_lee.md).
-* β continuation with a tangent predictor, which would start each point of a scan near the soft
-  mode's answer.
-* How long L-BFGS takes to settle m at D = 3 near β_c: not within 400 s (the chained run that was to
-  measure it did not finish).
+* **Newton–Krylov at D = 4 works, on the GPU:** the Yang–Lee maps at β = 0.20 and 0.21, 5 min – 1.5 h per point
+  (docs/yang_lee.md). On a GPU the norm and sandwich environments are evaluated one after the other.
+* **The ordered Potts branch near its spinodal:** points stall at |g| ≈ 4e-6, the gradient's noise floor at
+  χ = 3D², and hit the iteration cap. The latent heat depends on this branch just below β_t.
+* **χ convergence of first-order crossings:** the disordered branch is ~10× more χ-sensitive than the ordered
+  one, so β_t moves with χ by about as much as with one step in D.
+* **β continuation with a tangent predictor**, which would start each point of a scan near the soft mode's
+  answer.
+* **How long L-BFGS takes to settle m at D = 3 near β_c:** not within 400 s (not re-measured).

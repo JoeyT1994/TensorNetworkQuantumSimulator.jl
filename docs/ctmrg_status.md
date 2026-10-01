@@ -2,8 +2,8 @@
 
 **This file is the current state: what is true now, and what is still open.** For the derivations,
 the full chronological record, and the long list of approaches that were tried and failed, see
-[`finite_ctmrg_design.md`](finite_ctmrg_design.md). `ctmrg_cycle_projector_handoff.md` is an older
-handoff, superseded.
+[`finite_ctmrg_design.md`](finite_ctmrg_design.md). (The older cycle-projector handoff, superseded, is in the git
+history before 2026-10-01.)
 
 Every measurement here is dated. Anything measured before **2026-08-09** was produced with a
 convergence test that stopped early (see [The convergence test](#the-convergence-test)); tables that

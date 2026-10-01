@@ -114,6 +114,7 @@ correlation_length
 ising2d_site
 ising3d_site
 ice_site
+potts3d_site
 BoundaryPEPS
 boundary_peps
 boundary_peps_krylov
