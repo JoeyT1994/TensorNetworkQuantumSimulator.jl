@@ -10,6 +10,51 @@ The paper has three layers:
 
 Each item below is marked ✅ (have it), 🔄 (running), or ⬜ (to do).
 
+## 0. Prior work (literature check, 2026-10-01)
+
+**3D q = 3 Potts.** All values are converted to β = 1/T.
+
+| work | method | β_t | Q |
+|---|---|---|---|
+| Janke & Villanova 1997 | Monte Carlo, L = 36 | 0.550564(10) | 0.1614(3) |
+| Bazavov & Berg, PRD 75, 094506 (2007) | Monte Carlo, L = 50 | 0.5505648(58) | 0.1643(8) |
+| Monte Carlo 1991, L = 36 | Monte Carlo | 0.550524(11) | 0.16062(52) |
+| Gendiar & Nishino 2002 | TPVA | 0.5496 | 0.228 |
+| Wang, Xie, Chen, Normand & Xiang, CPL 31, 070503 (2014), arXiv:1405.1179 | HOTRG, D = 21 (Q at D = 14) | 0.55048(15) [T = 1.8166(5)] | 0.2029 |
+| Jha, arXiv:2201.01789 (2022) | triad TRG | 0.55021(45) [T = 1.8175(15)] | — |
+| **this work, D = 5** | boundary PEPS, two branches | **≈ 0.550548** | 0.168 (D = 4) to 0.170 |
+
+- **β_t.** The best earlier tensor-network value is HOTRG's, 1.5e-4 from Monte Carlo with a ±1.5e-4 error bar. Ours is
+  1.7e-5 from Monte Carlo, and converges with D at a factor ~0.43 per step (D = 3, 4, 5 shifts: 9.8e-5, 4.2e-5).
+  That is ~9× closer to Monte Carlo than HOTRG, not 60×; 60× was against TPVA.
+- **Q.** The tensor-network values so far are +26 % (HOTRG) and +41 % (TPVA); ours is within a few percent.
+  **The Monte Carlo values disagree among themselves**: 0.1614(3) and 0.1643(8) differ by 3.4σ, and 0.16062(52)
+  lies below both. A Q converged in D to ±0.5 % would arbitrate. That is a concrete angle, if the ordered
+  spinodal problem can be solved.
+- Chen, Liu, Deng & Zhang, arXiv:2509.23945 (2025), "tensor-network MCMC". Collective updates from 2D-slice
+  tensor networks let Monte Carlo cross the barrier of the 3D 3-state Potts transition, up to 64³. It works at
+  finite size, and is complementary to us; it is also a competitor for "tensor networks for first-order 3D".
+
+**3D variational methods: our closest prior art.**
+- Xu, Lin & Zhang, PRB 112, 134403 (2025), arXiv:2506.19339:
+  - "split CTMRG" for the PEPS–PEPO–PEPS triple layer: the edge tensors are split per layer and the projectors
+    are applied sequentially, at cost O(χ³D³d³);
+  - L-BFGS with analytic gradients, apparently on CPUs;
+  - the 3D Ising model up to D = 6, χ = 100, giving T_c = 4.51288(13) against Monte Carlo's 4.5115233, which is
+    3e-4 relative;
+  - Potts named only as an outlook.
+
+  **So "split" CTMRG is not our novelty by itself.** Our pair split, a matrix-free subspace SVD over quadrant
+  factor lists, needs a careful comparison with theirs, and we must cite them.
+- Vanderstraeten, Vanhecke & Verstraete (2018): the variational 3D Ising model at D ≤ 4.
+
+**What is new here, after the check:**
+- **Potts:** the first well-converged 3D tensor-network first-order transition. β_t is at Monte Carlo precision,
+  Q is within a few percent, and the metastable branches and spinodals come out directly.
+- **Scale:** GPU throughout, the C4v step, and the norm-metric preconditioner. Production runs at D = 5, χ = 75,
+  a few hours per point on an H200; D = 8, χ = 128 at 25 s/step.
+- **The Yang–Lee edge**, a complex-weight problem that Monte Carlo cannot reach.
+
 ## 1. Method
 
 The setting is boundary PEPS for 3D classical partition functions, all in the thermodynamic limit:
