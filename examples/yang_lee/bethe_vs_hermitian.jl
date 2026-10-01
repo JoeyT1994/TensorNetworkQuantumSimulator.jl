@@ -8,8 +8,15 @@
 #     f_B(R) − f_B(R*) ∝ η², f_H(R) − f_H(R*) ∝ η.
 # (2) TRUNCATION: Bethe states at D = 2, 3, … at the same θ; both estimators on each, saved for comparison
 #     against larger D (the D = 4 states come from the GPU later).
-# Env: BETA (0.21), DS ("2,3"), CHIS ("16,24"), THS ("0.002,0.004,0.0055"), PERTURB (1: run part 1 at D = 2).
+# Env: BETA (0.21), DS ("2,3"), CHIS ("16,24"), THS ("0.002,0.004,0.0055"), PERTURB (1: run part 1 at D = 2),
+# GPU (1: run on the GPU; states are saved on the host).
 using TensorNetworkQuantumSimulator, Printf, Serialization, LinearAlgebra, Random
+const GPU = get(ENV, "GPU", "0") == "1"
+if GPU
+    using CUDA, Adapt
+end
+dev(x) = GPU ? adapt(CuArray, x) : x
+host(x) = GPU ? adapt(Array, x) : x
 using Logging: NullLogger, with_logger
 const T = TensorNetworkQuantumSimulator
 redirect_stderr(stdout)
@@ -22,8 +29,9 @@ const PERTURB = get(ENV, "PERTURB", "1") == "1"
 const CTMTOL = 1.0e-12
 
 s0, legs, _ = ising3d_site(β)
-site_at(θ) = (x = ising3d_site(β; h = im * θ / β); T.replaceinds(x[1], collect(x[2]), collect(legs)))
-mag_at(θ) = (x = ising3d_site(β; h = im * θ / β); T.replaceinds(x[3], collect(x[2]), collect(legs)))
+s0 = dev(s0)
+site_at(θ) = (x = ising3d_site(β; h = im * θ / β); dev(T.replaceinds(x[1], collect(x[2]), collect(legs))))
+mag_at(θ) = (x = ising3d_site(β; h = im * θ / β); dev(T.replaceinds(x[3], collect(x[2]), collect(legs))))
 ctx(bp, θ, bilinear) = (; al = bp.Alegs, bl = bp.blegs, site = site_at(θ), legs = Tuple(legs), maxdim = bp.normenv.maxdim,
                         group = T._BP_C4V, ctm_tolerance = CTMTOL, ctm_maxiter = 4000, ctm_kwargs = (; c4v = true), bilinear)
 # both estimators (f and the impurity Im m) at the state A, environments warm-started from bp's
@@ -56,7 +64,7 @@ for (D, χ) in zip(DS, CHIS)
                 θ, info.residual, real(B.f), imag(B.f), real(H.f), imag(H.f), imag(B.m), imag(H.m), time() - t0)
         flush(stdout)
         push!(results, (; β, D, χ, θ, fB = B.f, fH = H.f, mB = B.m, mH = H.m, residual = info.residual))
-        serialize("state_beta$(β)_D$(D)_chi$(χ)_theta$(θ).jls", r)
+        serialize("state_beta$(β)_D$(D)_chi$(χ)_theta$(θ).jls", host(r))
         serialize("results_beta$(β).jls", results)
         cur, prev, θp, θc = r, cur, θc, θ
         if PERTURB && D == DS[1] && θ == THS[end]
