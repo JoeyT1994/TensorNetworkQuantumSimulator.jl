@@ -16,9 +16,9 @@ Each item below is marked ✅ (have it), 🔄 (running), or ⬜ (to do).
 
 | work | method | β_t | Q |
 |---|---|---|---|
-| Janke & Villanova 1997 | Monte Carlo, L = 36 | 0.550564(10) | 0.1614(3) |
-| Bazavov & Berg, PRD 75, 094506 (2007) | Monte Carlo, L = 50 | 0.5505648(58) | 0.1643(8) |
-| Monte Carlo 1991, L = 36 | Monte Carlo | 0.550524(11) | 0.16062(52) |
+| Janke & Villanova 1997 | Monte Carlo, L = 36 | 0.550565(10) | 0.1614(3) |
+| Bazavov & Berg, PRD 75, 094506 (2007) | Monte Carlo, L = 50 | 0.5505653(58) | 0.1643(8) |
+| Monte Carlo 1991, L = 36 | Monte Carlo | 0.550523(11) | 0.16062(52) |
 | Gendiar & Nishino 2002 | TPVA | 0.5496 | 0.228 |
 | Wang, Xie, Chen, Normand & Xiang, CPL 31, 070503 (2014), arXiv:1405.1179 | HOTRG, D = 21 (Q at D = 14) | 0.55048(15) [T = 1.8166(5)] | 0.2029 |
 | Jha, arXiv:2201.01789 (2022) | triad TRG | 0.55021(45) [T = 1.8175(15)] | — |
