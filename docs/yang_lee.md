@@ -389,6 +389,48 @@ norm |R*|:
 **Truncation (in progress):** both estimators on D = 3, χ = 24 states at the same θ, against D = 2 and later D = 4 —
 the real-world ε² vs ε.
 
+**At the fold** (`examples/yang_lee/bethe_vs_hermitian_fold.jl`; 3D Ising, β = 0.20, D = 2, χ = 16, CPU, 26 min).
+Pseudo-arclength takes the path through the turning point; θ* = 0.0167369 is its highest point (exact fold
+0.016738(2)).
+
+*Along the path:*
+
+| θ | f_B − f_H | Im m (Bethe) | Im m (Hermitian) |
+|---|---|---|---|
+| 0.01620 | 4.7e-4 | 0.490 | 0.0788 |
+| 0.01662 | 6.3e-4 | 0.568 | 0.0820 |
+| 0.016737 (θ*) | 8.2e-4 | 0.662 | 0.0838 |
+| 0.016731 (past the turn) | 8.6e-4 | 0.681 | 0.0839 |
+
+- **The Hermitian estimator does not see the Yang–Lee edge.** Its Im m drifts smoothly through the fold, 0.079 → 0.084.
+  The Bethe Im m has the square-root singularity, a slope that diverges at the turn.
+- The reduced Bethe Jacobian at θ*: σ_max = 1.78, smallest kept σ = 3.2e-5 (ratio 1.8e-5), next 4.9e-5. The soft mode
+  is not well separated: there are flat directions besides the fold's.
+
+*Stationarity at θ*, R = R* + ηX:*
+
+| η | random: \|Δf_B\| | random: \|Δf_H\| | soft mode: \|Δf_B\| | soft mode: \|Δf_H\| |
+|---|---|---|---|---|
+| 1e-1 | 1.4e-3 | 4.3e-3 | 4.4e-8 | 4.3e-5 |
+| 3e-2 | (2.5e-1)* | 9.2e-4 | 9.9e-9 | 1.2e-5 |
+| 1e-2 | (1.8e-5)* | 2.8e-4 | 1.5e-9 | 4.1e-6 |
+| 3e-3 | 6.4e-8 | 8.0e-5 | 1.2e-10 | 1.2e-6 |
+| 1e-3 | 1.3e-8 | 2.6e-5 | 8.4e-12 | 4.0e-7 |
+| 3e-4 | 1.7e-9 | 7.9e-6 | 8.7e-13 | 1.2e-7 |
+| 1e-4 | 1.9e-10 | 2.6e-6 | (6.2e-13, floor) | 4.0e-8 |
+
+\* Outliers: next to the exceptional point a perturbation this large lets the 2D environments jump between the two
+coalescing branches.
+
+- **Hermitian:** slope 1.0 in both directions at every η.
+- **Bethe, random direction:** slope 2.0 once η ≲ 3e-4; at 1e-4 it is 14 000× below the Hermitian.
+- **Bethe, soft mode:** also quadratic at small η (slopes 1.7–2.4, noisy at the 1e-12 level), but with curvature
+  |Δf_B|/η² ≈ 1e-5, against 1.9e-2 along the random direction: ~2000× flatter. That is the fold's vanishing Hessian
+  eigenvalue, not exactly zero because θ* lies a hair before the turn (σ ratio 1.8e-5). At η = 1e-3 it is 48 000×
+  below the Hermitian.
+- The ideal fold would give η³ along the soft mode. Seeing it needs θ* converged onto the turn itself: a bordered
+  Newton solve for (c, θ_f) with the null vector.
+
 ### Bethe consistency, and the fold fit's systematic (2026-10-01)
 
 **The estimators agree.**
