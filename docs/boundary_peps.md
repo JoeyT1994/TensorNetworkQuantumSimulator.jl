@@ -552,6 +552,22 @@ Q is interpolated linearly in β between grid points. The ordered branch's energ
     ordered branch near its spinodal. This is the open methods question for the headline result.
   - Follow-up (`jobs_d5b.txt`): ordered and disordered points at 0.5505 and 0.55045, 3000 iterations,
     so that β_t and Q come from interpolation.
+* **χ at D = 4: χ = 64 against 48** (A6000, 2026-09-30/10-01; stopped during the ordered point at 0.5504 to
+  free the GPU).
+
+  | | χ = 48 | χ = 64 | shift |
+  |---|---|---|---|
+  | f_dis(0.5504) | 1.7701409290 | 1.7701432679 | +2.3e-6 |
+  | f_dis(0.5506) | 1.7704580021 | 1.7704604777 | +2.5e-6 |
+  | f_ord(0.5506) | 1.7704739758 | 1.7704742254 | +2.5e-7 |
+  | f_ord(0.5508) | 1.7708280100 | 1.7708282150 | +2.1e-7 |
+
+  - The disordered branch is ~10× more χ-sensitive than the ordered one, so χ raises β_t.
+  - Ordered f at 0.5504 extrapolated along its tangent at 0.5506, Δf at 0.5504 and 0.5506 interpolated:
+    **β_t(D = 4, χ = 64) ≈ 0.550522**, against 0.550505 at χ = 48.
+  - Q ≈ 0.169, unchanged within the extrapolation.
+  - The χ shift of β_t, 1.7e-5, equals D = 5's whole remaining gap to Monte Carlo. **β_t needs χ convergence at
+    every D**: D = 5 at χ = 100 (`jobs_potts.txt`, second wave) is required, not optional.
 
   From D = 3 to D = 4, β_t moves 62 % of the way to Monte Carlo, and Q's error drops from 17 % to
   3.8 %. The remaining discrepancy is of the size of the finite-D bias. The ordered side is the
