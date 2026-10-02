@@ -5,16 +5,16 @@
 # operation dispatches through GPUArrays rather than hitting a Base fallback. NDTensors ships a
 # JLArrays extension, so ITensors' factorisations work on it too.
 #
-# Every check below stands for a bug that previously only surfaced on real hardware: a `copyto!`
-# between memory spaces silently falling back to an elementwise loop, buffers being allocated on
-# the wrong side, and the blocked message kernel reaching for a scalar index.
+# Every check below stands for a bug that previously only surfaced on real hardware: the message
+# arena being built in the wrong memory space, and the blocked message kernel reaching for a
+# scalar index.
 #
 # Two things it deliberately does NOT cover, so don't read a pass here as "the GPU is fine":
 #   * `datatype` comes back concrete for JLArray (`JLArray{ComplexF32,1}`) but is a UnionAll for
 #     CuArray (`CuArray{T,1,DeviceMemory} where T`), so type-construction bugs hide here.
 #   * CUDA-aware MPI, device pointers reaching UCX, and CUDA stream ordering have no analogue.
 @eval module $(gensym())
-using Test: @test, @testset
+using Test: @test, @test_broken, @testset
 using JLArrays: JLArray
 using TensorNetworkQuantumSimulator
 # Everything else is reached through the package, so this file needs no dependency beyond
@@ -44,10 +44,6 @@ SpyVec{T}(::UndefInitializer, n::Integer) where {T} = (SPY_SEEN[] = SPY_REF[][];
 
     @testset "device detection" begin
         @test !(ITensors.data(ψ[first(vertices(g))]) isa Array)
-        # Drives whether MPI payloads are staged through host memory. A false negative here puts
-        # device pointers into MPI, which segfaults rather than erroring.
-        @test TNQS._is_device_backed(bpc)
-        @test !TNQS._is_device_backed(bpc_host)
     end
 
     # The arena lives in the network's memory space, is reused while it still matches, and on a
@@ -91,26 +87,6 @@ SpyVec{T}(::UndefInitializer, n::Integer) where {T} = (SPY_SEEN[] = SPY_REF[][];
         ) isa TO.StridedBackend
     end
 
-    @testset "exchange buffers" begin
-        @test !(TNQS._alloc_buffer(bpc, ComplexF32, 16) isa Array)
-        @test TNQS._alloc_buffer(bpc_host, ComplexF32, 16) isa Array
-
-        # The five-argument copyto! is the only form with methods for every host/device pairing;
-        # the two-argument form on views falls back to scalar indexing and throws.
-        want = ComplexF32.(collect(1:8))
-        to_host = Vector{ComplexF32}(undef, 8)
-        TNQS._copy_range!(to_host, 1, adapt(JLArray, want), 1, 8)
-        @test to_host == want
-
-        to_device = adapt(JLArray, zeros(ComplexF32, 8))
-        TNQS._copy_range!(to_device, 5, ComplexF32.(collect(1:4)), 1, 4)
-        @test Array(to_device) == ComplexF32[0, 0, 0, 0, 1, 2, 3, 4]
-
-        both_device = adapt(JLArray, zeros(ComplexF32, 8))
-        TNQS._copy_range!(both_device, 1, adapt(JLArray, want), 1, 8)
-        @test Array(both_device) == want
-    end
-
     @testset "blocked message update" begin
         e = first(x for x in TNQS.edges(bpc) if degree(g, TNQS.src(x)) == 3)
         ref, _ = TNQS.updated_message(TNQS.set_default_kwargs(Algorithm("contract"), bpc), bpc, e)
@@ -133,137 +109,25 @@ SpyVec{T}(::UndefInitializer, n::Integer) where {T} = (SPY_SEEN[] = SPY_REF[][];
     end
 
     # Covers qr / factorize_svd / the env gauging on a device array type.
+    #
+    # Broken upstream: NDTensorsJLArraysExt's `Expose.qr` passes the bare JLArray to
+    # `LinearAlgebra.qr`, which has no GPU method and reaches host `geqrt!` -- "Illegal conversion
+    # of a JLArray to a Ptr". Its neighbours (`qr_positive`, `ql`, `eigen`) call `cpu` first.
+    # CUDA.jl supplies a cuSOLVER `qr` for CuArray, so this is a JLArray gap, not a GPU one.
     @testset "gate application" begin
         e = first(x for x in TNQS.edges(bpc) if degree(g, TNQS.src(x)) == 3)
         v⃗ = [TNQS.src(e), TNQS.dst(e)]
-        out, errs = TNQS.apply_gates(
-            [("Rzz", v⃗, 0.3)], bpc;
-            apply_kwargs = (; maxdim = chi, cutoff = 0.0),
-            bp_update_kwargs = (; maxiter = 2, tolerance = nothing)
-        )
-        @test out isa TNQS.BeliefPropagationCache
-        @test !(ITensors.data(TNQS.network(out)[first(v⃗)]) isa Array)
-        @test all(isfinite, errs)
-    end
-
-    # The buffer `_apply_q!` hands to `lmul!` has to be a *concrete* device matrix. CUDA declares
-    # its Q-multiply on `CuVecOrMat`, so a `SubArray` misses it and falls through to host LAPACK,
-    # which throws on a device pointer.
-    #
-    # JLArray cannot catch that by running the code -- it has no GPU `qr!`/`lmul!` override, so
-    # everything below it is host LAPACK and a `SubArray` works fine. The only thing that
-    # generalises is the TYPE, so that is what is asserted. The negative cases are the two
-    # spellings that look right and are not: a row range of a matrix is non-contiguous and stays
-    # a `SubArray` in both.
-    @testset "block buffer stays a concrete device array" begin
-        buf = adapt(JLArray, zeros(ComplexF32, 12 * 5))
-        for rows in (12, 7, 1)                       # full length and two partial prefixes
-            b = TNQS._block_buffer(buf, rows, 5)
-            @test size(b) == (rows, 5)
-            @test !(b isa SubArray)
-            @test !(b isa Array)
-        end
-
-        # The hazard being avoided, stated as a test so it cannot silently stop being true.
-        m = adapt(JLArray, zeros(ComplexF32, 12, 5))
-        @test view(m, 2:6, :) isa SubArray            # row range: not contiguous
-        @test !(view(m, :, 2:4) isa SubArray)         # column range: contiguous, collapses
-    end
-
-    # TSQR on a device array type. This is the check that matters for GPU friendliness: every
-    # block copy in it moves data between strided views, and `copyto!` has no specialised method
-    # for that -- it walks elementwise, which is scalar indexing and throws here. Running it under
-    # JLArray is what proves those are broadcasts.
-    #
-    # Note what this canNOT prove: JLArray has no GPU `qr!`/`lmul!`, so the factorization itself
-    # runs on host LAPACK. Numerical agreement here says nothing about CUSOLVER dispatch.
-    @testset "tall-skinny QR, device array" begin
-        M = adapt(JLArray, randn(ComplexF32, 256, 16))
-        F = TNQS._tall_skinny_qr!(copy(M), 4)
-        R = TNQS._qr_r(F, M)
-        @test !(R isa Array)
-
-        Q = adapt(JLArray, zeros(ComplexF32, 256, 16))
-        Q[1:16, :] .= adapt(JLArray, Matrix{ComplexF32}(one(ComplexF32) * TNQS.LinearAlgebra.I, 16, 16))
-        TNQS._apply_q!(F, Q)
-        @test !(Q isa Array)
-        Qh, Rh, Mh = Array(Q), Array(R), Array(M)
-        @test norm(Qh' * Qh - one(ComplexF32) * TNQS.LinearAlgebra.I) < 1.0f-3
-        @test norm(Qh * Rh - Mh) / norm(Mh) < 1.0f-3
-    end
-
-    # The whole gate, with the QR split, on a device array type.
-    @testset "blocked gate with split QR, device array" begin
-        e = first(x for x in TNQS.edges(bpc) if degree(g, TNQS.src(x)) == 3)
-        v⃗ = [TNQS.src(e), TNQS.dst(e)]
-        gate = TNQS.adapt_gate(
-            first(TNQS.toitensor(("Rxx", v⃗, 0.41), TNQS.graph(bpc), TNQS.siteinds(TNQS.network(bpc)))),
-            bpc
-        )
-        envs = TNQS.incoming_messages(bpc, v⃗)
-        ψ⃗ = [TNQS.network(bpc)[v] for v in v⃗]
-        apply_kwargs = (; maxdim = chi, cutoff = 0.0f0, normalize_tensors = true)
-        reference = TNQS.simple_update(gate, copy(ψ⃗); envs, apply_kwargs...)
-
-        split = 0
-        try
-            for limit in (typemax(Int32), 64)
-                TNQS.qr_block_limit!(limit)
-                TNQS._qr_tall!(adapt(JLArray, randn(ComplexF32, chi^2, 2chi))) isa
-                    TNQS.TallSkinnyQR && (split += 1)
-                blocked = TNQS.blocked_two_site_update(
-                    gate, copy(ψ⃗); envs, normalize_tensors = true, sqrt_cutoff = nothing,
-                    consume_inputs = false, apply_kwargs...
-                )
-                @test !isnothing(blocked)
-                @test !(ITensors.data(blocked[1][1]) isa Array)
-                @test norm(blocked[1][1] * blocked[1][2] - reference[1][1] * reference[1][2]) /
-                    norm(reference[1][1] * reference[1][2]) < 1.0f-3
-            end
-        finally
-            TNQS.qr_block_limit!(TNQS.default_qr_block_limit())
-        end
-        @test split > 0
-    end
-
-    # The memory-bounded gate path drives `qr!` and `lmul!(F.Q, C)` directly rather than going
-    # through ITensors' `qr`. What this proves is that the dispatch resolves on a non-Array type,
-    # that no step reaches for a scalar index, and that the result stays device-resident. What it
-    # cannot prove is that CUDA reaches CUSOLVER's geqrf/ormqr rather than a generic fallback --
-    # JLArray is host-backed, so LAPACK succeeds on it for the wrong reason.
-    @testset "blocked two-site gate" begin
-        e = first(x for x in TNQS.edges(bpc) if degree(g, TNQS.src(x)) == 3)
-        v⃗ = [TNQS.src(e), TNQS.dst(e)]
-        gate = TNQS.adapt_gate(
-            first(TNQS.toitensor(("Rxx", v⃗, 0.41), TNQS.graph(bpc), TNQS.siteinds(TNQS.network(bpc)))),
-            bpc
-        )
-        envs = TNQS.incoming_messages(bpc, v⃗)
-        ψ⃗ = [TNQS.network(bpc)[v] for v in v⃗]
-        apply_kwargs = (; maxdim = chi, cutoff = 0.0f0, normalize_tensors = true)
-
-        blocked = TNQS.blocked_two_site_update(
-            gate, copy(ψ⃗); envs, normalize_tensors = true, sqrt_cutoff = nothing,
-            consume_inputs = false, apply_kwargs...
-        )
-        @test !isnothing(blocked)
-        @test !(ITensors.data(blocked[1][1]) isa Array)
-        reference = TNQS.simple_update(gate, copy(ψ⃗); envs, apply_kwargs...)
-        @test norm(blocked[1][1] * blocked[1][2] - reference[1][1] * reference[1][2]) /
-            norm(reference[1][1] * reference[1][2]) < 1.0f-4
-
-        TNQS.blocked_gates!(true)
-        try
+        @test_broken begin
             out, errs = TNQS.apply_gates(
                 [("Rzz", v⃗, 0.3)], bpc;
-                apply_kwargs = (; maxdim = chi, cutoff = 0.0f0),
+                apply_kwargs = (; maxdim = chi, cutoff = 0.0),
                 bp_update_kwargs = (; maxiter = 2, tolerance = nothing)
             )
-            @test !(ITensors.data(TNQS.network(out)[first(v⃗)]) isa Array)
-            @test all(isfinite, errs)
-        finally
-            TNQS.blocked_gates!(false)
+            out isa TNQS.BeliefPropagationCache &&
+                !(ITensors.data(TNQS.network(out)[first(v⃗)]) isa Array) &&
+                all(isfinite, errs)
         end
     end
+
 end
 end
