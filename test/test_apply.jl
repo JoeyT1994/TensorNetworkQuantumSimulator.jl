@@ -342,8 +342,9 @@ end
 
     # The rank `cutoff` asks for: the fewest values whose discarded weight, relative to the total,
     # stays within it. That is what the sqrt in `truncation_strategy` has to get right.
-    @testset "gate_split truncates on the discarded weight" begin
-        q1, q2, d, b = 6, 6, 2, 5
+    # (3, 8) makes M wide, which `gate_split` builds transposed and so takes its flipped branch.
+    @testset "gate_split truncates on the discarded weight, q = $q" for q in ((6, 6), (3, 8), (8, 3))
+        (q1, q2), d, b = q, 2, 5
         R1 = randn(ComplexF64, q1, d, b)
         R2 = randn(ComplexF64, q2, d, b)
         gate = reshape(randn(ComplexF64, d * d, d * d), d, d, d, d)

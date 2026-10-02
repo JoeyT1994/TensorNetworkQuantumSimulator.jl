@@ -168,14 +168,20 @@ function gate_split(
         (1:(ns1 + ns2))...,
     )
     tlabels = (-1, (1:ns1)..., -(2 + ns1), ((ns1 + 1):(ns1 + ns2))...)
-    outlabels = ntuple(i -> -i, 2 + ns1 + ns2)
 
     TC = TO.promote_contract(TO.scalartype(R1), TO.scalartype(R2), TO.scalartype(gate))
     A1, A2, G = _as_eltype(TC, R1), _as_eltype(TC, R2), _as_eltype(TC, gate)
     q1, q2 = size(R1, 1), size(R2, 1)
+    d1, d2 = size(R1)[2:(1 + ns1)], size(R2)[2:(1 + ns2)]
+    # A wide matrix's SVD goes through its adjoint, a copy and a larger cuSOLVER workspace (6.1
+    # against 4.3 GiB at 5200 x 20800), so M is built with its longer side as rows.
+    flip = q1 * prod(d1) < q2 * prod(d2)
+    side1, side2 = ntuple(i -> -i, 1 + ns1), ntuple(i -> -(1 + ns1 + i), 1 + ns2)
+    outlabels = flip ? (side2..., side1...) : (side1..., side2...)
+    rows, cols = flip ? (q2 * prod(d2), q1 * prod(d1)) : (q1 * prod(d1), q2 * prod(d2))
 
     cp = TO.allocator_checkpoint!(allocator)
-    U, S, Vt, discarded, d1, d2 = try
+    U, S, Vt, discarded = try
         pA, pB, pAB = TO.contract_indices(r1labels, r2labels, tlabels)
         T = TO.tensoralloc_contract(TC, A1, pA, false, A2, pB, false, pAB, Val(true), allocator)
         TO.tensorcontract!(
@@ -186,12 +192,10 @@ function gate_split(
         TO.tensorcontract!(
             M, T, qA, false, G, qB, false, qAB, TO.One(), TO.Zero(), backend, allocator
         )
-        e1, e2 = size(M)[2:(1 + ns1)], size(M)[(3 + ns1):end]
-        u, sv, vt, disc = svd_trunc!(
-            reshape(M, q1 * prod(e1), q2 * prod(e2));
+        svd_trunc!(
+            reshape(M, rows, cols);
             trunc = truncation_strategy(; maxdim, mindim, cutoff), alg = svd_algorithm(alg),
         )
-        (u, sv, vt, disc, e1, e2)
     finally
         TO.allocator_reset!(allocator, cp)
     end
@@ -201,10 +205,10 @@ function gate_split(
     err = iszero(discarded) ? zero(discarded) :
         discarded^2 / (norm(svals)^2 + discarded^2)
     root = Diagonal(sqrt.(svals))
+    left, right = U * root, permutedims(root * Vt, (2, 1))
+    F1, F2 = flip ? (right, left) : (left, right)
 
-    return reshape(U * root, q1, d1..., k),
-        reshape(permutedims(root * Vt, (2, 1)), q2, d2..., k),
-        svals, err
+    return reshape(F1, q1, d1..., k), reshape(F2, q2, d2..., k), svals, err
 end
 
 function onesite_update!(o::ITensor, ψᵥ::ITensor; allocator = TO.DefaultAllocator())
