@@ -4,7 +4,6 @@ function expect(
         observables::Vector{<:Tuple};
         contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod())
     )
-    ITensors.disable_warn_order()
 
     denom = norm_sqr(alg, ψ; contraction_sequence_kwargs)
     out = Number[]
@@ -17,7 +16,7 @@ function expect(
         op_string_f = op_string_function(op_strings, vs)
         ψOψ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
         numer_seq = contraction_sequence(ψOψ_tensors; contraction_sequence_kwargs...)
-        numer = scalar(contract(ψOψ_tensors; sequence = numer_seq))
+        numer = scalar(contract_network(ψOψ_tensors; sequence = numer_seq))
         push!(out, coeff * (numer / denom))
     end
     return out
@@ -72,7 +71,7 @@ function expect(
         tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
         append!(tensors, incoming_ms)
         seq = contraction_sequence(tensors; alg = "optimal")
-        return scalar(contract(tensors; sequence = seq))
+        return scalar(contract_network(tensors; sequence = seq))
     end
 
     denom = contract_region(v -> "I")
