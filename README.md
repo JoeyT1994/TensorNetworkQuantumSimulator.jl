@@ -2,7 +2,7 @@
 
 [![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/)
 
-A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks (TNs) of near-arbitrary geometry. Built on top of [ITensors](https://github.com/ITensor/ITensors.jl) and [NamedGraphs](https://github.com/ITensor/NamedGraphs.jl).
+A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks (TNs) of near-arbitrary geometry. Built on top of [ITensorBase](https://github.com/ITensor/ITensorBase.jl) and [NamedGraphs](https://github.com/ITensor/NamedGraphs.jl).
 
 The main workhorses of the simulation are _belief propagation_ (BP) and the _singular value decomposition_ for applying gates, and _BP_ or _boundary MPS_ for estimating expectation values and sampling.
 
@@ -158,7 +158,7 @@ n = norm(ψ; alg = "bp")
 ψ = normalize(ψ; alg = "bp")
 
 # Inner product between two states
-ip = ITensors.inner(ψ, ϕ; alg = "bp")
+ip = inner(ψ, ϕ; alg = "bp")
 
 # Reduced density matrix on a set of vertices
 ρ = reduced_density_matrix(ψ, [(3, 3)]; alg = "bp")
@@ -261,14 +261,14 @@ We encourage users to read the literature listed below and explore the [tests](t
 You can also work directly in the Heisenberg picture, representing a many-body operator as a TNS with two indices per site.
 
 ```julia
-using ITensors: noprime, op
-using TensorNetworkQuantumSimulator: setindex_preserve!
+using ITensorBase: noprime
+using TensorNetworkQuantumSimulator: Ops, setindex_preserve!
 
 # Start with the Z operator on a single site vz, identity elsewhere
 s = siteinds("S=1/2", g; inds_per_site = 2)
 ψI = identity_tensornetworkstate(ComplexF64, g, s)
 ψ0 = copy(ψI)
-setindex_preserve!(ψ0, noprime(ψ0[vz] * op("Z", s[vz][1])), vz)
+setindex_preserve!(ψ0, noprime(ψ0[vz] * Ops.op("Z", s[vz][1])), vz)
 ```
 
 Gates are then applied as pairs to the ket (`s[v][1]`) and bra (`s[v][2]`) indices, and observables are extracted via inner products with other operators (e.g. the identity network gives the trace; see `examples/2dIsing_dynamics_Heisenbergpicture.jl`).

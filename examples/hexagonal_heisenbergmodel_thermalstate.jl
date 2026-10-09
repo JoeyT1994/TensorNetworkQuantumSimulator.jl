@@ -1,6 +1,6 @@
 using TensorNetworkQuantumSimulator
 using TensorNetworkQuantumSimulator: scalar_factors_quotient, TensorNetworkQuantumSimulator, freenergy
-using ITensors: ITensors, ITensor
+using TensorNetworkQuantumSimulator: Ops, ITensor
 
 function main()
     χ = 32
@@ -17,7 +17,7 @@ function main()
     apply_kwargs= (; maxdim = χ, cutoff = 1e-14, normalize_tensors = false)
     two_site_gates =ITensor[]
     for es in ec
-        append!(two_site_gates, [ITensors.op("Rxxyyzz", s[src(e)][1], s[dst(e)][1], θ = -0.5*J*dβ*im) for e in es])
+        append!(two_site_gates, [Ops.op("Rxxyyzz", s[src(e)][1], s[dst(e)][1], θ = -0.5*J*dβ*im) for e in es])
     end
 
     nsteps = 25
