@@ -1,0 +1,10 @@
+# Does the latent heat's plateau (Q = 0.168 at D = 4, 0.169 at D = 4 χ = 64, 0.1688(3) at D = 5 χ = 75; Monte Carlo
+# 0.1614(3) / 0.1643(8)) move with χ or with D? Both branches at the two β that bracket the D = 5 crossing
+# (β_t = 0.550546), each warm-started from the D = 5, χ = 75 states in runs/ (a D = 5 state is embedded into D = 6).
+#   BRANCH D CHI BETAS INIT TAG MAXITER
+# χ at D = 5:
+ordered    5 100 0.5506,0.5505 runs/d5_D5_chi75_ordered_beta0.5506.jls      d5x 3000
+disordered 5 100 0.5505,0.5506 runs/d5b_D5_chi75_disordered_beta0.5505.jls  d5x 3000
+# D = 6 (χ = 3D² = 108; ~6× D = 5 per step: expect 10–40 h per point on an H200, so a requeue or two):
+ordered    6 108 0.5506,0.5505 runs/d5_D5_chi75_ordered_beta0.5506.jls      d6 3000
+disordered 6 108 0.5505,0.5506 runs/d5b_D5_chi75_disordered_beta0.5505.jls  d6 3000

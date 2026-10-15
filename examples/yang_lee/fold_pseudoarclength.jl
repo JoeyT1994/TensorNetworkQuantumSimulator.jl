@@ -27,9 +27,21 @@ function evalg(site_at, legs, al, bl, B, c, θ, χ, ln, ls)
     f, G, ln2, ls2 = T._bp_evaluate(T._bp_from_coords(c, B, al, ctx.site), ctx, ln, ls, ctx.ctm_tolerance)
     return real(f), T._bp_to_coords(G, B, al), ln2, ls2
 end
+# The FD Jacobian column by column: on a GPU the library's threaded version would run the columns'
+# environments concurrently on one device (two concurrent jobs on one card died there, 2026-09-28).
+function fd_jacobian_seq(c, B, ctx, ln, ls, ε, tol, ref)
+    cols = map(1:length(c)) do k
+        e = zeros(eltype(c), length(c)); e[k] = ε
+        _, Gp, _, _ = T._bp_evaluate(T._bp_from_coords(c + e, B, ctx.al, ref), ctx, ln, ls, tol)
+        _, Gm, _, _ = T._bp_evaluate(T._bp_from_coords(c - e, B, ctx.al, ref), ctx, ln, ls, tol)
+        (T._bp_to_coords(Gp, B, ctx.al) - T._bp_to_coords(Gm, B, ctx.al)) / (2ε)
+    end
+    return reduce(hcat, cols)
+end
 function jac(site_at, legs, al, bl, B, χ, c, θ, ln, ls; fd = 1.0e-5, dθ_fd = 1.0e-6)
     ctx = fold_ctx(site_at, legs, al, bl, θ, χ)
-    J = T._bp_fd_jacobian(c, B, ctx, ln, ls, fd * norm(c), ctx.ctm_tolerance, ctx.site)
+    J = T.datatype(ctx.site) <: Array ? T._bp_fd_jacobian(c, B, ctx, ln, ls, fd * norm(c), ctx.ctm_tolerance, ctx.site) :
+        fd_jacobian_seq(c, B, ctx, ln, ls, fd * norm(c), ctx.ctm_tolerance, ctx.site)
     Gθ = (evalg(site_at, legs, al, bl, B, c, θ + dθ_fd, χ, ln, ls)[2] -
           evalg(site_at, legs, al, bl, B, c, θ - dθ_fd, χ, ln, ls)[2]) / (2dθ_fd)
     return J, Gθ

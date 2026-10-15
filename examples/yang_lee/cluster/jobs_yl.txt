@@ -1,0 +1,13 @@
+# Yang–Lee cluster jobs (docs/yang_lee.md, docs/status_3d.md). One line per GPU task:
+#   KIND D CHI BETA SPEC
+# fold:     the exact fold (fold_cluster.jl). SPEC = ths:θ1,θ2,… (continuation from θ = 0) or init:<scan checkpoint>.
+# showcase: both estimators on Bethe states at the θ in SPEC (../bethe_vs_hermitian.jl, PERTURB = 0).
+# The fit-free folds at D = 2, 3, 4 decide whether θ_f moves with D (the six-point fits could not: their window
+# systematic, 0.4–0.8 %, exceeds the D = 3 → 4 shift). D = 2 at β = 0.20 is done: 0.016738(2).
+fold     2 16 0.21 ths:0.002,0.004,0.005,0.0055,0.0058
+fold     3 24 0.2  ths:0.006,0.011,0.014,0.0155,0.0162,0.0166
+fold     3 24 0.21 ths:0.002,0.004,0.005,0.0055,0.0059,0.0061
+fold     4 48 0.2  init:seeds/ylk3_beta0.2_D4_chi48.jls
+fold     4 48 0.21 init:seeds/ylk3_beta0.21_D4_chi48.jls
+showcase 3 24 0.21 0.002,0.004,0.0055
+showcase 4 48 0.21 0.002,0.004,0.0055

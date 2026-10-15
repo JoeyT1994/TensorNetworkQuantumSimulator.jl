@@ -32,8 +32,8 @@ The 3D work does not change it (see "Scope" below).
     (`ctmenvironmentcache.jl:392`, commit 584601b) logs it only when Julia has more than one thread. This is an
     artefact of the threaded run, not a behaviour change. Rerun single-threaded to confirm;
   - total 827/831; tensors (188/188) and ctm2dinfinite (41/41) pass.
-  - The single-threaded rerun of `test_ctmenvironment.jl` was killed with the session (see Lessons). It is still to be
-    rerun.
+  - Single-threaded rerun of `test_ctmenvironment.jl` (2026-10-15): **251/251 pass**. The 2D engine is confirmed
+    unaffected.
 
 ---
 
@@ -82,8 +82,11 @@ The 3D work does not change it (see "Scope" below).
 - Ice: `examples/ice/`, see `ice.md`.
 
 **Cluster kits.**
-- `examples/potts_cluster/`: job array, resumable, self-requeue. Job lists `jobs_potts.txt` (D = 5), `jobs_d5b.txt`
-  (at the crossing), smoke list.
+- `examples/potts_cluster/`: job array, resumable, self-requeue.
+  - Job lists: `jobs_potts.txt` (D = 5), `jobs_d5b.txt` (at the crossing), smoke list.
+  - `jobs_q.txt` (2026-10-15): D = 5 at χ = 100, and D = 6 at χ = 108, at the crossing — does the Q plateau move?
+- `examples/yang_lee/cluster/` (2026-10-15): `fold_cluster.jl`, the exact fold — resumable, GPU, walk plus refinement
+  over the turn. `yl_array.slurm`, and `jobs_yl.txt` (folds at D = 2, 3, 4; the D = 3 and D = 4 showcase).
 - `examples/ice/cluster/`: its environment is stale, see above.
 
 **Tests.** `test/test_ctm2dinfinite.jl`, `test_boundarypeps3d.jl`, `test_ctm3denvironment.jl`, `test_ice.jl` (~6 min),
@@ -141,6 +144,10 @@ e_dis − e_ord there.
   - The impurity m and the Bethe f agree (d Re f/dθ = −Im m to the quadrature error).
 - **The exact fold** (pseudo-arclength through the turning point, no fit): θ_f(D = 2, β = 0.20) = 0.016738(2), in 19 min on
   the CPU.
+  - With the refinement over the turn (`examples/yang_lee/cluster/fold_cluster.jl`, 2026-10-15): **0.01673710**.
+  - Local-cubic rms 4e-8; the highest θ reached is 0.01673709. The old six-point fit gave 0.0167357.
+  - On the A6000 from a saved state (the `INIT` path): θ_f(D = 2, β = 0.21) = 0.00598997; the six-point fit gave 0.0059898.
+  - The D = 2–4 series is in `jobs_yl.txt`, for the user to submit.
 - **Lost, not finished:** the exact fold at D = 3, β = 0.20 (CPU), and both estimators at D = 3 (CPU) and D = 4 (A6000) on the
   same θ.
   - All of these were killed (SIGTERM) on 2026-10-01 at 16:34, when the Claude session that started them closed.
