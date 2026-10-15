@@ -32,8 +32,8 @@ The 3D work does not change it (see "Scope" below).
     (`ctmenvironmentcache.jl:392`, commit 584601b) logs it only when Julia has more than one thread. This is an
     artefact of the threaded run, not a behaviour change. Rerun single-threaded to confirm;
   - total 827/831; tensors (188/188) and ctm2dinfinite (41/41) pass.
-  - The single-threaded rerun of `test_ctmenvironment.jl` writes to
-    `~/3d_runs_2026-10-01/audit/ctmenvironment_t1.out`.
+  - The single-threaded rerun of `test_ctmenvironment.jl` was killed with the session (see Lessons). It is still to be
+    rerun.
 
 ---
 
@@ -110,14 +110,17 @@ e_dis − e_ord there.
 | 3, 27 | 0.550408 | 0.1891 | CPU |
 | 4, 48 | 0.550506(2) | 0.168(1) | A6000; crossing bracketed by both branches |
 | 4, 64 | ≈ 0.550522 | ≈ 0.169 | A6000; the disordered branch is ~10× more χ-sensitive than the ordered one |
-| 5, 75 | ≈ 0.550548 | 0.169–0.170 (extrapolated) | Rusty H200, job 7142983; the ordered spinodal lies within ~1e-4 of β_t |
+| 5, 75 | 0.550546(1) | 0.1688(3) | Rusty H200, jobs 7142983 and 7150214; crossing bracketed by both branches; the ordered branch collapses between 0.5504 and 0.55045 |
 | Monte Carlo (Janke–Villanova 1997; Bazavov–Berg 2007) | 0.550565(10) | 0.1614(3); 0.1643(8) | |
 
-- β_t is converging onto Monte Carlo: the D = 3, 4, 5 shifts are 9.8e-5 and 4.2e-5.
-- β_t needs χ convergence at each D: the χ shift at D = 4 (1.7e-5) equals D = 5's remaining gap.
-- Q does not improve from D = 4 to D = 5. The finite-D ordered branch collapses just below β_t, where e_ord is steep.
-- **Running:** `jobs_d5b.txt` (ordered and disordered points at β = 0.5505 and 0.55045, 3000 iterations) turns the
-  extrapolation into an interpolation.
+- **β_t is converging onto Monte Carlo.** The D = 3 → 4 → 5 shifts are 9.8e-5 and 4.0e-5, a ratio of ~0.41. A geometric
+  extrapolation gives ≈ 0.55057, within 1σ.
+- β_t needs χ convergence at each D: the χ shift at D = 4 was +1.7e-5.
+- **Q has plateaued at 0.168–0.169** (D = 4, D = 4 at χ = 64, D = 5): +2.7 % from Bazavov–Berg, +4.6 % from
+  Janke–Villanova.
+  - Either Q has converged and disagrees with Monte Carlo, or it is a shared bias of the ordered branch, which is read off
+    within ~1e-4 of its spinodal.
+  - Telling these apart is the open question for the Potts headline.
 
 ### The Yang–Lee edge (`yang_lee.md`)
 
@@ -138,8 +141,10 @@ e_dis − e_ord there.
   - The impurity m and the Bethe f agree (d Re f/dθ = −Im m to the quadrature error).
 - **The exact fold** (pseudo-arclength through the turning point, no fit): θ_f(D = 2, β = 0.20) = 0.016738(2), in 19 min on
   the CPU.
-- **Running:** the exact fold at D = 3, β = 0.20 (CPU); both estimators at D = 3 (CPU) and D = 4 (A6000) on the same θ, for
-  the truncation version of the showcase.
+- **Lost, not finished:** the exact fold at D = 3, β = 0.20 (CPU), and both estimators at D = 3 (CPU) and D = 4 (A6000) on the
+  same θ.
+  - All of these were killed (SIGTERM) on 2026-10-01 at 16:34, when the Claude session that started them closed.
+  - Only their θ = 0 stages had finished. They need relaunching (see Lessons).
 
 ### Ice Ih vs Ic (`ice.md`)
 
@@ -279,6 +284,11 @@ optional `CUDA.@profile` breakdown, and the working set via `JULIA_CUDA_HARD_MEM
   took ~16 cores and slowed everything 10×.
 - **Log watchers:** the filter must match every terminal state (`ERROR`, `Segmentation`, `Killed`, `Out of GPU memory`).
   One crash went unnoticed for 2.5 h, and finished rows were missed when the filter was too narrow.
+- **Workstation jobs die with the Claude session that started them** — `setsid nohup` does not protect them. Every
+  local run, and the single-threaded test rerun, got SIGTERM when the session closed on 2026-10-01.
+  - Anything that must outlive a session belongs on the cluster, or must be started by the user, e.g. in `tmux` or
+    with `systemd-run --user`.
+  - Cluster output, written to the shared home, survived.
 - **Julia parse traps:** `(a, b = f(); …)` parses as a named tuple; `@__FILE__ && main()` needs `(@__FILE__)`.
 
 ## Costs

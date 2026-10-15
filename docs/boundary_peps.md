@@ -552,6 +552,27 @@ Q is interpolated linearly in β between grid points. The ordered branch's energ
     ordered branch near its spinodal. This is the open methods question for the headline result.
   - Follow-up (`jobs_d5b.txt`): ordered and disordered points at 0.5505 and 0.55045, 3000 iterations,
     so that β_t and Q come from interpolation.
+* **D = 5, χ = 75, at the crossing** (Rusty, job 7150214, 2026-10-01; ordered warm from 0.5506, disordered
+  from 0.5504):
+
+  | β | f_ord | f_dis | f_ord − f_dis | e_ord | e_dis | m_ord |
+  |---|---|---|---|---|---|---|
+  | 0.55045 | 1.7702114174 | 1.7702272909 | −1.59e-5 | −1.74665 | −1.58707 | 0.3845 |
+  | 0.5505 | 1.7702988918 | 1.7703066532 | −7.76e-6 | −1.75222 | −1.58752 | 0.3918 |
+  | 0.5506 | 1.7704745959 | 1.7704654389 | +9.16e-6 | −1.76166 | −1.58843 | 0.4038 |
+  | 0.5508 | 1.7708284663 | 1.7707833248 | +4.51e-5 | −1.77676 | −1.59038 | 0.4218 |
+
+  - The ordered branch still exists at 0.55045 (it collapsed at 0.5504), so the crossing is bracketed by both
+    branches.
+  - Linear between 0.5505 and 0.5506, and quadratic through either neighbouring triple:
+    **β_t(D = 5) = 0.550546(1), Q = 0.1688(3)**, m jump 0.397.
+  - **β_t** shifts 9.8e-5 (D = 3 → 4) and 4.0e-5 (D = 4 → 5), a ratio of ~0.41. A geometric extrapolation gives
+    ≈ 0.55057, within 1σ of Monte Carlo. χ adds about +1e-5 (D = 4, χ = 64).
+  - **Q has plateaued: 0.168(1) at D = 4, 0.169 at D = 4 χ = 64, 0.1688(3) at D = 5.** That is +2.7 % from
+    Bazavov–Berg and +4.6 % from Janke–Villanova.
+  - Either Q has converged and disagrees with Monte Carlo, or every D carries the same bias from the ordered
+    branch, which is read off within ~1e-4 of its spinodal. Separating the two is the open question for this
+    result.
 * **χ at D = 4: χ = 64 against 48** (A6000, 2026-09-30/10-01; stopped during the ordered point at 0.5504 to
   free the GPU).
 
