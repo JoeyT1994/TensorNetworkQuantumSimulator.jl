@@ -13,7 +13,9 @@
 # (fold_…ckpt.jls, on the host); a rerun resumes. The result goes to fold_…result and a FOLD line.
 # Env: BETA, D, CHI, GPU (1), INIT or THS, BUDGET (s; on running out prints "(budget" and exits 0), DTHETA (the
 # first step in θ; default a quarter of the last θ spacing), REM (|Re m| guard, 1e-4), AFTER (3), NREF (8),
-# MAXSTEPS (80).
+# MAXSTEPS (80), NOISE (the corrector accepts a stagnating residual below it: 1e-7; the gradient floors near a
+# fold at ~1e-7 at D = 2, ~1e-6 at D = 3, 3–4e-6 at D = 4 — set ≳ the floor or every step fails), RESET_DS (1: on a
+# resume of the walk, restart the step from DTHETA instead of the checkpointed one).
 include(joinpath(@__DIR__, "..", "fold_pseudoarclength.jl"))
 using Serialization
 using Logging: NullLogger, with_logger
@@ -29,6 +31,7 @@ const D = parse(Int, ENV["D"])
 const χ = parse(Int, ENV["CHI"])
 const BUDGET = parse(Float64, get(ENV, "BUDGET", "Inf"))
 const REM = parse(Float64, get(ENV, "REM", "1e-4"))
+const NOISE = parse(Float64, get(ENV, "NOISE", "1e-7"))
 const AFTER = parse(Int, get(ENV, "AFTER", "3"))
 const NREF = parse(Int, get(ENV, "NREF", "8"))
 const MAXSTEPS = parse(Int, get(ENV, "MAXSTEPS", "80"))
@@ -62,6 +65,10 @@ function main()
     deadline = t0 + BUDGET
     if isfile(CKPT)
         W = deserialize(CKPT); legs = W.legs
+        if get(ENV, "RESET_DS", "0") == "1" && W.phase === :walk && !isnothing(W.s) && haskey(ENV, "DTHETA")
+            W = merge(W, (; Δs = parse(Float64, ENV["DTHETA"]) / abs(W.tθ)))
+            println("RESET_DS: step reset to Δs = $(W.Δs)")
+        end
         println("resuming $TAG ($(W.phase)): $(length(W.path)) path points, $(length(W.fine)) refined")
     else
         if haskey(ENV, "INIT")
@@ -77,7 +84,7 @@ function main()
             for θ in parse.(Float64, split(ENV["THS"], ","))
                 site = dev((x = ising3d_site(β; h = im * θ / β); T.replaceinds(x[1], collect(x[2]), collect(legs))))
                 A0 = isnothing(prevbp) ? curbp.A : curbp.A + (curbp.A - prevbp.A) * ((θ - θc) / (θc - θp))
-                r, i = quiet(() -> boundary_peps_krylov(site, legs, curbp; maxdim = χ, A0, tol = 1.0e-9, noise_tol = 1.0e-7))
+                r, i = quiet(() -> boundary_peps_krylov(site, legs, curbp; maxdim = χ, A0, tol = 1.0e-9, noise_tol = NOISE))
                 @printf("θ = %.6f: Newton–Krylov |g| = %.1e, %d evals (%.0f s)\n", θ, i.residual, i.evals, time() - t0)
                 flush(stdout)
                 prevbp, curbp, θp, θc = curbp, r, θc, θ
@@ -111,7 +118,7 @@ function main()
                               st.ls, st.f, norm(st.g), [st.f], true)
     # One arclength step from (s, tc, tθ) of length Δs: the accepted point and its secant, or nothing
     function step(s, tc, tθ, Δs, isfirst)
-        new, _, _ = arcstep(site_at, legs, al, bl, B, χ, s, tc, tθ, Δs; noise = 1.0e-7, verbose = false)
+        new, _, _ = arcstep(site_at, legs, al, bl, B, χ, s, tc, tθ, Δs; noise = NOISE, verbose = false)
         isnothing(new) && return nothing, "corrector failed"
         stc = new.c - s.c; stθ = new.θ - s.θ; nrm = sqrt(norm(stc)^2 + stθ^2); stc, stθ = stc / nrm, stθ / nrm
         ang = acos(clamp(real(dot(stc, tc)) + stθ * tθ, -1.0, 1.0))

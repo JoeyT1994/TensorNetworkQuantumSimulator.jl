@@ -1,0 +1,9 @@
+# Resubmission (2026-10-15) of the D = 3 and D = 4 folds with the corrector's noise floor at the gradient floor:
+# the first submission used 1e-7, below the floor (D = 3: |g| ≈ 1.1–1.4e-7 after 3000–5000 Newton–Krylov
+# evaluations per point; D = 4 near the fold 3–4e-6), so continuation points ran to the iteration cap and every
+# arclength step failed. The D = 4 checkpoints hold a halved step: RESET_DS restarts it.
+#   KIND D CHI BETA SPEC EXTRA
+fold 3 24 0.2  ths:0.006,0.011,0.014,0.0155,0.0162,0.0166 NOISE=1e-6
+fold 3 24 0.21 ths:0.002,0.004,0.005,0.0055,0.0059,0.0061 NOISE=1e-6
+fold 4 48 0.2  init:seeds/ylk3_beta0.2_D4_chi48.jls  NOISE=5e-6,RESET_DS=1,DTHETA=2.8e-5
+fold 4 48 0.21 init:seeds/ylk3_beta0.21_D4_chi48.jls NOISE=5e-6,RESET_DS=1,DTHETA=1.1e-5

@@ -25,7 +25,8 @@ WALL_S=${WALL_S:-172800}; MARGIN_S=${MARGIN_S:-900}
 TASK=${SLURM_ARRAY_TASK_ID:?"run as an array task (or set SLURM_ARRAY_TASK_ID)"}
 LINE=$(bash "$REPO/examples/ice/cluster/jobs.sh" line "$JOBS" "$TASK")
 [ -z "$LINE" ] && { echo "task $TASK: no such job line"; exit 1; }
-read -r KIND D CHI BETA SPEC <<< "$LINE"
+read -r KIND D CHI BETA SPEC EXTRA <<< "$LINE"
+EXTRA_ENV=(); [ -n "${EXTRA:-}" ] && IFS=, read -r -a EXTRA_ENV <<< "$EXTRA"   # optional 6th column: K=V,K=V
 export JULIA_PROJECT="$REPO"               # the repo's environment (home and depot shared with the workstation)
 JL=${JULIA:-$HOME/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia}; [ -x "$JL" ] || JL=julia
 BUDGET=$((WALL_S - MARGIN_S - 120))
@@ -37,11 +38,11 @@ case "$KIND" in
       *) echo "fold SPEC must be ths:… or init:…, got $SPEC"; exit 1 ;;
     esac
     WORK="$RUNDIR"
-    CMD=(env GPU=1 BETA=$BETA D=$D CHI=$CHI BUDGET=$BUDGET "${START[@]}"
+    CMD=(env GPU=1 BETA=$BETA D=$D CHI=$CHI BUDGET=$BUDGET "${START[@]}" "${EXTRA_ENV[@]}"
          "$JL" --startup-file=no -t 4 "$REPO/examples/yang_lee/cluster/fold_cluster.jl") ;;
   showcase)
     WORK="$RUNDIR/showcase_D${D}_beta${BETA}"; mkdir -p "$WORK"
-    CMD=(env GPU=1 BETA=$BETA DS=$D CHIS=$CHI THS=$SPEC PERTURB=0
+    CMD=(env GPU=1 BETA=$BETA DS=$D CHIS=$CHI THS=$SPEC PERTURB=0 "${EXTRA_ENV[@]}"
          "$JL" --startup-file=no -t 4 "$REPO/examples/yang_lee/bethe_vs_hermitian.jl") ;;
   *) echo "unknown KIND $KIND"; exit 1 ;;
 esac
