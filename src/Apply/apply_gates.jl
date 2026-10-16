@@ -84,7 +84,7 @@ function apply_gates(
 
         # actually apply the gate
         gate = adapt_gate(gate, ψ_bpc)
-        t = @timed ψ_bpc, truncation_errors[ii] = apply_gate!(gate, ψ_bpc; v⃗ = gate_vertices[ii], apply_kwargs)
+        ψ_bpc, truncation_errors[ii] = apply_gate!(gate, ψ_bpc; v⃗ = gate_vertices[ii], apply_kwargs)
         for v in gate_vertices[ii]
             push!(affected_vertices, v)
         end

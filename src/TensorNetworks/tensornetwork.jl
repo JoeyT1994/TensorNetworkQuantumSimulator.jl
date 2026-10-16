@@ -85,7 +85,7 @@ end
 random_tensornetwork(g::AbstractGraph; kwargs...) = random_tensornetwork(Float64, g; kwargs...)
 
 function siteinds(tn::TensorNetwork)
-    s = Dictionary{vertextype(tn), Vector{<:Index}}()
+    s = Dictionary{vertextype(tn), Vector{Index}}()
     for v in vertices(tn)
         is = uniqueinds(tn, v)
         isempty(is) ? set!(s, v, Index[]) : set!(s, v, is)

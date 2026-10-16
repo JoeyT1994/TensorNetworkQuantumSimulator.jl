@@ -4,23 +4,18 @@ function expect(
         observables::Vector{<:Tuple};
         contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod())
     )
-    ITensors.disable_warn_order()
-
-    denom = norm_sqr(alg, ψ; contraction_sequence_kwargs)
-    out = Number[]
-    for obs in observables
+    denom = ITensors.@disable_warn_order norm_sqr(alg, ψ; contraction_sequence_kwargs)
+    out = map(observables) do obs
         op_strings, vs, coeff = collectobservable(obs, graph(ψ))
-        if iszero(coeff)
-            push!(out, zero(coeff))
-            continue
-        end
+        iszero(coeff) && return coeff * zero(denom)
         op_string_f = op_string_function(op_strings, vs)
         ψOψ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
         numer_seq = contraction_sequence(ψOψ_tensors; contraction_sequence_kwargs...)
-        numer = scalar(contract(ψOψ_tensors; sequence = numer_seq))
-        push!(out, coeff * (numer / denom))
+        numer = scalar(ITensors.@disable_warn_order contract(ψOψ_tensors; sequence = numer_seq))
+        return coeff * (numer / denom)
     end
-    return out
+    # Observables can differ in type (e.g. "Z" real, "Y" complex), so promote to a common concrete type
+    return convert(Vector{mapreduce(typeof, promote_type, out; init = Union{})}, out)
 end
 
 function expect(

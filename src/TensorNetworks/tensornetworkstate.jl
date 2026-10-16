@@ -7,11 +7,11 @@ A tensor network state defined on a graph with vertices of type `V`. Wraps a `Te
 
 # Fields
 - `tensornetwork::TensorNetwork{V}`: The underlying tensor network.
-- `siteinds::Dictionary{V, Vector{<:Index}}`: A dictionary mapping each vertex to its physical (site) indices.
+- `siteinds::Dictionary{V, Vector{Index}}`: A dictionary mapping each vertex to its physical (site) indices.
 """
 struct TensorNetworkState{V} <: AbstractTensorNetwork{V}
     tensornetwork::TensorNetwork{V}
-    siteinds::Dictionary{V, Vector{<:Index}}
+    siteinds::Dictionary{V, Vector{Index}}
 end
 
 tensornetwork(tns::TensorNetworkState) = tns.tensornetwork
@@ -144,9 +144,9 @@ function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dic
     for v in vs
         tnv = f(v)
         if tnv isa String
-            set!(tensors, v, adapt(eltype)(ITensors.state(f(v), only(siteinds[v]))))
+            set!(tensors, v, adapt(eltype)(ITensors.state(tnv, only(siteinds[v]))))
         elseif tnv isa Vector{<:Number}
-            set!(tensors, v, adapt(eltype)(ITensors.ITensor(f(v), only(siteinds[v]))))
+            set!(tensors, v, adapt(eltype)(ITensors.ITensor(tnv, only(siteinds[v]))))
         else
             error("Unrecognized local state constructor. Currently supported: Strings and Vectors.")
         end

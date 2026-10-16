@@ -181,7 +181,9 @@ function updated_message(
     updated_message = contract(contract_list; sequence)
 
     if alg.kwargs.normalize
-        message_norm = sum(updated_message)
+        # Normalise by the 2-norm rather than the element sum: the sum can cancel to ~0 for
+        # signed or complex networks. message_diff is phase-invariant so convergence is unaffected.
+        message_norm = norm(updated_message)
         if !iszero(message_norm)
             updated_message = updated_message / message_norm
         end
