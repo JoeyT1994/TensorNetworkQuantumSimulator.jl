@@ -2,15 +2,16 @@
 ITensorsBackend: the TensorInterface seam on ITensors 0.9 (General registry), dense storage only.
 
 Every verb forwards to its ITensors namesake, whose conventions the seam follows (see the header
-of src/tensor_interface.jl); the few the seam adds (`dense`, `scale!`, ...) are written here in
-ITensors terms. This is the only module that references ITensors, together with the
-compatibility shim ITensorsCompat.jl.
+of src/tensor_interface.jl); the few the seam adds (`truncated_svd`, `pad_index`, `charge_sectors`,
+`dense`, `scale!`, ...) are written here in ITensors terms. Graded queries answer for dense data:
+`isdual` is false and `space` is the dimension. This is the only module that references ITensors,
+together with the compatibility shim ITensorsCompat.jl.
 =#
 module ITensorsBackend
 
 using ITensors: ITensors, ITensor, Index
 using ITensors.NDTensors: NDTensors
-using LinearAlgebra: LinearAlgebra, rmul!
+using LinearAlgebra: LinearAlgebra, I, diag, rmul!
 using Random: Random
 
 import ..TensorInterface as TI
@@ -34,6 +35,8 @@ TI.dim(x::Union{ITensor, IndexLike}) = ITensors.dim(x)
 TI.plev(i::Index) = ITensors.plev(i)
 TI.tags(x::Union{ITensor, Index}) = ITensors.tags(x)
 TI.isgraded(x::Union{ITensor, Index}) = ITensors.hasqns(x)
+TI.isdual(i::Index) = false
+TI.space(i::Index) = ITensors.dim(i)
 
 TI.dag(x::TensorOrIndex) = ITensors.dag(x)
 TI.dag(t::ITensor, cod) = ITensors.dag(t)          # dense: the map adjoint is the bra (rule 5)
@@ -46,6 +49,11 @@ TI.replaceinds(t::ITensor, args...) = ITensors.replaceinds(t, args...)
 
 # ── Construction ────────────────────────────────────────────────────────────────────────
 TI.new_index(d::Integer; tags = "") = Index(Int(d), tags)
+TI.new_index(ref, d::Integer; tags = "") = Index(Int(d), tags)
+function TI.pad_index(w::Index, ins, kt::Integer; tags = "Link,pad")
+    k = ITensors.dim(w)
+    return k >= kt ? nothing : Index(Int(kt) - k, tags)
+end
 
 TI.from_array(A::AbstractArray, is::IndexCollection) = ITensor(copy(A), is...)
 TI.from_array(A::AbstractArray, i::Index, is::Index...) = ITensor(copy(A), i, is...)
@@ -67,7 +75,16 @@ TI.onehot(p::Pair{<:Index}...) = ITensors.onehot(p...)
 TI.onehot(elt::Type, p::Pair{<:Index}...) = ITensors.onehot(elt, p...)
 TI.delta(x::IndexLike, xs::IndexLike...) = ITensors.delta(x, xs...)
 TI.delta(elt::Type{<:Number}, xs::IndexLike...) = ITensors.delta(elt, xs...)
-TI.dense(t::ITensor) = ITensors.denseblocks(t)
+# Diagonal storage densifies directly. A combiner is a structured object that can only fuse or
+# unfuse its legs whole, so it is made explicit by fusing an identity through it.
+function TI.dense(t::ITensor)
+    ITensors.storage(t) isa NDTensors.Combiner || return ITensors.denseblocks(t)
+    is = collect(ITensors.inds(t))[2:end]               # the combined index comes first
+    n = ITensors.dim(is)
+    js = ITensors.sim.(is)                   # fresh copies: priming could collide (b and b′ legs)
+    Id = ITensor(Matrix{Float64}(I, n, n), is..., js...)
+    return ITensors.replaceinds(Id * t, js, is)
+end
 # collections may nest (a vector of index tuples); ITensors flattens them
 TI.combiner(is::Union{Index, AbstractVector, Tuple}...; kwargs...) = ITensors.combiner(is...; kwargs...)
 TI.combinedind(C::ITensor) = ITensors.combinedind(C)
@@ -75,6 +92,7 @@ TI.directsum(p1::Pair{ITensor}, p2::Pair{ITensor}; tags = "sum") =
     first(ITensors.directsum(p1, p2; tags))
 TI.directsum(news, p1::Pair{ITensor}, p2::Pair{ITensor}; kwargs...) =
     ITensors.directsum(news, p1, p2; kwargs...)
+TI.charge_sectors(legs) = [Index(1, "Charge")]
 
 # ── Contraction ─────────────────────────────────────────────────────────────────────────
 # ITensors warns about high-order intermediates; the package chooses its own sequences, so the
@@ -95,10 +113,26 @@ TI.map_diag!(f::Function, out::ITensor, t::ITensor) = ITensors.map_diag!(f, out,
 TI.factorize_svd(t::ITensor, args...; kwargs...) = ITensors.factorize_svd(t, args...; kwargs...)
 TI.gram(a::ITensor, b::ITensor, legs) = ITensors.dag(a) * b
 
+# The full SVD, then the seam's truncation rule on its (sorted) spectrum: U, S, V restricted to
+# the kept singular triplets on fresh bonds that keep the original bonds' tags.
+function TI.truncated_svd(t::ITensor, linds; trunc::TI.TruncationStrategy)
+    U, S, V = LinearAlgebra.svd(t, linds)
+    u = ITensors.commonind(U, S)
+    v = ITensors.commonind(S, V)
+    s = abs.(diag(ITensors.array(S, u, v)))
+    k = TI.kept_count(s, trunc)
+    k == length(s) && return U, S, V
+    uk, vk = Index(k, ITensors.tags(u)), Index(k, ITensors.tags(v))
+    Pu = ITensor(Matrix{real(eltype(S))}(I, length(s), k), u, uk)
+    Pv = ITensor(Matrix{real(eltype(S))}(I, length(s), k), v, vk)
+    return U * Pu, Pu * ITensors.denseblocks(S) * Pv, V * Pv
+end
+
 # ── Storage / type queries ──────────────────────────────────────────────────────────────
 TI.datatype(t::ITensor) = ITensors.datatype(t)
 TI.scalartype(t::ITensor) = NDTensors.scalartype(t)
 TI.array(t::ITensor, is::Index...) = ITensors.array(t, is...)
+TI.data(t::ITensor) = ITensors.data(t)
 function TI.scale!(t::ITensor, x::Number)
     rmul!(ITensors.data(t), x)
     return t

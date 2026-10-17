@@ -46,17 +46,17 @@ The rules:
 
 What a backend must implement, by group (contracts on the declarations below):
 
-  Index construction : new_index(dim; tags),
+  Index construction : new_index(dim; tags), new_index(ref, dim; tags), pad_index(w, ins, kt),
                        sim, dag, prime, noprime
   Index queries      : inds, dim, plev, tags, commonind(s), uniqueinds, unioninds,
-                       noncommonind(s), hascommoninds, isgraded
+                       noncommonind(s), hascommoninds, isgraded, isdual, space
   Index replacement  : replaceind(s) (relabeling, no data movement)
   Construction       : from_array, random_tensor, onehot, delta, dense, combiner, combinedind,
-                       directsum
+                       directsum, charge_sectors
   Contraction        : contract(ts::Vector; sequence), Base.:*, scalar, apply
   Diagonal ops       : map_diag, map_diag!
-  Factorizations     : the LinearAlgebra generics of rule 3, factorize_svd, gram
-  Storage/type       : datatype, scalartype, array, scale!
+  Factorizations     : the LinearAlgebra generics of rule 3, factorize_svd, truncated_svd, gram
+  Storage/type       : datatype, scalartype, array, data, scale!
   Hooks (optional)   : fused_norm_message, fused_norm_scalar, backend_op
 =#
 module TensorInterface
@@ -93,8 +93,17 @@ end
 # `hascommoninds(a, b)` — the ITensors semantics, on tensors and on index collections.
 #
 # `isgraded(x)`: true when the tensor or index `x` carries symmetry sectors. Dense: false.
+# `isdual(i)`: the arrow of a graded index (true on the dual copy). Dense: false.
+# `space(i)`: the vector space of an index — two indices with equal `space` (and arrow) are
+#   interchangeable as the same leg slot of a tensor. Dense: its dimension.
 #
-# `new_index(d; tags)`: a fresh index of total dimension `d`.
+# `new_index(d; tags)`: a fresh index of total dimension `d`. `new_index(ref, d; tags)`: a fresh
+#   bond of dimension `d` compatible with the legs `ref` (an index, a vector of them, or a tensor);
+#   graded backends choose its sector content, dense ones ignore `ref`.
+# `pad_index(w, ins, kt; tags)`: the zero-padding index that brings the retained bond `w` on the
+#   interface `ins` to total width `kt`, or `nothing` when `dim(w) >= kt`. Its sector content must
+#   depend only on `ins` and `kt` (so a padded bond has the same structure every sweep). Dense: a
+#   fresh index of dimension `kt - dim(w)`.
 # `sim(x; tags)`: a fresh copy (new identity, same space and arrow) of an index or of each index
 #   of a collection, optionally retagged.
 #
@@ -107,10 +116,14 @@ end
 #   (identity for two legs), possibly with structured (diagonal) storage — see `dense`.
 # `dense(t)`: `t` with any structured storage (e.g. diagonal) made explicit, same symmetry
 #   structure. Identity on tensors that are already dense.
-# `combiner(inds; tags)`: the tensor fusing `inds` into one combined index, `combinedind(C)`.
+# `combiner(inds; tags)`: the tensor fusing `inds` into one combined index, `combinedind(C)`. It
+#   may be a structured object that can only fuse (or unfuse) all of `inds` at once; `dense(C)` is
+#   the explicit isometry, for contractions that use it as an ordinary tensor.
 # `directsum(a => ia, b => ib; tags)`: the direct sum of `a` and `b` along the paired legs `ia`,
 #   `ib`, returned as a tensor carrying the newly minted summed bond. `directsum(news, a => ias,
 #   b => ibs)`: several paired legs at once, the summed bonds given as `news`.
+# `charge_sectors(legs)`: the dim-1 "charge" legs that complete a tensor on `legs` to a flux-zero
+#   one: one trivial leg for dense data, one per reachable sector for graded data.
 #
 # `contract(ts::Vector; sequence)`: contract a list (nested-vector `sequence` addresses tensors by
 #   position; `nothing` lets the backend choose). `scalar(t)`: the number of a 0-leg tensor.
@@ -121,28 +134,31 @@ end
 # `factorize_svd(t, linds; ortho, singular_values!, maxdim, cutoff, ...)`: the truncated SVD
 #   split (L, R, spec) with `spec.truncerr`; with `ortho = "none"` the singular values are split
 #   symmetrically, and a `Ref` passed as `singular_values!` receives the diagonal tensor S.
+# `truncated_svd(t, linds; trunc)`: `svd(t, linds)` truncated by the seam-owned
+#   `TruncationStrategy` `trunc` (below) — U, S, V on the kept bond.
 # `gram(a, b, legs)`: a† b over `legs`, with a and b viewed as maps INTO `legs` (rule 5).
 #
 # `datatype(t)`: the storage type (Array, CuArray, ...). `scalartype(t)`: the element type.
 # `array(t)`, `array(t, i1, i2, ...)`: the data as a dense Array (in that leg order).
+# `data(t)`: the raw storage as a vector (a copy on block-sparse data); use `scale!` to mutate.
 # `scale!(t, x)`: multiply `t`'s storage by the number `x` in place; returns `t`.
 for f in [
         # index queries
         :inds, :commonind, :commoninds, :uniqueinds, :unioninds, :noncommonind,
-        :noncommoninds, :hascommoninds, :dim, :plev, :tags, :isgraded,
+        :noncommoninds, :hascommoninds, :dim, :plev, :tags, :isgraded, :isdual, :space,
         # index/tensor transforms
         :dag, :prime, :noprime, :sim, :replaceind, :replaceinds,
         # construction
-        :new_index, :from_array, :random_tensor, :onehot, :delta, :dense,
-        :combiner, :combinedind, :directsum,
+        :new_index, :pad_index, :from_array, :random_tensor, :onehot, :delta, :dense,
+        :combiner, :combinedind, :directsum, :charge_sectors,
         # contraction / evaluation
         :contract, :scalar, :apply, :inner,
         # diagonal ops
         :map_diag, :map_diag!,
         # factorizations (beyond the LinearAlgebra generics)
-        :factorize_svd, :gram,
+        :factorize_svd, :truncated_svd, :gram,
         # storage / type queries
-        :datatype, :array, :scale!,
+        :datatype, :array, :data, :scale!,
     ]
     @eval function $f end
 end
@@ -162,6 +178,40 @@ datatype(A::AbstractArray) = typeof(A)
 
 # Full contractions on some backends produce raw numbers; they flow through scalar unchanged.
 scalar(x::Number) = x
+
+# ── Truncation strategies ───────────────────────────────────────────────────────────────
+"""
+    TruncationStrategy(maxdim, rtol, degtol)
+
+Seam-owned truncation rule for `truncated_svd` (built with [`truncation_strategy`](@ref)): keep at
+most `maxdim` singular values, drop those at or below `rtol · s₁`, and back off rather than split a
+multiplet whose gap is `≤ degtol · s_k`. Backends apply it to the merged spectrum of all sectors;
+[`kept_count`](@ref) is the rule on one sorted spectrum.
+"""
+struct TruncationStrategy
+    maxdim::Int
+    rtol::Float64
+    degtol::Float64
+end
+truncation_strategy(; maxdim::Integer, rtol::Real = 0.0, degtol::Real = 0.0) =
+    TruncationStrategy(Int(maxdim), Float64(rtol), Float64(degtol))
+
+"""
+    kept_count(s, trunc::TruncationStrategy)
+
+How many of the singular values `s` (sorted by decreasing magnitude) `trunc` keeps; at least one.
+"""
+function kept_count(s::AbstractVector{<:Real}, st::TruncationStrategy)
+    n = length(s)
+    k = min(st.maxdim, n)
+    while k > 1 && s[k] ≤ st.rtol * s[1]
+        k -= 1
+    end
+    while k > 1 && k < n && abs(s[k] - s[k + 1]) ≤ st.degtol * abs(s[k])
+        k -= 1
+    end
+    return k
+end
 
 # ── Hooks (rule 7: `nothing` = not provided, take the generic path) ───────────────────────
 """

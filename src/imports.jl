@@ -42,12 +42,13 @@ using NamedGraphs: named_grid, named_hexagonal_lattice_graph, named_comb_tree, n
 # `using`) for the names this package extends with its own methods.
 using .TensorInterface: Algorithm, @Algorithm_str
 using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, noncommoninds,
-    hascommoninds, dim, plev, tags, isgraded,
+    hascommoninds, dim, plev, tags, isgraded, isdual, space,
     dag, prime, noprime, sim, replaceind, replaceinds,
-    new_index, from_array, random_tensor, onehot, delta, dense, combiner, combinedind,
-    directsum,
-    scalar, apply, map_diag, map_diag!, factorize_svd, gram,
-    array, scale!, fused_norm_message, fused_norm_scalar, backend_op
+    new_index, pad_index, from_array, random_tensor, onehot, delta, dense, combiner, combinedind,
+    directsum, charge_sectors,
+    scalar, apply, map_diag, map_diag!, factorize_svd, truncated_svd, gram,
+    TruncationStrategy, truncation_strategy, kept_count,
+    array, data, scale!, fused_norm_message, fused_norm_scalar, backend_op
 import .TensorInterface: contract, truncate, inner, uniqueinds, datatype, scalartype
 
 using Adapt: adapt

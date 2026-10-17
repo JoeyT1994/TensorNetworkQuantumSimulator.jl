@@ -19,6 +19,7 @@ include("MessagePassing/abstractbeliefpropagationcache.jl")
 include("MessagePassing/beliefpropagationcache.jl")
 include("MessagePassing/boundarympscache.jl")
 include("MessagePassing/loopcorrection.jl")
+include("MessagePassing/ctmenvironmentcache.jl")
 include("graph_ops.jl")
 include("utils.jl")
 include("kernel_hooks.jl")
@@ -86,6 +87,16 @@ export
     datatype,
     scalartype,
     BoundaryMPSCache,
+    CTMEnvironmentCache,
+    CTMOptions,
+    cvm_freenergy,
+    marginal_inconsistency,
+    region_lnZ,
+    environments,
+    vertex_environments,
+    vertex_ring,
+    region_ring,
+    vertex_window,
     register_op!,
     TensorNetwork,
     AbstractTensorNetwork,

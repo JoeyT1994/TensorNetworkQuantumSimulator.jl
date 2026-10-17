@@ -14,4 +14,5 @@ using Test
     include("test_seam.jl")
     include("test_operators.jl")
     include("test_kernels.jl")
+    include("test_ctmenvironment.jl")
 end
