@@ -34,6 +34,90 @@ function lieb_lattice(nx::Int64, ny::Int64; periodic = false)
 
 end
 
+"""
+    triangular_lattice(nx::Int64, ny::Int64)
+
+Create a triangular lattice of `nx × ny` sites. Vertex `(i, j)` is joined to `(i + 1, j)`, `(i, j + 1)`
+and `(i + 1, j + 1)`; the names are a planar straight-line drawing (a square grid with one
+diagonal per square).
+"""
+function triangular_lattice(nx::Int64, ny::Int64)
+    g = named_grid((nx, ny))
+    for i in 1:(nx - 1), j in 1:(ny - 1)
+        g = add_edge(g, NamedEdge((i, j) => (i + 1, j + 1)))
+    end
+    return g
+end
+
+"""
+    kagome_lattice(nx::Int64, ny::Int64)
+
+Create a kagome lattice of `nx × ny` unit cells (three sites each): the triangular lattice on
+`(2nx + 1) × (2ny + 1)` sites with every site whose two coordinates are both even removed. The
+names are a planar straight-line drawing.
+"""
+function kagome_lattice(nx::Int64, ny::Int64)
+    g = triangular_lattice(2 * nx + 1, 2 * ny + 1)
+    for v in collect(vertices(g))
+        iseven(first(v)) && iseven(last(v)) && (g = rem_vertex(g, v))
+    end
+    return g
+end
+
+"""
+    penrose_tiling(ngenerations::Int64)
+
+Create the vertex–edge graph of a Penrose rhombus (P3) tiling: a wheel of ten Robinson triangles
+deflated `ngenerations` times, each pair of triangles sharing a base forming one rhombus. Vertex
+names are their (x, y) positions (rounded), so the names are a planar straight-line drawing; the
+patch fills the unit disc.
+"""
+function penrose_tiling(ngenerations::Int64)
+    φ = (1 + sqrt(5)) / 2
+    tris = Tuple{Int, ComplexF64, ComplexF64, ComplexF64}[]
+    for i in 0:9
+        b, c = cis((2i - 1) * π / 10), cis((2i + 1) * π / 10)
+        iseven(i) && ((b, c) = (c, b))
+        push!(tris, (0, 0.0im, b, c))
+    end
+    for _ in 1:ngenerations
+        next = similar(tris, 0)
+        for (color, a, b, c) in tris
+            if color == 0
+                p = a + (b - a) / φ
+                push!(next, (0, c, p, b), (1, p, c, a))
+            else
+                q = b + (a - b) / φ
+                r = b + (c - b) / φ
+                push!(next, (1, r, c, a), (1, q, r, b), (0, r, q, a))
+            end
+        end
+        tris = next
+    end
+    # merge coincident points (computed along different deflation paths) on a fine grid
+    scale = 1.0e8
+    keys_ = Dict{Tuple{Int, Int}, Tuple{Float64, Float64}}()
+    function name(z)
+        k = (round(Int, real(z) * scale), round(Int, imag(z) * scale))
+        for di in -1:1, dj in -1:1
+            haskey(keys_, (k[1] + di, k[2] + dj)) && return keys_[(k[1] + di, k[2] + dj)]
+        end
+        keys_[k] = (round(real(z); digits = 8), round(imag(z); digits = 8))
+        return keys_[k]
+    end
+    # each triangle contributes its two legs C–A and A–B; the base B–C is the rhombus diagonal
+    es = Set{Tuple{Tuple{Float64, Float64}, Tuple{Float64, Float64}}}()
+    for (_, a, b, c) in tris
+        na, nb, nc = name(a), name(b), name(c)
+        push!(es, minmax(nc, na), minmax(na, nb))
+    end
+    g = NamedGraph(collect(unique(Iterators.flatten(es))))
+    for (u, v) in es
+        g = add_edge(g, NamedEdge(u => v))
+    end
+    return g
+end
+
 function topologytograph(topology)
     # TODO: adapt this to named graphs with non-integer labels
     # find number of vertices

@@ -21,6 +21,7 @@ include("MessagePassing/boundarympscache.jl")
 include("MessagePassing/loopcorrection.jl")
 include("MessagePassing/ctmenvironmentcache.jl")
 include("graph_ops.jl")
+include("Planar/planar_embedding.jl")
 include("utils.jl")
 include("kernel_hooks.jl")
 
@@ -127,6 +128,12 @@ export
     virtualinds,
     nv,
     heavy_hexagonal_lattice,
+    triangular_lattice,
+    kagome_lattice,
+    penrose_tiling,
+    PlanarEmbedding,
+    planar_embedding,
+    vertex_polygon,
     lieb_lattice,
     rescale,
     renyi_entropy,

@@ -36,6 +36,7 @@ using NamedGraphs:
     rem_vertex!
 
 using NamedGraphs: named_grid, named_hexagonal_lattice_graph, named_comb_tree, named_path_graph
+using Graphs: ne
 
 # All tensor-level verbs come from the TensorInterface seam (see tensor_interface.jl), never from
 # a tensor library directly; `Tensor` and `Index` are bound by Backends/Backends.jl. `import` (not
