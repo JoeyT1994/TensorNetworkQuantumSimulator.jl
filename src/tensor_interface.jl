@@ -40,9 +40,9 @@ The rules:
      element types; it never calls their constructors — new indices come from `new_index`,
      new tensors from the construction verbs below.
   7. Hooks. Seam VERBS have no fallbacks: a missing method is a missing backend feature and
-     fails loudly at the call site. Seam HOOKS (`backend_op`) are optional fast paths or
-     extensions: their fallback returns `nothing` and the caller then takes its generic path,
-     with identical results.
+     fails loudly at the call site. Seam HOOKS (`fused_norm_message`, `fused_norm_scalar`,
+     `backend_op`) are optional fast paths or extensions: their fallback returns `nothing` and
+     the caller then takes its generic path, with identical results.
 
 What a backend must implement, by group (contracts on the declarations below):
 
@@ -57,7 +57,7 @@ What a backend must implement, by group (contracts on the declarations below):
   Diagonal ops       : map_diag, map_diag!
   Factorizations     : the LinearAlgebra generics of rule 3, factorize_svd, gram
   Storage/type       : datatype, scalartype, array, scale!
-  Hooks (optional)   : backend_op
+  Hooks (optional)   : fused_norm_message, fused_norm_scalar, backend_op
 =#
 module TensorInterface
 
@@ -164,6 +164,25 @@ datatype(A::AbstractArray) = typeof(A)
 scalar(x::Number) = x
 
 # ── Hooks (rule 7: `nothing` = not provided, take the generic path) ───────────────────────
+"""
+    fused_norm_message(ψ, sinds, incoming; normalize = true)
+
+Optional fused double-layer BP kernel: the outgoing message on the one bond of `ψ` not covered by
+the `incoming` (b, b′) messages, i.e. `contract([incoming; ψ; ψ̄])` with ket and bra sharing the
+site indices `sinds` and the bra's virtual legs primed — without forming the double-layer tensor.
+With `normalize`, the result has unit 2-norm. `nothing` where the backend has no fused path.
+"""
+fused_norm_message(ψ, sinds, incoming; normalize = true) = nothing
+
+"""
+    fused_norm_scalar(ψ, sinds, incoming, ops)
+
+Optional fused single-vertex closure: the scalar `contract([incoming; ψ; ops; ψ̄])`, where `ops`
+are (s′, s) operators on site legs `s ∈ sinds` (empty for the norm). `nothing` where the backend
+has no fused path.
+"""
+fused_norm_scalar(ψ, sinds, incoming, ops) = nothing
+
 """
     backend_op(name, sites...; kwargs...)
 

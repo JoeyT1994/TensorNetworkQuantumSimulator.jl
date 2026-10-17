@@ -116,5 +116,6 @@ function TI.backend_op(name::String, sites::Index...; kwargs...)
     end
 end
 
+include("ITensorsKernels.jl")
 
 end

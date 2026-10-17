@@ -13,4 +13,5 @@ using Test
     include("test_contraction_sequences.jl")
     include("test_seam.jl")
     include("test_operators.jl")
+    include("test_kernels.jl")
 end

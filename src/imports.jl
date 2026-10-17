@@ -47,7 +47,7 @@ using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, no
     new_index, from_array, random_tensor, onehot, delta, dense, combiner, combinedind,
     directsum,
     scalar, apply, map_diag, map_diag!, factorize_svd, gram,
-    array, scale!, backend_op
+    array, scale!, fused_norm_message, fused_norm_scalar, backend_op
 import .TensorInterface: contract, truncate, inner, uniqueinds, datatype, scalartype
 
 using Adapt: adapt

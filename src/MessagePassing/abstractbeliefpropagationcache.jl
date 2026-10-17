@@ -19,8 +19,15 @@ function rescale_vertices!(
     return not_implemented()
 end
 
+#Backend fast paths for the double-layer message update and single-vertex region scalars;
+#`nothing` means no specialization applies and the generic path runs (see kernel_hooks.jl).
+norm_message_kernel(net, vertex, incoming_ms; kwargs...) = nothing
+norm_scalar_kernel(net, vertices, incoming_ms; kwargs...) = nothing
+
 function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
     incoming_ms = incoming_messages(bp_cache, vertex)
+    fast = norm_scalar_kernel(network(bp_cache), [vertex], incoming_ms; op_strings = v -> "I")
+    fast !== nothing && return fast
     state = bp_factors(bp_cache, vertex)
     contract_list = [state; incoming_ms]
     sequence = contraction_sequence(contract_list; alg = "optimal")
@@ -167,6 +174,13 @@ function updated_message(
     incoming_ms = incoming_messages(
         bp_cache, vertex; ignore_edges = (reverse(edge),)
     )
+
+    # unnormalised, so both paths share `normalize_message`
+    m_fast = norm_message_kernel(network(bp_cache), vertex, incoming_ms; normalize = false)
+    if m_fast !== nothing
+        return (alg.kwargs.normalize ? normalize_message(m_fast) : m_fast), (nothing, nothing, false)
+    end
+
     state = bp_factors(bp_cache, vertex)
     contract_list = Tensor[incoming_ms; state]
     cache_key = vertex => edge

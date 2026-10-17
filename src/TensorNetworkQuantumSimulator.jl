@@ -21,6 +21,7 @@ include("MessagePassing/boundarympscache.jl")
 include("MessagePassing/loopcorrection.jl")
 include("graph_ops.jl")
 include("utils.jl")
+include("kernel_hooks.jl")
 
 include("Apply/apply_gates.jl")
 include("Apply/simple_update.jl")
