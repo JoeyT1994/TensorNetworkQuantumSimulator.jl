@@ -1,8 +1,10 @@
 module TensorNetworkQuantumSimulator
 
-
+include("tensor_interface.jl")
+include("Backends/Backends.jl")
 include("imports.jl")
 
+include("operators.jl")
 include("siteinds.jl")
 include("TensorNetworks/abstracttensornetwork.jl")
 include("TensorNetworks/tensornetwork.jl")
@@ -33,6 +35,8 @@ include("symmetric_gauge.jl")
 include("entanglement.jl")
 include("truncate.jl")
 include("rdm.jl")
+
+include("Backends/Compat.jl")
 
 
 export
@@ -81,6 +85,7 @@ export
     datatype,
     scalartype,
     BoundaryMPSCache,
+    register_op!,
     TensorNetwork,
     AbstractTensorNetwork,
     partitionfunction,

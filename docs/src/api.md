@@ -91,12 +91,15 @@ fidelity
 optimise_p_q
 ```
 
-## Custom Gate Definitions
+## Operators and States
+
+The in-house operator library (`src/operators.jl`): plain matrices keyed by name, including the
+gates `"Rxxyy"`, `"Rxxyyzz"` and `"xx_plus_yy"`.
 
 ```@docs
-ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"Rxxyy", ::ITensors.SiteTypes.SiteType"S=1/2", ::ITensors.Index, ::ITensors.Index)
-ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"Rxxyyzz", ::ITensors.SiteTypes.SiteType"S=1/2", ::ITensors.Index, ::ITensors.Index)
-ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"xx_plus_yy", ::ITensors.SiteTypes.SiteType"S=1/2")
+register_op!
+op
+state
 ```
 
 ## Index

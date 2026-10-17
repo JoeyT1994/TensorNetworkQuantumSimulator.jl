@@ -1,4 +1,4 @@
-function normalize_rdm(ρ::ITensor)
+function normalize_rdm(ρ::Tensor)
     dtype = datatype(ρ)
     tr_ρ = copy(ρ)
     for i in inds(ρ; plev = 0)
@@ -22,7 +22,7 @@ Compute the reduced density matrix on the vertices `verts` of the tensor network
 - `kwargs...`: Additional keyword arguments specific to the chosen algorithm.
 
 # Returns
-- An `ITensor` representing the reduced density matrix on the specified vertices.
+- A `Tensor` representing the reduced density matrix on the specified vertices.
 """
 function reduced_density_matrix(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, verts; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "rdm", alg)
@@ -40,7 +40,7 @@ function reduced_density_matrix(
     op_string_f = v -> v ∈ verts ? "ρ" : "I"
     ρ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
     seq = contraction_sequence(ρ_tensors; contraction_sequence_kwargs...)
-    ρ = ITensors.@disable_warn_order contract(ρ_tensors; sequence = seq)
+    ρ = contract(ρ_tensors; sequence = seq)
     if normalize
         ρ = normalize_rdm(ρ)
     end

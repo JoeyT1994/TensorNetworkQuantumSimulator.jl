@@ -37,8 +37,18 @@ using NamedGraphs:
 
 using NamedGraphs: named_grid, named_hexagonal_lattice_graph, named_comb_tree, named_path_graph
 
-using ITensors: ITensors
-using ITensors: Index, ITensor, hasqns, noncommonind, combinedind, combiner, replaceinds, sim, onehot, delta, plev, dense, unioninds, uniqueinds, commonind, commoninds, replaceind, datatype, inds, dag, noprime, factorize_svd, prime, hascommoninds, map_diag!, @Algorithm_str, scalar, @OpName_str, @SiteType_str, denseblocks, tags, op, apply, contract, inner
+# All tensor-level verbs come from the TensorInterface seam (see tensor_interface.jl), never from
+# a tensor library directly; `Tensor` and `Index` are bound by Backends/Backends.jl. `import` (not
+# `using`) for the names this package extends with its own methods.
+using .TensorInterface: Algorithm, @Algorithm_str
+using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, noncommoninds,
+    hascommoninds, dim, plev, tags, isgraded,
+    dag, prime, noprime, sim, replaceind, replaceinds,
+    new_index, from_array, random_tensor, onehot, delta, dense, combiner, combinedind,
+    directsum,
+    scalar, apply, map_diag, map_diag!, factorize_svd, gram,
+    array, scale!, backend_op
+import .TensorInterface: contract, truncate, inner, uniqueinds, datatype, scalartype
 
 using Adapt: adapt
 
