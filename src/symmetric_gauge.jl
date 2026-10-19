@@ -1,7 +1,7 @@
 function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 * eps(real(scalartype(bp_cache))), kwargs...)
     tn = network(bp_cache)
-    !(tn isa TensorNetworkState) && error("Can only transform TensorNetworkStates to the symmetric gauge")
-    for e in edges(tn)
+    !(bp_cache.factors isa ITNN.NormNetwork) && error("Can only transform TensorNetworkStates to the symmetric gauge")
+    for e in collect(edges(tn))
         vsrc, vdst = src(e), dst(e)
         ψvsrc, ψvdst = tn[vsrc], tn[vdst]
 
@@ -48,16 +48,18 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         ψvsrc = ψvsrc * sqrtS
         ψvdst = ψvdst * sqrtS
 
-        new_edge_ind = Index[settags(only(v), tags(first(edge_ind)))]
+        # The new bond keeps the old bond's name, which the norm network's bra-name map contains.
+        new_edge_ind = edge_ind
         ψvsrc = rename(ψvsrc, (v .=> new_edge_ind)...)
         ψvdst = rename(ψvdst, (u .=> new_edge_ind)...)
-        setindex_preserve!(bp_cache, ψvsrc, vsrc)
-        setindex_preserve!(bp_cache, ψvdst, vdst)
+        tn[vsrc] = ψvsrc
+        tn[vdst] = ψvdst
 
         # The gauged network's messages are the singular values, with the unprimed leg
         # carrying the producing side's bond copy (the message convention).
-        setmessage!(bp_cache, e, rename(S, only(u) => prime(only(new_edge_ind)), only(v) => only(new_edge_ind)))
-        setmessage!(bp_cache, reverse(e), rename(S, only(u) => only(new_edge_ind), only(v) => prime(only(new_edge_ind))))
+        l = only(new_edge_ind)
+        bp_cache.messages[e] = ITensorBase.operator(rename(S, only(u) => prime(l), only(v) => l), (prime(l),), (l,))
+        bp_cache.messages[reverse(e)] = ITensorBase.operator(rename(S, only(u) => l, only(v) => prime(l)), (prime(l),), (l,))
     end
 
     return bp_cache

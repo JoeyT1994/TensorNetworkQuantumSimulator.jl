@@ -12,7 +12,7 @@ end
 function truncate(bpc::BeliefPropagationCache; bp_update_kwargs = default_bp_update_kwargs(bpc), maxdim::Integer, cutoff = nothing, edge_color = true, normalize_tensors = true)
     bpc = copy(bpc)
     s = siteinds(network(bpc))
-    apply_kwargs = (; maxdim, cutoff, normalize_tensors)
+    alg = ITNN.BPApplyGate(; trunc = itensor_trunc(; maxdim, cutoff), normalize = normalize_tensors)
     dtype = datatype(bpc)
     if edge_color
         g = graph(network(bpc))
@@ -24,21 +24,24 @@ function truncate(bpc::BeliefPropagationCache; bp_update_kwargs = default_bp_upd
         catch
             SimpleGraphAlgorithms.edge_color(g, z + 1)
         end
-        for eg in edge_groups
-            for e in eg
-                if truncatable_edge(bpc, e)
-                    g1, g2 = reduce(*, [Ops.op("I", sv) for sv in s[src(e)] ]), reduce(*, [Ops.op("I", sv) for sv in s[dst(e)] ])
-                    apply_gate!(adapt(dtype)(g1 * g2), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
-                end
-            end
-            bpc = update(bpc; bp_update_kwargs...)
-        end
     else
-        for e in edges(bpc)
-            g1, g2 = reduce(*, [Ops.op("I", sv) for sv in s[src(e)]]), reduce(*, [Ops.op("I", sv) for sv in s[dst(e)]])
-            apply_gate!(adapt(dtype)(g1 * g2), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
-            bpc = update(bpc; bp_update_kwargs...)
+        edge_groups = [[e] for e in edges(bpc)]
+    end
+    for eg in edge_groups
+        tn = network(bpc)
+        for e in filter(e -> truncatable_edge(bpc, e), eg)
+            sv = [s[src(e)]; s[dst(e)]]
+            id = adapt(dtype)(reduce(*, [Ops.op("I", i) for i in sv]))
+            # `apply_operator!` overwrites the data of the tensors it reads, which `copy(bpc)` shares.
+            foreach(v -> tn[v] = copy(tn[v]), (src(e), dst(e)))
+            # The new bond keeps the old bond's name, which the norm network's bra-name map contains.
+            l = name(only(virtualinds(tn, e)))
+            ITNN.apply_operator!(
+                alg, tn, ITensorBase.operator(id, prime.(sv), sv), tn, bpc.messages;
+                vertices = [src(e), dst(e)], bondnames = (l, prime(l))
+            )
         end
+        bpc = update(bpc; bp_update_kwargs...)
     end
     return bpc
 end
@@ -63,8 +66,8 @@ function truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff = nothin
                     ρv1 = normalize(ρv1)
                     ρv2 = normalize(ρv2)
                 end
-                setindex_preserve!(bmps_cache, ρv1, src(e))
-                setindex_preserve!(bmps_cache, ρv2, dst(e))
+                network(bmps_cache)[src(e)] = ρv1
+                network(bmps_cache)[dst(e)] = ρv2
             end
             update_partition!(bmps_cache, [e])
         end

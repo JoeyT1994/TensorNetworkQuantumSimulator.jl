@@ -15,14 +15,14 @@ function bra_tensor(t::ITensor, auxinds::Vector{<:Index})
 end
 bra_tensor(tns::TensorNetworkState, v) = bra_tensor(tns[v], Index[])
 
-# The legs returned by `auxinds_f` stay unprimed on the bra. The loop-correction weights pass
-# the bond they relabel to dangle, which `siteinds` would otherwise count as a site index.
-function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I", auxinds_f::Function = v -> Index[])
+# `siteinds_f` gives the indices treated as site indices. The loop-correction weights pass those
+# recorded before they relabel a bond to dangle, which `siteinds` would otherwise count.
+function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I", siteinds_f::Function = v -> siteinds(tns, v))
     factors = ITensor[]
     for v in verts
-        sinds = siteinds(tns, v)
+        sinds = siteinds_f(v)
         tnv = tns[v]
-        tnv_dag = bra_tensor(tnv, auxinds_f(v))
+        tnv_dag = bra_tensor(tns, v)
         if op_strings(v) == "ρ" || isempty(sinds)
             append!(factors, ITensor[tnv, tnv_dag])
         elseif op_strings(v) == "I"

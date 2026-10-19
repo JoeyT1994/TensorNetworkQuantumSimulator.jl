@@ -9,7 +9,7 @@ function contract_network(alg::Algorithm"bp", tn::TensorNetwork; bp_update_kwarg
 end
 
 function contract_network(alg::Algorithm"boundarymps", tn::TensorNetwork; mps_bond_dimension::Integer, bmps_update_kwargs = default_bmps_update_kwargs(tn))
-    return partitionfunction(update(BoundaryMPSCache(tn, mps_bond_dimension); bmps_update_kwargs...))
+    return partitionfunction(update(BoundaryMPSCache(tn, default_messages(), mps_bond_dimension); bmps_update_kwargs...))
 end
 
 function contract_network(tn::AbstractTensorNetwork; alg = "exact", kwargs...)

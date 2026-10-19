@@ -27,7 +27,7 @@ end
 
 messages(bp_cache::BeliefPropagationCache) = bp_cache.messages
 message(bp_cache::BeliefPropagationCache, edge::AbstractEdge) = ITensorBase.state(bp_cache.messages[edge])
-function network(bp_cache::BeliefPropagationCache)
+function network(bp_cache::AbstractBeliefPropagationCache)
     return bp_cache.factors isa ITNN.NormNetwork ? ITNN.ketnetwork(bp_cache.factors) : bp_cache.factors
 end
 graph(bp_cache::BeliefPropagationCache) = graph(network(bp_cache))

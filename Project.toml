@@ -33,6 +33,10 @@ url = "https://github.com/ITensor/ITensorBase.jl.git"
 rev = "buffered-bp-gate-update"
 url = "https://github.com/jack-dunham/ITensorNetworksNext.jl.git"
 
+[sources.TensorAlgebra]
+rev = "qr-compact-inplace"
+url = "https://github.com/ITensor/TensorAlgebra.jl.git"
+
 [compat]
 Adapt = "4.3.0"
 DataGraphs = "0.6"
