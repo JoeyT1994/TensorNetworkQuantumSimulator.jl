@@ -1,12 +1,12 @@
 using KrylovKit: linsolve
 
 """
-    full_update(o::ITensor, ψ::TensorNetworkState, v⃗; envs, kwargs...)
+    full_update(o::Tensor, ψ::TensorNetworkState, v⃗; envs, kwargs...)
 
 Full update of two tensors in the presence of environments under the action of a two-site gate. More general than `simple_update` (allows for more accurate non-BP environments), but at a higher computational cost depending on the dimensions of the environment tensors involved.
 """
 function full_update(
-        o::ITensor,
+        o::Tensor,
         ψ::TensorNetworkState,
         v⃗;
         envs,
@@ -37,7 +37,7 @@ function full_update(
         apply_kwargs...,
     )
     if symmetrize
-        singular_values! = Ref(ITensor())
+        singular_values! = Ref{Tensor}()
         Rᵥ₁, Rᵥ₂, spec = factorize_svd(
             Rᵥ₁ * Rᵥ₂,
             inds(Rᵥ₁);
@@ -49,17 +49,17 @@ function full_update(
     end
     ψᵥ₁ = Qᵥ₁ * Rᵥ₁
     ψᵥ₂ = Qᵥ₂ * Rᵥ₂
-    return ITensor[ψᵥ₁, ψᵥ₂]
+    return Tensor[ψᵥ₁, ψᵥ₂]
 end
 
 """Calculate the overlap of the gate acting on the previous p and q versus the new p and q in the presence of environments. This is the cost function that optimise_p_q will minimise"""
 function fidelity(
-        envs::Vector{ITensor},
-        p_cur::ITensor,
-        q_cur::ITensor,
-        p_prev::ITensor,
-        q_prev::ITensor,
-        gate::ITensor,
+        envs::Vector{Tensor},
+        p_cur::Tensor,
+        q_cur::Tensor,
+        p_prev::Tensor,
+        q_prev::Tensor,
+        gate::Tensor,
     )
     p_sind, q_sind = commonind(p_cur, gate), commonind(q_cur, gate)
     p_sind_sim, q_sind_sim = sim(p_sind), sim(q_sind)
@@ -76,7 +76,7 @@ function fidelity(
         envs,
     )
     sequence = contraction_sequence(term1_tns; alg = "optimal")
-    term1 = ITensors.contract(term1_tns; sequence)
+    term1 = contract(term1_tns; sequence)
 
     term2_tns = vcat(
         [
@@ -88,10 +88,10 @@ function fidelity(
         envs,
     )
     sequence = contraction_sequence(term2_tns; alg = "optimal")
-    term2 = ITensors.contract(term2_tns; sequence)
+    term2 = contract(term2_tns; sequence)
     term3_tns = vcat([p_prev, q_prev, prime(dag(p_cur)), prime(dag(q_cur)), gate], envs)
     sequence = contraction_sequence(term3_tns; alg = "optimal")
-    term3 = ITensors.contract(term3_tns; sequence)
+    term3 = contract(term3_tns; sequence)
 
     f = scalar(term3) / sqrt(scalar(term1) * scalar(term2))
     return f * conj(f)
@@ -100,10 +100,10 @@ end
 """Do Full Update Sweeping, Optimising the tensors p and q in the presence of the environments envs,
 Specifically this functions find the p_cur and q_cur which optimise envs*gate*p*q*dag(prime(p_cur))*dag(prime(q_cur))"""
 function optimise_p_q(
-        p::ITensor,
-        q::ITensor,
-        envs::Vector{ITensor},
-        o::ITensor;
+        p::Tensor,
+        q::Tensor,
+        envs::Vector{Tensor},
+        o::Tensor;
         nfullupdatesweeps = 10,
         print_fidelity_loss = false,
         envisposdef = true,
@@ -118,21 +118,21 @@ function optimise_p_q(
     qs_ind = setdiff(inds(q_cur), collect(Iterators.flatten(inds.(vcat(envs, p_cur)))))
     ps_ind = setdiff(inds(p_cur), collect(Iterators.flatten(inds.(vcat(envs, q_cur)))))
 
-    function b(p::ITensor, q::ITensor, o::ITensor, envs::Vector{ITensor}, r::ITensor)
-        ts = vcat(ITensor[p, q, o, dag(prime(r))], envs)
+    function b(p::Tensor, q::Tensor, o::Tensor, envs::Vector{Tensor}, r::Tensor)
+        ts = vcat(Tensor[p, q, o, dag(prime(r))], envs)
         sequence = contraction_sequence(ts; alg = "optimal")
-        return noprime(ITensors.contract(ts; sequence))
+        return noprime(contract(ts; sequence))
     end
 
-    function M_p(envs::Vector{ITensor}, p_q_tensor::ITensor, s_ind, apply_tensor::ITensor)
+    function M_p(envs::Vector{Tensor}, p_q_tensor::Tensor, s_ind, apply_tensor::Tensor)
         ts = vcat(
-            ITensor[
+            Tensor[
                 p_q_tensor, replaceinds(prime(dag(p_q_tensor)), prime(s_ind), s_ind), apply_tensor,
             ],
             envs,
         )
         sequence = contraction_sequence(ts; alg = "optimal")
-        return noprime(ITensors.contract(ts; sequence))
+        return noprime(contract(ts; sequence))
     end
     for i in 1:nfullupdatesweeps
         b_vec = b(p, q, o, envs, q_cur)

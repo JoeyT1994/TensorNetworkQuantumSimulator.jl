@@ -124,17 +124,17 @@ gate2 = ITensor(my_nn_gate, s[v1], s[v2], s[v1]', s[v2]')
 
 For a gate you'll reuse repeatedly, register it once and then use the tuple form like any built-in. Two steps:
 
-1. Define the matrix as an `ITensors.op` method.
-2. Call [`register_gate!`](@ref) to tell the dispatcher which keyword arguments your `op` accepts.
+1. Register the matrix with [`register_op!`](@ref): a function of the gate's keyword arguments returning the `4 × 4` (two-site) or `2 × 2` (one-site) matrix, in the basis where the first site is the most significant (`kron(A, B)` is `A` on the first site, `B` on the second).
+2. Call [`register_gate!`](@ref) to tell the dispatcher which keyword arguments your operator accepts.
 
 ```julia
-using ITensors: op, OpName, SiteType, Index
-
 # 1. Define the matrix (the "physics" part)
-function ITensors.op(::OpName"FSim", ::SiteType"S=1/2", s1::Index, s2::Index;
-                     θ::Number, ϕ::Number)
-    # ... return a 4-leg ITensor ...
-end
+register_op!("FSim", (; θ, ϕ) -> [
+    1 0 0 0
+    0 cos(θ) -im*sin(θ) 0
+    0 -im*sin(θ) cos(θ) 0
+    0 0 0 exp(-im * ϕ)
+]; nsites = 2)
 
 # 2. Register the dispatch info (the "name → kwargs" part)
 register_gate!("FSim"; paramkeys = (:θ, :ϕ))
@@ -146,9 +146,11 @@ circuit = [("FSim", [v1, v2], (π/4, π/8))]
 
 The keyword arguments map as:
 
-- `paramkeys = (:θ, :ϕ)` — names of the kwargs your `op` expects, in the order they appear in the circuit-tuple parameter. For a single-parameter gate, use a 1-tuple like `(:θ,)`.
-- `opname = "FSim"` — defaults to the gate name; override if your circuit-level name should differ from the `OpName` your `op` uses.
-- `rescale = identity` — applied to the parameter(s) before forwarding to `op`. Useful when your `op` follows a different convention (e.g., the built-in `"Rxx"` uses `rescale = θ -> θ/2` to bridge our qiskit convention to ITensors').
+- `paramkeys = (:θ, :ϕ)` — names of the kwargs your operator expects, in the order they appear in the circuit-tuple parameter. For a single-parameter gate, use a 1-tuple like `(:θ,)`.
+- `opname = "FSim"` — defaults to the gate name; override if your circuit-level name should differ from the name the operator is registered under.
+- `rescale = identity` — applied to the parameter(s) before forwarding to the operator. Useful when your operator follows a different convention (e.g., the built-in `"Rxx"` uses `rescale = θ -> θ/2` to bridge our qiskit convention to the registry's `exp(-iϕ XX)`).
+
+On the ITensors backend an `ITensors.op` method for the name also works in place of step 1: names the package's operator registry does not define fall through to ITensors' own operator library.
 
 To add a qiskit-style alias for your gate (so e.g. `"fsim"` resolves to `"FSim"`), call [`register_alias!`](@ref):
 

@@ -1,12 +1,11 @@
 using Dictionaries: Dictionary
 using Graphs: Graphs
-using ITensors: ITensors, ITensor
 using NamedGraphs: NamedGraphs, add_edge!, incident_edges, rem_edges!
 using Adapt
 
 #TODO: Make this show() nicely.
 struct TensorNetwork{V} <: AbstractTensorNetwork{V}
-    tensors::Dictionary{V, ITensor}
+    tensors::Dictionary{V, Tensor}
     graph::NamedGraph{V}
 end
 
@@ -30,7 +29,7 @@ end
 
 Base.copy(tn::TensorNetwork) = TensorNetwork(copy(tensors(tn)), copy(graph(tn)))
 
-function TensorNetwork(tensors::Vector{<:ITensor})
+function TensorNetwork(tensors::Vector{<:Tensor})
     return TensorNetwork(Dictionary([i for i in 1:length(tensors)], tensors))
 end
 
@@ -40,7 +39,7 @@ function NamedGraphs.rem_vertex!(tn::TensorNetwork, v)
     return tn
 end
 
-function add_tensor!(tn::TensorNetwork, tensor::ITensor, v)
+function add_tensor!(tn::TensorNetwork, tensor::Tensor, v)
     vs = collect(vertices(tn))
     g = graph(tn)
     if !has_vertex(g, v)
@@ -59,25 +58,25 @@ function add_tensor!(tn::TensorNetwork, tensor::ITensor, v)
 end
 
 function default_message(tn::TensorNetwork, edge::NamedEdge)
-    return adapt_like(tn, denseblocks(delta(virtualinds(tn, edge))))
+    return adapt_like(tn, dense(delta(virtualinds(tn, edge))))
 end
 
 function bp_factors(tn::TensorNetwork, vertex)
-    return ITensor[tn[vertex]]
+    return Tensor[tn[vertex]]
 end
 
 function bp_factors(tn::TensorNetwork, vertices::Vector)
-    return ITensor[tn[v] for v in vertices]
+    return Tensor[tn[v] for v in vertices]
 end
 
 function random_tensornetwork(eltype, g::AbstractGraph; bond_dimension::Integer = 1)
     vs = collect(vertices(g))
-    l = Dict(e => Index(bond_dimension) for e in edges(g))
+    l = Dict(e => new_index(bond_dimension) for e in edges(g))
     l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
-    tensors = Dictionary{vertextype(g), ITensor}()
+    tensors = Dictionary{vertextype(g), Tensor}()
     for v in vs
         is = [l[NamedEdge(v => vn)] for vn in neighbors(g, v)]
-        set!(tensors, v, random_itensor(eltype, is))
+        set!(tensors, v, random_tensor(eltype, is))
     end
     return TensorNetwork(tensors, g)
 end

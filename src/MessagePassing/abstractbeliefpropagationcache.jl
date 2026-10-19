@@ -6,7 +6,7 @@ abstract type AbstractBeliefPropagationCache{V} <: AbstractNamedGraph{V} end
 #Interface
 messages(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 contraction_sequences(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
-default_messages() = Dictionary{NamedEdge, Union{ITensor, Vector{ITensor}}}()
+default_messages() = Dictionary{NamedEdge, Union{Tensor, Vector{Tensor}}}()
 
 function rescale_messages!(
         bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge}; kwargs...
@@ -19,8 +19,15 @@ function rescale_vertices!(
     return not_implemented()
 end
 
+#Backend fast paths for the double-layer message update and single-vertex region scalars;
+#`nothing` means no specialization applies and the generic path runs (see kernel_hooks.jl).
+norm_message_kernel(net, vertex, incoming_ms; kwargs...) = nothing
+norm_scalar_kernel(net, vertices, incoming_ms; kwargs...) = nothing
+
 function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
     incoming_ms = incoming_messages(bp_cache, vertex)
+    fast = norm_scalar_kernel(network(bp_cache), [vertex], incoming_ms; op_strings = v -> "I")
+    fast !== nothing && return fast
     state = bp_factors(bp_cache, vertex)
     contract_list = [state; incoming_ms]
     sequence = contraction_sequence(contract_list; alg = "optimal")
@@ -41,8 +48,8 @@ for f in [
         :(bp_factors),
         :(default_bp_maxiter),
         :(virtualinds),
-        :(ITensors.datatype),
-        :(ITensors.NDTensors.scalartype),
+        :datatype,
+        :scalartype,
         :(maxvirtualdim),
         :(default_message),
         :(siteinds),
@@ -60,7 +67,7 @@ function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCa
     return bp_cache
 end
 
-function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex)
+function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::Tensor, vertex)
     setindex_preserve!(network(bp_cache), value, vertex)
     return bp_cache
 end
@@ -91,7 +98,7 @@ function deletemessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdg
     return bp_cache
 end
 
-function setmessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdge, message::Union{ITensor, Vector{<:ITensor}})
+function setmessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdge, message::Union{Tensor, Vector{<:Tensor}})
     ms = messages(bp_cache)
     set!(ms, e, message)
     return bp_cache
@@ -103,11 +110,11 @@ function message(bp_cache::AbstractBeliefPropagationCache, edge::AbstractEdge; k
 end
 
 function messages(bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge})
-    isempty(edges) && return ITensor[]
-    ms = ITensor[]
+    isempty(edges) && return Tensor[]
+    ms = Tensor[]
     for e in edges
         m = message(bp_cache, e)
-        if m isa ITensor
+        if m isa Tensor
             push!(ms, m)
         else
             append!(ms, m)
@@ -167,8 +174,15 @@ function updated_message(
     incoming_ms = incoming_messages(
         bp_cache, vertex; ignore_edges = (reverse(edge),)
     )
+
+    # unnormalised, so both paths share `normalize_message`
+    m_fast = norm_message_kernel(network(bp_cache), vertex, incoming_ms; normalize = false)
+    if m_fast !== nothing
+        return (alg.kwargs.normalize ? normalize_message(m_fast) : m_fast), (nothing, nothing, false)
+    end
+
     state = bp_factors(bp_cache, vertex)
-    contract_list = ITensor[incoming_ms; state]
+    contract_list = Tensor[incoming_ms; state]
     cache_key = vertex => edge
     seq_cache = contraction_sequences(bp_cache)
     seq_changed = false
@@ -181,15 +195,25 @@ function updated_message(
     updated_message = contract(contract_list; sequence)
 
     if alg.kwargs.normalize
-        # Normalise by the 2-norm rather than the element sum: the sum can cancel to ~0 for
-        # signed or complex networks. message_diff is phase-invariant so convergence is unaffected.
-        message_norm = norm(updated_message)
-        if !iszero(message_norm)
-            updated_message = updated_message / message_norm
-        end
+        updated_message = normalize_message(updated_message)
     end
 
     return updated_message, (cache_key, sequence, seq_changed)
+end
+
+# Unit 2-norm with the phase of the element sum removed. The 2-norm rather than the sum sets the
+# scale: the sum can cancel to ~0 for signed or complex networks. But the 2-norm alone leaves each
+# message's global phase free, and an outgoing message's phase is the sum of its incoming messages'
+# phases, so on a loopy graph roundoff phases grow exponentially (measured ~5× per sweep on a complex
+# hexagonal state: messages lost Hermiticity entirely within 25 sweeps and `symmetric_gauge!` took
+# square roots of negative eigenvalues). Dividing out the sum's phase, wherever the sum is not
+# cancelled to roundoff, pins it. message_diff is phase-invariant so convergence is unaffected.
+function normalize_message(m)
+    n = norm(m)
+    iszero(n) && return m
+    s = sum(m)
+    phase = abs(s) > sqrt(eps(real(typeof(s)))) * n ? s / abs(s) : one(s)
+    return m / (n * phase)
 end
 
 function updated_message(

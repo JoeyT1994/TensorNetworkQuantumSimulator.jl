@@ -1,4 +1,4 @@
-# TNQS roadmap and open problem (handoff, 2026-10-16)
+# TNQS roadmap and open problem (handoff 2026-10-16, updated 2026-10-17)
 
 This note is for whoever picks up the next phase of TensorNetworkQuantumSimulator (TNQS). It records
 the maintainer's decisions, the target scope of the next release line, and the problem currently
@@ -18,29 +18,118 @@ blocking it: **which tensor backend the library should be built on**.
 | Branch | What it is | Relation to `main` |
 |---|---|---|
 | `main` (v0.4.6, released) | ITensors 0.9 backend, BP / boundary MPS / loop corrections, dense only | — |
-| `Improvements` (this branch) | `main` + small cleanups | 1 commit ahead |
-| `FixesV2` | The real development line: tensor backend seam, symmetric + fermionic tensors, finite 2D CTMRG, fused BP kernels, plus 3D research code | 234 commits ahead, +23.6k lines |
+| `Improvements` (this branch) | `main` made backend-agnostic: the `TensorInterface` seam on an ITensors 0.9 dense backend, an in-house operator library, the fused BP kernel hooks and finite 2D CTMRG (see [Status](#status-of-improvements-2026-10-17)) | ahead of `main`, not yet merged |
+| `FixesV2` | The research line: an ITensorBase backend, symmetric + fermionic tensors, finite 2D CTMRG, fused BP kernels, plus 3D research code | 234 commits ahead, +23.6k lines |
 | `FixesV2DMRG` | `FixesV2` + generating-function DMRG (research) | 204 ahead |
-| `Fermions` | Older fermion work, partly superseded by `FixesV2` | 86 ahead, 19 behind |
+| `Fermions` | Older fermion work, partly superseded by `FixesV2` | 85 ahead, 19 behind |
 | `Research` | Stale (May 2025) | 376 behind |
 
-### The backend seam (already built, on `FixesV2`)
+## Status of `Improvements` (2026-10-17)
 
-`src/tensor_interface.jl` defines module `TensorInterface`: every tensor verb the package uses
-(index construction and queries, contraction, factorisations, `dag`, `combiner`, `directsum`, ...).
-Only the backend file references a tensor library. On `FixesV2`, `src/Tensors/ITensorBackend.jl`
-(1.6k lines) is the **only** file that references ITensorBase, GradedArrays, TensorAlgebra or
-MatrixAlgebraKit; the 2.8k-line CTM cache, BP, boundary MPS, etc. go through the seam. Read the
-header of `tensor_interface.jl` before touching anything. Its rule 5 ("two adjoints": `dag(t)` is the
-network bra, `dag(t, cod)` is the adjoint of `t` as a map) is what makes fermions work. Breaking it
-silently breaks projector identities.
+The trunk is being built on this branch rather than cut from `FixesV2`: `main`'s code is the model
+(its structure and style are kept, and the seam mostly replaced `using ITensors: …` imports), and
+`FixesV2` was taken as authoritative only for the finite 2D CTMRG engine, the kernel hooks / fused
+BP kernels, and simple fixes. Commits, in order:
 
-The seam has already been proven to swap backends: commit `0aa8795` (2026-09-10) replaced a working
-TensorKit-based backend with ITensorBase behind an essentially unchanged interface.
+1. **Pin the BP message phase** (`048883e`). A fix to `c45e1f1`, which normalised BP messages by
+   their 2-norm: that leaves each message's phase free, and on loopy graphs the phases add up around
+   the loops and grow exponentially (~5× per sweep on a complex hexagonal state). `symmetric_gauge!`
+   then took square roots of negative eigenvalues — `test_truncate.jl` failed at `7300229`.
+   `normalize_message` keeps the 2-norm and divides out the phase of the element sum.
+2. **The seam** (`1e889a0`) — `src/tensor_interface.jl`, `src/Backends/`, `src/operators.jl` (details below).
+3. **Kernel hooks** (`06763aa`) — the fused dense BP message/closure kernel from `FixesV2` `d41fa35`.
+4. **Finite 2D CTMRG** (`7b3905e`) — `src/MessagePassing/ctmenvironmentcache.jl` from `FixesV2`, `:cut` and
+   `:cycle`, with `expect`/`rdm` support for `alg = "ctmrg"`.
+
+### The backend seam (on this branch)
+
+`src/tensor_interface.jl` defines module `TensorInterface`: every tensor verb the package uses, each
+a generic function with a written contract in that file. **Read its header before touching anything.**
+Its rule 5 ("two adjoints": `dag(t)` is the network bra, `dag(t, cod)` the adjoint of `t` as a map)
+is what makes fermions work on a graded backend; breaking it silently breaks projector identities.
+
+Layout:
+
+- `src/tensor_interface.jl` — the verbs, their contracts, the seam-owned `Algorithm` and
+  `TruncationStrategy` types, and three optional **hooks** whose fallback is `nothing`
+  (`fused_norm_message`, `fused_norm_scalar`, `backend_op`).
+- `src/Backends/Backends.jl` — selects the backend and binds the two type names the package
+  annotates with (`Tensor`, `Index`). Swapping backends means changing this file and `Compat.jl`.
+- `src/Backends/ITensorsBackend.jl` (+ `ITensorsKernels.jl`) — ITensors 0.9, dense only. Every verb
+  forwards to its ITensors namesake; the seam follows ITensors conventions, so most are one line.
+- `src/Backends/ITensorsCompat.jl` — forwards ITensors' own functions to the package for package
+  objects (`ITensors.contract(ψ; alg)`, `datatype(ψ)` imported from ITensors, `ITensors.op("Rxxyy", …)`),
+  so code written against the ITensors-backed releases keeps working. Delete it with the backend.
+- `src/operators.jl` — the operator and state library as plain matrices (`register_op!`, `op`,
+  `state`); the backend contributes only `from_array(A, outs, ins)`. Names the registry lacks fall
+  through to the backend's library (`backend_op`; on this backend, `ITensors.op`).
+- `test/test_seam.jl` fails if any file under `src/` outside `src/Backends/` references ITensors,
+  NDTensors, ITensorBase, GradedArrays, TensorAlgebra, TensorKit*, MatrixAlgebraKit or the backend
+  module in code (comments may name them).
+
+**What a new backend must implement:** the verbs listed in the header of `tensor_interface.jl`
+(index construction/queries/replacement, construction, contraction, diagonal ops, factorisations
+incl. the LinearAlgebra generics of rule 3, storage queries), a `Tensor`/`Index` binding in
+`Backends.jl`, and optionally the hooks. On this branch:
+
+| group | verbs |
+|---|---|
+| index construction | `new_index(d; tags)`, `new_index(ref, d; tags)`, `pad_index`, `sim`, `dag`, `prime`, `noprime` |
+| index queries | `inds`, `dim`, `plev`, `tags`, `commonind(s)`, `uniqueinds`, `unioninds`, `noncommonind(s)`, `hascommoninds`, `isgraded`, `isdual`, `space` |
+| index replacement | `replaceind(s)` |
+| construction | `from_array`, `random_tensor`, `onehot`, `delta`, `dense`, `combiner`, `combinedind`, `directsum`, `charge_sectors` |
+| contraction | `contract(ts; sequence)`, `Base.:*`, `scalar`, `apply` |
+| diagonal ops | `map_diag`, `map_diag!` |
+| factorisations | `qr`, `svd`, `eigen`, `factorize` (LinearAlgebra), `factorize_svd`, `truncated_svd`, `gram` |
+| storage / type | `datatype`, `scalartype`, `array`, `data`, `scale!` |
+| hooks (optional) | `fused_norm_message`, `fused_norm_scalar`, `backend_op` |
+
+Contract decisions made while building it (each is written in the seam's header):
+
+- **Factorisation results are destructured, never indexed or `last`ed.** ITensors returns extra
+  values (`qr` → `(Q, R, q)`, `svd` → a `TruncSVD` that iterates but cannot be indexed), so
+  `last(qr(…))` silently returned an index. Two such sites in the CTM file were rewritten.
+- **Truncation by strategy is its own verb, `truncated_svd(t, linds; trunc)`**, with the rule
+  (rank, relative cutoff, degeneracy back-off) a seam-owned `TruncationStrategy` and `kept_count`
+  the rule on one sorted spectrum. `FixesV2` passed `trunc` as an `svd` keyword; ITensors' `svd`
+  cannot take one without overwriting its method.
+- **A combiner may be structured.** ITensors combiners only fuse or unfuse all their legs at once;
+  `dense(C)` is the explicit isometry, used where the CTM treats it as an ordinary tensor.
+- **`Tensor` and `Index` are type names bound by the backend**, not seam-owned abstract types
+  (ITensors' types cannot subtype ours). The package uses them only in annotations and containers
+  and never calls their constructors (`new_index`, `from_array` instead).
+- **Hooks return `nothing` to decline**, and the caller takes the generic path. The fused message
+  kernel is called unnormalised so both paths share `normalize_message`.
+- **The `FixesV2` seam leaked**: its core called ~23 backend-only `Tensors.*` functions. For the code
+  ported here (CTM, kernels) these became seam verbs with dense-trivial contracts (`isgraded`,
+  `isdual`, `space`, `pad_index`, `charge_sectors`, `new_index(ref, d)`), an existing verb (a raw
+  `Index(rand(UInt64), space, …)` → `sim(w; tags)`), or were dropped with the graded-only code.
+- `Random` became a package dependency (`random_tensor(rng, …)`, the CTM's seeded Krylov starts).
+
+Latency, `7300229` against `7b3905e` (Windows laptop, Julia 1.12.7, each test file in a fresh
+process, two alternating runs — they agreed to 1%):
+
+| | `7300229` | `7b3905e` |
+|---|---|---|
+| `using TensorNetworkQuantumSimulator` | 4.65 s | **3.88 s** |
+| package precompile (TNQS only) | ~7.2 s | ~7.5–7.8 s |
+| `test_beliefpropagation.jl`, first / second run | 64.2 s / 0.35 s | 75.1 s / **0.28 s** |
+| `test_apply.jl`, first / second run | 83.3 s / 0.72 s | 80.5 s / 0.69 s |
+
+No second-run regression. The BP first run is 17% slower: it now compiles the fused kernel too.
+The whole suite (incl. CTMRG, 7.7 min, and the examples, ~5.5 min) is ~30 min on this machine.
+
+Out for now (on `FixesV2`, not ported): the graded/fermionic machinery and its constructors
+(`graded_tensornetworkstate`, charged boundary-MPS initialisation), `docs/ctmrg_status.md` and
+`docs/finite_ctmrg_design.md` (the CTM file's comments cite them; read them on `origin/FixesV2`),
+`src/precompile.jl`, the GPU paths.
 
 ## Trunk scope
 
-Cut the trunk from `FixesV2`.
+Being built on `Improvements` (see [Status](#status-of-improvements-2026-10-17)); `FixesV2` supplies
+the CTMRG engine and kernels. Done: the seam + an interim dense backend, finite 2D CTMRG, kernel
+hooks, core. Still to come: a General-registered **graded** backend (the open problem below) and with
+it the symmetric tensors, and `src/precompile.jl`.
 
 **In**
 - `src/tensor_interface.jl` + one General-registered backend (see the open problem)
@@ -145,17 +234,19 @@ function barriers on the bookkeeping paths. Concretely:
    dense + U1 + fZ2.
 3. Decide: if TensorKit with workload + wrapper fixes is acceptable for that script, go with option 1.
 
-### Catch-up needed if TensorKit is restored
+### What a restored (or new) backend must do
 
-Nine commits on `FixesV2` touched the seam, backend or kernel hooks after the switch; `tensor_interface.jl`
-changed by 26 lines. The TensorKit backend must add:
-- New seam verbs: `pad_index` (sector-stable zero-padding on graded bonds, used by CTM `:cycle`),
-  `scale!` (in-place scaling of block-sparse storage), `dag(t, cod)` (map adjoint)
-- Equivalents of the fixes and kernels made on the ITensorBase side since then: the fused dense BP kernel
-  (`d41fa35`), simple-update layout and in-place work (`bedf61b`, `597affd`), Hermitian `eigen` fixes
-  including the fermionic sign (`48a0dd7`, `4a64006`), dual bond copies for graded random states,
-  dense GPU paths (`2dcd1e2`)
-- The 2026-09-16 dependency ports (NamedGraphs 0.14, etc., `b9700d4`)
+A new backend now targets **this branch's** seam: the verb table in
+[the backend seam](#the-backend-seam-on-this-branch), next to `ITensorsBackend.jl` in `src/Backends/`,
+selected in `Backends.jl`. The ITensors backend is the dense reference implementation, and the test
+suite (incl. `test_operators.jl`, which pins every operator matrix, and `test_ctmenvironment.jl`) is
+the acceptance check. The old TensorKit backend (`0aa8795^`) was written against an earlier version
+of the `FixesV2` seam; beyond the verb table, a graded backend needs equivalents of the graded fixes
+made on the ITensorBase side since then — Hermitian `eigen` incl. the fermionic sign (`48a0dd7`,
+`4a64006`), dual bond copies for graded random states — and the graded constructors and the CTM's
+graded branches, which were not ported here (see "Out for now" above). The fused BP kernel is
+optional (a hook); simple-update in-place work (`bedf61b`, `597affd`) and the dense GPU paths
+(`2dcd1e2`) were not ported either.
 
 ## Gotchas for whoever runs this
 

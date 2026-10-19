@@ -1,0 +1,816 @@
+@eval module $(gensym())
+using Dictionaries: Dictionary
+using TensorNetworkQuantumSimulator.TensorInterface: array, commoninds, delta, dim, inds, prime, scalar, replaceind, sim
+using LinearAlgebra: Hermitian, eigvals, norm
+using Logging: NullLogger, Warn, with_logger
+using Statistics: median
+using Random
+using TensorNetworkQuantumSimulator
+using Test: @testset, @test, @test_throws, @test_logs, TestLogger
+const TNQS = TensorNetworkQuantumSimulator
+
+@testset "CVM free energy: Ising, anisotropic and non-square" begin
+    # Isotropic, anisotropic, square and non-square finite Ising partition functions vs the
+    # library's exact contraction. χ large enough to be lossless.
+    for (Lx, Ly, Kx, Ky) in [(5, 5, 0.3, 0.3), (5, 5, 0.3, 0.6), (4, 5, 0.3, 0.6)]
+        g = named_grid((Lx, Ly))
+        es = collect(edges(g))
+        Js = Dictionary(es, [(src(e)[2] == dst(e)[2]) ? Kx : Ky for e in es])   # Kx horiz, Ky vert
+        tn = ising_partitionfunction(g, 1.0; Js)
+        lnZ = log(real(contract(tn; alg = "exact")))
+        # maxiter must let the STATE converge, not just F: F ~ sd^2, so it lands first.
+        @test cvm_freenergy(update(CTMEnvironmentCache(tn, 40); maxiter = 30)) ≈ lnZ atol = 1.0e-8
+    end
+
+    # χ-convergence: near-critical and too big to be lossless → error shrinks with χ.
+    g = named_grid((6, 6))
+    es = collect(edges(g))
+    Js = Dictionary(es, [0.44 for _ in es])
+    tn = ising_partitionfunction(g, 1.0; Js)
+    lnZ = log(real(contract(tn; alg = "exact")))
+    errs = [abs(cvm_freenergy(update(CTMEnvironmentCache(tn, χ))) - lnZ) for χ in (2, 8)]
+    @test errs[2] < errs[1]
+    @test errs[2] < 1.0e-6
+end
+
+@testset "CVM per-vertex environments" begin
+    Random.seed!(123)
+    # Non-square as well as square: the `:S`/`:E` block families are keyed by their first
+    # included row/column, so an off-by-one there leaves regions unclosable at the boundary.
+    for (Lx, Ly) in [(3, 3), (4, 3)]
+        tn = random_tensornetwork(Float64, named_grid((Lx, Ly)); bond_dimension = 2)
+        lnZ = log(abs(real(contract(tn; alg = "exact"))))
+        cache = update(CTMEnvironmentCache(tn, 100); maxiter = 30)
+        @test !isnothing(environments(cache))       # `update` stores them on the cache
+
+        # 1. EVERY region type must close — interior, edge and corner vertices, boundary edge
+        # strips, corner plaquettes. Blocks are renormalized as they are built, so an individual
+        # `region_lnZ` carries an arbitrary scale and is NOT comparable to ln Z; what this
+        # catches is the failure mode that actually occurs, an unclosable region (a projector
+        # applied on one side only leaves dangling indices and `region_lnZ` throws).
+        for cx in 1:0.5:Lx, cy in 1:0.5:Ly
+            @test isfinite(region_lnZ(cache, cx, cy))
+        end
+        # 2. Mobius identity: V − E + P = 1, so the weighted SUM returns ln Z — and the
+        # per-block rescaling cancels out of it exactly.
+        @test cvm_freenergy(cache) ≈ lnZ atol = 1.0e-8
+    end
+
+    # Double layer, kept lazy: the sweep is generic over `bp_factors`, so ⟨ψ|ψ⟩ and the
+    # equivalent QuadraticForm must both close their regions and agree.
+    ψ = random_tensornetworkstate(Float64, named_grid((3, 3)); bond_dimension = 2)
+    lnN = log(abs(real(norm_sqr(ψ; alg = "exact"))))
+    for net in (ψ, QuadraticForm(ψ))
+        cache = update(CTMEnvironmentCache(net, 200); maxiter = 30)
+        @test cvm_freenergy(cache) ≈ lnN atol = 1.0e-8
+        @test isfinite(region_lnZ(cache, 2, 2))                # interior vertex closes
+        @test isfinite(region_lnZ(cache, 1.5, 1.5))            # corner plaquette closes
+    end
+
+    # The two-sided sweep must improve on the greedy one-sided pass and be monotone in χ.
+    #
+    # Compare only in the CONVERGENT regime. At χ too small for the problem both methods sit
+    # at O(1) error and either can win by luck — a measured scan over 4×4 D=3 found the sweep
+    # ahead in 29/32 cases, the exceptions being χ where both had already reached machine
+    # precision. Racing them at a fixed small χ on an unseeded network is what made an earlier
+    # version of this test flaky.
+    tn = random_tensornetwork(Float64, named_grid((4, 4)); bond_dimension = 3)
+    lnZ = log(abs(real(contract(tn; alg = "exact"))))
+    swept = Float64[]
+    for χ in (6, 8)
+        fresh = CTMEnvironmentCache(tn, χ)
+        cache = update(fresh; maxiter = 30, tolerance = 1.0e-11)
+        F = cvm_freenergy(cache)
+        push!(swept, abs(F - lnZ))
+        # Stationary: sweeping the converged cache again barely moves F. Uses the sweep directly
+        # rather than `update(...; maxiter = 2)` — the point is "one more sweep changes nothing",
+        # and a 2-sweep `update` cannot certify convergence (it needs a state distance, which is
+        # unavailable on the first sweep) so it would warn about something this test does not care
+        # about.
+        @test cvm_freenergy(TNQS.sweep_vertex_environments(cache, TNQS.environments(cache)),
+                            cache) ≈ F atol = 1.0e-7
+    end
+    @test swept[2] < swept[1]                                  # monotone in χ
+    @test swept[2] < 1.0e-3                                    # actually converging
+    # There is only ONE interface projector now; the `ρ`-route alternative (`qr = false`) is gone,
+    # so there is no second implementation to cross-check against. What replaces that check is the
+    # full-rank identity assertion in the complex testset, which tests the pair against what it must
+    # satisfy rather than against another implementation that could be wrong the same way.
+    #
+    # Options are carried BY the cache, so two caches with different numerical strategies coexist —
+    # no global state to save and restore, and options survive `update`.
+    let c = CTMEnvironmentCache(tn, 6; degtol = 1.0e-9, qr_cutoff = 1.0e-11)
+        @test TNQS.options(c).degtol == 1.0e-9
+        @test TNQS.options(c).qr_cutoff == 1.0e-11
+        @test TNQS.options(c).gauge                                    # untouched fields default
+        @test TNQS.options(update(c; maxiter = 20, tolerance = 1.0e-11)).degtol == 1.0e-9
+    end
+    # A mistyped option is an error, not a silently ignored keyword. (`qr_cuttoff` is a typo of the
+    # real `qr_cutoff`, which is the mistake this actually guards against.)
+    @test_throws MethodError CTMEnvironmentCache(tn, 6; qr_cuttoff = 1.0e-9)
+    # And a removed option is an error too, not silently accepted.
+    @test_throws MethodError CTMEnvironmentCache(tn, 6; qr = false)
+
+    # Beats greedy where greedy is still visibly wrong. The greedy pass is asked for EXPLICITLY,
+    # via its environments — `cvm_freenergy(fresh8)` would return the same number but warn, since
+    # an implicit fallback is almost always a forgotten `update`.
+    fresh8 = CTMEnvironmentCache(tn, 8)
+    @test swept[2] < abs(cvm_freenergy(vertex_environments(fresh8), fresh8) - lnZ)
+    # And the implicit fallback does warn, rather than quietly returning the greedy number.
+    @test_logs (:warn, r"has not been `update`d") cvm_freenergy(CTMEnvironmentCache(tn, 4))
+end
+
+@testset "CVM with complex tensors" begin
+    # REGRESSION. The interface projector used to be derived from CONJUGATED blocks (`ρ = A†A`,
+    # `W = R_A R_B†`) while the sweep contracts the enlarged corners BILINEARLY (`Bw * Be`
+    # conjugates nothing). For real tensors `ᵀ ≡ †` and it was exact; for complex ones the pair was
+    # 11% off its own full-rank identity, so every truncation sat in the wrong subspace and no χ
+    # could repair it. Symptom: 4×4 complex double layer stuck 3.7e-3 from the exact norm at χ=16
+    # AND χ=64, while boundary MPS was exact — the saturation in χ is the tell.
+    #
+    # Small lattices hid it (2×2 and 3×3 were exact), so test at 4×4 and check saturation.
+    Random.seed!(31)
+    g = named_grid((4, 4)); si = siteinds("S=1/2", g)
+    for elt in (Float64, ComplexF64)
+        ψ = random_tensornetworkstate(elt, g, si; bond_dimension = 2)
+        lnN = log(abs(real(norm_sqr(ψ; alg = "exact"))))
+        for χ in (16, 64)                       # both lossless: the value must not drift with χ
+            cache = update(CTMEnvironmentCache(ψ, χ); maxiter = 40, tolerance = 1.0e-11)
+            @test cvm_freenergy(cache) ≈ lnN atol = 1.0e-10
+        end
+    end
+
+    # The projector pair must be EXACT at full rank — the invariant the bug violated. Checked
+    # directly, since an end-to-end free energy can mask it (small lattices did).
+    ψc = random_tensornetworkstate(ComplexF64, g, si; bond_dimension = 2)
+    let cache = CTMEnvironmentCache(ψc, 64), opts = TNQS.options(cache)
+        S = TNQS.vertex_environments(cache)
+        tbl = TNQS._ctm_factor_table(cache)
+        worst, nchecked = 0.0, 0
+        for x in 1:3, y in 2:4
+            Bw = TNQS._ctm_enlarged(S, tbl, :NW, x + 1, y, opts)
+            Be = TNQS._ctm_enlarged(S, tbl, :NE, x + 1, y, opts)
+            (isnothing(Bw) || isnothing(Be)) && continue
+            ins = collect(commoninds(Bw, Be)); isempty(ins) && continue
+            pr = TNQS._ctm_interface_proj2(Bw, Be, ins, prod(dim.(ins)), opts)  # full rank
+            isnothing(pr) && continue
+            exact = Bw * Be
+            worst = max(worst, norm(exact - (Bw * pr[1]) * (pr[2] * Be)) / norm(exact))
+            nchecked += 1
+        end
+        @test nchecked > 0
+        @test worst < 1.0e-12
+    end
+
+    # A genuinely complex single-layer Z: `F` must be log|Z|. `region_lnZ` used `abs(real(·))`,
+    # which telescoped to log|Re Z| instead — a no-op for real tensors and for the double-layer
+    # norm (both real positive), wrong for anything with a phase.
+    Random.seed!(5)
+    tnc = random_tensornetwork(ComplexF64, named_grid((4, 4)); bond_dimension = 3)
+    Z = contract(tnc; alg = "exact")
+    @test abs(imag(Z)) > 0.1 * abs(real(Z))         # the test is vacuous without a real phase
+    Fc = cvm_freenergy(update(CTMEnvironmentCache(tnc, 64); maxiter = 40, tolerance = 1.0e-11))
+    @test Fc ≈ log(abs(Z)) atol = 1.0e-10
+    @test !isapprox(Fc, log(abs(real(Z))); atol = 1.0e-3)      # and not the old quantity
+
+
+    # --- audit of the remaining conjugation-sensitive paths -------------------------------
+    # The projector bug above was found by testing an invariant, not by reading code, so the other
+    # operations that are a no-op for real tensors get the same treatment. All four passed on first
+    # run; these keep them honest.
+
+    # The GREEDY one-sided projector still builds a sesquilinear `ρ = Bc·prime(dag(Bc))` and applies
+    # `P` on one side, `dag(P)` on the other. At full rank `P` is unitary so `P dag(P) = I` and it is
+    # exact even against the bilinear pairing; at finite χ it is merely suboptimal, and it is only
+    # ever a seed for `update`. Assert the exactness, which is the part that could have been wrong.
+    Random.seed!(7)
+    tnr = random_tensornetwork(ComplexF64, named_grid((3, 3)); bond_dimension = 2)
+    lnZr = log(abs(contract(tnr; alg = "exact")))
+    let cg = CTMEnvironmentCache(tnr, 64)
+        @test cvm_freenergy(TNQS.vertex_environments(cg), cg) ≈ lnZr atol = 1.0e-10
+    end
+
+    # Gauge fixing is a sesquilinear Procrustes (`svd(a' * ao)`). `F` invariance was only ever
+    # verified on real tensors; it holds for complex too.
+    for χ in (6, 16)
+        on = cvm_freenergy(update(CTMEnvironmentCache(ψc, χ; gauge = true);
+                                  maxiter = 60, tolerance = 1.0e-12))
+        off = cvm_freenergy(update(CTMEnvironmentCache(ψc, χ; gauge = false);
+                                   maxiter = 60, tolerance = 1.0e-12))
+        @test on ≈ off atol = 1.0e-10
+    end
+
+    # Observables and the RDM: exact at lossless χ, Hermitian, and positive. The RDM picks up a
+    # small non-hermiticity at intermediate χ (~1e-12) because the truncation does not respect the
+    # ket↔bra structure — measured to be nine orders below the truncation error, hence not worth
+    # constraining the projector for. See the removed-symmetry section in the design doc.
+    let v = (2, 2), s = only(siteinds(ψc, v))
+        Oex = expect(ψc, ("Z", [v]); alg = "exact")
+        ρex = array(rdm(ψc, [v]; alg = "exact"), s, prime(s))
+        c = update(CTMEnvironmentCache(ψc, 32); maxiter = 60, tolerance = 1.0e-12)
+        ρ = array(rdm(c, [v]), s, prime(s))
+        @test expect(c, ("Z", [v])) ≈ Oex atol = 1.0e-10
+        @test norm(ρ - ρex) < 1.0e-10
+        @test norm(ρ - ρ') / norm(ρ) < 1.0e-10            # Hermitian
+        @test minimum(real.(eigvals(Hermitian((ρ + ρ') / 2)))) > 0   # and positive
+    end
+
+    # `marginal_inconsistency` must behave for complex exactly as documented for real: monotone in χ
+    # and machine-zero once lossless.
+    let mi = [marginal_inconsistency(update(CTMEnvironmentCache(ψc, χ);
+                                           maxiter = 60, tolerance = 1.0e-12)) for χ in (2, 8, 32)]
+        @test mi[1] > mi[2] > mi[3]
+        @test mi[3] < 1.0e-10
+    end
+
+    # Sparse (x,y) grids with complex tensors: the hex/heavy-hex `nothing` paths are their own code
+    # path and were only ever exercised with real tensors.
+    for gg in (named_hexagonal_lattice_graph(3, 3), heavy_hexagonal_lattice(2, 2))
+        Random.seed!(2024)
+        tnh = random_tensornetwork(ComplexF64, gg; bond_dimension = 2)
+        @test cvm_freenergy(update(CTMEnvironmentCache(tnh, 40);
+                                   maxiter = 60, tolerance = 1.0e-12)) ≈
+              log(abs(contract(tnh; alg = "exact"))) atol = 1.0e-10
+        sih = siteinds("S=1/2", gg)
+        ψh = random_tensornetworkstate(ComplexF64, gg, sih; bond_dimension = 2)
+        chh = update(CTMEnvironmentCache(ψh, 40); maxiter = 60, tolerance = 1.0e-12)
+        vh = first(vertices(gg))
+        @test expect(chh, ("Z", [vh])) ≈ expect(ψh, ("Z", [vh]); alg = "exact") atol = 1.0e-8
+    end
+end
+
+@testset "CVM convergence cannot be certified from one sweep" begin
+    # REGRESSION, and it hid behind the same Möbius cancellation as the projector bug above.
+    #
+    # `update` used to accept convergence on the FIRST sweep, where `_ctm_statedist` returns
+    # `nothing` (the interface bases are still bootstrapping) so the criterion degenerates to
+    # `|ΔF|` alone. `F` is a signed Möbius sum whose cancellation is worth ~4000×, so at some χ it
+    # already sits at its final value while the state is still the one-sided GREEDY seed — which is
+    # 3–4 orders worse and non-monotone in χ.
+    #
+    # Measured, complex hex 4×4 D=2 at χ=64: sweep 1 reported `|ΔF| = 2.2e-16`, `update` returned
+    # after ONE sweep, and the norm was still exact to 1.3e-15 (all cancellation) while `⟨Z⟩` was
+    # 7.0e-4 wrong and `marginal_inconsistency` 2.9e-6 against 8.7e-10 at χ=32 and χ=128. Nothing
+    # was special about χ=64 — `Δ` just got unlucky, which is exactly the point: a single `Δ`
+    # carries no information about the state. The observable is the sensitive probe because a
+    # single-region ratio gets no cancellation; the norm cannot see this class of bug at all.
+    Random.seed!(1234)
+    g = named_hexagonal_lattice_graph(4, 4)
+    s = siteinds("S=1/2", g)
+    ψ = gauge_and_scale(random_tensornetworkstate(ComplexF64, g, s; bond_dimension = 2))
+    obs = ("Z", (2, 2))
+    O_exact = expect(ψ, obs; alg = "exact")
+
+    # One sweep can never certify, even at a lossless χ where `|ΔF|` is at the roundoff floor.
+    @test_logs (:warn, r"did not converge") update(CTMEnvironmentCache(ψ, 64); maxiter = 1)
+
+    # End to end: the observable must be at machine precision at every lossless χ, with no
+    # anomalous value. χ=64 is the one that used to fail; 32 brackets it as a control.
+    for χ in (32, 64)
+        cache = update(CTMEnvironmentCache(ψ, χ); maxiter = 100, tolerance = 1.0e-14)
+        @test abs(O_exact - expect(cache, obs)) < 1.0e-12
+    end
+end
+
+@testset "CVM on sparse (x,y) grids: hexagonal and heavy-hexagonal" begin
+    Random.seed!(2024)
+    # Hex and heavy-hex are laid out on an (x,y) grid with vertices AND edges missing. The 4C+4T
+    # tiling survives holes because the quadrant/strip definitions partition by COMPARISON, not
+    # occupancy, and the Möbius identity is a telescoping one on the BOUNDING BOX:
+    #   Lx·Ly − (Lx−1)Ly − Lx(Ly−1) + (Lx−1)(Ly−1) = 1
+    # independent of which slots are filled. Unit squares need NOT be faces of the graph — the
+    # plaquette region is the four-quadrant overlap of a cut, not a lattice face.
+    for (lbl, g) in (("hex 2x2", named_hexagonal_lattice_graph(2, 2)),
+                     ("hex 3x3", named_hexagonal_lattice_graph(3, 3)),
+                     ("heavy-hex 2x2", heavy_hexagonal_lattice(2, 2)))
+        vs = collect(vertices(g))
+        Lx, Ly = maximum(first.(vs)), maximum(last.(vs))
+        @test length(vs) < Lx * Ly                      # genuinely sparse
+        tn = random_tensornetwork(Float64, g; bond_dimension = 2)
+        lnZ = log(abs(real(contract(tn; alg = "exact"))))
+        @test cvm_freenergy(update(CTMEnvironmentCache(tn, 40); maxiter = 30)) ≈ lnZ atol = 1.0e-8
+    end
+
+    # Observables and the diagnostic must work on a sparse grid too. Hex vertices have degree
+    # 2-3, so their rings are 3-5 blocks rather than 8 — the `nothing` paths must absorb that.
+    Random.seed!(21)
+    g = named_hexagonal_lattice_graph(2, 2)
+    si = siteinds("S=1/2", g)
+    ψh = random_tensornetworkstate(Float64, g, si; bond_dimension = 2)
+    ch = update(CTMEnvironmentCache(ψh, 40); maxiter = 30)
+    @test marginal_inconsistency(ch) < 1.0e-10          # lossless χ: marginals parallel
+    for v in collect(vertices(g))[1:6]
+        @test 0 < length(vertex_ring(ch, v)) <= 8
+        @test expect(ch, ("Z", [v])) ≈ expect(ψh, ("Z", [v]); alg = "exact") atol = 1.0e-7
+    end
+    @test rdm(ch, [collect(vertices(g))[3]]) ≈
+          rdm(ψh, [collect(vertices(g))[3]]; alg = "exact") atol = 1.0e-8
+
+    # And it must beat BP, i.e. the corner tier carries real information on hex even though no
+    # unit square is a face there.
+    tn = random_tensornetwork(Float64, named_hexagonal_lattice_graph(3, 3); bond_dimension = 3)
+    lnZ = log(abs(real(contract(tn; alg = "exact"))))
+    ebp = abs(log(abs(real(contract(tn; alg = "bp")))) - lnZ)
+    # maxiter = 20: this case needs ~14 sweeps for the state distance to clear the default
+    # tolerance. At 12 it converged in `F` but warned, which reads as a solver fault and is not.
+    ecvm = abs(cvm_freenergy(update(CTMEnvironmentCache(tn, 8); maxiter = 20)) - lnZ)
+    @test ecvm < ebp / 10
+end
+
+@testset "CVM single-site observables" begin
+    Random.seed!(456)
+    L, D = 4, 2
+    g = named_grid((L, L))
+    s = siteinds("S=1/2", g)
+    ψ = random_tensornetworkstate(Float64, g, s; bond_dimension = D)
+    # interior, edge, corner and far-corner vertices — boundary rings are where it breaks
+    vs = [(1, 1), (2, 1), (2, 2), (L, L)]
+    ex = Dict(v => expect(ψ, ("Z", [v]); alg = "exact") for v in vs)
+
+    # At lossless χ the ring is the exact environment, so ⟨Z⟩ is exact everywhere.
+    cache = update(CTMEnvironmentCache(ψ, 16))
+    for v in vs
+        @test expect(cache, ("Z", [v])) ≈ ex[v] atol = 1.0e-8       # alg defaults to "ctmrg"
+        @test expect(cache, ("Z", [v]); alg = "ctmrg") ≈ ex[v] atol = 1.0e-8
+    end
+    # vector-of-observables form, and the state-level entry point that builds its own cache
+    @test all(isapprox.(expect(cache, [("Z", [v]) for v in vs]), [ex[v] for v in vs]; atol = 1.0e-8))
+    @test expect(ψ, ("Z", [(2, 2)]); alg = "ctmrg", maxdim = 16) ≈ ex[(2, 2)] atol = 1.0e-8
+
+    # `vertex_ring` is the documented primitive: 4C+4T in the bulk, fewer at the boundary,
+    # and contracting it by hand with the site factors must reproduce `expect`.
+    @test length(vertex_ring(cache, (2, 2))) == 8
+    @test length(vertex_ring(cache, (1, 1))) < 8            # blocks fall off the lattice
+    ring = vertex_ring(cache, (2, 2))
+    num = scalar(contract([TNQS.norm_factors(ψ, [(2, 2)]; op_strings = _ -> "Z"); ring]))
+    den = scalar(contract([TNQS.norm_factors(ψ, [(2, 2)]; op_strings = _ -> "I"); ring]))
+    @test num / den ≈ ex[(2, 2)] atol = 1.0e-8
+    # The ring carries no factor from its own vertex.
+    @test all(t -> isempty(commoninds(t, only(siteinds(ψ, (2, 2))))), ring)
+
+    # rdm through the same ring: trace-normalized and equal to the exact one.
+    ρ = rdm(cache, [(2, 2)])
+    ρx = rdm(ψ, [(2, 2)]; alg = "exact")
+    @test ρ ≈ ρx atol = 1.0e-8
+    @test real(scalar(ρ * delta(inds(ρ)...))) ≈ 1.0
+
+    # Accuracy must improve with χ, and beat BP at lossless χ.
+    errs = [abs(expect(update(CTMEnvironmentCache(ψ, χ)), ("Z", [(2, 2)])) - ex[(2, 2)])
+            for χ in (2, 16)]
+    @test errs[2] < errs[1]
+    @test errs[2] < abs(expect(ψ, ("Z", [(2, 2)]); alg = "bp") - ex[(2, 2)])
+
+    # `marginal_inconsistency`: the only lnZ-free quality measure. Must be exactly 0 where the
+    # contraction is lossless (the marginals are then genuinely parallel) and must shrink with χ.
+    Random.seed!(99)
+    tn2 = random_tensornetwork(Float64, named_grid((4, 4)); bond_dimension = 3)
+    mi = [marginal_inconsistency(update(CTMEnvironmentCache(tn2, χ); maxiter = 30, tolerance = 1.0e-11))
+          for χ in (4, 8, 16)]
+    @test all(>=(0.0), mi)                  # it is a distance
+    @test mi[3] < 1.0e-10                   # lossless χ: marginals exactly parallel
+    @test mi[1] > mi[3]                     # and it shrinks with χ
+
+    # `vertex_window`: a bigger window keeps more of the lattice EXACT around the site, which is
+    # the lever for observable accuracy at fixed χ. w=0 must reproduce the ring exactly, any w
+    # must stay exact at lossless χ, and on a lattice big enough for w=1 to be genuinely partial
+    # it must beat w=0.
+    @test length(vertex_window(cache, (2, 2), 0)) == length(vertex_ring(cache, (2, 2)))
+    @test expect(cache, ("Z", [(2, 2)]); window = 1) ≈ ex[(2, 2)] atol = 1.0e-8
+    @test rdm(cache, [(2, 2)]; window = 1) ≈ rdm(ψ, [(2, 2)]; alg = "exact") atol = 1.0e-8
+
+    # At a truncated χ the w=1 gain is NOT guaranteed per state (measured on both tensor
+    # backends: ~2-4 of 10 random 6x6 D=2 seeds have w=1 slightly worse at χ=6), so the
+    # comparison is made at a χ where the ring is still inexact (~1e-6) but the w=1 window
+    # already encloses everything the interior site can see: there w=1 must be exact.
+    Random.seed!(456)
+    g6 = named_grid((6, 6)); s6 = siteinds("S=1/2", g6)
+    ψ6 = random_tensornetworkstate(Float64, g6, s6; bond_dimension = 2)
+    c6 = update(CTMEnvironmentCache(ψ6, 16); maxiter = 20, tolerance = 1.0e-11)
+    for v in [(4, 3), (2, 2)]
+        @test length(vertex_window(c6, v, 1)) > length(vertex_window(c6, v, 0))
+    end
+    exv = expect(ψ6, ("Z", [(4, 3)]); alg = "exact")
+    e0 = abs(expect(c6, ("Z", [(4, 3)])) - exv)
+    e1 = abs(expect(c6, ("Z", [(4, 3)]); window = 1) - exv)
+    @test e1 < 1.0e-12                                 # interior site: window is lossless
+    @test e1 < e0                                      # and more exact context wins
+
+    # Multi-site is not supported: the ring encloses exactly one vertex.
+    @test_throws ErrorException expect(cache, ("ZZ", [(1, 1), (2, 1)]))
+    @test_throws ErrorException rdm(cache, [(1, 1), (2, 1)])
+end
+
+@testset "Two-projector engine: :cut and :cycle" begin
+    # The engine offers two interface projectors. They share every consumer -- same interface keys,
+    # same regions, same observables -- and differ only in what the projector optimises:
+    #   :cut    the best rank-χ truncation of ONE bipartition, each interface independently.
+    #   :cycle  the dominant invariant subspace of the four-corner cycle, i.e. consistency AROUND
+    #           the plaquette, which is stationarity of `F`.
+
+    @test_throws ArgumentError CTMEnvironmentCache(
+        random_tensornetwork(Float64, named_grid((3, 3)); bond_dimension = 2), 4;
+        projector = :nonsense)
+    @test TNQS.options(CTMEnvironmentCache(
+        random_tensornetwork(Float64, named_grid((3, 3)); bond_dimension = 2), 4)).projector === :cut
+
+    # 1. Both are EXACT at lossless χ, on a square grid and on a sparse (x,y) hex grid. Hex is the
+    # gate that matters: it has plaquettes whose four-corner cycle is rank-collapsed by a
+    # dimension-1 bond (a missing lattice link), and `:cycle` must decline those to the cut rather
+    # than collapse the interface. An earlier prototype saturated near 1e-3 here.
+    Random.seed!(11)
+    for g in (named_grid((3, 3)), named_hexagonal_lattice_graph(2, 2))
+        tn = random_tensornetwork(Float64, g; bond_dimension = 2)
+        lnZ = log(abs(real(contract(tn; alg = "exact"))))
+        for proj in (:cut, :cycle)
+            F = cvm_freenergy(update(CTMEnvironmentCache(tn, 40; projector = proj)))
+            @test abs(F - lnZ) < 1.0e-12
+        end
+    end
+
+    # 2. STATIONARITY, the reason `:cycle` exists. `marginal_inconsistency` is the only ln Z-free
+    # quality measure here: it asks whether the marginal read from one region agrees with the one
+    # read from an overlapping region, which is exactly `∂F/∂B = 0`. `:cycle` has it by construction
+    # WHERE IT APPLIES -- i.e. where the four-corner cycle determines the whole retained subspace.
+    # Measured on the collaborator's 5×5 Ising PEPS: 3.3e-16 at χ=9 and 8.7e-15 at χ=16 against the
+    # cut's 2.9e-11 and 2.6e-14. Here, on a lattice/χ where the gate passes throughout:
+    # A 4×4 at D=2 is lossless by χ=4, so BOTH come out at ~5e-17 and the comparison is vacuous;
+    # 6×6 D=2 at χ=4 is genuinely truncated and separates them by 12 orders.
+    Random.seed!(22)
+    tn = random_tensornetwork(Float64, named_grid((6, 6)); bond_dimension = 2)
+    mi_cut = marginal_inconsistency(update(CTMEnvironmentCache(tn, 4; projector = :cut)))
+    # Stationarity is a property of the SETTLED messages, so drive `:cycle` to worst-region here;
+    # the `:free_energy` default certifies once F settles, which is a few sweeps sooner.
+    mi_cyc = marginal_inconsistency(update(CTMEnvironmentCache(tn, 4; projector = :cycle);
+                                           convergence = :worst_region))
+    @test mi_cut > 1.0e-8                                   # the cut is NOT stationary here
+    @test mi_cyc < 1.0e-14                                  # the cycle is, to machine precision
+    # NOT asserted at χ=6. `:cycle` is a PURE formulation — every interface comes from the
+    # four-corner cycle, with no per-interface fallback to `:cut` — so a lattice never carries a
+    # mixture of the two families. That purity is a DESIGN choice, not a measured one: a mixed
+    # lattice is not stationary, which makes the one question `:cycle` exists to answer ill-posed,
+    # and the switch would be a discontinuous rank comparison that can flip on a small change in the
+    # environment. (An earlier version of this comment justified it by "mixtures measured worse than
+    # either pure method" — that rested on ONE seed at ONE χ and is retracted; see the retraction
+    # table in docs/ctmrg_status.md.) Stationarity IS asserted above at χ=4, where it holds by six
+    # orders.
+
+    # 3. What stationarity BUYS: single-site observables, where a single-region ratio cannot hide a
+    # marginal inconsistency the way the signed Möbius sum can. Measured 11.9× / 7.5× / 2.6× at
+    # χ = 4 / 6 / 8; asserted at 2× for headroom. NOT tested at χ=2, where nothing is converged and
+    # `:cycle` legitimately loses. On the collaborator's 5×5 Ising PEPS the same comparison tracks
+    # their engine to within 2% at χ ≤ 16 -- see examples/ctm_ising5x5_benchmark.jl.
+    # The win is a PER-STATE property of random states (their cycle spectra can be
+    # quasi-degenerate where tight χ forces the cut — see docs/ctmrg_status.md), so it is
+    # asserted as a median over seeds and χ, not on one seed: measured medians 3.1× (ITensors
+    # random stream) and 1.6× (Tensors stream) over these seeds, with individual ratios
+    # anywhere from 0.2× to 25×.
+    # Through the high-level `expect(::TensorNetworkState; alg = "ctmrg", ...)` path ON PURPOSE: it
+    # is what a caller measuring an observable uses, and it defaults the `:cycle` solve to
+    # worst-region (message stationarity), which is what makes the observable tight. `:cut` is
+    # unaffected by that default.
+    g3 = named_grid((4, 4))
+    ratios = Float64[]
+    for seed in (1, 2, 3, 4)
+        Random.seed!(seed)
+        ψ3 = random_tensornetworkstate(Float64, g3, siteinds("S=1/2", g3); bond_dimension = 2)
+        ex3 = real(expect(ψ3, ("Z", [(2, 2)]); alg = "exact"))
+        err3(proj, χ) = abs(real(expect(ψ3, ("Z", [(2, 2)]); alg = "ctmrg", maxdim = χ,
+                                        ctm_options = (; projector = proj))) - ex3)
+        for χ in (4, 6, 8)
+            push!(ratios, err3(:cut, χ) / err3(:cycle, χ))
+        end
+    end
+    @test median(ratios) > 1
+
+    # 3b. THE LARGE-χ WIN, which is what the scale-free Arnoldi tolerance bought. The cycle action is
+    # normalised by its dominant singular value so `tol` is relative, because the cycle spectrum is
+    # the PRODUCT of the four factors' spectra and spans ~14 orders: a fixed `tol = 1e-13` sat above
+    # the eigenvalues being resolved and silently discarded them. Guard the regime where it pays --
+    # `:cycle` must be well clear of `:cut` once χ is large enough for the tail to be real.
+    Random.seed!(31)
+    tn3 = random_tensornetwork(Float64, named_grid((5, 5)); bond_dimension = 2)
+    lnZ3 = log(abs(real(contract(tn3; alg = "exact"))))
+    # both are near-exact here, so compare stationarity, which is where the criterion shows
+    @test marginal_inconsistency(update(CTMEnvironmentCache(tn3, 8; projector = :cycle);
+                                        convergence = :worst_region)) < 1.0e-13
+    @test abs(cvm_freenergy(update(CTMEnvironmentCache(tn3, 8; projector = :cycle))) - lnZ3) < 1.0e-8
+
+    # 4. DETERMINISM. Every Krylov solve here takes a locally seeded start vector, so a sweep is
+    # reproducible and does not touch the caller's global RNG stream. Without this the run-to-run
+    # spread exceeded the difference between the two projectors, making item 3 meaningless.
+    Random.seed!(7)
+    tn2 = random_tensornetwork(Float64, named_grid((4, 4)); bond_dimension = 3)
+    for proj in (:cut, :cycle)
+        F1 = cvm_freenergy(update(CTMEnvironmentCache(tn2, 8; projector = proj)))
+        F2 = cvm_freenergy(update(CTMEnvironmentCache(tn2, 8; projector = proj)))
+        @test F1 == F2
+        # ... and independently of where the global stream happens to be.
+        Random.seed!(999)
+        @test cvm_freenergy(update(CTMEnvironmentCache(tn2, 8; projector = proj))) == F1
+    end
+
+    # 5. REGRESSION: `update` must not certify convergence from a PARTIAL state comparison.
+    #
+    # `_ctm_statedist` used to skip blocks whose index set had changed rather than counting them as
+    # changed. Interface widths stabilise from the bulk outward, so the comparable blocks on early
+    # sweeps are exactly the ones that settled first — a biased sample. On square 6×6 D=2 at χ=16,
+    # `:cycle` compared 28 of 220 blocks on sweep 2, found them equal to 1.0e-15, and STOPPED, while
+    # sweep 3 (64 of 220) still moved by 1.0e-1. `F` and the bulk were converged; the boundary ring
+    # was left ~3 orders wrong, χ-INDEPENDENTLY, which read as a projector defect for two sessions.
+    # `:cut` escaped only by chance -- its 28-block subset still read 2.6e-1.
+    #
+    # (a) The contract, directly: a block whose index set changed aborts the comparison — the
+    # function must say "no distance" rather than return a number measured on whatever happened
+    # to match. (Since 2026-09-08 every interface keeps its index from the second sweep on — the
+    # seed stores full triples and re-minted levels record transition maps — so a distance DOES
+    # exist at sweep 2; the contract is exercised by re-indexing one block by hand.)
+    Random.seed!(1)
+    tn4 = random_tensornetwork(Float64, named_grid((6, 6)); bond_dimension = 2)
+    c4 = CTMEnvironmentCache(tn4, 16; projector = :cycle)
+    e1 = TNQS.sweep_vertex_environments(c4, TNQS.vertex_environments(c4))
+    e2 = TNQS.sweep_vertex_environments(c4, e1)
+    @test !isnothing(TNQS._ctm_statedist(e2, e1))       # index-stable from sweep 2: a distance exists
+    kC = first(k for (k, v) in e2.C if !isnothing(v))
+    e2b = TNQS.CTMVertexEnvironments(copy(e2.C), e2.T, e2.PH, e2.PV, e2.CYC, e2.Lx, e2.Ly)
+    iC = first(inds(e2.C[kC]))
+    e2b.C[kC] = replaceind(e2.C[kC], iC, sim(iC))
+    @test isnothing(TNQS._ctm_statedist(e2b, e1))       # one re-indexed block => no distance
+
+    # (b) End to end, on the case that showed the largest error: heavy-hex at χ=8 was 3.7e-06 with
+    # `:cycle` against a `:cut` that is exact, and is now exact too. Ten orders of headroom, so this
+    # fails loudly if partial-coverage certification ever returns.
+    Random.seed!(1)
+    ghh = heavy_hexagonal_lattice(2, 2)
+    ψhh = random_tensornetworkstate(Float64, ghh, siteinds("S=1/2", ghh); bond_dimension = 2)
+    vhh = collect(vertices(ghh))[max(1, length(vertices(ghh)) ÷ 2)]
+    exhh = real(expect(ψhh, ("Z", [vhh]); alg = "exact"))
+    # Each projector runs its OBSERVABLE-TIGHT criterion — the same split the `expect` path picks
+    # automatically. `:cut` stays on its default `|ΔF|`+statedist pair: that is the criterion whose
+    # partial-coverage bug this test guards, and the worst-region signal over-warns on it here
+    # (floors ~8e-6 on this lossless case while `⟨Z⟩` is exact). `:cycle` needs
+    # `convergence = :worst_region`, since its `|ΔF|` default certifies before the boundary-lagged
+    # `⟨Z⟩` settles (F at sweep 2, `⟨Z⟩` at sweep ~5).
+    # `:cut` is exact here. `:cycle` is exact on most states but NOT all: on some random heavy-hex
+    # states it floors at a χ-INDEPENDENT 1e-10..1e-8 (measured 2.9e-8 at χ=4/8/12/16 on one state,
+    # reproduced to 1e-15 by both tensor backends, so it is an engine property, not roundoff —
+    # open item in docs/ctmrg_status.md). The bound below still sits 30× under the 3.7e-6 the
+    # partial-coverage bug produced, which is what this test guards.
+    for (proj, kw, bound) in ((:cut, (;), 1.0e-12), (:cycle, (; convergence = :worst_region), 1.0e-7))
+        err = abs(real(expect(update(CTMEnvironmentCache(ψhh, 8; projector = proj); kw...),
+                              ("Z", [vhh]))) - exhh)
+        @test err < bound
+    end
+end
+
+@testset "Cycle solver: warm starts (cycle_solver = :warm, :block)" begin
+    # `:schur` is the cold single-vector solve; `:warm` (what `:auto` resolves to) is that solve
+    # started from last sweep's Schur basis; `:block` (Woolls et al., MP-BP §V.D) keeps each
+    # plaquette's Schur bases from the previous sweep and solves the cycle in a depth-K block Krylov
+    # space, the outer sweep acting as the restart. Same fixed point wherever the truncated map has a
+    # unique one (see 2b), same consumers.
+    g3 = named_grid((3, 3))
+    @test_throws ArgumentError CTMEnvironmentCache(
+        random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle, cycle_solver = :nonsense)
+    @test_throws ArgumentError CTMEnvironmentCache(
+        random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle, cycle_depth = 0)
+    @test_throws ArgumentError CTMEnvironmentCache(
+        random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle, cycle_tol = -1.0)
+    @test_throws ArgumentError CTMEnvironmentCache(
+        random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle, cycle_restarts = 0)
+    @test TNQS.options(CTMEnvironmentCache(random_tensornetwork(Float64, g3; bond_dimension = 2), 4)).cycle_solver === :warm    # :auto → :warm
+    # `:auto` → `:warm` on every network (single layer, dense and graded double layer); an explicit
+    # choice is respected
+    ψ3 = random_tensornetworkstate(Float64, g3, siteinds("S=1/2", g3); bond_dimension = 2)
+    @test TNQS.options(CTMEnvironmentCache(ψ3, 4; projector = :cycle)).cycle_solver === :warm     # :auto → warm on a dense state
+    @test TNQS.options(CTMEnvironmentCache(ψ3, 4; projector = :cycle, cycle_solver = :warm)).cycle_solver === :warm
+    @test TNQS.options(CTMEnvironmentCache(ψ3, 4; projector = :cycle, cycle_solver = :block)).cycle_solver === :block
+    @test TNQS.options(CTMEnvironmentCache(ψ3, 4; projector = :cycle, cycle_solver = :schur)).cycle_solver === :schur
+    @test TNQS.options(CTMEnvironmentCache(random_tensornetwork(Float64, g3; bond_dimension = 2), 4; projector = :cycle)).cycle_solver === :warm
+
+    # 1. Exact at lossless χ, real and complex, and identical to the cold solver's F.
+    Random.seed!(31)
+    for elt in (Float64, ComplexF64)
+        tn = random_tensornetwork(elt, named_grid((4, 4)); bond_dimension = 2)
+        lnZ = log(abs(contract(tn; alg = "exact")))
+        Fs = [cvm_freenergy(update(CTMEnvironmentCache(tn, 40; projector = :cycle, cycle_solver = s)))
+              for s in (:schur, :block)]
+        @test abs(Fs[2] - lnZ) < 1.0e-12
+        @test abs(Fs[2] - Fs[1]) < 1.0e-12
+    end
+
+    # 2. The warm start is actually taken: sweep 1 has no bases and falls back to the cold solve on
+    #    every plaquette, sweep 2 runs warm on every plaquette.
+    Random.seed!(32)
+    tn6 = random_tensornetwork(Float64, named_grid((6, 6)); bond_dimension = 2)
+    c = CTMEnvironmentCache(tn6, 16; projector = :cycle, cycle_solver = :block)
+    empty!(TNQS.CTM_SVD_STATS)
+    c = update(c; maxiter = 1, tolerance = 0.0)
+    @test get(TNQS.CTM_SVD_STATS, :cycle_block_warm, 0) == 0
+    @test get(TNQS.CTM_SVD_STATS, :cycle_block_cold, 0) == 25
+    empty!(TNQS.CTM_SVD_STATS)
+    c = update(c; maxiter = 1, tolerance = 0.0)
+    @test get(TNQS.CTM_SVD_STATS, :cycle_block_warm, 0) == 25
+    @test get(TNQS.CTM_SVD_STATS, :cycle_block_cold, 0) == 0
+    @test isfinite(cvm_freenergy(c))
+
+    # 2b. `:warm` — the cold solve warm-started from last sweep's Schur basis: taken on every plaquette
+    #     from sweep 2, and the cold solver's fixed point on a truncated state (below).
+    Random.seed!(34)
+    g6 = named_grid((6, 6))
+    ψ6 = random_tensornetworkstate(ComplexF64, g6, siteinds("S=1/2", g6); bond_dimension = 2)
+    cw = CTMEnvironmentCache(ψ6, 16; projector = :cycle, cycle_solver = :warm)
+    empty!(TNQS.CTM_SVD_STATS)
+    cw = update(cw; maxiter = 1, tolerance = 0.0)
+    @test get(TNQS.CTM_SVD_STATS, :cycle_warm_start, 0) == 0
+    @test get(TNQS.CTM_SVD_STATS, :cycle_warm_cold, 0) == 25
+    empty!(TNQS.CTM_SVD_STATS)
+    cw = update(cw; maxiter = 1, tolerance = 0.0)
+    # every plaquette warm except any whose west interface re-minted its index on sweep 1
+    @test get(TNQS.CTM_SVD_STATS, :cycle_warm_start, 0) >= 22
+    # The fixed point: the smaller warm Krylov space converges fewer Schur vectors per build while the
+    # environment is still moving (sweeps 2–4 read ~1e-6 off where the cold solve is already exact) and
+    # catches up as it settles, so compare CONVERGED caches — of a state whose `:cycle` iteration does
+    # converge at a truncated χ. The random 6×6 above does not: at χ = 16 (its centre cut needs
+    # 4³ = 64) it sits in the under-truncation limit cycle of docs/ctmrg_status.md (open problem 1)
+    # under BOTH solvers — worst marginal change 1.5–2 for 60 sweeps, ⟨Z⟩ anywhere from exact to 1e5
+    # depending on the sweep — and comparing the two there compared two points of a limit cycle
+    # (measured 2026-09-24). A shallow-circuit state has the fast-decaying spectrum that converges:
+    # 4×4 D = 3 at χ = 8, ⟨Z⟩ 4e-4 off exact, both solvers certified after 15 sweeps (the marginal
+    # change falling ~4× per sweep) and agreeing to 1e-14.
+    g4c = named_grid((4, 4))
+    ψc = tensornetworkstate(ComplexF64, v -> iseven(sum(v)) ? "↑" : "↓", g4c, siteinds("S=1/2", g4c))
+    layer = Any[("Rz", [v], 0.4) for v in vertices(g4c)]
+    for ces in edge_color(g4c, 4)
+        append!(layer, ("Rxx", pair, 0.7) for pair in ces)
+        append!(layer, ("Rzz", pair, 0.2) for pair in ces)
+    end
+    ψc, _ = apply_gates(vcat(layer, layer), ψc; apply_kwargs = (; maxdim = 3, cutoff = 1.0e-14))
+    zc = real(only(expect(ψc, ("Z", [(2, 2)]); alg = "exact")))
+    cwc, csc = map((:warm, :schur)) do s
+        # no warning = certified under `:marginal` within the cap
+        @test_logs min_level = Warn update(CTMEnvironmentCache(ψc, 8; projector = :cycle, cycle_solver = s);
+                                           convergence = :marginal, maxiter = 40)
+    end
+    zw, zs = (real(only(expect(c, ("Z", [(2, 2)])))) for c in (cwc, csc))
+    @test abs(zs - zc) > 1.0e-5                     # genuinely truncated
+    @test abs(cvm_freenergy(cwc) - cvm_freenergy(csc)) < 1.0e-10
+    @test abs(zw - zs) < 1.0e-10
+    # exact at a lossless χ, like the cold solve
+    g4w = named_grid((4, 4))
+    ψ4w = random_tensornetworkstate(ComplexF64, g4w, siteinds("S=1/2", g4w); bond_dimension = 2)
+    lnZ4 = log(abs(real(norm_sqr(ψ4w; alg = "exact"))))
+    @test abs(cvm_freenergy(update(CTMEnvironmentCache(ψ4w, 40; projector = :cycle, cycle_solver = :warm))) - lnZ4) < 1.0e-10
+
+    # 3. Observable exact at lossless χ on a state, through the `expect` path.
+    Random.seed!(33)
+    g4 = named_grid((4, 4))
+    ψ = random_tensornetworkstate(ComplexF64, g4, siteinds("S=1/2", g4); bond_dimension = 2)
+    ex = real(only(expect(ψ, ("Z", [(2, 2)]); alg = "exact")))
+    cb = update(CTMEnvironmentCache(ψ, 16; projector = :cycle, cycle_solver = :block); convergence = :worst_region)
+    @test abs(real(only(expect(cb, ("Z", [(2, 2)]); alg = "ctmrg"))) - ex) < 1.0e-10
+end
+
+@testset "Cycle projector: plaquette insertion identity" begin
+    # The four `:cycle` pairs inserted exactly as the sweep inserts them (NW: P_A,P_A; NE: P_B on N,
+    # P_A on E; SW: P_A on S, P_B on W; SE: P_B,P_B) must leave the closed plaquette contraction
+    # (= Z on a 2×2) unchanged at a lossless χ, and the observable read from the converged ring must
+    # be exact. (FixesV2 runs the same identity on fermionic gradings, where it caught a parity
+    # twist; on dense data it guards the biorthogonal pairing itself.)
+    function plaquette_Z(ψc, χ, fam)
+        c = CTMEnvironmentCache(ψc, χ; projector = :cycle)
+        S0 = vertex_environments(c); tbl = TNQS._ctm_factor_table(c); opts = c.options
+        E = Dict(sym => TNQS._ctm_enlarged(S0, tbl, sym, 2, 2, opts) for sym in (:NW, :NE, :SE, :SW))
+        cyc = fam ? TNQS._ctm_cycle_projectors(E[:NW], E[:NE], E[:SE], E[:SW], χ, opts, hash((2, 2))) : nothing
+        ap(t, side, which) = isnothing(cyc) ? t : t * getfield(cyc, side)[which]
+        NW = ap(ap(E[:NW], :N, 1), :W, 1); NE = ap(ap(E[:NE], :N, 2), :E, 1)
+        SW = ap(ap(E[:SW], :S, 1), :W, 2); SE = ap(ap(E[:SE], :S, 2), :E, 2)
+        return scalar(((SW * SE) * NE) * NW), isnothing(cyc)
+    end
+    Random.seed!(77)
+    gf = named_grid((2, 2))
+    ψc = random_tensornetworkstate(ComplexF64, gf, siteinds("S=1/2", gf); bond_dimension = 2)
+    Z0, _ = plaquette_Z(ψc, 16, false)
+    Z1, declined = plaquette_Z(ψc, 16, true)
+    @test !declined
+    @test abs(Z1 - Z0) / abs(Z0) < 1.0e-12
+    zex = expect(ψc, ("Z", [(2, 2)]); alg = "exact")
+    cc = update(CTMEnvironmentCache(ψc, 16; projector = :cycle);
+                maxiter = 30, tolerance = 1.0e-12, convergence = :marginal)
+    @test expect(cc, ("Z", [(2, 2)])) ≈ zex atol = 1.0e-12
+    # kres = 1 must not decline (a lone Krylov vector once shared an index id with its left partner,
+    # so the two bases' overlap contracted to a scalar — `_ctm_stack`). χ = 1 is the cheap way to hit it.
+    logger = TestLogger()
+    with_logger(logger) do
+        update(CTMEnvironmentCache(ψc, 1; projector = :cycle); maxiter = 5)
+    end
+    @test !any(occursin("declined", string(r.message)) for r in logger.logs)
+end
+
+
+@testset "CTMRG agrees with boundary MPS" begin
+    # Both exact at a lossless χ on a state (observable and norm), and converging to the same
+    # value on a truncated partition function. Measured 2026-10-17: lossless differences ~1e-15;
+    # 8×8 Ising at β = 0.35, |ln Z_bmps − F| = 2.6e-8 at χ = 4 and 4e-14 at χ = 8.
+    Random.seed!(2026)
+    g = named_grid((4, 4)); s = siteinds("S=1/2", g)
+    ψ = random_tensornetworkstate(Float64, g, s; bond_dimension = 2)
+    v = (2, 3)
+    zb = expect(ψ, ("Z", [v]); alg = "boundarymps", mps_bond_dimension = 16)
+    for proj in (:cut, :cycle)
+        zc = expect(ψ, ("Z", [v]); alg = "ctmrg", maxdim = 16, ctm_options = (; projector = proj))
+        @test zc ≈ zb atol = 1.0e-12
+    end
+    lnNb = log(abs(norm_sqr(ψ; alg = "boundarymps", mps_bond_dimension = 16)))
+    @test cvm_freenergy(update(CTMEnvironmentCache(ψ, 16))) ≈ lnNb atol = 1.0e-12
+
+    tn = ising_partitionfunction(named_grid((8, 8)), 0.35)
+    lb = log(real(contract(tn; alg = "boundarymps", mps_bond_dimension = 8)))
+    @test cvm_freenergy(update(CTMEnvironmentCache(tn, 8); maxiter = 40)) ≈ lb atol = 1.0e-10
+end
+
+@testset "Cut projector: subspace route, certification, marginal signal" begin
+    # A cheap state with a DECAYING corner spectrum — the regime of every physical PEPS and the one
+    # the subspace route is for: a product state plus a small random admixture on the bonds.
+    # (Random states have flat spectra; on those every subspace attempt bails out to the dense
+    # route by design, and gate-built states cost minutes to make.)
+    function decaying_state(g, D, ε; seed = 7)
+        Random.seed!(seed)
+        ψ = random_tensornetworkstate(Float64, g, siteinds("S=1/2", g); bond_dimension = D)
+        for v in vertices(g)
+            t = ψ[v]
+            At = TNQS.TensorInterface.array(t, inds(t)...)
+            A = zeros(Float64, size(At)); A[1] = 1.0                # site ↑, every bond in state 1
+            ψ[v] = TNQS.TensorInterface.from_array(A .+ ε .* At, inds(t)...)
+        end
+        return ψ
+    end
+    g6 = named_grid((6, 6))
+    ψ6 = decaying_state(g6, 2, 0.3)
+    obs6 = ("Z", (3, 3))
+    @test_throws ArgumentError CTMEnvironmentCache(ψ6, 4; svd = :fast)
+
+    # 1. The subspace route (`svd = :subspace`) is the dense route's fixed point to roundoff. It
+    #    needs interfaces whose three sides exceed the block width χ + oversample, which on a D=2
+    #    double layer means the 6×6 lattice (deep chains are 8·4 = 32 wide) with a small oversample.
+    cd = update(CTMEnvironmentCache(ψ6, 8; svd = :dense); maxiter = 40, tolerance = 1.0e-12)
+    empty!(TNQS.CTM_SVD_STATS)
+    cs = update(CTMEnvironmentCache(ψ6, 8; svd = :subspace, svd_min = 1, svd_oversample = 2);
+                maxiter = 40, tolerance = 1.0e-12)
+    @test get(TNQS.CTM_SVD_STATS, :subspace, 0) > 0                  # the route actually ran
+    @test cvm_freenergy(cs) ≈ cvm_freenergy(cd) atol = 1.0e-11
+    @test expect(cs, obs6) ≈ expect(cd, obs6) atol = 1.0e-10
+
+    # 2. Certification at an OVER-PARAMETRISED χ, kept singular values down at the cutoff.
+    #    REGRESSION: the gauge alignment used to test its rotation through `P_B P_A` before and
+    #    after, which on such an interface is biorthogonal only to eps/qr_cutoff ~ 1e-3, so every
+    #    deep interface was rejected, the levels above re-indexed, no state distance ever existed,
+    #    and `update` ran to `maxiter` (measured 90 s for a 5 s solve, 508 s on 9×9). It must
+    #    converge silently now — 11 sweeps here.
+    c32 = @test_logs update(CTMEnvironmentCache(ψ6, 32); maxiter = 15, tolerance = 1.0e-10)
+    @test maximum(dim(p[3]) for p in values(TNQS.environments(c32).PH)) == 32   # χ genuinely reached
+    @test expect(c32, obs6) ≈ expect(ψ6, obs6; alg = "exact") atol = 1.0e-8       # lossless: exact
+
+    # 3. Index bootstrapping. The greedy seed stores full `(P, dag(P), w)` triples and a level that
+    #    re-mints its index records transition maps, so every interface keeps its index from the
+    #    second sweep on and a state distance exists then — it used to take one sweep per lattice
+    #    level (9 sweeps on 9×9, with `|ΔF|` at 1e-14 from sweep 2).
+    Random.seed!(456)
+    ψ6r = random_tensornetworkstate(Float64, g6, siteinds("S=1/2", g6); bond_dimension = 2)
+    c6 = CTMEnvironmentCache(ψ6r, 8)
+    e0 = TNQS.vertex_environments(c6)
+    e1 = TNQS.sweep_vertex_environments(c6, e0)
+    e2 = TNQS.sweep_vertex_environments(c6, e1)
+    @test !isnothing(TNQS._ctm_statedist(e2, e1))
+    @test all(p -> length(p) >= 3, values(e0.PH))                  # seed triples
+
+    # 4. A random (flat-spectrum) state: the forced route bails out everywhere and the default
+    #    `:auto` keeps it dense (the memo backs off) — both give the dense answer, and a lossless χ
+    #    is exact either way.
+    Random.seed!(1234)
+    g5 = named_grid((5, 5)); s5 = siteinds("S=1/2", g5)
+    ψ5 = gauge_and_scale(random_tensornetworkstate(Float64, g5, s5; bond_dimension = 2))
+    lnZ5 = log(norm_sqr(ψ5; alg = "exact"))
+    for χ in (8, 16)
+        cd5 = update(CTMEnvironmentCache(ψ5, χ; svd = :dense); maxiter = 40, tolerance = 1.0e-12)
+        for kw in ((; svd = :subspace, svd_min = 1), (;))
+            c5 = update(CTMEnvironmentCache(ψ5, χ; kw...); maxiter = 40, tolerance = 1.0e-12)
+            @test cvm_freenergy(c5) ≈ cvm_freenergy(cd5) atol = 1.0e-11
+            @test expect(c5, ("Z", (3, 3))) ≈ expect(cd5, ("Z", (3, 3))) atol = 1.0e-10
+            χ == 16 && @test cvm_freenergy(c5) ≈ lnZ5 atol = 1.0e-10   # lossless: exact
+        end
+    end
+
+    # 5. `convergence = :marginal`, the signal `expect`/`rdm` use for `:cycle`: certifies on an
+    #    over-parametrised χ where `:worst_region` floors (surplus-mode wander), and the answer is
+    #    exact.
+    Random.seed!(31)
+    g4 = named_grid((4, 4)); s4 = siteinds("S=1/2", g4)
+    ψc = random_tensornetworkstate(ComplexF64, g4, s4; bond_dimension = 2)
+    zx = expect(ψc, ("Z", [(2, 2)]); alg = "exact")
+    cm = @test_logs update(CTMEnvironmentCache(ψc, 32; projector = :cycle);
+                           maxiter = 20, tolerance = 1.0e-10, convergence = :marginal)
+    @test expect(cm, ("Z", [(2, 2)])) ≈ zx atol = 1.0e-9
+    @test_throws ArgumentError update(CTMEnvironmentCache(ψc, 8); convergence = :nonsense)
+end
+
+end
