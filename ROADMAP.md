@@ -92,13 +92,21 @@ each test file in a fresh process.
 |---|---|---|
 | Package precompile after a source edit | 8.4 s | **3.4 s** |
 | `using TensorNetworkQuantumSimulator` | ~9–10 s | **~6.5–7.5 s** |
-| `test_tensors.jl`, first run (compile + compute) | **> 1050 s, still running when this was written** | 427 s |
-| `test_tensors.jl`, second run (compute only) | — | 16 s |
-| `test_beliefpropagation.jl`, first / second run | not reached | 82 s / 0.4 s |
-| `test_apply.jl`, first / second run | not reached | 88 s / 0.8 s |
+| `test_tensors.jl`, first run (compile + compute) | **1442 s** | 427 s |
+| `test_tensors.jl`, second run (compute only) | **13.6 s** | 16.0 s |
+| `test_beliefpropagation.jl`, first / second run | 99 s / 0.4 s | 82 s / 0.4 s |
+| `test_apply.jl`, first / second run | 115 s / 0.8 s | 88 s / 0.8 s |
+| `test_ctmenvironment.jl`, first / second run | **1492 s** / 64 s | 673 s / 76 s |
 
-So first-use compilation dominates everything (≈96% of the first run), and TensorKit is
-substantially worse than ITensorBase on it. The maintainer's memory was right.
+So first-use compilation dominates everything (≈90–99% of a first run), and the maintainer's memory
+was right. The problem is purely compilation: once compiled, TensorKit is as fast or faster
+(13.6 s vs 16.0 s, 64 s vs 76 s).
+
+The gap is not uniform. On the BP and gate tests TensorKit compiles only ~1.2–1.3× longer, but on
+`test_tensors.jl` (3.4×) and `test_ctmenvironment.jl` (2.2×) it is far worse. Those two exercise the
+graded (symmetric/fermionic) path and many different leg splits most heavily. This is consistent with
+the specialisation hypothesis below, but does not prove it: check what each test file actually runs
+before relying on it.
 
 Caveat: the test suite exercises dense **plus five sector types**, which is close to the worst case
 for a library that specialises on sector type. A user script typically uses one sector type. For
