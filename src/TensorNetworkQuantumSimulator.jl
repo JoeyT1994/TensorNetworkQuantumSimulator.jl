@@ -14,7 +14,6 @@ include("contraction_sequences.jl")
 include("contract.jl")
 include("Forms/abstractform.jl")
 include("Forms/bilinearform.jl")
-include("Forms/quadraticform.jl")
 include("MessagePassing/abstractbeliefpropagationcache.jl")
 include("MessagePassing/beliefpropagationcache.jl")
 include("MessagePassing/boundarympscache.jl")
@@ -103,7 +102,6 @@ export
     src,
     dst,
     normalize,
-    QuadraticForm,
     BilinearForm,
     sample_certified,
     sample_directly_certified,

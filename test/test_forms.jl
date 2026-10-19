@@ -1,6 +1,10 @@
 @eval module $(gensym())
+using Dictionaries: Dictionary
+using ITensorBase: name, operator, prime
+import ITensorNetworksNext as ITNN
 using Random
 using TensorNetworkQuantumSimulator
+const TNQS = TensorNetworkQuantumSimulator
 using Test: @testset, @test
 
 
@@ -13,8 +17,10 @@ using Test: @testset, @test
     for eltype in [Float32, Float64, ComplexF32, ComplexF64]
         ψ = random_tensornetworkstate(eltype, g, s; bond_dimension = 2)
         ψ = normalize(ψ; alg = "bp")
-        ψψ = QuadraticForm(ψ)
-        @test ψψ isa QuadraticForm
+        vs = collect(vertices(g))
+        id = TNQS.ITensorNetwork(Dictionary(vs, [TNQS.Ops.op("I", only(s[v])) for v in vs]))
+        ψψ = ITNN.quadraticformnetwork(ψ, operator(id, [name(prime(only(s[v]))) for v in vs], [name(only(s[v])) for v in vs]))
+        @test ψψ isa ITNN.QuadraticFormNetwork
         @test scalartype(ψψ) == eltype
         @test graph(ψψ) == g
 

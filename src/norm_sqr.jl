@@ -70,10 +70,9 @@ function norm_sqr(
 end
 
 function norm_sqr(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
-    tn = network(cache)
     z = cache_partitionfunction(alg, cache; max_configuration_size)
-    tn isa TensorNetworkState && return z
-    tn isa TensorNetwork && return abs2(z)
+    cache.factors isa ITNN.NormNetwork && return z
+    cache.factors isa ITensorNetwork && return abs2(z)
     return state_error("TensorNetworkState")
 end
 

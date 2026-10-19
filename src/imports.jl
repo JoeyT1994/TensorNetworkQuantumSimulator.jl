@@ -43,8 +43,9 @@ using NamedGraphs: named_grid, named_hexagonal_lattice_graph, named_comb_tree, n
 # unqualified use (gate definitions dispatch on bare `OpName"…"` / `SiteType"…"`).
 using .Ops: OpName, SiteType, @OpName_str, @SiteType_str
 using ITensorBase: ITensorBase, Index, ITensor, commonind, commoninds, hascommoninds, name,
-    noprime, plev, prime, rename, settags, sim, tags, uniqueind, unnamed
-import ITensorBase: uniqueinds
+    noprime, plev, prime, rename, settags, sim, tags, uniqueind, uniqueinds, unnamed
+using ITensorNetworksNext: ITensorNetworksNext as ITNN, ITensorNetwork
+using DataGraphs: DataGraphs
 using TensorAlgebra: trivialrange, matricize, scalar, directsum
 import TensorAlgebra: datatype
 import Base: truncate

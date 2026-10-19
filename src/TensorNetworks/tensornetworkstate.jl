@@ -1,58 +1,10 @@
-
 """
-    TensorNetworkState{V} <: AbstractTensorNetwork{V}
+    TensorNetworkState
 
-A tensor network state defined on a graph with vertices of type `V`. Wraps a `TensorNetwork` together with a dictionary of site indices (physical degrees of freedom) at each vertex.
-
-# Fields
-- `tensornetwork::TensorNetwork{V}`: The underlying tensor network.
-- `siteinds::Dictionary{V, Vector{<:Index}}`: A dictionary mapping each vertex to its physical (site) indices.
+A tensor network state: an `ITensorNetwork` whose dangling indices at each vertex are its
+site indices (physical degrees of freedom), as returned by `siteinds`.
 """
-struct TensorNetworkState{V} <: AbstractTensorNetwork{V}
-    tensornetwork::TensorNetwork{V}
-    siteinds::Dictionary{V, Vector{<:Index}}
-end
-
-tensornetwork(tns::TensorNetworkState) = tns.tensornetwork
-siteinds(tns::TensorNetworkState) = tns.siteinds
-graph(tns::TensorNetworkState) = graph(tensornetwork(tns))
-tensors(tns::TensorNetworkState) = tensors(tensornetwork(tns))
-
-Base.copy(tns::TensorNetworkState) = TensorNetworkState(copy(tensornetwork(tns)), copy(siteinds(tns)))
-
-TensorNetworkState(tn::TensorNetwork) = TensorNetworkState(tn, siteinds(tn))
-# Widen a concretely-typed site-index dictionary to the field type.
-function TensorNetworkState(tn::TensorNetwork{V}, sinds::Dictionary) where {V}
-    s = Dictionary{V, Vector{<:Index}}()
-    for v in keys(sinds)
-        set!(s, v, sinds[v])
-    end
-    return TensorNetworkState(tn, s)
-end
-TensorNetworkState(tensors::Dictionary, g::NamedGraph) = TensorNetworkState(TensorNetwork(tensors, g))
-TensorNetworkState(tensors::Union{Dictionary, Vector{<:ITensor}}) = TensorNetworkState(TensorNetwork(tensors))
-
-#Forward onto the tn
-for f in [
-        :(Base.getindex),
-    ]
-    @eval begin
-        function $f(tns::TensorNetworkState, args...; kwargs...)
-            return $f(tensornetwork(tns), args...; kwargs...)
-        end
-    end
-end
-
-siteinds(tns::TensorNetworkState, v) = siteinds(tns)[v]
-
-function Base.setindex!(tns::TensorNetworkState, value::ITensor, v)
-    setindex!(tensornetwork(tns), value, v)
-    sinds = siteinds(tns)
-    for vn in vcat(neighbors(tns, v), [v])
-        set!(sinds, vn, uniqueinds(tns, vn))
-    end
-    return tns
-end
+const TensorNetworkState = ITensorNetwork
 
 # Bra copy of a tensor: `conj` and prime all legs except `auxinds` — dangling
 # non-physical legs (e.g. a charged state's charge leg), which always pair directly
@@ -61,15 +13,11 @@ function bra_tensor(t::ITensor, auxinds::Vector{<:Index})
     tdag = conj(prime(t))
     return isempty(auxinds) ? tdag : rename(tdag, (prime.(auxinds) .=> auxinds)...)
 end
-bra_tensor(tns::TensorNetworkState, v) = bra_tensor(tns[v], auxinds(tns, v))
+bra_tensor(tns::TensorNetworkState, v) = bra_tensor(tns[v], Index[])
 
-# The dangling non-physical legs of a vertex tensor: dangling legs that are not site indices.
-auxinds(tns::TensorNetworkState, v) = Index[i for i in setdiff(uniqueinds(tns, v), siteinds(tns, v))]
-
-# `auxinds_f` overrides the live aux-leg classification. The loop-correction weights
-# need this: they deliberately relabel a bond so it dangles in the modified network,
-# and the live classification would misread it as a charge leg.
-function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I", auxinds_f::Function = v -> auxinds(tns, v))
+# The legs returned by `auxinds_f` stay unprimed on the bra. The loop-correction weights pass
+# the bond they relabel to dangle, which `siteinds` would otherwise count as a site index.
+function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Function = v -> "I", auxinds_f::Function = v -> Index[])
     factors = ITensor[]
     for v in verts
         sinds = siteinds(tns, v)
@@ -89,16 +37,6 @@ function norm_factors(tns::TensorNetworkState, verts::Vector; op_strings::Functi
 end
 
 norm_factors(tns::TensorNetworkState, v; kwargs...) = norm_factors(tns, [v]; kwargs...)
-bp_factors(tns::TensorNetworkState, v) = norm_factors(tns, v)
-
-# The flat starting message is the identity between the ket links and their bra
-# copies, built as an identity operator so it follows the links' backend (graded
-# links give a graded message; the legacy `delta` filled a dense diagonal).
-function default_message(tns::TensorNetworkState, edge::AbstractEdge)
-    linds = virtualinds(tns, edge)
-    cod, dom = Tuple(linds), Tuple(prime.(conj.(linds)))
-    return adapt_like(tns, one(zeros(scalartype(tns), cod..., dom...), cod, dom))
-end
 
 """
     random_tensornetworkstate(eltype, g::AbstractGraph, siteinds::Dictionary; bond_dimension::Integer = 1)
@@ -125,7 +63,7 @@ function random_tensornetworkstate(eltype, g::AbstractGraph, siteinds::Dictionar
         is = vcat(siteinds[v], [l[NamedEdge(v => vn)] for vn in neighbors(g, v)])
         set!(tensors, v, randn(eltype, is...))
     end
-    return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
+    return TensorNetworkState(tensors)
 end
 
 """
@@ -187,7 +125,7 @@ function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dic
         tensors[src(e)] *= x
         tensors[dst(e)] *= conj(x)
     end
-    return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
+    return TensorNetworkState(tensors)
 end
 
 """
