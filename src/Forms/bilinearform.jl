@@ -1,28 +1,19 @@
-struct BilinearForm{V} <: AbstractForm{V}
-    ket::TensorNetworkState{V}
-    operator::TensorNetworkState{V}
-    bra::TensorNetworkState{V}
+struct BilinearForm{T, V, K <: ITensorNetwork{<:Any, V}, B <: ITensorNetwork{<:Any, V}} <: AbstractForm{T, V}
+    ket::K
+    bra::B
 end
 
-ket(blf::BilinearForm) = blf.ket
-operator(blf::BilinearForm) = blf.operator
-bra(blf::BilinearForm) = blf.bra
-bra_tensor(blf::BilinearForm, v) = bra(blf)[v]
-bra_virtualinds(blf::BilinearForm, edge::NamedEdge) = virtualinds(bra(blf), edge)
+ITNN.ketnetwork(blf::BilinearForm) = blf.ket
+ITNN.branetwork(blf::BilinearForm) = blf.bra
+ITNN.factor_tensors(blf::BilinearForm, v) = [blf.ket[v], blf.bra[v]]
 
-Base.copy(blf::BilinearForm) = BilinearForm(copy(blf.ket), copy(blf.operator), copy(blf.bra))
+Base.copy(blf::BilinearForm) = typeof(blf)(copy(blf.ket), copy(blf.bra))
 
 #Constructor, bra is taken to be in the vector space of ket so the dual is taken
-function BilinearForm(ket::TensorNetworkState, bra::TensorNetworkState)
+function BilinearForm(ket::ITensorNetwork{T, V}, bra::ITensorNetwork) where {T, V}
     @assert graph(ket) == graph(bra)
-    sinds = siteinds(ket)
-    verts = collect(vertices(ket))
-    bra = TensorNetworkState(Dictionary(verts, [bra_tensor(bra, v) for v in verts]))
-    operator_tensors = [
-        let codomain = conj.(sinds[v]), domain = conj.(prime.(sinds[v]))
-            one(similar(ket[v], codomain, domain), codomain, domain)
-        end for v in verts
-    ]
-    operator = TensorNetworkState(Dictionary(verts, operator_tensors))
-    return BilinearForm(ket, operator, bra)
+    nn = ITNN.normnetwork(prime, bra)
+    verts = collect(vertices(bra))
+    bra = ITensorNetwork(Dictionary(verts, [ITNN.bratensor(nn, v) for v in verts]))
+    return BilinearForm{T, V, typeof(ket), typeof(bra)}(ket, bra)
 end

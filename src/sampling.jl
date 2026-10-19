@@ -33,7 +33,7 @@ function sample(
             set!(bit_string, v, config - 1)
             s_ind = inds(ρ)[findfirst(i -> plev(i) == 0, inds(ρ))]
             P = adapt_like(ρ, conj(onehot(s_ind => config)))
-            setindex_preserve!(projected_bp_cache, ψv * P, v)
+            network(projected_bp_cache)[v] = ψv * P
 
             if v != last(vertices(ψ))
                 projected_bp_cache = update(projected_bp_cache; bp_update_kwargs...)
@@ -252,7 +252,7 @@ function sample_partition!(
         q = ρ_diag[config]
         logq += log(q)
         Pψv = copy(network(norm_bmps_cache)[v]) * inv(sqrt(q)) * P
-        setindex_preserve!(norm_bmps_cache, Pψv, v)
+        network(norm_bmps_cache)[v] = Pψv
         prev_v = v
     end
 
@@ -272,15 +272,15 @@ function certify_sample(
         ψ = gauge_and_scale(ψ)
     end
 
-    ψproj = copy(tensornetwork(ψ))
+    ψproj = copy(ψ)
     s = siteinds(ψ)
     qv = sqrt(exp(inv(oftype(logq, length(vertices(ψ)))) * logq))
     for v in vertices(ψ)
         P = adapt_like(ψproj[v], conj(onehot(only(s[v]) => bitstring[v] + 1)))
-        setindex_preserve!(ψproj, ψproj[v] * P * inv(qv), v)
+        ψproj[v] = ψproj[v] * P * inv(qv)
     end
 
-    certification_mps_cache = BoundaryMPSCache(ψproj, certification_mps_bond_dimension)
+    certification_mps_cache = BoundaryMPSCache(ψproj, default_messages(), certification_mps_bond_dimension)
     certification_cache_message_update_kwargs = (; normalize = false, certification_cache_message_update_kwargs...)
 
     certification_mps_cache = update(certification_mps_cache, message_update_alg = Algorithm("zipup"; certification_cache_message_update_kwargs...))

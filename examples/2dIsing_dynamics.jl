@@ -53,7 +53,7 @@ function main()
     for l in 1:nl
         println("Layer $l")
 
-        t1 = @timed ψ_bpc, errors =
+        t1 = @timed ψ_bpc =
             apply_gates(layer, ψ_bpc; apply_kwargs, verbose = false)
 
         #BP expectation (already have an up-to-date BP cache)
@@ -64,7 +64,6 @@ function main()
         sz_boundarymps = expect(ψ, obs; alg = "boundarymps", mps_bond_dimension)
 
         println("    Took time: $(t1.time) [s]. Max bond dimension: $(maxvirtualdim(ψ_bpc))")
-        println("    Maximum Gate error for layer was $(maximum(errors))")
 
         println("    BP Measured Sigmaz is $(sz_bp)")
         println("    Boundary MPS Measured Sigmaz is $(sz_boundarymps)")

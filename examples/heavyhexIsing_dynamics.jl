@@ -33,18 +33,10 @@ function main()
     ψ_bpc = BeliefPropagationCache(ψ)
 
     #Do the evolution
-    fidelities = []
     for i in 1:no_trotter_steps
         println("Applying gates for Trotter Step $(i)")
-        ψ_bpc, errs = apply_gates(layer, ψ_bpc; apply_kwargs)
-        fidelity = prod(1.0 .- errs)
-        println("Layer fidelity was $(fidelity)")
-        push!(fidelities, fidelity)
+        ψ_bpc = apply_gates(layer, ψ_bpc; apply_kwargs)
     end
-
-    println("Total final fidelity is $(prod(fidelities))")
-    ntwo_site_gates = length(edges(g)) * no_trotter_steps
-    println("Avg gate fidelity is $((prod(fidelities))^((1 / ntwo_site_gates)))")
 
     central_site = (11, 5)
 

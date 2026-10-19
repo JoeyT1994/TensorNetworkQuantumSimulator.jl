@@ -14,11 +14,11 @@ const TNQS = TensorNetworkQuantumSimulator
     #BP Cache
     for eltype in [Float32, Float64, ComplexF32, ComplexF64]
         ψ = random_tensornetwork(eltype, g; bond_dimension = 2)
-        ψ_BPC = BeliefPropagationCache(ψ)
+        ψ_BPC = BeliefPropagationCache(ψ, TNQS.default_messages(ψ))
         @test network(ψ_BPC) isa TensorNetwork
         @test ψ_BPC isa BeliefPropagationCache
         @test graph(ψ_BPC) == g
-        @test isempty(messages(ψ_BPC))
+        @test length(keys(messages(ψ_BPC))) == 2 * length(edges(g))
         @test datatype(ψ_BPC) == datatype(ψ)
         @test scalartype(ψ_BPC) == scalartype(ψ)
 
@@ -38,7 +38,7 @@ const TNQS = TensorNetworkQuantumSimulator
         @test ψ_BPC isa BeliefPropagationCache
         @test network(ψ_BPC) isa TensorNetworkState
         @test graph(ψ_BPC) == g
-        @test isempty(messages(ψ_BPC))
+        @test length(keys(messages(ψ_BPC))) == 2 * length(edges(g))
         @test datatype(ψ_BPC) == datatype(ψ)
         @test scalartype(ψ_BPC) == scalartype(ψ)
 
@@ -56,27 +56,13 @@ const TNQS = TensorNetworkQuantumSimulator
     end
 end
 
-@testset "Test contraction sequence cache clearing" begin
-    Random.seed!(456)
-    g = named_comb_tree((3, 3))
-
-    # Test that sequences are empty before update
-    ψ = random_tensornetworkstate(Float64, g; bond_dimension = 2)
-    bpc = BeliefPropagationCache(ψ)
-    @test isempty(TNQS.contraction_sequences(bpc))
-
-    # Test that sequences are cleared after update returns (only live during update)
-    bpc = update(bpc)
-    @test isempty(TNQS.contraction_sequences(bpc))
-end
-
 @testset "Test setting multiple messages" begin
     g = named_path_graph(2)
     tn = random_tensornetwork(Float64, g; bond_dimension = 2)
-    bpc = BeliefPropagationCache(tn)
+    bpc = BeliefPropagationCache(tn, TNQS.default_messages(tn))
     e = first(edges(g))
     directed_edges = [e, reverse(e)]
-    new_messages = [TNQS.default_message(bpc, edge) for edge in directed_edges]
+    new_messages = [2 * message(bpc, edge) for edge in directed_edges]
 
     @test TNQS.setmessages!(bpc, directed_edges, new_messages) === bpc
     @test all(message(bpc, edge) == new_message for (edge, new_message) in zip(directed_edges, new_messages))

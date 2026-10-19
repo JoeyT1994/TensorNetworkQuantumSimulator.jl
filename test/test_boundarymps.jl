@@ -14,7 +14,7 @@ const TNQS = TensorNetworkQuantumSimulator
     #BMPS Cache
     for eltype in [Float32, Float64, ComplexF32, ComplexF64]
         ψ = random_tensornetwork(eltype, g; bond_dimension = 2)
-        ψ_BMPS = BoundaryMPSCache(ψ, 4)
+        ψ_BMPS = BoundaryMPSCache(ψ, TNQS.default_messages(), 4)
         @test network(ψ_BMPS) isa TensorNetwork
         @test ψ_BMPS isa BoundaryMPSCache
         @test graph(ψ_BMPS) == g

@@ -19,10 +19,10 @@ function full_update(
     )
 
     Qᵥ₁, Rᵥ₁ = MAK.left_orth(
-        ψ[v⃗[1]], setdiff(uniqueinds(ψ[v⃗[1]], ψ[v⃗[2]]), uniqueinds(ψ, v⃗[1]))
+        ψ[v⃗[1]], setdiff(uniqueinds(ψ[v⃗[1]], ψ[v⃗[2]]), siteinds(ψ, v⃗[1]))
     )
     Qᵥ₂, Rᵥ₂ = MAK.left_orth(
-        ψ[v⃗[2]], setdiff(uniqueinds(ψ[v⃗[2]], ψ[v⃗[1]]), uniqueinds(ψ, v⃗[2]))
+        ψ[v⃗[2]], setdiff(uniqueinds(ψ[v⃗[2]], ψ[v⃗[1]]), siteinds(ψ, v⃗[2]))
     )
 
     extended_envs = vcat(envs, Qᵥ₁, prime(conj(Qᵥ₁)), Qᵥ₂, prime(conj(Qᵥ₂)))
@@ -52,8 +52,10 @@ function full_update(
         truncation_error = iszero(total) ? zero(real(scalartype(M))) : (ϵ / total)^2
         callback(; singular_values = S, truncation_error)
     end
-    ψᵥ₁ = Qᵥ₁ * Rᵥ₁
-    ψᵥ₂ = Qᵥ₂ * Rᵥ₂
+    # The new bond keeps the old bond's name, which the norm network's bra-name map contains.
+    bond = commonind(Rᵥ₁, Rᵥ₂) => commonind(ψ[v⃗[1]], ψ[v⃗[2]])
+    ψᵥ₁ = rename(Qᵥ₁ * Rᵥ₁, bond)
+    ψᵥ₂ = rename(Qᵥ₂ * Rᵥ₂, bond)
     return ITensor[ψᵥ₁, ψᵥ₂]
 end
 

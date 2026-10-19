@@ -13,7 +13,7 @@ using Test: @testset, @test, @test_throws
     g = build_graph_from_circuit(circuit)
     ψ0 = tensornetworkstate(ComplexF32, v -> "↓", g)
     apply_kwargs = (; maxdim = 2, cutoff = 1.0e-10, normalize_tensors = false)
-    ψ, _ = apply_circuit(circuit, ψ0; apply_kwargs, verbose = false)
+    ψ = apply_circuit(circuit, ψ0; apply_kwargs, verbose = false)
 
     @test ψ isa TensorNetworkState
     @test scalartype(ψ) == scalartype(ψ0)
@@ -46,7 +46,7 @@ using Test: @testset, @test, @test_throws
     end
 
     apply_kwargs = (cutoff = 1.0e-10, normalize_tensors = false)
-    ψ, errs = apply_circuit(layer, ψ0; apply_kwargs, verbose = false)
+    ψ = apply_circuit(layer, ψ0; apply_kwargs, verbose = false)
 
     @test ψ isa TensorNetworkState
     @test scalartype(ψ) == scalartype(ψ0)
@@ -73,8 +73,8 @@ end
 
     ψ_rz = tensornetworkstate(ComplexF64, w -> "↓", g)
     ψ_my = tensornetworkstate(ComplexF64, w -> "↓", g)
-    ψ_rz, _ = apply_gates([("Rx", [v], 0.4), ("Rz", [v], θ)], ψ_rz; apply_kwargs)
-    ψ_my, _ = apply_gates([("Rx", [v], 0.4), ("MyZRot", [v], θ)], ψ_my; apply_kwargs)
+    ψ_rz = apply_gates([("Rx", [v], 0.4), ("Rz", [v], θ)], ψ_rz; apply_kwargs)
+    ψ_my = apply_gates([("Rx", [v], 0.4), ("MyZRot", [v], θ)], ψ_my; apply_kwargs)
 
     @test expect(ψ_rz, ("X", [v]); alg = "exact") ≈ expect(ψ_my, ("X", [v]); alg = "exact")
     @test expect(ψ_rz, ("Y", [v]); alg = "exact") ≈ expect(ψ_my, ("Y", [v]); alg = "exact")
@@ -83,7 +83,7 @@ end
     # Aliases work too.
     register_alias!("myzrot", "MyZRot")
     ψ_alias = tensornetworkstate(ComplexF64, w -> "↓", g)
-    ψ_alias, _ = apply_gates([("Rx", [v], 0.4), ("myzrot", [v], θ)], ψ_alias; apply_kwargs)
+    ψ_alias = apply_gates([("Rx", [v], 0.4), ("myzrot", [v], θ)], ψ_alias; apply_kwargs)
     @test expect(ψ_alias, ("X", [v]); alg = "exact") ≈ expect(ψ_my, ("X", [v]); alg = "exact")
 
     # register_alias! requires the canonical name to exist.
@@ -102,7 +102,7 @@ end
     @test_throws ArgumentError unregister_gate!("Rxx")
     # The built-in still works after the failed attempts.
     ψ_check = tensornetworkstate(ComplexF64, w -> "↓", g)
-    ψ_check, _ = apply_gates([("Rxx", [v, (1, 2)], 0.3)], ψ_check; apply_kwargs)
+    ψ_check = apply_gates([("Rxx", [v, (1, 2)], 0.3)], ψ_check; apply_kwargs)
     @test ψ_check isa TensorNetworkState
 end
 

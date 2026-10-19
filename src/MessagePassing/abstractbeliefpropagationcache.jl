@@ -21,7 +21,7 @@ end
 
 function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
     incoming_ms = incoming_messages(bp_cache, vertex)
-    state = bp_factors(bp_cache, vertex)
+    state = ITNN.factor_tensors(bp_cache.factors, vertex)
     contract_list = [state; incoming_ms]
     sequence = contraction_sequence(contract_list; alg = "optimal")
     return scalar(contract_network(contract_list; sequence))
@@ -33,18 +33,15 @@ function edge_scalar(
     return not_implemented()
 end
 
-network(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 graph(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 
 #Forward onto the network
 for f in [
-        :(bp_factors),
         :(default_bp_maxiter),
         :(virtualinds),
         :(datatype),
         :(VectorInterface.scalartype),
         :(maxvirtualdim),
-        :(default_message),
         :(siteinds),
     ]
     @eval begin
@@ -57,11 +54,6 @@ end
 function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCache)
     seq_cache = contraction_sequences(bp_cache)
     !isnothing(seq_cache) && empty!(seq_cache)
-    return bp_cache
-end
-
-function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex)
-    setindex_preserve!(network(bp_cache), value, vertex)
     return bp_cache
 end
 
@@ -99,7 +91,7 @@ end
 
 function message(bp_cache::AbstractBeliefPropagationCache, edge::AbstractEdge; kwargs...)
     ms = messages(bp_cache)
-    return get(() -> default_message(bp_cache, edge; kwargs...), ms, edge)
+    return get(() -> default_message(bp_cache.factors, edge; kwargs...), ms, edge)
 end
 
 function messages(bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge})
@@ -167,7 +159,7 @@ function updated_message(
     incoming_ms = incoming_messages(
         bp_cache, vertex; ignore_edges = (reverse(edge),)
     )
-    state = bp_factors(bp_cache, vertex)
+    state = ITNN.factor_tensors(bp_cache.factors, vertex)
     contract_list = ITensor[incoming_ms; state]
     cache_key = vertex => edge
     seq_cache = contraction_sequences(bp_cache)
@@ -209,18 +201,9 @@ end
 """
 Do a sequential update of the message tensors on `edges`
 """
-function update_iteration!(
-        alg::Algorithm"bp",
-        bpc::AbstractBeliefPropagationCache,
-        edges::Vector;
-        (update_diff!) = nothing,
-    )
+function update_iteration!(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache, edges::Vector)
     for e in edges
-        prev_message = !isnothing(update_diff!) ? message(bpc, e) : nothing
         update_message!(alg.kwargs.message_update_alg, bpc, e)
-        if !isnothing(update_diff!)
-            update_diff![] += message_diff(message(bpc, e), prev_message)
-        end
     end
     return bpc
 end
@@ -229,34 +212,13 @@ end
 More generic interface for update, with default params
 """
 function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
-    compute_error = !isnothing(alg.kwargs.tolerance)
     if isnothing(alg.kwargs.maxiter)
         error("You need to specify a number of iterations for BP!")
     end
     bpc = copy(bpc)
     invalidate_contraction_sequences!(bpc)
-    converged = false
-    avg_diff = nothing
-    niter = alg.kwargs.maxiter
     for i in 1:alg.kwargs.maxiter
-        diff = compute_error ? Ref(0.0) : nothing
-        update_iteration!(alg, bpc, alg.kwargs.edge_sequence; (update_diff!) = diff)
-        if compute_error
-            avg_diff = diff.x / length(alg.kwargs.edge_sequence)
-            if avg_diff <= alg.kwargs.tolerance
-                converged = true
-                niter = i
-                break
-            end
-        end
-    end
-    if compute_error
-        if converged
-            alg.kwargs.verbose && println("BP converged to desired precision after $niter iterations.")
-        else
-            msg = "BP did not converge to tolerance $(alg.kwargs.tolerance) after $niter iterations (final average message change: $avg_diff)."
-            alg.kwargs.verbose ? println(msg) : @warn(msg)
-        end
+        update_iteration!(alg, bpc, alg.kwargs.edge_sequence)
     end
     invalidate_contraction_sequences!(bpc)
     return bpc
@@ -277,7 +239,7 @@ end
 function map_factors(f, bp_cache::AbstractBeliefPropagationCache, vs = vertices(bp_cache))
     bp_cache = copy(bp_cache)
     for v in vs
-        setindex_preserve!(bp_cache, f(network(bp_cache)[v]), v)
+        network(bp_cache)[v] = f(network(bp_cache)[v])
     end
     return bp_cache
 end

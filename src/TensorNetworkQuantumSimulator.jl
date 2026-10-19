@@ -14,7 +14,6 @@ include("contraction_sequences.jl")
 include("contract.jl")
 include("Forms/abstractform.jl")
 include("Forms/bilinearform.jl")
-include("Forms/quadraticform.jl")
 include("MessagePassing/abstractbeliefpropagationcache.jl")
 include("MessagePassing/beliefpropagationcache.jl")
 include("MessagePassing/boundarympscache.jl")
@@ -23,7 +22,6 @@ include("graph_ops.jl")
 include("utils.jl")
 
 include("Apply/apply_gates.jl")
-include("Apply/simple_update.jl")
 include("Apply/full_update.jl")
 include("Apply/gate_definitions.jl")
 include("expect.jl")
@@ -103,7 +101,6 @@ export
     src,
     dst,
     normalize,
-    QuadraticForm,
     BilinearForm,
     sample_certified,
     sample_directly_certified,

@@ -41,7 +41,7 @@ using Test: @testset, @test, @test_throws
         v = first(vertices(g))
         rem_vertex!(ψ, v)
         @test graph(ψ) == rem_vertex(g, v)
-        @test !all([length(inds(ψ[v])) == degree(g, v) for v in vertices(ψ)])
+        @test !all([length(inds(ψ[v])) == degree(graph(ψ), v) for v in vertices(ψ)])
     end
 
     #SiteInds

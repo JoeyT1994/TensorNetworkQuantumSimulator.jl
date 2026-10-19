@@ -6,7 +6,7 @@ using Statistics
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test
 using NamedGraphs: NamedEdge, has_edge
-using TensorNetworkQuantumSimulator: virtualinds, tensors
+using TensorNetworkQuantumSimulator: virtualinds
 
 
 @testset "Test Truncate" begin
