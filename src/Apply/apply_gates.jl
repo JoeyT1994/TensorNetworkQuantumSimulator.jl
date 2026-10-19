@@ -43,24 +43,43 @@ end
 function apply_gates(
         circuit::Vector{<:ITensor},
         ψ_bpc::BeliefPropagationCache;
-        apply_kwargs = (;),
         bp_update_kwargs = default_bp_update_kwargs(ψ_bpc),
         update_cache = true,
         verbose = false,
+        kwargs...,
     )
-    (; maxdim, cutoff, normalize_tensors) = (; maxdim = nothing, cutoff = nothing, normalize_tensors = true, apply_kwargs...)
-    ops = [ITensorBase.operator(g, operator_inds(g)...) for g in adapt_gate.(circuit, (ψ_bpc,))]
-    (; maxiter, tolerance) = (; default_bp_update_kwargs(ψ_bpc)..., bp_update_kwargs...)
-    stopping_criterion = isnothing(tolerance) ? (; maxiter) : (; maxiter, tol = tolerance)
-    environment_alg = update_cache ? (; stopping_criterion, edges = forest_cover_edge_sequence(graph(ψ_bpc))) : nothing
-    ψ, ms = ITNN.apply_operators(
-        ops, network(ψ_bpc), ψ_bpc.messages;
-        trunc = itensor_trunc(; maxdim, cutoff), normalize = normalize_tensors, environment_alg
+    bp_update_kwargs = (; default_bp_update_kwargs(ψ_bpc)..., bp_update_kwargs...)
+    ψ, ms = apply_gates(
+        adapt_gate.(circuit, (ψ_bpc,)), network(ψ_bpc), ψ_bpc.messages;
+        bp_update_kwargs, update_cache, kwargs...
     )
-    # New bonds carry names minted by `svd_trunc`; the bra name of each is reset to the prime of its ket name.
-    foreach(e -> ms[e] = rename(ms[e], (ITensorBase.outputnames(ms[e]) .=> prime.(ITensorBase.inputnames(ms[e])))...), edges(ms))
     ψ_bpc = BeliefPropagationCache(ITNN.normnetwork(prime, ψ), ms)
     return update_cache ? update(ψ_bpc; bp_update_kwargs...) : ψ_bpc
+end
+
+"""
+    apply_gates(circuit::Vector{<:ITensor}, ψ, messages; bp_update_kwargs, apply_kwargs = (;), update_cache = true) -> (ψ, messages)
+
+Apply `circuit` to the network `ψ` with the norm-network `messages`, returning both updated. `ψ` and `messages` may be
+an `ITensorNetworksMPI.DistITensorNetwork` and its `DistMessageCache`, in which case the call is collective.
+"""
+function apply_gates(
+        circuit::Vector{<:ITensor}, ψ, messages;
+        bp_update_kwargs, apply_kwargs = (;), update_cache = true,
+    )
+    (; maxdim, cutoff, normalize_tensors) = (; maxdim = nothing, cutoff = nothing, normalize_tensors = true, apply_kwargs...)
+    ops = [ITensorBase.operator(g, operator_inds(g)...) for g in circuit]
+    (; maxiter, tolerance) = bp_update_kwargs
+    stopping_criterion = isnothing(tolerance) ? (; maxiter) : (; maxiter, tol = tolerance)
+    environment_alg = update_cache ? (; stopping_criterion) : nothing
+    ψ, ms = ITNN.apply_operators(
+        ops, ψ, messages; trunc = itensor_trunc(; maxdim, cutoff), normalize = normalize_tensors, environment_alg
+    )
+    # New bonds carry names minted by `svd_trunc`; the bra name of each is reset to the prime of its ket name.
+    for e in keys(ITNN.MessageCache(ms))
+        ms[e] = rename(ms[e], (ITensorBase.outputnames(ms[e]) .=> prime.(ITensorBase.inputnames(ms[e])))...)
+    end
+    return ψ, ms
 end
 
 const apply_circuit = apply_gates
