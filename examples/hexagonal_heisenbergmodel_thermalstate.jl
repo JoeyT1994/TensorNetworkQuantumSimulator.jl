@@ -25,7 +25,7 @@ function main()
     rescale!(ψ_bpc)
     for i in 1:nsteps
         t1 = time()
-        ψ_bpc, errs = apply_gates(two_site_gates,ψ_bpc;apply_kwargs)
+        ψ_bpc = apply_gates(two_site_gates,ψ_bpc;apply_kwargs)
         logz -= freenergy(ψ_bpc)
         rescale!(ψ_bpc)
         if i % 5 == 0

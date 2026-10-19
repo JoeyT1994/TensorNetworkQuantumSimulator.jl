@@ -22,7 +22,6 @@ include("graph_ops.jl")
 include("utils.jl")
 
 include("Apply/apply_gates.jl")
-include("Apply/simple_update.jl")
 include("Apply/full_update.jl")
 include("Apply/gate_definitions.jl")
 include("expect.jl")
