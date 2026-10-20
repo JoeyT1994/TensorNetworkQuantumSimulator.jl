@@ -1,11 +1,14 @@
-# Native planar CTMRG: status (2026-10-17)
+# Native planar CTMRG: status (2026-10-20)
 
 This note covers the general planar CTMRG engine. It works on any planar graph, using the planar
 embedding in `src/Planar/planar_embedding.jl` (commit 7ea4015). It is meant to replace the grid
 engine eventually.
 
-The engine is a working **prototype** that has not yet been ported to `src/`. Its scratch files are
-listed at the end.
+**In `src/` since 2026-10-20** as `PlanarCTMRGCache` (`alg = "planarctmrg"`):
+`src/MessagePassing/planarctmrg_rules.jl` (geometry, recipes, rule design and certification) and
+`src/MessagePassing/planarctmrg.jl` (the cache, passes, free energy, observables); tests in
+`test/test_planarctmrg.jl`. See [Production port](#production-port) for what changed from the
+prototype, which stays in `prototypes/planar_ctm/` for reference.
 
 ## Where it stands
 
@@ -95,19 +98,52 @@ Random positive tensors, D = 2, pseudo-inverse cutoff 1e-3. Entries are |F − l
 - **Inverse-free corner gauge.** This would remove the floor and the pseudo-inverses. It is a
   separate research item; Lukin–Sotnikov, arXiv:2610.00631, report no systematic method.
 
-## Next: production (on the maintainer's go)
+## Production port
 
-Planned file: `src/MessagePassing/planarctm.jl`. It would contain:
-- rule design and certification (exit portfolio, static regions, min-depth DAG, oracle fallback);
-- the sequential pass with stacked projectors;
-- the Kikuchi F and convergence check;
-- expectation values and reduced density matrices on vertex rings;
-- double-layer support;
-- tests on the lattices above.
+- **One description of the geometry.** The prototype described every block twice, as tensors
+  (`planar_proto2.jl`) and as vertex multisets (`rcg.jl`). In `src/` each block, and each closed
+  region (vertex, edge, face), is one *recipe*: a list of parts (sites, messages, corners,
+  pseudo-inverses, projector sides). Contracting a recipe gives the tensor; summing it as a signed
+  multiset gives the region, and its block parts are the dependencies.
+- **Certified on every graph, at construction.** `planar_ctm_rules` tries the exit rules, picks the
+  minimum-depth acyclic corner modes (the least fixed point of `design_minimax`), and certifies
+  them: one symbolic pass in dependency order must leave every vertex, edge and face region covering
+  each vertex exactly once. With no acyclic choice it certifies diagonal corners under Jacobi
+  passes instead (the triangular lattice). The prototype certified only the lattices it was tried on.
+- **Projectors reduce to the grid engine's.** An interface's projector is the grid `:cut` projector
+  of its two enlarged corners (the same function computes it). Only where a directional corner is
+  projected, which has no enlarged corner behind it, are the directional corners and side messages
+  stacked in as well, keeping each lossless. On the square lattice no corner is directional, and the
+  engine reproduces grid `:cut` exactly: ⟨Z⟩ errors 0.0096 / 0.0018 at χ = 4 / 8 on a random 6×6
+  D = 2 PEPS, both engines. (The prototype stacked side messages everywhere: 2× worse at χ = 4 there,
+  and 100× worse on kagome.) On a random 10×10 D = 3 PEPS the two engines agree on ⟨Z⟩ to 1e-7
+  at χ = 16 and 32, and the planar one is as fast or faster (57 / 109 s against 137 / 136 s per
+  `update`, the first grid run including compilation; the planar engine took 15 / 30 min before
+  these changes).
+- **Enlarged corners are nested parts** of the recipes (diagonal corners, face regions, and factored
+  out of vertex and edge regions), contracted once and reused. This keeps every list short, which is
+  what matters for cost: a cold `update` was ~93% JIT compilation of the many distinct intermediate
+  shapes long lists produce, not contraction or order search.
+- **Dropped:** the per-sweep basis-change machinery (`prev`, `G`, stale legs), the isometric and
+  canonical-gauge projectors, the `CHECK`/`EXACT` switches. The sequential pass made them unnecessary.
+- **Double layer.** A site's factors are a list (`bp_factors`), and an edge's bonds are all the legs
+  its two sites share, so ⟨ψ|ψ⟩ and forms run lazily, never forming the ket ⊗ bra tensor.
+- **Observables** on one vertex (its ring) or on the two ends of an edge (the edge region): `expect`,
+  `reduced_density_matrix`; `freenergy`, `partitionfunction`, and `contract(tn; alg = "planarctmrg")`.
+- **Through the seam.** Every tensor operation is a seam verb; the stacked projector is the grid
+  engine's `_ctm_biorth` on direct sums of the blocks, and contractions share its sequence cache.
 
-After that: the comparison with the grid engine, then replacing it.
+Validation against exact contraction (same positive D = 2 networks as the table above):
+square, honeycomb, Penrose disc ~1e-14 at every χ; triangular 7e-9 / 7e-12 / 6e-11 at χ = 4 / 8 /
+lossless (as the prototype); kagome 4×4 1.9e-8 / 6e-12 / 6e-12; Penrose 3 8.4e-7 / 6.7e-9 /
+2.3e-9 at χ = 4 / 8 / lossless (the floor is the pseudo-inverse regularisation; the prototype's
+was 2.9e-10, its χ = 4 / 8 errors 9e-5 / 2e-8). Double-layer ⟨Z⟩, ⟨X⟩, nearest-neighbour ⟨ZZ⟩, ⟨XY⟩ and ⟨ψ|ψ⟩ on random complex
+square and honeycomb states: ≤ 1e-15 at lossless χ.
 
-## Prototype files (`prototypes/planar_ctm/`)
+Next: the comparison with the grid engine, then replacing it (and retiring `alg = "ctmrg"`'s grid
+cache in favour of this one).
+
+## Prototype files (`prototypes/planar_ctm/`, superseded by `src/`)
 
 Run `julia --project=. prototypes/planar_ctm/smoke.jl` from the repository root. It takes a few minutes and
 prints |F − ln Z| for the Penrose disc, kagome 3×3 and Penrose 3 at truncated and lossless χ.

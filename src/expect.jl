@@ -33,7 +33,7 @@ end
 Compute the expectation value of one or more observables on a tensor network state.
 
 # Arguments
-- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMEnvironmentCache}`: The tensor network state or cache wrapping the state to measure the observable(s) on.
+- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMEnvironmentCache, PlanarCTMRGCache}`: The tensor network state or cache wrapping the state to measure the observable(s) on.
 - `observable::Union{Tuple, Vector{<:Tuple}}`: The observable(s) to measure. Should be a tuple or vector of tuples of the form `(ops, vertices, coeff=1)`.
 
 # Keyword Arguments
@@ -45,12 +45,14 @@ Compute the expectation value of one or more observables on a tensor network sta
       When given a `TensorNetworkState` with `ctm_options = (; projector = :cycle)`, the internal
       `update` defaults to `convergence = :marginal`, so the vertex rings are converged rather than
       just the free energy.
-- `cache_update_kwargs...`: Keyword arguments passed to the `update` function when using `"bp"`, `"boundarymps"` or `"ctmrg"` algorithms.
+    - `"planarctmrg"`: CTMRG on any planar graph (requires `maxdim`; observables on one vertex or
+      on the two ends of an edge).
+- `cache_update_kwargs...`: Keyword arguments passed to the `update` function when using `"bp"`, `"boundarymps"`, `"ctmrg"` or `"planarctmrg"`.
 
 # Returns
 - A single number if measuring one observable, or a vector of numbers if measuring multiple observables.
 """
-function expect(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMEnvironmentCache}, observable; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
+function expect(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMEnvironmentCache, PlanarCTMRGCache}, observable; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "expect", alg)
     return expect(Algorithm(alg), ψ, observable; kwargs...)
 end
@@ -202,6 +204,49 @@ function expect(
     end
     cache = update(CTMEnvironmentCache(ψ, maxdim; ctm_options...); cache_update_kwargs...)
     return expect(alg, cache, observable; kwargs...)
+end
+
+# Planar CTMRG: the closed region around the observable's vertex (or edge), with the operator
+# inserted, over the same region without it.
+function expect(
+        alg::Algorithm"planarctmrg",
+        cache::PlanarCTMRGCache,
+        obs::Tuple
+    )
+    op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
+    iszero(coeff) && return zero(coeff)
+    parts = _observable_region(cache, obs_vs)
+
+    function contract_region(op_string_f)
+        site = v -> norm_factors(network(cache), [v]; op_strings = op_string_f)
+        return scalar(_evaluate(cache, parts; site))
+    end
+
+    denom = contract_region(v -> "I")
+    numer = contract_region(op_string_function(op_strings, obs_vs))
+
+    return coeff * numer / denom
+end
+
+function expect(
+        alg::Algorithm"planarctmrg",
+        cache::PlanarCTMRGCache,
+        observables::Vector{<:Tuple}
+    )
+    return map(obs -> expect(alg, cache, obs), observables)
+end
+
+function expect(
+        alg::Algorithm"planarctmrg",
+        ψ::TensorNetworkState,
+        observable::Union{Tuple, Vector{<:Tuple}};
+        maxdim::Integer,
+        cache_update_kwargs = (;),
+        kwargs...,
+    )
+    ψ_ctm = converged_cache(alg, ψ; maxdim, cache_update_kwargs)
+
+    return expect(alg, ψ_ctm, observable; kwargs...)
 end
 
 function expect(

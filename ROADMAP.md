@@ -147,11 +147,10 @@ it the symmetric tensors, and `src/precompile.jl`.
 - The ITensorBase backend (cannot be a trunk dependency, see below)
 
 **Later directions** (not the trunk's first cut, but the architecture should not block them)
-- CTMRG on **any planar graph**, with a planarity test + embedding step so vertex names become pure
-  labels. Today geometry is read off tuple vertex names (e.g. `boundarymps_partitioning` uses
-  `first.(vs)` as the row). No General package does planarity testing / combinatorial embedding as far
-  as we know, so this likely means implementing Boyer–Myrvold or left–right planarity. The research
-  question is generalising corner/sweep structure to irregular faces, not the embedding itself.
+- CTMRG on **any planar graph**: done on `Improvements`. Planar embeddings from vertex positions
+  (`src/Planar/`) and `PlanarCTMRGCache` (`alg = "planarctmrg"`, see `PLANAR_CTM.md`), exact at
+  lossless χ on square, honeycomb, triangular, kagome and Penrose lattices. Still to do: compare it
+  with the grid engine (`CTMEnvironmentCache`) and retire one.
 - **Simple, serialisable types for distributed BP**: plain vertex→tensor and edge→message dictionaries
   plus a partition, with message exchange between partitions. Fold in `origin/DistributedBP` and
   `origin/Jack_Distributed_BP` rather than starting from scratch.

@@ -16,4 +16,5 @@ using Test
     include("test_kernels.jl")
     include("test_ctmenvironment.jl")
     include("test_planar_embedding.jl")
+    include("test_planarctmrg.jl")
 end

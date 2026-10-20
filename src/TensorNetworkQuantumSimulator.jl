@@ -22,6 +22,8 @@ include("MessagePassing/loopcorrection.jl")
 include("MessagePassing/ctmenvironmentcache.jl")
 include("graph_ops.jl")
 include("Planar/planar_embedding.jl")
+include("MessagePassing/planarctmrg_rules.jl")
+include("MessagePassing/planarctmrg.jl")
 include("utils.jl")
 include("kernel_hooks.jl")
 
@@ -89,6 +91,7 @@ export
     scalartype,
     BoundaryMPSCache,
     CTMEnvironmentCache,
+    PlanarCTMRGCache,
     CTMOptions,
     cvm_freenergy,
     marginal_inconsistency,

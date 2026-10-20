@@ -12,6 +12,10 @@ function contract(alg::Algorithm"boundarymps", tn::TensorNetwork; mps_bond_dimen
     return partitionfunction(update(BoundaryMPSCache(tn, mps_bond_dimension); bmps_update_kwargs...))
 end
 
+function contract(alg::Algorithm"planarctmrg", tn::TensorNetwork; maxdim::Integer, cache_update_kwargs = (;))
+    return partitionfunction(update(PlanarCTMRGCache(tn, maxdim); cache_update_kwargs...))
+end
+
 function contract(tn::AbstractTensorNetwork; alg = "exact", kwargs...)
     return contract(Algorithm(alg), tn; kwargs...)
 end

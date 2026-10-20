@@ -44,7 +44,7 @@ function identity_tensor(eltype, row_inds::Vector{<:Index}, col_inds::Vector{<:I
 end
 
 #Function for checking the correct algorithm is being used for the given cache type and functionality
-function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState, CTMEnvironmentCache}, f::String, alg)
+function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState, CTMEnvironmentCache, PlanarCTMRGCache}, f::String, alg)
     if alg == "bp"
         if !((tns isa BeliefPropagationCache) || (tns isa TensorNetworkState))
             return error("Expected BeliefPropagationCache or TensorNetworkState for 'bp' algorithm, got $(typeof(tns))")
@@ -75,12 +75,19 @@ function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetwor
         if f ∈ ["normalize", "sample", "sample_certified", "truncate"]
             return error("ctmrg contraction not supported for this functionality yet")
         end
+    elseif alg == "planarctmrg"
+        if !((tns isa PlanarCTMRGCache) || (tns isa TensorNetworkState))
+            return error("Expected PlanarCTMRGCache or TensorNetworkState for 'planarctmrg' algorithm, got $(typeof(tns))")
+        end
+        if f ∈ ["normalize", "sample", "sample_certified", "truncate"]
+            return error("planarctmrg contraction not supported for this functionality yet")
+        end
     elseif alg == "exact"
         if f ∈ ["normalize", "sample", "sample_certified", "truncate"]
             return error("exact contraction not supported for this functionality yet")
         end
-    elseif alg ∉ ["exact", "bp", "loopcorrections", "boundarymps", "ctmrg"]
-        return error("Unrecognized algorithm specified. Must be one of 'exact', 'bp', 'loopcorrections', 'boundarymps' or 'ctmrg'")
+    elseif alg ∉ ["exact", "bp", "loopcorrections", "boundarymps", "ctmrg", "planarctmrg"]
+        return error("Unrecognized algorithm specified. Must be one of 'exact', 'bp', 'loopcorrections', 'boundarymps', 'ctmrg' or 'planarctmrg'")
     else
         return nothing
     end
@@ -89,7 +96,8 @@ end
 default_alg(bp_cache::BeliefPropagationCache) = "bp"
 default_alg(bmps_cache::BoundaryMPSCache) = "boundarymps"
 default_alg(ctm_cache::CTMEnvironmentCache) = "ctmrg"
-default_alg(any) = error("You must specify a contraction algorithm. Currently supported: exact, bp, boundarymps and ctmrg.")
+default_alg(ctm_cache::PlanarCTMRGCache) = "planarctmrg"
+default_alg(any) = error("You must specify a contraction algorithm. Currently supported: exact, bp, boundarymps, ctmrg and planarctmrg.")
 
 # Build the cache `alg` needs over `network` and run it to convergence. Shared by the state-level
 # entry points of `expect`, `reduced_density_matrix`, `norm_sqr`, `inner` and `normalize`, which all
@@ -100,6 +108,14 @@ function converged_cache(
         cache_update_kwargs,
     )
     return update(BeliefPropagationCache(network); cache_update_kwargs...)
+end
+
+function converged_cache(
+        ::Algorithm"planarctmrg", network;
+        maxdim::Integer,
+        cache_update_kwargs,
+    )
+    return update(PlanarCTMRGCache(network, maxdim); cache_update_kwargs...)
 end
 
 function converged_cache(
