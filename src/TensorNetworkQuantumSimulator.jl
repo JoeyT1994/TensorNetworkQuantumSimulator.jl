@@ -19,11 +19,10 @@ include("MessagePassing/abstractbeliefpropagationcache.jl")
 include("MessagePassing/beliefpropagationcache.jl")
 include("MessagePassing/boundarympscache.jl")
 include("MessagePassing/loopcorrection.jl")
-include("MessagePassing/ctmenvironmentcache.jl")
 include("graph_ops.jl")
 include("Planar/planar_embedding.jl")
-include("MessagePassing/planarctmrg_rules.jl")
-include("MessagePassing/planarctmrg.jl")
+include("MessagePassing/ctmrg_rules.jl")
+include("MessagePassing/ctmrg.jl")
 include("utils.jl")
 include("kernel_hooks.jl")
 
@@ -90,17 +89,7 @@ export
     datatype,
     scalartype,
     BoundaryMPSCache,
-    CTMEnvironmentCache,
-    PlanarCTMRGCache,
-    CTMOptions,
-    cvm_freenergy,
-    marginal_inconsistency,
-    region_lnZ,
-    environments,
-    vertex_environments,
-    vertex_ring,
-    region_ring,
-    vertex_window,
+    CTMRGCache,
     register_op!,
     TensorNetwork,
     AbstractTensorNetwork,

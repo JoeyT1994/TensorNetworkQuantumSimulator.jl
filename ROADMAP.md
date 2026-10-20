@@ -38,7 +38,7 @@ BP kernels, and simple fixes. Commits, in order:
    `normalize_message` keeps the 2-norm and divides out the phase of the element sum.
 2. **The seam** (`1e889a0`) — `src/tensor_interface.jl`, `src/Backends/`, `src/operators.jl` (details below).
 3. **Kernel hooks** (`06763aa`) — the fused dense BP message/closure kernel from `FixesV2` `d41fa35`.
-4. **Finite 2D CTMRG** (`7b3905e`) — `src/MessagePassing/ctmenvironmentcache.jl` from `FixesV2`, `:cut` and
+4. **Finite 2D CTMRG** (`7b3905e`, since retired for the planar engine, see `PLANAR_CTM.md`) — `src/MessagePassing/ctmenvironmentcache.jl` from `FixesV2`, `:cut` and
    `:cycle`, with `expect`/`rdm` support for `alg = "ctmrg"`.
 
 ### The backend seam (on this branch)
@@ -134,7 +134,7 @@ it the symmetric tensors, and `src/precompile.jl`.
 **In**
 - `src/tensor_interface.jl` + one General-registered backend (see the open problem)
 - Symmetric tensors: dense, Z2, U1, and the fermionic sectors fZ2, fU1, fU1xU1 that the backend already supports
-- `src/MessagePassing/ctmenvironmentcache.jl`: finite 2D CTMRG (`:cut` and `:cycle` projectors)
+- `src/MessagePassing/ctmrg.jl` + `ctmrg_rules.jl`: CTMRG on any planar graph (`CTMRGCache`, see `PLANAR_CTM.md`)
 - `src/kernel_hooks.jl` and the fused BP message/closure kernels (peak-memory reduction), as
   optional per-backend overrides with the generic contraction as fallback
 - Core: BP, boundary MPS, loop corrections, gates/simple update, expect, sampling, entanglement, truncate
@@ -148,9 +148,10 @@ it the symmetric tensors, and `src/precompile.jl`.
 
 **Later directions** (not the trunk's first cut, but the architecture should not block them)
 - CTMRG on **any planar graph**: done on `Improvements`. Planar embeddings from vertex positions
-  (`src/Planar/`) and `PlanarCTMRGCache` (`alg = "planarctmrg"`, see `PLANAR_CTM.md`), exact at
-  lossless χ on square, honeycomb, triangular, kagome and Penrose lattices. Still to do: compare it
-  with the grid engine (`CTMEnvironmentCache`) and retire one.
+  (`src/Planar/`) and `CTMRGCache` (`alg = "ctmrg"`, see `PLANAR_CTM.md`), exact at
+  lossless χ on square, honeycomb, triangular, kagome and Penrose lattices. It reproduces the grid
+  engine's `:cut` projector on the square lattice, and the grid engine (`CTMEnvironmentCache`) is
+  retired.
 - **Simple, serialisable types for distributed BP**: plain vertex→tensor and edge→message dictionaries
   plus a partition, with message exchange between partitions. Fold in `origin/DistributedBP` and
   `origin/Jack_Distributed_BP` rather than starting from scratch.
@@ -238,7 +239,7 @@ function barriers on the bookkeeping paths. Concretely:
 A new backend now targets **this branch's** seam: the verb table in
 [the backend seam](#the-backend-seam-on-this-branch), next to `ITensorsBackend.jl` in `src/Backends/`,
 selected in `Backends.jl`. The ITensors backend is the dense reference implementation, and the test
-suite (incl. `test_operators.jl`, which pins every operator matrix, and `test_ctmenvironment.jl`) is
+suite (incl. `test_operators.jl`, which pins every operator matrix, and `test_ctmrg.jl`) is
 the acceptance check. The old TensorKit backend (`0aa8795^`) was written against an earlier version
 of the `FixesV2` seam; beyond the verb table, a graded backend needs equivalents of the graded fixes
 made on the ITensorBase side since then — Hermitian `eigen` incl. the fermionic sign (`48a0dd7`,

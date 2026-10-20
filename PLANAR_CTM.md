@@ -4,10 +4,12 @@ This note covers the general planar CTMRG engine. It works on any planar graph, 
 embedding in `src/Planar/planar_embedding.jl` (commit 7ea4015). It is meant to replace the grid
 engine eventually.
 
-**In `src/` since 2026-10-20** as `PlanarCTMRGCache` (`alg = "planarctmrg"`):
-`src/MessagePassing/planarctmrg_rules.jl` (geometry, recipes, rule design and certification) and
-`src/MessagePassing/planarctmrg.jl` (the cache, passes, free energy, observables); tests in
-`test/test_planarctmrg.jl`. See [Production port](#production-port) for what changed from the
+**In `src/` since 2026-10-20** as `CTMRGCache` (`alg = "ctmrg"`), the package's only CTMRG engine:
+the grid engine (`CTMEnvironmentCache`, `ctmenvironmentcache.jl`) was retired once this one
+reproduced it (see [Production port](#production-port)).
+`src/MessagePassing/ctmrg_rules.jl` (geometry, recipes, rule design and certification) and
+`src/MessagePassing/ctmrg.jl` (the cache, passes, free energy, observables); tests in
+`test/test_ctmrg.jl`. See [Production port](#production-port) for what changed from the
 prototype, which stays in `prototypes/planar_ctm/` for reference.
 
 ## Where it stands
@@ -92,7 +94,6 @@ Random positive tensors, D = 2, pseudo-inverse cutoff 1e-3. Entries are |F − l
   contraction or the passes could be the bottleneck.
 - **Not yet done:**
   - Ising / PEPS (double-layer) networks;
-  - a comparison with the grid engine on the square lattice;
   - interior degree-2 vertices (absorb them first);
   - a trivalent vertex whose far face is a triangle.
 - **Inverse-free corner gauge.** This would remove the floor and the pseudo-inverses. It is a
@@ -111,7 +112,7 @@ Random positive tensors, D = 2, pseudo-inverse cutoff 1e-3. Entries are |F − l
   each vertex exactly once. With no acyclic choice it certifies diagonal corners under Jacobi
   passes instead (the triangular lattice). The prototype certified only the lattices it was tried on.
 - **Projectors reduce to the grid engine's.** An interface's projector is the grid `:cut` projector
-  of its two enlarged corners (the same function computes it). Only where a directional corner is
+  of its two enlarged corners. Only where a directional corner is
   projected, which has no enlarged corner behind it, are the directional corners and side messages
   stacked in as well, keeping each lossless. On the square lattice no corner is directional, and the
   engine reproduces grid `:cut` exactly: ⟨Z⟩ errors 0.0096 / 0.0018 at χ = 4 / 8 on a random 6×6
@@ -129,7 +130,7 @@ Random positive tensors, D = 2, pseudo-inverse cutoff 1e-3. Entries are |F − l
 - **Double layer.** A site's factors are a list (`bp_factors`), and an edge's bonds are all the legs
   its two sites share, so ⟨ψ|ψ⟩ and forms run lazily, never forming the ket ⊗ bra tensor.
 - **Observables** on one vertex (its ring) or on the two ends of an edge (the edge region): `expect`,
-  `reduced_density_matrix`; `freenergy`, `partitionfunction`, and `contract(tn; alg = "planarctmrg")`.
+  `reduced_density_matrix`; `freenergy`, `partitionfunction`, and `contract(tn; alg = "ctmrg")`.
 - **Through the seam.** Every tensor operation is a seam verb; the stacked projector is the grid
   engine's `_ctm_biorth` on direct sums of the blocks, and contractions share its sequence cache.
 
@@ -140,8 +141,21 @@ lossless (as the prototype); kagome 4×4 1.9e-8 / 6e-12 / 6e-12; Penrose 3 8.4e-
 was 2.9e-10, its χ = 4 / 8 errors 9e-5 / 2e-8). Double-layer ⟨Z⟩, ⟨X⟩, nearest-neighbour ⟨ZZ⟩, ⟨XY⟩ and ⟨ψ|ψ⟩ on random complex
 square and honeycomb states: ≤ 1e-15 at lossless χ.
 
-Next: the comparison with the grid engine, then replacing it (and retiring `alg = "ctmrg"`'s grid
-cache in favour of this one).
+- **Convergence on every closed region.** `update` stops when no vertex, edge or face region
+  changes its ln Z by more than `tolerance`, not when the free energy settles: F settles first (the
+  Kikuchi sum cancels), and stopping there left single-site observables short (4.3e-5 against
+  2.6e-5 on the 6×6 PEPS at χ = 16). With it, the 6×6 PEPS gives 0.0096 / 0.0018 / 2.6e-5 at
+  χ = 4 / 8 / 16, grid `:cut` exactly, in ~22–24 passes.
+- **Retiring the grid engine.** Only grid `:cut` had been reproduced; grid `:cycle` (the
+  four-corner invariant-subspace projector) went with it. It was the most accurate where it
+  converged (3.2e-6 at χ = 16 above) but failed to converge on the 10×10 D = 3 PEPS (⟨Z⟩ 0.0738
+  against 0.0537). Its planar generalisation (a cycle around each face) is open; the grid code is
+  in the history before the retirement commit.
+
+`pinv_rtol` is a real trade-off: at 1e-6 or 1e-9 the lossless floor vanishes (Penrose 3 4e-14,
+kagome 7e-15), but truncated χ breaks (Penrose 3 at χ = 8: 5e-3 against 7e-9; kagome at χ = 4:
+4e-3 against 2e-8). 1e-3 stays the default; a cutoff that tightens as the truncation becomes
+lossless is the open refinement.
 
 ## Prototype files (`prototypes/planar_ctm/`, superseded by `src/`)
 

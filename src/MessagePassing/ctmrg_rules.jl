@@ -1,5 +1,5 @@
 #=
-Geometry and update rules of the planar CTMRG (the cache that uses them is in planarctmrg.jl).
+Geometry and update rules of CTMRG (the cache that uses them is in ctmrg.jl).
 
 On a planar embedding every inner face f carries a ring of CORNERS C(p, f), one per vertex p of f,
 and every dart u → v a MESSAGE T(u → v). Each block stands for a region of the network, cut off
@@ -20,20 +20,20 @@ as a RECIPE, a list of parts:
                                        interfaces I1 and I2 (each corner counted with sign −1)
     (:projector, (p, q), :A or :B)     one side of the projector pair at interface (p, q)
 
-Contracting a recipe gives a tensor (planarctmrg.jl). Summing it as a signed multiset of vertices
+Contracting a recipe gives a tensor (ctmrg.jl). Summing it as a signed multiset of vertices
 gives the block's REGION, and listing its blocks gives its dependencies; that is how the update
 rules are chosen and certified below, without touching a tensor. Enlarged corners are nested parts
 so that each is contracted once and reused, and the lists to contract stay short.
 =#
 
 """
-    PlanarCTMRules
+    CTMRGRules
 
-How a [`PlanarCTMRGCache`](@ref) updates its blocks, fixed by the geometry alone (see
-[`planar_ctm_rules`](@ref)): the exit of every ray, the update used for every corner, and the
+How a [`CTMRGCache`](@ref) updates its blocks, fixed by the geometry alone (see
+[`ctmrg_rules`](@ref)): the exit of every ray, the update used for every corner, and the
 order in which the blocks are recomputed.
 """
-struct PlanarCTMRules{V}
+struct CTMRGRules{V}
     exits::Dict{Tuple{V, V}, Int}                         # interface → its exit in the next face
     next::Dict{Tuple{V, V}, Union{Nothing, Tuple{V, V}}}  # interface → where its ray continues
     interfaces::Vector{Tuple{V, V}}                       # every interface, boundary first
@@ -54,7 +54,7 @@ end
 function _interface(emb::PlanarEmbedding, f, a, b)
     face_of_dart(emb, a, b) == f && return (a, b)
     face_of_dart(emb, b, a) == f && return (b, a)
-    return error("planar CTMRG: the edge $a – $b is not on face $f")
+    return error("CTMRG: the edge $a – $b is not on face $f")
 end
 
 _interfaces(emb::PlanarEmbedding) = [(w[k], w[mod1(k + 1, length(w))]) for w in faces(emb) for k in eachindex(w)]
@@ -225,11 +225,11 @@ function _message_core(emb::PlanarEmbedding, u, v)
     _isinner(fB) && push!(excl, uB)
     parts = _far_chain(emb, u, excl)
     if length(excl) == 3 && all(x -> x in excl, first.(poly))
-        z == 2 && error("planar CTMRG: interior vertex $u of degree 2 is not supported")
+        z == 2 && error("CTMRG: interior vertex $u of degree 2 is not supported")
         g = last(poly[mod1(i + 1, z)])
         if _isinner(g)
             ring = _ring(emb, u, g)
-            isempty(ring) && error("planar CTMRG: trivalent vertex $u whose far face is a triangle is not supported")
+            isempty(ring) && error("CTMRG: trivalent vertex $u whose far face is a triangle is not supported")
             legs = (_interface(emb, g, uA, _other_neighbor(emb, g, uA, u)), _interface(emb, g, uB, _other_neighbor(emb, g, uB, u)))
             push!(parts, (:inverse, [last(c) for c in ring], legs))
         end
@@ -416,9 +416,9 @@ function _certify(emb::PlanarEmbedding, exits, modes, order)
 end
 
 """
-    planar_ctm_rules(emb::PlanarEmbedding)
+    ctmrg_rules(emb::PlanarEmbedding)
 
-The update rules of the planar CTMRG on `emb`, certified exact at lossless bond dimension.
+The update rules of CTMRG on `emb`, certified exact at lossless bond dimension.
 
 Each exit rule (straight, opposite, geodesic) whose rays all reach the outer face is tried, and the
 corner updates are chosen to make the blocks' dependencies acyclic with the fewest levels; the
@@ -426,7 +426,7 @@ shallowest certified choice wins, and its blocks are recomputed once per pass in
 the triangular lattice) every corner uses its diagonal update and the passes are Jacobi sweeps,
 provided those certify. Errors if no rule set certifies.
 """
-function planar_ctm_rules(emb::PlanarEmbedding{V}) where {V}
+function ctmrg_rules(emb::PlanarEmbedding{V}) where {V}
     best = nothing
     for rule in _EXIT_RULES
         exits, next = _exits(emb, rule)
@@ -452,7 +452,7 @@ function planar_ctm_rules(emb::PlanarEmbedding{V}) where {V}
             end
         end
     end
-    isnothing(best) && error("planar CTMRG: no certified update rules for this graph")
+    isnothing(best) && error("CTMRG: no certified update rules for this graph")
     interfaces = sort(collect(keys(best.next)); by = I -> best.lengths[I])
-    return PlanarCTMRules{V}(best.exits, best.next, interfaces, best.modes, best.order)
+    return CTMRGRules{V}(best.exits, best.next, interfaces, best.modes, best.order)
 end
