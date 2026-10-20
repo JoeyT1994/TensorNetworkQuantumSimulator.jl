@@ -107,12 +107,16 @@ Planned file: `src/MessagePassing/planarctm.jl`. It would contain:
 
 After that: the comparison with the grid engine, then replacing it.
 
-## Prototype files (session scratchpad, not in the repo)
+## Prototype files (`prototypes/planar_ctm/`)
+
+Run `julia --project=. prototypes/planar_ctm/smoke.jl` from the repository root. It takes a few minutes and
+prints |F − ln Z| for the Penrose disc, kagome 3×3 and Penrose 3 at truncated and lossless χ.
 
 | file | contents |
 |---|---|
+| `smoke.jl` | quick end-to-end check from the repository project |
 | `planar_proto2.jl` | `PCTM` tensor engine: blocks, connectors, Jacobi sweep, Kikuchi F, exact mode |
 | `planar_seq.jl` | sequential pass, stacked projectors |
 | `rcg.jl`, `rcs.jl` | region oracle (vertex multisets), static true regions from winding numbers |
 | `dagtools.jl` | exit rules, `design_minimax` (min-depth rule choice) |
-| `seq_suite.jl`, `seq_big.jl` | the drivers behind the table above |
+| `seq_suite.jl`, `seq_big.jl`, `seq_run.jl` | the drivers behind the table above |
