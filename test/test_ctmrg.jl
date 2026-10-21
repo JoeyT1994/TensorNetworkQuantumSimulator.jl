@@ -1,6 +1,7 @@
 @eval module $(gensym())
 using TensorNetworkQuantumSimulator
 using TensorNetworkQuantumSimulator: Dictionary, freenergy, map_tensors, ctmrg_rules
+using LinearAlgebra: Diagonal, I, norm
 using Random
 using Test: @testset, @test, @test_throws
 
@@ -55,6 +56,17 @@ end
     @test freenergy(update(CTMRGCache(tn, 64; projector = :cycle); convergence = :freenergy)) ≈ log(contract(tn; alg = "exact")) atol = 1.0e-8
     @test_throws ArgumentError update(CTMRGCache(tn, 4); convergence = :sometimes)
     @test_throws ArgumentError CTMRGCache(tn, 4; projector = :both)
+    # the matrix-free ring finds the same spectral projector as the dense Schur decomposition
+    Random.seed!(1)
+    N, r = 120, 6
+    mats = [randn(N, N) * Diagonal(0.7 .^ (0:(N - 1))) * randn(N, N) / N for _ in 1:4]
+    ring(x) = foldr(*, mats; init = x)
+    ringᵀ(y) = foldl((y, K) -> transpose(K) * y, mats; init = y)
+    noise = N * eps() * prod(norm, mats)
+    Vk, Wk, _ = TensorNetworkQuantumSimulator._krylov_spectral_bases(ring, ringᵀ, N, Float64, r, noise)
+    Vd, Wd, _ = TensorNetworkQuantumSimulator._spectral_bases(ring(Matrix(1.0I, N, N)), r; noise)
+    Π(V, W) = V * ((transpose(W) * V) \ transpose(W))
+    @test Π(Vk, Wk) ≈ Π(Vd, Wd) rtol = 1.0e-8
     # kagome (like larger Penrose tilings) needs directional corners, which cycle projectors cannot use
     @test_throws ErrorException CTMRGCache(positive_network(kagome_lattice(3, 3)), 4; projector = :cycle)
 end

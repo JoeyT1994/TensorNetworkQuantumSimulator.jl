@@ -159,10 +159,30 @@ enlarged corners, Z_f = tr(K₁ ⋯ Kₙ); each interface I_k is truncated to th
 the ring's transfer matrix M_k = K_{k+1} ⋯ K_k onto its maxdim largest eigenvalues. Right and left
 bases come from ONE Schur decomposition (left from a Sylvester solve), so they belong to the same
 eigenvalues; computing them by two separate decompositions picked different eigenvalue sets
-wherever the choice was ambiguous and broke at χ = 16 (⟨Z⟩ off by 0.4). Numerically zero
-eigenvalues are never kept and clusters are never split. Needs diagonal corners under Jacobi
-passes (square, honeycomb, triangular, small Penrose; not kagome or larger Penrose). Dense: the
-ring is formed as N × N matrices, O(N³) per face against the grid engine's matrix-free O(N²χ).
+wherever the choice was ambiguous and broke at χ = 16 (⟨Z⟩ off by 0.4). Needs diagonal corners
+under Jacobi passes (square, honeycomb, triangular, small Penrose; not kagome or larger Penrose).
+
+Rank rules (each fixed a failure, diagnosed on the triangular lattice at lossless χ, where `:cycle`
+sat at 1e-8 and never converged while `:cut` was exact):
+- **Noise.** M is a product of n blocks, so its eigenvalues are known only to N ε ∏‖K_k‖, far
+  above N ε ‖M‖ for a non-normal ring. Eigenvalues near 1e-13 |λ₁| were noise, and keeping them
+  made the rank toggle every pass (largest kept rank 8 ↔ 10, F error 1e-7 ↔ 1.4e-8).
+- **Truncate only where forced.** The spectral projector onto the nonzero eigenvalues drops the
+  ring's kernel, which other faces' blocks see: at lossless χ the cycle kept fewer directions than
+  the cut on 17–19 of 96 interfaces. A face whose spectrum above the noise fits in χ is now left to
+  `:cut` (lossless there), so at large χ `:cycle` is `:cut`.
+- **Clusters** are judged only against left-out eigenvalues above the noise; judging against noise
+  dropped genuine small eigenvalues.
+
+Now exact at lossless χ on the triangular lattice (6.0e-11, 9 passes), and better at χ = 8
+(4.4e-11, was 3.7e-8).
+
+**Matrix-free ring.** The bases are found at one interface per face and carried around the ring
+(K_k maps the right subspace at I_k onto the one at I_{k−1}, K_kᵀ the left one forward), O(nN²k).
+At that interface a Krylov–Schur solve for M and one for Mᵀ (KrylovKit) apply the n blocks in turn
+and never form M; the two must agree on the kept eigenvalues, else the dense Schur decides. Rings
+too small for a Krylov space to pay stay dense. The two agree to 2e-12 on a random ring; one pass
+of a 6×6 D = 3 PEPS at χ = 32 (N = 288) takes 0.4 s against 1.2 s dense.
 
 Convergence: `update(...; convergence = :messages)` (the default, for observables) waits for every
 vertex's environment to settle (BP's message distance on it); `:freenergy` waits for F only.
@@ -178,10 +198,11 @@ hx = 2, J = 1, t = 1 on 5×5):
 `:cycle` wins where χ binds (3–16×), loses at severe truncation (D = 3, χ = 4), where it also does
 not converge (as the grid's did). Ising 8×8 at β = 0.44: both projectors agree on F (2.4e-10 at
 χ = 4, exact from χ = 8), converging in 3–5 passes. On random complex PEPS it matches the grid's
-`:cycle` (6×6 D = 2: 0.0025 / 5.1e-4 / 3.2e-6 at χ = 4 / 8 / 16).
+`:cycle` (6×6 D = 2: 3.2e-4 / 3.2e-6 at χ = 8 / 16; the grid's 3.5e-4 / 3.2e-6).
 
-Open: a matrix-free (Krylov–Schur) ring for the cost; directional corners; the triangular lattice
-at lossless χ, where `:cycle` sits at ~1e-8 and does not converge (`:cut` is exact).
+Open: directional corners (kagome, Penrose); non-convergence at severe truncation; the ring blocks
+are still formed as N × N matrices (as the `:cut` enlarged corners are), so a graded backend needs
+the ring in tensor form.
 
 `pinv_rtol` is a real trade-off: at 1e-6 or 1e-9 the lossless floor vanishes (Penrose 3 4e-14,
 kagome 7e-15), but truncated χ breaks (Penrose 3 at χ = 8: 5e-3 against 7e-9; kagome at χ = 4:

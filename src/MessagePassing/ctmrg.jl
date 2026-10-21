@@ -1,4 +1,5 @@
 using Random: Xoshiro
+using KrylovKit: Arnoldi, schursolve
 
 """
     CTMRGCache(network, maxdim::Integer; positions, projector = :cut, pinv_rtol = 1e-3, seed = 1)
@@ -295,11 +296,13 @@ end
 # to the dominant invariant subspaces of the ring's transfer matrix M_k = K_{k+1} ⋯ Kₙ K₁ ⋯ K_k
 # keeps its maxdim largest eigenvalues, the best rank-maxdim approximation of Z_f = tr(M_k), and
 # makes the free energy stationary: the grid engine's `:cycle` projector, on a face of any size.
-# The interface carries the spectral projector Π = V Wᵀ onto those eigenvalues (Wᵀ V = 1): the
-# right subspace V (M_k V = V T) lies on the K_k side, the left one W on the K_{k+1} side, both
-# from ONE Schur decomposition, so they belong to the same eigenvalues by construction (see
-# `_spectral_bases`). The pair is then whitened as in `_projector_pair`. Dense: the ring is formed
-# as matrices. `nothing` when a block carries legs beyond its two interfaces.
+# All M_k share their nonzero eigenvalues, so the choice is made once per face (`_ring_bases`)
+# and each interface carries the spectral projector V (Wᵀ V)⁻¹ Wᵀ onto them: the right subspace V
+# on the K_k side, the left one W on the K_{k+1} side, whitened as in `_projector_pair`.
+# A face whose spectrum above the noise fits in maxdim is left to the `:cut` projector, which is
+# lossless there: the cycle would choose nothing, and its projector would drop the ring's kernel,
+# which other faces' blocks see. So at large maxdim `:cycle` is `:cut`. `nothing` also when a block
+# carries legs beyond its two interfaces.
 function _cycle_projectors(cache::CTMRGCache, f, ins_of, memo)
     emb, exits = cache.embedding, cache.rules.exits
     w = faces(emb)[f]
@@ -314,40 +317,67 @@ function _cycle_projectors(cache::CTMRGCache, f, ins_of, memo)
     end
     all(k -> issetequal(inds(K[k]), [before(k); ins[k]]), 1:n) || return nothing
     mats = [reshape(array(K[k], before(k)..., ins[k]...), dim(before(k)), dim(ins[k])) for k in 1:n]
+    # M is a product of n blocks, so its eigenvalues are known only to ~ N ε ∏ ‖K‖
+    noise = maximum(size.(mats, 2)) * eps(real(eltype(first(mats)))) * prod(norm, mats)
+    bases = _ring_bases(mats, min(cache.maxdim, minimum(size.(mats, 2))), noise)
+    isnothing(bases) && return nothing
     pairs = Dict{Any, Any}()
     for k in 1:n
-        M = prod(mats[mod1(k + j, n)] for j in 1:n)
-        r = min(cache.maxdim, size(M, 1))
-        basis(X, tags) = (c = new_index(size(X, 2); tags); (from_array(reshape(X, dim.(ins[k])..., size(X, 2)), [ins[k]; c])))
-        bases = _spectral_bases(M, r)
-        isnothing(bases) && return nothing
-        V, W = basis(bases[1], "Link,right"), basis(bases[2], "Link,left")
+        basis(X, tags) = (c = new_index(size(X, 2); tags); from_array(reshape(X, dim.(ins[k])..., size(X, 2)), [ins[k]; c]))
+        V, W = basis(bases[1][k], "Link,right"), basis(bases[2][k], "Link,left")
         pairs[I[k]] = _projector_pair([adapt_like(K[k], W)], [adapt_like(K[k], V)], ins[k], cache.maxdim)
     end
     return pairs
 end
 
-# Right and left bases V, W (Wᵀ V = 1, Mᵀ W = W Tᵀ) of the invariant subspace of M belonging to
-# its (at most) r eigenvalues of largest modulus, from one Schur decomposition: with the kept
-# eigenvalues ordered first, M Z = Z [T₁₁ T₁₂; 0 T₂₂], V = Z[:, 1:r], and the spectral projector is
-# Z [1 X; 0 0] Z⁻¹ with T₁₁ X − X T₂₂ = T₁₂ (it must commute with T), so Wᵀ = [1 X] Z⁻¹.
-# The kept set is cut only where the subspace is defined: numerically zero eigenvalues
-# (|λ| ≤ N ε |λ₁|) are never kept, and neither is a group closer than `gap · |λ₁|` to an eigenvalue
-# left out (a split cluster, where the Sylvester equation, and the subspace, are ill-defined). A
-# complex-conjugate pair is kept or dropped whole, so a real M gets real bases.
-function _spectral_bases(M::AbstractMatrix, r::Integer; gap::Real = 1.0e-8)
-    F = schur(M)
-    λ = F.values
+# Right and left bases of the kept invariant subspace at every interface of a ring with blocks
+# `mats` (mats[k] a matrix from ins(I_{k−1}) to ins(I_k)), or `nothing` when the face is left to the
+# cut (nothing above the noise left out, or no well-defined choice). They are found at Iₙ and
+# carried around the ring: K_k maps the right subspace at I_k onto the one at I_{k−1}, and K_kᵀ
+# the left one at I_{k−1} onto the one at I_k. At Iₙ the ring M = K₁ ⋯ Kₙ is matrix-free when
+# large: a Krylov–Schur solve for M and one for Mᵀ, each applying the n blocks in turn, never forming
+# M; their eigenvalues must agree, or the dense Schur decomposition decides instead.
+function _ring_bases(mats, r, noise)
+    n = length(mats)
+    N = size(mats[n], 2)
+    ring(x) = foldr(*, mats; init = x)
+    ringᵀ(y) = foldl((y, K) -> transpose(K) * y, mats; init = y)
+    found = _krylov_spectral_bases(ring, ringᵀ, N, eltype(first(mats)), r, noise)
+    if isnothing(found)
+        found = _spectral_bases(ring(Matrix{eltype(first(mats))}(LinearAlgebra.I, N, N)), r; noise)
+    end
+    (isnothing(found) || !found[3]) && return nothing
+    orthonormal(X) = Matrix(qr(X).Q)[:, 1:size(X, 2)]
+    Vs = Vector{Matrix}(undef, n)
+    Ws = Vector{Matrix}(undef, n)
+    Vs[n], Ws[n] = found[1], found[2]
+    for k in n:-1:2
+        Vs[k - 1] = orthonormal(mats[k] * Vs[k])
+    end
+    for k in 1:(n - 1)
+        Ws[k] = orthonormal(transpose(mats[k]) * Ws[mod1(k - 1, n)])
+    end
+    return Vs, Ws
+end
+
+# Which eigenvalues `λ` to keep: the (at most) r of largest modulus, never one within the rounding
+# `noise`, never splitting a conjugate pair (for real matrices) or a cluster (a kept eigenvalue
+# within `gap · |λ₁|` of one above the noise left out, where the subspace is ill-defined). Returns
+# the kept mask and whether an eigenvalue above the noise was left out, or `nothing` if none is kept.
+# Keeping noise eigenvalues makes the rank flip from pass to pass.
+function _kept_eigenvalues(λ, r, noise, isreal_matrix; gap = 1.0e-8)
     order = sortperm(abs.(λ); rev = true)
     scale = abs(λ[first(order)])
-    nonzero = filter(i -> abs(λ[i]) > size(M, 1) * eps(real(eltype(λ))) * scale, order)
+    nonzero = filter(i -> abs(λ[i]) > noise, order)
     groups = Vector{Int}[]
     taken = falses(length(λ))
     for i in nonzero
         taken[i] && continue
         group = [i]
-        if eltype(M) <: Real && !isreal(λ[i])
-            push!(group, findfirst(j -> j != i && !taken[j] && λ[j] ≈ conj(λ[i]), eachindex(λ)))
+        if isreal_matrix && !isreal(λ[i])
+            partner = findfirst(j -> j != i && !taken[j] && λ[j] ≈ conj(λ[i]), eachindex(λ))
+            isnothing(partner) && break             # its partner lies beyond what was computed
+            push!(group, partner)
         end
         taken[group] .= true
         push!(groups, group)
@@ -357,18 +387,65 @@ function _spectral_bases(M::AbstractMatrix, r::Integer; gap::Real = 1.0e-8)
         count(keep) + length(group) > r && break
         keep[group] .= true
     end
-    separated(keep) = all(abs(λ[i] - λ[j]) > gap * scale for i in findall(keep), j in findall(!, keep))
+    separated(keep) = all(abs(λ[i] - λ[j]) > gap * scale for i in findall(keep), j in nonzero if !keep[j])
     while any(keep) && !separated(keep)
-        keep[findlast(g -> all(keep[g]), groups) |> g -> groups[g]] .= false
+        keep[groups[findlast(g -> all(keep[g]), groups)]] .= false
     end
     any(keep) || return nothing
+    return keep, count(keep) < length(nonzero)
+end
+
+# Dense: right and left bases V, W (Wᵀ V = 1) of the kept invariant subspace of M, and whether
+# anything above the noise was left out, from ONE Schur decomposition, so both belong to the same
+# eigenvalues: with the kept ones ordered first, M Z = Z [T₁₁ T₁₂; 0 T₂₂], V = Z[:, 1:k], and the
+# spectral projector Z [1 X; 0 0] Z⁻¹ commutes with T when T₁₁ X − X T₂₂ = T₁₂, so Wᵀ = [1 X] Z⁻¹.
+function _spectral_bases(M::AbstractMatrix, r::Integer; noise::Real = size(M, 1) * eps(real(eltype(M))) * norm(M))
+    F = schur(M)
+    kept = _kept_eigenvalues(F.values, r, noise, eltype(M) <: Real)
+    isnothing(kept) && return nothing
+    keep, truncated = kept
     ordschur!(F, keep)
     k = count(keep)
     T, Z = F.T, F.Z
-    k == size(M, 1) && return Z, transpose(inv(Z))
+    k == size(M, 1) && return Z, transpose(inv(Z)), truncated
     X = sylvester(T[1:k, 1:k], -T[(k + 1):end, (k + 1):end], -T[1:k, (k + 1):end])
     Wt = [Matrix{eltype(T)}(LinearAlgebra.I, k, k) X] / Z
-    return Z[:, 1:k], transpose(Wt)
+    return Z[:, 1:k], transpose(Wt), truncated
+end
+
+# Matrix-free: the same from Krylov–Schur solves of the ring and of its transpose, asking for the
+# r + 2 eigenvalues of largest modulus to see past the cut. `nothing` when the ring is too small
+# for a Krylov space to pay, a solve does not converge, the kept set is not a prefix of what was
+# computed, or the two solves disagree on the kept eigenvalues.
+function _krylov_spectral_bases(ring, ringᵀ, N, T, r, noise; gap = 1.0e-8)
+    howmany = r + 2
+    krylovdim = 2howmany + 16
+    krylovdim <= N ÷ 2 || return nothing
+    alg = Arnoldi(; krylovdim, tol = noise, maxiter = 100, verbosity = 0)
+    rng = Xoshiro(N)
+    _, vR, λR, infoR = schursolve(ring, randn(rng, T, N), howmany, :LM, alg)
+    _, vL, λL, infoL = schursolve(ringᵀ, randn(rng, T, N), howmany, :LM, alg)
+    # Fewer converged than asked is fine when the rest are within the noise: the ring has no more
+    # eigenvalues above it (its Krylov space closed), so the spectrum that matters is all there.
+    for (λ, info) in ((λR, infoR), (λL, infoL))
+        all(μ -> abs(μ) <= noise, λ[(info.converged + 1):end]) || return nothing
+    end
+    λR, vR = λR[1:infoR.converged], vR[1:infoR.converged]
+    λL, vL = λL[1:infoL.converged], vL[1:infoL.converged]
+    isempty(λR) && return nothing
+    kept = _kept_eigenvalues(λR, r, noise, T <: Real; gap)
+    isnothing(kept) && return nothing
+    keep, truncated = kept
+    k = count(keep)
+    all(keep[1:k]) || return nothing
+    # the left solve must find the same kept eigenvalues
+    left = collect(λL[1:min(k, length(λL))])
+    for λ in λR[1:k]
+        j = findfirst(μ -> abs(μ - λ) <= gap * abs(λR[1]), left)
+        isnothing(j) && return nothing
+        deleteat!(left, j)
+    end
+    return reduce(hcat, vR[1:k]), reduce(hcat, vL[1:k]), truncated
 end
 
 # ── Passes ──────────────────────────────────────────────────────────────────────────────────
