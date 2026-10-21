@@ -152,6 +152,37 @@ square and honeycomb states: ≤ 1e-15 at lossless χ.
   against 0.0537). Its planar generalisation (a cycle around each face) is open; the grid code is
   in the history before the retirement commit.
 
+## Face cycle projector (`projector = :cycle`, experimental, 2026-10-21)
+
+The grid engine's `:cycle` generalised to faces of any size. Face f's interfaces cut the ring of its
+enlarged corners, Z_f = tr(K₁ ⋯ Kₙ); each interface I_k is truncated to the spectral projector of
+the ring's transfer matrix M_k = K_{k+1} ⋯ K_k onto its maxdim largest eigenvalues. Right and left
+bases come from ONE Schur decomposition (left from a Sylvester solve), so they belong to the same
+eigenvalues; computing them by two separate decompositions picked different eigenvalue sets
+wherever the choice was ambiguous and broke at χ = 16 (⟨Z⟩ off by 0.4). Numerically zero
+eigenvalues are never kept and clusters are never split. Needs diagonal corners under Jacobi
+passes (square, honeycomb, triangular, small Penrose; not kagome or larger Penrose). Dense: the
+ring is formed as N × N matrices, O(N³) per face against the grid engine's matrix-free O(N²χ).
+
+Convergence: `update(...; convergence = :messages)` (the default, for observables) waits for every
+vertex's environment to settle (BP's message distance on it); `:freenergy` waits for F only.
+
+Results (max error of ⟨Z⟩, ⟨X⟩ and a nearest-neighbour ⟨ZZ⟩ against exact, TFIM quench
+hx = 2, J = 1, t = 1 on 5×5):
+
+| | χ = 4 | χ = 8 | χ = 16 |
+|---|---|---|---|
+| D = 2, `:cut` / `:cycle` | 0.0032 / 0.0027 | 1.4e-4 / **4.1e-5** | exact / exact |
+| D = 3, `:cut` / `:cycle` | **0.029** / 0.047 | 0.0056 / **3.4e-4** | 5.8e-5 / 5.2e-5 |
+
+`:cycle` wins where χ binds (3–16×), loses at severe truncation (D = 3, χ = 4), where it also does
+not converge (as the grid's did). Ising 8×8 at β = 0.44: both projectors agree on F (2.4e-10 at
+χ = 4, exact from χ = 8), converging in 3–5 passes. On random complex PEPS it matches the grid's
+`:cycle` (6×6 D = 2: 0.0025 / 5.1e-4 / 3.2e-6 at χ = 4 / 8 / 16).
+
+Open: a matrix-free (Krylov–Schur) ring for the cost; directional corners; the triangular lattice
+at lossless χ, where `:cycle` sits at ~1e-8 and does not converge (`:cut` is exact).
+
 `pinv_rtol` is a real trade-off: at 1e-6 or 1e-9 the lossless floor vanishes (Penrose 3 4e-14,
 kagome 7e-15), but truncated χ breaks (Penrose 3 at χ = 8: 5e-3 against 7e-9; kagome at χ = 4:
 4e-3 against 2e-8). 1e-3 stays the default; a cutoff that tightens as the truncation becomes

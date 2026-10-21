@@ -41,6 +41,24 @@ end
     @test errs[2] < 1.0e-6
 end
 
+@testset "CTMRG cycle projector and convergence criteria" begin
+    # exact at lossless χ, on a state's norm and its observables
+    Random.seed!(5)
+    g = named_grid((3, 3))
+    ψ = random_tensornetworkstate(ComplexF64, g, "S=1/2"; bond_dimension = 2)
+    obs = [("Z", [(2, 2)]), ("ZZ", [(2, 2), (2, 3)])]
+    cache = update(CTMRGCache(ψ, 64; projector = :cycle))
+    @test expect(cache, obs) ≈ expect(ψ, obs; alg = "exact") atol = 1.0e-8
+    @test partitionfunction(cache) ≈ norm_sqr(ψ; alg = "exact") rtol = 1.0e-8
+    # the free energy criterion, on a single-layer network
+    tn = positive_network(named_hexagonal_lattice_graph(2, 2))
+    @test freenergy(update(CTMRGCache(tn, 64; projector = :cycle); convergence = :freenergy)) ≈ log(contract(tn; alg = "exact")) atol = 1.0e-8
+    @test_throws ArgumentError update(CTMRGCache(tn, 4); convergence = :sometimes)
+    @test_throws ArgumentError CTMRGCache(tn, 4; projector = :both)
+    # kagome (like larger Penrose tilings) needs directional corners, which cycle projectors cannot use
+    @test_throws ErrorException CTMRGCache(positive_network(kagome_lattice(3, 3)), 4; projector = :cycle)
+end
+
 @testset "CTMRG update rules" begin
     # acyclic on the square lattice; the triangular lattice needs Jacobi passes
     @test !isnothing(ctmrg_rules(planar_embedding(named_grid((3, 3)))).order)

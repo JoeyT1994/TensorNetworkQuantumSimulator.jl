@@ -1,7 +1,7 @@
 using Random: Xoshiro
 
 """
-    CTMRGCache(network, maxdim::Integer; positions, pinv_rtol = 1e-3, seed = 1)
+    CTMRGCache(network, maxdim::Integer; positions, projector = :cut, pinv_rtol = 1e-3, seed = 1)
 
 Corner transfer matrix environments for a tensor network on any planar graph: a single-layer
 `TensorNetwork`, the norm network of a `TensorNetworkState`, or a form. Every inner face carries a
@@ -14,12 +14,21 @@ see [`planar_embedding`](@ref)). The update rules are fixed at construction and 
 lossless `maxdim` (see [`ctmrg_rules`](@ref)). `pinv_rtol` regularises the pseudo-inverses of
 the corners some updates divide by. Run [`update`](@ref) before reading the free energy or
 expectation values.
+
+`projector` chooses how each interface is truncated:
+- `:cut`: the optimal truncation of the product of the two enlarged corners on either side.
+- `:cycle`: every face's interfaces together, from the dominant invariant subspaces of the ring of
+  its enlarged corners, which makes the free energy stationary. It needs diagonal corners under
+  Jacobi passes, so it is not available on graphs that need directional corners (e.g. Penrose
+  tilings), and it is dense-only (the ring is formed as matrices). A face whose blocks carry legs
+  beyond its interfaces is truncated by `:cut` instead.
 """
 struct CTMRGCache{V, N}
     network::N
     embedding::PlanarEmbedding{V}
     rules::CTMRGRules{V}
     maxdim::Int
+    projector::Symbol
     pinv_rtol::Float64
     rng::Xoshiro
     bonds::Dict{Tuple{V, V}, Vector{Index}}    # dart → the network's legs on that edge
@@ -33,7 +42,7 @@ graph(cache::CTMRGCache) = graph(network(cache))
 
 function Base.copy(cache::CTMRGCache)
     return CTMRGCache(
-        cache.network, cache.embedding, cache.rules, cache.maxdim, cache.pinv_rtol, copy(cache.rng),
+        cache.network, cache.embedding, cache.rules, cache.maxdim, cache.projector, cache.pinv_rtol, copy(cache.rng),
         copy(cache.bonds), copy(cache.sides), copy(cache.blocks), copy(cache.projectors)
     )
 end
@@ -41,13 +50,15 @@ end
 function CTMRGCache(
         network, maxdim::Integer;
         positions = default_positions(graph(network)),
+        projector::Symbol = :cut,
         pinv_rtol::Real = 1.0e-3,
         seed::Integer = 1,
     )
+    projector in (:cut, :cycle) || throw(ArgumentError("projector must be :cut or :cycle, got $(repr(projector))"))
     g = graph(network)
     V = vertextype(g)
     emb = planar_embedding(g; positions)
-    rules = ctmrg_rules(emb)
+    rules = ctmrg_rules(emb; jacobi = projector === :cycle)
     bonds = Dict{Tuple{V, V}, Vector{Index}}()
     for e in edges(g)
         u, v = src(e), dst(e)
@@ -55,7 +66,7 @@ function CTMRGCache(
     end
     sides = Dict{Tuple{V, V}, Index}(I => new_index(1; tags = "Link,ctm") for I in rules.interfaces)
     cache = CTMRGCache(
-        network, emb, rules, Int(maxdim), Float64(pinv_rtol), Xoshiro(seed),
+        network, emb, rules, Int(maxdim), projector, Float64(pinv_rtol), Xoshiro(seed),
         bonds, sides, Dict{Any, Tensor}(), Dict{Tuple{V, V}, Any}()
     )
     _initialize_blocks!(cache)
@@ -276,6 +287,90 @@ function _carried_projectors!(cache::CTMRGCache)
     return _set_projectors!(cache, new)
 end
 
+# ── Cycle projectors ────────────────────────────────────────────────────────────────────────
+
+# The interfaces I₁, …, Iₙ of face f (I_k between its k-th and (k+1)-th vertex) cut the ring of its
+# enlarged corners: Z_f = tr(K₁ ⋯ Kₙ), with K_k the enlarged corner at the k-th vertex and the
+# connectors of the interfaces on either side, a map from ins(I_{k−1}) to ins(I_k). Truncating I_k
+# to the dominant invariant subspaces of the ring's transfer matrix M_k = K_{k+1} ⋯ Kₙ K₁ ⋯ K_k
+# keeps its maxdim largest eigenvalues, the best rank-maxdim approximation of Z_f = tr(M_k), and
+# makes the free energy stationary: the grid engine's `:cycle` projector, on a face of any size.
+# The interface carries the spectral projector Π = V Wᵀ onto those eigenvalues (Wᵀ V = 1): the
+# right subspace V (M_k V = V T) lies on the K_k side, the left one W on the K_{k+1} side, both
+# from ONE Schur decomposition, so they belong to the same eigenvalues by construction (see
+# `_spectral_bases`). The pair is then whitened as in `_projector_pair`. Dense: the ring is formed
+# as matrices. `nothing` when a block carries legs beyond its two interfaces.
+function _cycle_projectors(cache::CTMRGCache, f, ins_of, memo)
+    emb, exits = cache.embedding, cache.rules.exits
+    w = faces(emb)[f]
+    n = length(w)
+    I = [(w[k], w[mod1(k + 1, n)]) for k in 1:n]
+    ins = [ins_of(I[k]) for k in 1:n]
+    before(k) = ins[mod1(k - 1, n)]
+    K = map(1:n) do k
+        _, Qr = _connectors(emb, exits, I[mod1(k - 1, n)]...)
+        Ql, _ = _connectors(emb, exits, I[k]...)
+        return _evaluate(cache, [Qr; (:enlarged, (w[k], f)); Ql]; memo)
+    end
+    all(k -> issetequal(inds(K[k]), [before(k); ins[k]]), 1:n) || return nothing
+    mats = [reshape(array(K[k], before(k)..., ins[k]...), dim(before(k)), dim(ins[k])) for k in 1:n]
+    pairs = Dict{Any, Any}()
+    for k in 1:n
+        M = prod(mats[mod1(k + j, n)] for j in 1:n)
+        r = min(cache.maxdim, size(M, 1))
+        basis(X, tags) = (c = new_index(size(X, 2); tags); (from_array(reshape(X, dim.(ins[k])..., size(X, 2)), [ins[k]; c])))
+        bases = _spectral_bases(M, r)
+        isnothing(bases) && return nothing
+        V, W = basis(bases[1], "Link,right"), basis(bases[2], "Link,left")
+        pairs[I[k]] = _projector_pair([adapt_like(K[k], W)], [adapt_like(K[k], V)], ins[k], cache.maxdim)
+    end
+    return pairs
+end
+
+# Right and left bases V, W (Wᵀ V = 1, Mᵀ W = W Tᵀ) of the invariant subspace of M belonging to
+# its (at most) r eigenvalues of largest modulus, from one Schur decomposition: with the kept
+# eigenvalues ordered first, M Z = Z [T₁₁ T₁₂; 0 T₂₂], V = Z[:, 1:r], and the spectral projector is
+# Z [1 X; 0 0] Z⁻¹ with T₁₁ X − X T₂₂ = T₁₂ (it must commute with T), so Wᵀ = [1 X] Z⁻¹.
+# The kept set is cut only where the subspace is defined: numerically zero eigenvalues
+# (|λ| ≤ N ε |λ₁|) are never kept, and neither is a group closer than `gap · |λ₁|` to an eigenvalue
+# left out (a split cluster, where the Sylvester equation, and the subspace, are ill-defined). A
+# complex-conjugate pair is kept or dropped whole, so a real M gets real bases.
+function _spectral_bases(M::AbstractMatrix, r::Integer; gap::Real = 1.0e-8)
+    F = schur(M)
+    λ = F.values
+    order = sortperm(abs.(λ); rev = true)
+    scale = abs(λ[first(order)])
+    nonzero = filter(i -> abs(λ[i]) > size(M, 1) * eps(real(eltype(λ))) * scale, order)
+    groups = Vector{Int}[]
+    taken = falses(length(λ))
+    for i in nonzero
+        taken[i] && continue
+        group = [i]
+        if eltype(M) <: Real && !isreal(λ[i])
+            push!(group, findfirst(j -> j != i && !taken[j] && λ[j] ≈ conj(λ[i]), eachindex(λ)))
+        end
+        taken[group] .= true
+        push!(groups, group)
+    end
+    keep = falses(length(λ))
+    for group in groups
+        count(keep) + length(group) > r && break
+        keep[group] .= true
+    end
+    separated(keep) = all(abs(λ[i] - λ[j]) > gap * scale for i in findall(keep), j in findall(!, keep))
+    while any(keep) && !separated(keep)
+        keep[findlast(g -> all(keep[g]), groups) |> g -> groups[g]] .= false
+    end
+    any(keep) || return nothing
+    ordschur!(F, keep)
+    k = count(keep)
+    T, Z = F.T, F.Z
+    k == size(M, 1) && return Z, transpose(inv(Z))
+    X = sylvester(T[1:k, 1:k], -T[(k + 1):end, (k + 1):end], -T[1:k, (k + 1):end])
+    Wt = [Matrix{eltype(T)}(LinearAlgebra.I, k, k) X] / Z
+    return Z[:, 1:k], transpose(Wt)
+end
+
 # ── Passes ──────────────────────────────────────────────────────────────────────────────────
 
 function _recompute(cache::CTMRGCache, block; kwargs...)
@@ -295,19 +390,28 @@ function _sequential_pass!(cache::CTMRGCache)
     return cache
 end
 
-# A Jacobi pass, for rules with no acyclic order (diagonal corners only): every projector from the
-# current blocks, then every block recomputed from the current blocks and the new projectors.
+# A Jacobi pass, for rules with no acyclic order (diagonal corners only) and for cycle projectors:
+# every projector from the current blocks, then every block recomputed from the current blocks
+# and the new projectors.
 function _jacobi_pass!(cache::CTMRGCache)
     emb, rules = cache.embedding, cache.rules
     memo = Dict{Any, Tensor}()           # the blocks stay unchanged until the end of the pass
+    ins(I) = _interface_legs(cache, I, J -> cache.sides[J])
     new = Dict{Any, Any}()
+    if cache.projector === :cycle
+        for f in eachindex(faces(emb))
+            pairs = _cycle_projectors(cache, f, ins, memo)
+            isnothing(pairs) || merge!(new, pairs)
+        end
+    end
     for I in rules.interfaces
+        haskey(new, I) && continue
         p, q = I
         f = face_of_dart(emb, p, q)
         Ql, Qr = _connectors(emb, rules.exits, p, q)
         Bw = _evaluate(cache, [Ql; (:enlarged, (p, f))]; memo)
         Be = _evaluate(cache, [Qr; (:enlarged, (q, f))]; memo)
-        new[I] = _projector_pair([Bw], [Be], _interface_legs(cache, I, J -> cache.sides[J]), cache.maxdim)
+        new[I] = _projector_pair([Bw], [Be], ins(I), cache.maxdim)
     end
     blocks = Dict(b => _recompute(cache, b; projectors = new, memo) for b in keys(cache.blocks))
     merge!(cache.blocks, blocks)
@@ -315,29 +419,58 @@ function _jacobi_pass!(cache::CTMRGCache)
 end
 
 """
-    update(cache::CTMRGCache; maxiter = 30, tolerance = 1e-10, verbose = false)
+    update(cache::CTMRGCache; convergence = :messages, tolerance, maxiter = 30, verbose = false)
 
-Run passes over the cache until no closed region (the network with one vertex, edge or face
-explicit) changes its log-contraction by more than `tolerance` between passes, or `maxiter`
-passes. Observables are ratios of these regions, so this waits for them too, not just for the
-free energy, which settles first. At lossless `maxdim` two passes suffice.
+Run passes over the cache until it converges, or `maxiter` passes. What converges depends on
+what the cache is for:
+- `convergence = :messages` (for observables): every vertex's environment, the contraction of
+  the messages and corners around it, changes by at most `tolerance` (default 1e-12) between
+  passes, measured as 1 − |⟨E, E′⟩|² / (‖E‖² ‖E′‖²). Environments live on the vertex's own legs,
+  so passes compare directly, whatever gauge the truncated legs are in.
+- `convergence = :freenergy` (for the free energy): `freenergy` changes by at most `tolerance`
+  (default 1e-10) relative to max(1, |F|). It settles before the messages do, so it does not
+  certify observables.
+
+At lossless `maxdim` two passes suffice.
 """
-function update(cache::CTMRGCache; maxiter::Integer = 30, tolerance::Real = 1.0e-10, verbose::Bool = false)
+function update(
+        cache::CTMRGCache;
+        convergence::Symbol = :messages,
+        tolerance::Real = convergence === :messages ? 1.0e-12 : 1.0e-10,
+        maxiter::Integer = 30,
+        verbose::Bool = false,
+    )
+    convergence in (:messages, :freenergy) || throw(ArgumentError("convergence must be :messages or :freenergy, got $(repr(convergence))"))
     cache = copy(cache)
     pass! = isnothing(cache.rules.order) ? _jacobi_pass! : _sequential_pass!
+    signal(cache) = convergence === :messages ? _environments(cache) : freenergy(cache)
+    change(a, b) = convergence === :messages ? maximum(message_diff.(a, b)) : abs(a - b) / max(1, abs(a))
     previous = nothing
     for i in 1:maxiter
         pass!(cache)
-        regions = _region_logs(cache)
-        if !isnothing(previous) && maximum(abs, last.(regions) .- last.(previous)) <= tolerance
+        current = signal(cache)
+        if !isnothing(previous) && change(current, previous) <= tolerance
             verbose && println("CTMRG converged after $i passes.")
             return cache
         end
-        previous = regions
+        previous = current
     end
-    msg = "CTMRG did not converge to tolerance $tolerance after $maxiter passes."
+    msg = "CTMRG did not converge to tolerance $tolerance in its $convergence after $maxiter passes."
     verbose ? println(msg) : @warn(msg)
     return cache
+end
+
+# The environment of every vertex: the messages into it and the corners around it, contracted.
+function _environments(cache::CTMRGCache)
+    emb = cache.embedding
+    return map(collect(vertices(graph(emb)))) do v
+        parts = Any[]
+        for (u, f) in vertex_polygon(emb, v)
+            push!(parts, (:message, (u, v)))
+            append!(parts, _ring(emb, v, f))
+        end
+        return _evaluate(cache, parts)
+    end
 end
 
 # ── Free energy and observables ─────────────────────────────────────────────────────────────

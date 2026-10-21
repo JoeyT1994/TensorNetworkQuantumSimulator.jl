@@ -13,7 +13,7 @@ function contract(alg::Algorithm"boundarymps", tn::TensorNetwork; mps_bond_dimen
 end
 
 function contract(alg::Algorithm"ctmrg", tn::TensorNetwork; maxdim::Integer, cache_update_kwargs = (;))
-    return partitionfunction(update(CTMRGCache(tn, maxdim); cache_update_kwargs...))
+    return partitionfunction(update(CTMRGCache(tn, maxdim); convergence = :freenergy, cache_update_kwargs...))
 end
 
 function contract(tn::AbstractTensorNetwork; alg = "exact", kwargs...)

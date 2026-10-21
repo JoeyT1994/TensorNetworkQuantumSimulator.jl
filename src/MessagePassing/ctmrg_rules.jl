@@ -424,11 +424,12 @@ Each exit rule (straight, opposite, geodesic) whose rays all reach the outer fac
 corner updates are chosen to make the blocks' dependencies acyclic with the fewest levels; the
 shallowest certified choice wins, and its blocks are recomputed once per pass in dependency order. When no acyclic choice exists (e.g.
 the triangular lattice) every corner uses its diagonal update and the passes are Jacobi sweeps,
-provided those certify. Errors if no rule set certifies.
+provided those certify. With `jacobi = true` those are the rules from the start, as cycle
+projectors need (see `CTMRGCache`). Errors if no rule set certifies.
 """
-function ctmrg_rules(emb::PlanarEmbedding{V}) where {V}
+function ctmrg_rules(emb::PlanarEmbedding{V}; jacobi::Bool = false) where {V}
     best = nothing
-    for rule in _EXIT_RULES
+    for rule in (jacobi ? () : _EXIT_RULES)
         exits, next = _exits(emb, rule)
         lengths = _ray_lengths(next)
         isnothing(lengths) && continue
@@ -452,7 +453,9 @@ function ctmrg_rules(emb::PlanarEmbedding{V}) where {V}
             end
         end
     end
-    isnothing(best) && error("CTMRG: no certified update rules for this graph")
+    isnothing(best) && error(jacobi ?
+        "CTMRG: diagonal corners under Jacobi passes do not certify on this graph (it needs directional corners), so `projector = :cycle` is not available here" :
+        "CTMRG: no certified update rules for this graph")
     interfaces = sort(collect(keys(best.next)); by = I -> best.lengths[I])
     return CTMRGRules{V}(best.exits, best.next, interfaces, best.modes, best.order)
 end
