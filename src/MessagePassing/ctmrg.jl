@@ -2,7 +2,7 @@ using Random: Xoshiro
 using KrylovKit: Arnoldi, schursolve
 
 """
-    CTMRGCache(network, maxdim::Integer; positions, projector = :cut, pinv_rtol = 1e-3, seed = 1)
+    CTMRGCache(network, maxdim::Integer; positions, projector = :svd, pinv_rtol = 1e-3, seed = 1)
 
 Corner transfer matrix (CTMRG) environments for a tensor network on any planar graph. Every inner
 face carries a ring of corners and every directed edge a message, each the contraction of a region
@@ -16,10 +16,10 @@ computing free energies or expectation values.
 # Keyword Arguments
 - `positions`: Vertex positions `v => (x, y)` defining the planar embedding (default: the vertex
   names, when they are coordinates). See `planar_embedding`.
-- `projector::Symbol = :cut`: How the cuts are truncated. `:cut` keeps the best approximation of the
-  two enlarged corners on either side of a cut. `:cycle` (experimental) truncates all the cuts of a
-  face together, keeping the dominant eigenvalues of the ring of its enlarged corners; it needs
-  diagonal corners, so it is not available on every planar graph (e.g. kagome), and is dense-only.
+- `projector::Symbol = :svd`: How the cuts are truncated. `:svd` keeps the best approximation (a
+  truncated SVD) of the two enlarged corners on either side of a cut. `:eig` (experimental) truncates
+  all the cuts of a face together, keeping the dominant eigenvalues of the ring of its enlarged
+  corners; it needs diagonal corners, so it is not available on every planar graph (e.g. kagome).
 - `pinv_rtol::Real = 1e-3`: Relative cutoff regularising the pseudo-inverses some updates use.
 - `seed::Integer = 1`: Seed for the random projectors of the first pass.
 
@@ -53,15 +53,15 @@ end
 function CTMRGCache(
         network, maxdim::Integer;
         positions = default_positions(graph(network)),
-        projector::Symbol = :cut,
+        projector::Symbol = :svd,
         pinv_rtol::Real = 1.0e-3,
         seed::Integer = 1,
     )
-    projector in (:cut, :cycle) || throw(ArgumentError("projector must be :cut or :cycle, got $(repr(projector))"))
+    projector in (:svd, :eig) || throw(ArgumentError("projector must be :svd or :eig, got $(repr(projector))"))
     g = graph(network)
     V = vertextype(g)
     emb = planar_embedding(g; positions)
-    rules = ctmrg_rules(emb; jacobi = projector === :cycle)
+    rules = ctmrg_rules(emb; jacobi = projector === :eig)
     bonds = Dict{Tuple{V, V}, Vector{Index}}()
     for e in edges(g)
         u, v = src(e), dst(e)
@@ -281,12 +281,12 @@ function _carried_projectors!(cache::CTMRGCache)
 end
 
 
-#Cycle projectors for the interfaces of face f. They cut the ring of its enlarged corners,
+#Eigenvalue projectors for the interfaces of face f. They cut the ring of its enlarged corners,
 #Z_f = tr(K_1 ⋯ K_n), and each keeps the dominant invariant subspaces of the ring's transfer matrix
 #at that interface (the eigenvalues all the transfer matrices share). A face whose spectrum fits in
-#maxdim is left to the cut projector, which is lossless there: the cycle would drop the ring's
+#maxdim is left to the SVD projector, which is lossless there: these would drop the ring's
 #kernel, which other faces see. `nothing` also if a block has legs beyond its two interfaces.
-function _cycle_projectors(cache::CTMRGCache, f, ins_of, memo)
+function _eig_projectors(cache::CTMRGCache, f, ins_of, memo)
     emb, exits = cache.embedding, cache.rules.exits
     w = faces(emb)[f]
     n = length(w)
@@ -315,7 +315,7 @@ function _cycle_projectors(cache::CTMRGCache, f, ins_of, memo)
 end
 
 #Right and left bases of the kept invariant subspace at every interface of a ring, or `nothing` if
-#the face is left to the cut. They are found at the last interface (matrix-free when the ring is
+#the face is left to the SVD projector. They are found at the last interface (matrix-free when the ring is
 #large, else dense) and carried around the ring by the blocks.
 function _ring_bases(mats, r, noise)
     n = length(mats)
@@ -443,9 +443,9 @@ function _jacobi_pass!(cache::CTMRGCache)
     memo = Dict{Any, Tensor}()
     ins(I) = _interface_legs(cache, I, J -> cache.sides[J])
     new = Dict{Any, Any}()
-    if cache.projector === :cycle
+    if cache.projector === :eig
         for f in eachindex(faces(emb))
-            pairs = _cycle_projectors(cache, f, ins, memo)
+            pairs = _eig_projectors(cache, f, ins, memo)
             isnothing(pairs) || merge!(new, pairs)
         end
     end

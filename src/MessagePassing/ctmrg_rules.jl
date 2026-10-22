@@ -405,7 +405,7 @@ update of every corner and the order of the blocks, certified exact at lossless 
 - `emb::PlanarEmbedding`: The planar embedding of the network's graph.
 
 # Keyword Arguments
-- `jacobi::Bool = false`: Use diagonal corners under Jacobi passes, as the cycle projector needs.
+- `jacobi::Bool = false`: Use diagonal corners under Jacobi passes, as the eigenvalue projector needs.
   Otherwise the corners are chosen so the blocks can be recomputed once per pass in dependency
   order, with the fewest levels, and Jacobi passes are the fallback.
 
@@ -439,7 +439,7 @@ function ctmrg_rules(emb::PlanarEmbedding{V}; jacobi::Bool = false) where {V}
         end
     end
     if isnothing(best)
-        jacobi && error("CTMRG: this graph needs directional corners, so `projector = :cycle` is not available")
+        jacobi && error("CTMRG: this graph needs directional corners, so `projector = :eig` is not available")
         error("CTMRG: no certified update rules for this graph")
     end
     interfaces = sort(collect(keys(best.next)); by = I -> best.lengths[I])

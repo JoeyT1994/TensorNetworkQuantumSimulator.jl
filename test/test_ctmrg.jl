@@ -42,18 +42,18 @@ end
     @test errs[2] < 1.0e-6
 end
 
-@testset "CTMRG cycle projector and convergence criteria" begin
+@testset "CTMRG eigenvalue projector and convergence criteria" begin
     # exact at lossless χ, on a state's norm and its observables
     Random.seed!(5)
     g = named_grid((3, 3))
     ψ = random_tensornetworkstate(ComplexF64, g, "S=1/2"; bond_dimension = 2)
     obs = [("Z", [(2, 2)]), ("ZZ", [(2, 2), (2, 3)])]
-    cache = update(CTMRGCache(ψ, 64; projector = :cycle))
+    cache = update(CTMRGCache(ψ, 64; projector = :eig))
     @test expect(cache, obs) ≈ expect(ψ, obs; alg = "exact") atol = 1.0e-8
     @test partitionfunction(cache) ≈ norm_sqr(ψ; alg = "exact") rtol = 1.0e-8
     # the free energy criterion, on a single-layer network
     tn = positive_network(named_hexagonal_lattice_graph(2, 2))
-    @test freenergy(update(CTMRGCache(tn, 64; projector = :cycle); convergence = :freenergy)) ≈ log(contract(tn; alg = "exact")) atol = 1.0e-8
+    @test freenergy(update(CTMRGCache(tn, 64; projector = :eig); convergence = :freenergy)) ≈ log(contract(tn; alg = "exact")) atol = 1.0e-8
     @test_throws ArgumentError update(CTMRGCache(tn, 4); convergence = :sometimes)
     @test_throws ArgumentError CTMRGCache(tn, 4; projector = :both)
     # the matrix-free ring finds the same spectral projector as the dense Schur decomposition
@@ -67,8 +67,8 @@ end
     Vd, Wd, _ = TensorNetworkQuantumSimulator._spectral_bases(ring(Matrix(1.0I, N, N)), r; noise)
     Π(V, W) = V * ((transpose(W) * V) \ transpose(W))
     @test Π(Vk, Wk) ≈ Π(Vd, Wd) rtol = 1.0e-8
-    # kagome (like larger Penrose tilings) needs directional corners, which cycle projectors cannot use
-    @test_throws ErrorException CTMRGCache(positive_network(kagome_lattice(3, 3)), 4; projector = :cycle)
+    # kagome (like larger Penrose tilings) needs directional corners, which eigenvalue projectors cannot use
+    @test_throws ErrorException CTMRGCache(positive_network(kagome_lattice(3, 3)), 4; projector = :eig)
 end
 
 @testset "CTMRG observables on a state" begin

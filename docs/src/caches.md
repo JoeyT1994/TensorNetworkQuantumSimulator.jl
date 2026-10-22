@@ -197,7 +197,7 @@ Observables can act on one vertex or on the two ends of an edge.
 
 ### Projectors
 
-`CTMRGCache(ψ, maxdim; projector = :cut)` chooses how the cuts are truncated. The default, `:cut`, keeps the best approximation of the two enlarged corners on either side of each cut. `projector = :cycle` (experimental) truncates the cuts of a face together, keeping the dominant eigenvalues of the ring of corners around it; it is often more accurate when `maxdim` is small relative to the entanglement of the state, but is not available on graphs that need more general corner updates (such as kagome lattices or large Penrose tilings).
+`CTMRGCache(ψ, maxdim; projector = :svd)` chooses how the cuts are truncated. The default, `:svd`, keeps the best approximation (a truncated SVD) of the two enlarged corners on either side of each cut. `projector = :eig` (experimental) truncates the cuts of a face together, keeping the dominant eigenvalues of the ring of corners around it; it is often more accurate when `maxdim` is small relative to the entanglement of the state, but is not available on graphs that need more general corner updates (such as kagome lattices or large Penrose tilings).
 
 ## Choosing between BP, Boundary MPS and CTMRG
 
