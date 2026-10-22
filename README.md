@@ -261,8 +261,7 @@ We encourage users to read the literature listed below and explore the [tests](t
 You can also work directly in the Heisenberg picture, representing a many-body operator as a TNS with two indices per site.
 
 ```julia
-using ITensors: noprime, op
-using TensorNetworkQuantumSimulator: setindex_preserve!
+using TensorNetworkQuantumSimulator: noprime, setindex_preserve!
 
 # Start with the Z operator on a single site vz, identity elsewhere
 s = siteinds("S=1/2", g; inds_per_site = 2)

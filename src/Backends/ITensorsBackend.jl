@@ -131,17 +131,6 @@ function TI.scale!(t::ITensor, x::Number)
     return t
 end
 
-# ── Hooks ───────────────────────────────────────────────────────────────────────────────
-# ITensors signals an unknown operator name with an ArgumentError.
-function TI.backend_op(name::String, sites::Index...; kwargs...)
-    try
-        return ITensors.op(name, sites...; kwargs...)
-    catch err
-        err isa ArgumentError && return nothing
-        rethrow()
-    end
-end
-
 include("ITensorsKernels.jl")
 
 end

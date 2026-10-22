@@ -5,10 +5,9 @@
 # - `opname`: the operator name looked up by `op` (see operators.jl). Usually equal to
 #   the user-facing key, but kept separate so a registry entry can rename if needed.
 # - `paramkeys`: keyword names accepted by the underlying operator definition, e.g.
-#   `(:θ,)`, `(:ϕ,)`, or `(:θ, :β)`. Empty for fixed gates.
-# - `rescale`: applied to the user-supplied parameter(s) before forwarding. Used
-#   when our (qiskit) convention differs from the registry convention. For
-#   multi-parameter gates, `rescale` receives and returns a tuple/vector.
+#   `(:θ,)` or `(:θ, :β)`. Empty for fixed gates.
+# - `rescale`: applied to the user-supplied parameter(s) before forwarding, for operators defined
+#   in another convention. For multi-parameter gates it receives and returns a tuple/vector.
 struct GateSpec
     opname::String
     paramkeys::Tuple{Vararg{Symbol}}
@@ -25,11 +24,11 @@ const GATES = Dict{String, GateSpec}(
     "Z" => GateSpec("Z"),
     "H" => GateSpec("H"),
 
-    # Single-qubit parametric (qiskit and the registry agree on convention)
+    # Parametric gates: the registry follows qiskit, so parameters are forwarded unchanged
     "Rx"  => GateSpec("Rx";  paramkeys = (:θ,)),
     "Ry"  => GateSpec("Ry";  paramkeys = (:θ,)),
     "Rz"  => GateSpec("Rz";  paramkeys = (:θ,)),
-    "P"   => GateSpec("P";   paramkeys = (:ϕ,)),
+    "P"   => GateSpec("P";   paramkeys = (:θ,)),
     "Rz+" => GateSpec("Rz+"; paramkeys = (:θ,)),
 
     # Two-qubit fixed
@@ -42,18 +41,14 @@ const GATES = Dict{String, GateSpec}(
     "√SWAP"  => GateSpec("√SWAP"),
     "√iSWAP" => GateSpec("√iSWAP"),
 
-    # Two-qubit parametric.
-    # qiskit:   Rxx(θ) = exp(-i θ XX / 2)
-    # registry: op("Rxx"; ϕ) = exp(-i ϕ XX)
-    # We expose qiskit's θ and forward ϕ = θ/2 to the registry.
-    "Rxx" => GateSpec("Rxx"; paramkeys = (:ϕ,), rescale = θ -> θ / 2),
-    "Ryy" => GateSpec("Ryy"; paramkeys = (:ϕ,), rescale = θ -> θ / 2),
-    "Rzz" => GateSpec("Rzz"; paramkeys = (:ϕ,), rescale = θ -> θ / 2),
+    "Rxx" => GateSpec("Rxx"; paramkeys = (:θ,)),
+    "Ryy" => GateSpec("Ryy"; paramkeys = (:θ,)),
+    "Rzz" => GateSpec("Rzz"; paramkeys = (:θ,)),
 
     "CRx"    => GateSpec("CRx";    paramkeys = (:θ,)),
     "CRy"    => GateSpec("CRy";    paramkeys = (:θ,)),
     "CRz"    => GateSpec("CRz";    paramkeys = (:θ,)),
-    "CPHASE" => GateSpec("CPHASE"; paramkeys = (:ϕ,)),
+    "CPHASE" => GateSpec("CPHASE"; paramkeys = (:θ,)),
 
     "Rz+z+" => GateSpec("Rz+z+"; paramkeys = (:θ,)),
 

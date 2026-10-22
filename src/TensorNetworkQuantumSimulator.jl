@@ -91,6 +91,7 @@ export
     BoundaryMPSCache,
     CTMRGCache,
     register_op!,
+    op,
     TensorNetwork,
     AbstractTensorNetwork,
     partitionfunction,

@@ -20,7 +20,7 @@ Rules:
      fermions, so use the right one. `gram(a, b, legs) = dag(a, legs) * b`.
   6. `Tensor` and `Index` (bound in Backends.jl) are used only in annotations; new indices come
      from `new_index`, new tensors from the construction verbs.
-  7. Verbs have no fallbacks. Hooks (`fused_norm_message`, `fused_norm_scalar`, `backend_op`)
+  7. Verbs have no fallbacks. Hooks (`fused_norm_message`, `fused_norm_scalar`)
      are optional: their fallback returns `nothing` and the caller takes the generic path.
 =#
 module TensorInterface
@@ -155,14 +155,6 @@ are (s′, s) operators on site legs `s ∈ sinds` (empty for the norm). `nothin
 has no fused path.
 """
 fused_norm_scalar(ψ, sinds, incoming, ops) = nothing
-
-"""
-    backend_op(name, sites...; kwargs...)
-
-Optional backend operator library, consulted for operator names the package's own registry does
-not define. `nothing` when the backend has none, or does not know `name` either.
-"""
-backend_op(name, sites...; kwargs...) = nothing
 
 export Algorithm, @Algorithm_str
 

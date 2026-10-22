@@ -105,8 +105,9 @@ optimise_p_q
 
 ## Operators and States
 
-The in-house operator library (`src/operators.jl`): plain matrices keyed by name, including the
-gates `"Rxxyy"`, `"Rxxyyzz"` and `"xx_plus_yy"`.
+The package's own operator and state library, for S=1/2 and S=1 sites. Parameterised operators
+follow qiskit's conventions (e.g. `op("Rzz", s1, s2; θ)` is `exp(-iθ/2 Z⊗Z)`); multi-site matrices
+take the first site as the most significant. Add your own with `register_op!`.
 
 ```@docs
 register_op!

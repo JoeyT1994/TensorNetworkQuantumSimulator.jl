@@ -1,26 +1,36 @@
 # Operator and state library as plain matrices, keyed by number of sites, site dimension (2 for
-# S=1/2, 3 for S=1) and name. Conventions follow ITensors: |↑⟩ = |0⟩ is the first basis state and
-# the first site is the most significant (A on site 1, B on site 2 is `kron(A, B)`). Unknown names
-# fall through to the backend's library (`backend_op`).
+# S=1/2, 3 for S=1) and name. |↑⟩ = |0⟩ is the first basis state and the first site is the most
+# significant (A on site 1, B on site 2 is `kron(A, B)`), the same conventions as ITensors.
 
 const _σ0 = [1.0 0.0; 0.0 1.0]
 const _σx = [0.0 1.0; 1.0 0.0]
 const _σy = [0.0 -1.0im; 1.0im 0.0]
 const _σz = [1.0 0.0; 0.0 -1.0]
 
-# Controlled single-qubit `u`, control on the first site.
-_controlled(u::AbstractMatrix) = [1 0 0 0; 0 1 0 0; 0 0 u[1, 1] u[1, 2]; 0 0 u[2, 1] u[2, 2]]
+# `u` controlled on all preceding sites, i.e. applied when they are all |1⟩.
+function _controlled(u::AbstractMatrix, ncontrols::Integer = 1)
+    n = 2^ncontrols * size(u, 1)
+    m = Matrix{eltype(u)}(LinearAlgebra.I, n, n)
+    m[(end - size(u, 1) + 1):end, (end - size(u, 1) + 1):end] = u
+    return m
+end
+
+_rn(θ, ϕ, λ) = [cos(θ / 2) -exp(im * λ) * sin(θ / 2); exp(im * ϕ) * sin(θ / 2) exp(im * (ϕ + λ)) * cos(θ / 2)]
+const _SWAP = [1 0 0 0; 0 0 1 0; 0 1 0 0; 0 0 0 1]
 
 _rx(θ) = [cos(θ / 2) -im * sin(θ / 2); -im * sin(θ / 2) cos(θ / 2)]
 _ry(θ) = [cos(θ / 2) -sin(θ / 2); sin(θ / 2) cos(θ / 2)]
 _rz(θ) = [exp(-im * θ / 2) 0; 0 exp(im * θ / 2)]
 
-# Rz and CRz accept the deprecated ϕ in place of θ, as ITensors does.
-function _rz_angle(θ, ϕ)
+# Parameters follow qiskit. The angle of Rz, CRz, Phase and CPHASE may also be passed as `ϕ`.
+function _angle(θ, ϕ)
     isone(count(isnothing, (θ, ϕ))) ||
-        throw(ArgumentError("Rz: specify the keyword argument `θ` (or the deprecated `ϕ`), not both."))
+        throw(ArgumentError("specify the angle as the keyword argument `θ` (or `ϕ`), not both."))
     return isnothing(θ) ? ϕ : θ
 end
+
+# exp(-i θ/2 P⊗P)
+_pauli_pair_rotation(θ, P) = cos(θ / 2) * kron(_σ0, _σ0) - im * sin(θ / 2) * kron(P, P)
 
 # (nsites, site dimension) => name => (; kwargs...) -> matrix
 const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
@@ -33,13 +43,15 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
         "iY" => (; kw...) -> [0.0 1.0; -1.0 0.0],
         "H" => (; kw...) -> [1 1; 1 -1] / sqrt(2),
         "√NOT" => (; kw...) -> [(1 + im)/2 (1 - im)/2; (1 - im)/2 (1 + im)/2],
-        "Phase" => (; ϕ::Number = π / 2, kw...) -> [1 0; 0 exp(im * ϕ)],
+        "Phase" => (; θ = nothing, ϕ = nothing, kw...) -> [1 0; 0 exp(im * _angle(θ, ϕ))],
         "π/8" => (; kw...) -> [1 0; 0 1 / sqrt(2) + im / sqrt(2)],
         "Rx" => (; θ::Number, kw...) -> _rx(θ),
         "Ry" => (; θ::Number, kw...) -> _ry(θ),
-        "Rz" => (; θ = nothing, ϕ = nothing, kw...) -> _rz(_rz_angle(θ, ϕ)),
+        "Rz" => (; θ = nothing, ϕ = nothing, kw...) -> _rz(_angle(θ, ϕ)),
         # diag(1, e^{-iθ/2}): a Z rotation acting on |1⟩ only, at a halved angle
         "Rz+" => (; θ::Number, kw...) -> [1 0; 0 exp(-im * θ / 2)],
+        # general rotation, U(θ, ϕ, λ) in qiskit's notation
+        "Rn" => (; θ::Number, ϕ::Number, λ::Number, kw...) -> _rn(θ, ϕ, λ),
         "Sx" => (; kw...) -> _σx / 2,
         "Sy" => (; kw...) -> _σy / 2,
         "iSy" => (; kw...) -> [0.0 0.5; -0.5 0.0],
@@ -56,23 +68,22 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
         "CZ" => (; kw...) -> _controlled(_σz),
         "CRx" => (; θ::Number, kw...) -> _controlled(_rx(θ)),
         "CRy" => (; θ::Number, kw...) -> _controlled(_ry(θ)),
-        "CRz" => (; θ = nothing, ϕ = nothing, kw...) -> _controlled(_rz(_rz_angle(θ, ϕ))),
-        "CPHASE" => (; ϕ::Number, kw...) -> _controlled([1 0; 0 exp(im * ϕ)]),
-        "SWAP" => (; kw...) -> [1 0 0 0; 0 0 1 0; 0 1 0 0; 0 0 0 1],
+        "CRz" => (; θ = nothing, ϕ = nothing, kw...) -> _controlled(_rz(_angle(θ, ϕ))),
+        "CRn" => (; θ::Number, ϕ::Number, λ::Number, kw...) -> _controlled(_rn(θ, ϕ, λ)),
+        "CPHASE" => (; θ = nothing, ϕ = nothing, kw...) -> _controlled([1 0; 0 exp(im * _angle(θ, ϕ))]),
+        "SWAP" => (; kw...) -> _SWAP,
         "√SWAP" => (; kw...) -> [1 0 0 0; 0 (1 + im)/2 (1 - im)/2 0; 0 (1 - im)/2 (1 + im)/2 0; 0 0 0 1],
         "iSWAP" => (; kw...) -> [1 0 0 0; 0 0 im 0; 0 im 0 0; 0 0 0 1],
         "√iSWAP" => (; kw...) -> [1 0 0 0; 0 1/√2 im/√2 0; 0 im/√2 1/√2 0; 0 0 0 1],
-        # Ising couplings exp(-iϕ σσ)
-        "Rxx" => (; ϕ::Number, kw...) -> cos(ϕ) * kron(_σ0, _σ0) - im * sin(ϕ) * kron(_σx, _σx),
-        "Ryy" => (; ϕ::Number, kw...) -> cos(ϕ) * kron(_σ0, _σ0) - im * sin(ϕ) * kron(_σy, _σy),
-        "Rzz" => (; ϕ::Number, kw...) -> cos(ϕ) * kron(_σ0, _σ0) - im * sin(ϕ) * kron(_σz, _σz),
-        "Rxy" => (; ϕ::Number, kw...) -> [1 0 0 0; 0 cos(ϕ) -im*sin(ϕ) 0; 0 -im*sin(ϕ) cos(ϕ) 0; 0 0 0 1],
+        "Rxx" => (; θ::Number, kw...) -> _pauli_pair_rotation(θ, _σx),
+        "Ryy" => (; θ::Number, kw...) -> _pauli_pair_rotation(θ, _σy),
+        "Rzz" => (; θ::Number, kw...) -> _pauli_pair_rotation(θ, _σz),
         # diag(1, 1, 1, e^{-iθ/2}): a ZZ-type rotation acting on |11⟩ only, at a halved angle
         "Rz+z+" => (; θ::Number, kw...) -> [1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 exp(-im * θ / 2)],
         # exp(-iθ (XX + YY) / 2)
-        "Rxxyy" => (; θ::Number = 1, kw...) -> exp(-im * θ * 0.5 * (kron(_σx, _σx) + kron(_σy, _σy))),
+        "Rxxyy" => (; θ::Number, kw...) -> exp(-im * θ * 0.5 * (kron(_σx, _σx) + kron(_σy, _σy))),
         # exp(-iθ (XX + YY + ZZ) / 2)
-        "Rxxyyzz" => (; θ::Number = 1, kw...) ->
+        "Rxxyyzz" => (; θ::Number, kw...) ->
             exp(-im * θ * 0.5 * (kron(_σx, _σx) + kron(_σy, _σy) + kron(_σz, _σz))),
         # Rotation by XX+YY at angle θ with Rz(β) rotations either side; consistent with qiskit.
         "xx_plus_yy" => (; θ::Number, β::Number, kw...) -> [
@@ -81,6 +92,13 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
             0 -im*sin(θ / 2)*exp(im * β) cos(θ / 2) 0
             0 0 0 1
         ],
+    ),
+    (3, 2) => Dict{String, Function}(
+        "Toffoli" => (; kw...) -> _controlled(_σx, 2),
+        "Fredkin" => (; kw...) -> _controlled(_SWAP),
+    ),
+    (4, 2) => Dict{String, Function}(
+        "CCCNOT" => (; kw...) -> _controlled(_σx, 3),
     ),
     (1, 3) => Dict{String, Function}(
         "I" => (; kw...) -> [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0],
@@ -102,7 +120,7 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
 const _OPERATOR_ALIASES = Dict(
     (1, 2) => [
         "σx" => "X", "σ1" => "X", "σy" => "Y", "σ2" => "Y", "σz" => "Z", "σ3" => "Z",
-        "iσy" => "iY", "iσ2" => "iY", "√X" => "√NOT", "P" => "Phase", "T" => "π/8",
+        "iσy" => "iY", "iσ2" => "iY", "√X" => "√NOT", "P" => "Phase", "T" => "π/8", "Rn̂" => "Rn",
         "Sˣ" => "Sx", "Sʸ" => "Sy", "iSʸ" => "iSy", "Sᶻ" => "Sz", "S⁺" => "S+", "Splus" => "S+",
         "S⁻" => "S-", "Sminus" => "S-", "S²" => "S2",
         "ProjUp" => "Proj0", "projUp" => "Proj0", "ProjDn" => "Proj1", "projDn" => "Proj1",
@@ -110,8 +128,11 @@ const _OPERATOR_ALIASES = Dict(
     (2, 2) => [
         "CX" => "CNOT", "CRX" => "CRx", "CRY" => "CRy", "CRZ" => "CRz", "Cphase" => "CPHASE",
         "Swap" => "SWAP", "√Swap" => "√SWAP", "iSwap" => "iSWAP", "√iSwap" => "√iSWAP",
-        "RXX" => "Rxx", "RYY" => "Ryy", "RZZ" => "Rzz", "RXY" => "Rxy",
+        "RXX" => "Rxx", "RYY" => "Ryy", "RZZ" => "Rzz", "Rxy" => "Rxxyy", "RXY" => "Rxxyy", "CRn̂" => "CRn",
     ],
+    # "CS" is the controlled SWAP, as in ITensors
+    (3, 2) => ["CCNOT" => "Toffoli", "CCX" => "Toffoli", "TOFF" => "Toffoli",
+        "CSWAP" => "Fredkin", "CSwap" => "Fredkin", "CS" => "Fredkin"],
     (1, 3) => [
         "Sˣ" => "Sx", "Sʸ" => "Sy", "iSʸ" => "iSy", "Sᶻ" => "Sz", "S⁺" => "S+", "Splus" => "S+",
         "Sp" => "S+", "S⁻" => "S-", "Sminus" => "S-", "Sm" => "S-", "S²" => "S2",
@@ -121,7 +142,7 @@ for (key, pairs) in _OPERATOR_ALIASES, (alias, canon) in pairs
     OPERATORS[key][alias] = OPERATORS[key][canon]
 end
 # "S" is the phase gate at ϕ = π/2
-OPERATORS[(1, 2)]["S"] = (; kw...) -> OPERATORS[(1, 2)]["Phase"](; ϕ = π / 2)
+OPERATORS[(1, 2)]["S"] = (; kw...) -> OPERATORS[(1, 2)]["Phase"](; θ = π / 2)
 
 """
     register_op!(name::String, f; nsites = 1, sitedim = 2)
@@ -148,10 +169,25 @@ function register_op!(name::String, f; nsites::Integer = 1, sitedim::Integer = 2
     return name
 end
 
-# The registered matrix of `name` on `nsites` sites of dimension `d`, or nothing.
+# The registered matrix of `name` on `nsites` sites of dimension `d`, or nothing. The identity and
+# random unitaries are defined for any number of sites of any dimension.
 function operator_matrix(name::AbstractString, nsites::Integer, d::Integer; kwargs...)
     f = get(get(OPERATORS, (Int(nsites), Int(d)), Dict{String, Function}()), name, nothing)
-    return isnothing(f) ? nothing : f(; kwargs...)
+    isnothing(f) || return f(; kwargs...)
+    n = d^nsites
+    name in ("Id", "I") && return _identity(n; kwargs...)
+    name == "F" && nsites == 1 && return _identity(n; kwargs...)    # no fermions: parity is trivial
+    name in ("RandomUnitary", "randU") && return _random_unitary(n; kwargs...)
+    return nothing
+end
+
+_identity(n; eltype = Float64, kw...) = Matrix{eltype}(LinearAlgebra.I, n, n)
+
+# Haar-random unitary: the Q of a QR decomposition of a Gaussian matrix, with R's diagonal made
+# positive.
+function _random_unitary(n; eltype = ComplexF64, random_matrix = randn(eltype, n, n), kw...)
+    Q, R = LinearAlgebra.qr(random_matrix)
+    return Matrix(Q) * LinearAlgebra.Diagonal(sign.(LinearAlgebra.diag(R)))
 end
 
 # A matrix on (sites′, sites) as a tensor. Legs are reversed so that, read column-major, the first
@@ -163,8 +199,7 @@ end
 """
     op(name::String, sites...; kwargs...)
 
-Build the operator `name` on `sites` from the package's registry, falling back to the backend's
-own library.
+Build the operator `name` on `sites` from the package's operator registry.
 
 # Arguments
 - `name::String`: The operator name, e.g. `"X"`, `"CNOT"`, `"Rx"`.
@@ -180,8 +215,6 @@ function op(name::AbstractString, sites...; kwargs...)
     d = dim(first(sites))
     m = all(s -> dim(s) == d, sites) ? operator_matrix(name, length(sites), d; kwargs...) : nothing
     isnothing(m) || return operator_tensor(m, collect(sites))
-    t = backend_op(String(name), sites...; kwargs...)
-    isnothing(t) || return t
     throw(ArgumentError(
         "op: no operator \"$name\" on $(length(sites)) site(s) of dimension $d. " *
             "Register one with `register_op!`."
@@ -194,6 +227,9 @@ const STATES = Dict{Int, Dict{String, Vector}}(
         "0" => [1.0, 0.0], "1" => [0.0, 1.0],
         "+" => [1.0, 1.0] / √2, "-" => [1.0, -1.0] / √2,
         "i" => [1.0, im] / √2, "-i" => [1.0, -im] / √2,
+        # the tetrahedral (SIC-POVM) states
+        "Tetra1" => [1.0, 0.0], "Tetra2" => [1 / √3, √2 / √3],
+        "Tetra3" => [1 / √3, √2 / √3 * exp(im * 2π / 3)], "Tetra4" => [1 / √3, √2 / √3 * exp(im * 4π / 3)],
     ),
     3 => Dict{String, Vector}(
         "Up" => [1.0, 0.0, 0.0], "Z0" => [0.0, 1.0, 0.0], "Dn" => [0.0, 0.0, 1.0],

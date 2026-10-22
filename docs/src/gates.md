@@ -148,9 +148,7 @@ The keyword arguments map as:
 
 - `paramkeys = (:θ, :ϕ)` — names of the kwargs your operator expects, in the order they appear in the circuit-tuple parameter. For a single-parameter gate, use a 1-tuple like `(:θ,)`.
 - `opname = "FSim"` — defaults to the gate name; override if your circuit-level name should differ from the name the operator is registered under.
-- `rescale = identity` — applied to the parameter(s) before forwarding to the operator. Useful when your operator follows a different convention (e.g., the built-in `"Rxx"` uses `rescale = θ -> θ/2` to bridge our qiskit convention to the registry's `exp(-iϕ XX)`).
-
-On the ITensors backend an `ITensors.op` method for the name also works in place of step 1: names the package's operator registry does not define fall through to ITensors' own operator library.
+- `rescale = identity` — applied to the parameter(s) before forwarding to the operator. Useful when your operator is written in a different convention from the circuit's (e.g. `rescale = θ -> θ/2` for an operator defined as `exp(-iϕ XX)` when the circuit passes qiskit's `θ`). The built-in operators all follow qiskit, so none of them needs one.
 
 To add a qiskit-style alias for your gate (so e.g. `"fsim"` resolves to `"FSim"`), call [`register_alias!`](@ref):
 

@@ -48,7 +48,7 @@ using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, no
     directsum, charge_sectors,
     scalar, apply, map_diag, map_diag!, factorize_svd, truncated_svd, gram,
     TruncationStrategy, truncation_strategy, kept_count,
-    array, data, scale!, fused_norm_message, fused_norm_scalar, backend_op
+    array, data, scale!, fused_norm_message, fused_norm_scalar
 import .TensorInterface: contract, truncate, inner, uniqueinds, datatype, scalartype
 
 using Adapt: adapt
