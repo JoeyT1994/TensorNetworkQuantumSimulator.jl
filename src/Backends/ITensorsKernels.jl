@@ -30,13 +30,12 @@ function _fused_message_slot(m::ITensor, ψinds::Vector{<:Index})
     return k, M
 end
 
-# Task-local pool of two buffers for the chain intermediates, keyed by storage family (Array,
-# CuArray, ...) and element type. Kernels never return a buffer.
+# Two buffers for the chain intermediates, pooled in the kernel workspace (see
+# `TI.with_kernel_workspace`) by storage family (Array, CuArray, ...) and element type. Kernels
+# never return a buffer.
 function _fused_buffers(ref::AbstractArray, ::Type{T}, n::Integer) where {T}
     key = (Base.typename(typeof(ref)).wrapper, T)
-    pool = get!(task_local_storage(), :tnqs_fused_buffers) do
-        Dict{Any, Tuple{AbstractVector, AbstractVector}}()
-    end::Dict{Any, Tuple{AbstractVector, AbstractVector}}
+    pool = TI.kernel_workspace()
     bufs = get(pool, key, nothing)
     if bufs === nothing || length(bufs[1]) < n
         bufs = (similar(ref, T, n), similar(ref, T, n))
@@ -163,6 +162,10 @@ function _fused_slots(ψinds::Vector{<:Index}, incoming::Vector)
 end
 
 function TI.fused_norm_message(ψ::ITensor, sinds, incoming::Vector; normalize::Bool = true)
+    return TI.with_kernel_workspace(() -> _fused_norm_message(ψ, sinds, incoming; normalize))
+end
+
+function _fused_norm_message(ψ::ITensor, sinds, incoming::Vector; normalize::Bool)
     A = _fused_data(ψ)
     A === nothing && return nothing
     ψinds = collect(Index, ITensors.inds(ψ))
@@ -207,6 +210,10 @@ end
 
 # Single-vertex closure ψ·Πm·(ops)·ψ̄ → scalar; `ops` are (s′, s) operator tensors on site legs.
 function TI.fused_norm_scalar(ψ::ITensor, sinds, incoming::Vector, ops::Vector)
+    return TI.with_kernel_workspace(() -> _fused_norm_scalar(ψ, sinds, incoming, ops))
+end
+
+function _fused_norm_scalar(ψ::ITensor, sinds, incoming::Vector, ops::Vector)
     A = _fused_data(ψ)
     A === nothing && return nothing
     ψinds = collect(Index, ITensors.inds(ψ))

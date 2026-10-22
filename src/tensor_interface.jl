@@ -21,7 +21,8 @@ Rules:
   6. `Tensor` and `Index` (bound in Backends.jl) are used only in annotations; new indices come
      from `new_index`, new tensors from the construction verbs.
   7. Verbs have no fallbacks. Hooks (`fused_norm_message`, `fused_norm_scalar`)
-     are optional: their fallback returns `nothing` and the caller takes the generic path.
+     are optional: their fallback returns `nothing` and the caller takes the generic path. Their
+     scratch memory lives in `kernel_workspace()`, scoped by `with_kernel_workspace`.
 =#
 module TensorInterface
 
@@ -155,6 +156,26 @@ are (s′, s) operators on site legs `s ∈ sinds` (empty for the norm). `nothin
 has no fused path.
 """
 fused_norm_scalar(ψ, sinds, incoming, ops) = nothing
+
+"""
+    with_kernel_workspace(f)
+
+Run `f()` with the fused kernels sharing one set of scratch buffers across calls (e.g. a BP
+sweep). On return the workspace is held only weakly: the next scope reuses it unless a GC has
+collected it in between, so buffers are never kept alive past a GC. Nested scopes share the
+outermost workspace.
+"""
+function with_kernel_workspace(f)
+    tls = task_local_storage()
+    haskey(tls, :tnqs_kernel_workspace) && return f()
+    last = get(tls, :tnqs_kernel_workspace_last, WeakRef()).value
+    workspace = last === nothing ? Dict{Any, Any}() : last
+    tls[:tnqs_kernel_workspace_last] = WeakRef(workspace)
+    return task_local_storage(f, :tnqs_kernel_workspace, workspace)
+end
+
+# The current scope's workspace (a Dict for the backend's kernels to pool buffers in), or nothing.
+kernel_workspace() = get(task_local_storage(), :tnqs_kernel_workspace, nothing)
 
 export Algorithm, @Algorithm_str
 

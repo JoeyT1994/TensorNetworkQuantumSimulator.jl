@@ -74,8 +74,9 @@ function expect(
         return scalar(contract(tensors; sequence = seq))
     end
 
-    denom = contract_region(v -> "I")
-    numer = contract_region(op_string_function(op_strings, obs_vs))
+    numer, denom = with_kernel_workspace() do
+        contract_region(op_string_function(op_strings, obs_vs)), contract_region(v -> "I")
+    end
 
     return coeff * numer / denom
 end
@@ -116,7 +117,7 @@ function expect(
         observables::Vector{<:Tuple};
         kwargs...,
     )
-    return map(obs -> expect(alg, cache, obs; kwargs...), observables)
+    return with_kernel_workspace(() -> map(obs -> expect(alg, cache, obs; kwargs...), observables))
 end
 
 function expect(
@@ -148,8 +149,9 @@ function expect(
         return scalar(_evaluate(cache, parts; site))
     end
 
-    denom = contract_region(v -> "I")
-    numer = contract_region(op_string_function(op_strings, obs_vs))
+    numer, denom = with_kernel_workspace() do
+        contract_region(op_string_function(op_strings, obs_vs)), contract_region(v -> "I")
+    end
 
     return coeff * numer / denom
 end

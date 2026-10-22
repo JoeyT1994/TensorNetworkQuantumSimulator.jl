@@ -251,15 +251,18 @@ function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
     converged = false
     avg_diff = nothing
     niter = alg.kwargs.maxiter
-    for i in 1:alg.kwargs.maxiter
-        diff = compute_error ? Ref(0.0) : nothing
-        update_iteration!(alg, bpc, alg.kwargs.edge_sequence; (update_diff!) = diff)
-        if compute_error
-            avg_diff = diff.x / length(alg.kwargs.edge_sequence)
-            if avg_diff <= alg.kwargs.tolerance
-                converged = true
-                niter = i
-                break
+    # the fused kernels share their scratch buffers across the sweeps, and drop them afterwards
+    with_kernel_workspace() do
+        for i in 1:alg.kwargs.maxiter
+            diff = compute_error ? Ref(0.0) : nothing
+            update_iteration!(alg, bpc, alg.kwargs.edge_sequence; (update_diff!) = diff)
+            if compute_error
+                avg_diff = diff.x / length(alg.kwargs.edge_sequence)
+                if avg_diff <= alg.kwargs.tolerance
+                    converged = true
+                    niter = i
+                    break
+                end
             end
         end
     end
