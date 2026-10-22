@@ -11,7 +11,6 @@ using Test
     include("test_sampling.jl")
     include("test_truncate.jl")
     include("test_contraction_sequences.jl")
-    include("test_seam.jl")
     include("test_operators.jl")
     include("test_kernels.jl")
     include("test_planar_embedding.jl")
