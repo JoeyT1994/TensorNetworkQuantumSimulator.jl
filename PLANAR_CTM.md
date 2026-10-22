@@ -10,7 +10,7 @@ reproduced it (see [Production port](#production-port)).
 `src/MessagePassing/ctmrg_rules.jl` (geometry, recipes, rule design and certification) and
 `src/MessagePassing/ctmrg.jl` (the cache, passes, free energy, observables); tests in
 `test/test_ctmrg.jl`. See [Production port](#production-port) for what changed from the
-prototype, which stays in `prototypes/planar_ctm/` for reference.
+prototype (removed from the tree; it is in commit 4655802).
 
 ## Where it stands
 
@@ -208,17 +208,3 @@ the ring in tensor form.
 kagome 7e-15), but truncated χ breaks (Penrose 3 at χ = 8: 5e-3 against 7e-9; kagome at χ = 4:
 4e-3 against 2e-8). 1e-3 stays the default; a cutoff that tightens as the truncation becomes
 lossless is the open refinement.
-
-## Prototype files (`prototypes/planar_ctm/`, superseded by `src/`)
-
-Run `julia --project=. prototypes/planar_ctm/smoke.jl` from the repository root. It takes a few minutes and
-prints |F − ln Z| for the Penrose disc, kagome 3×3 and Penrose 3 at truncated and lossless χ.
-
-| file | contents |
-|---|---|
-| `smoke.jl` | quick end-to-end check from the repository project |
-| `planar_proto2.jl` | `PCTM` tensor engine: blocks, connectors, Jacobi sweep, Kikuchi F, exact mode |
-| `planar_seq.jl` | sequential pass, stacked projectors |
-| `rcg.jl`, `rcs.jl` | region oracle (vertex multisets), static true regions from winding numbers |
-| `dagtools.jl` | exit rules, `design_minimax` (min-depth rule choice) |
-| `seq_suite.jl`, `seq_big.jl`, `seq_run.jl` | the drivers behind the table above |
