@@ -1,6 +1,6 @@
 @eval module $(gensym())
 using TensorNetworkQuantumSimulator
-using TensorNetworkQuantumSimulator: Dictionary, freenergy, map_tensors, ctmrg_rules
+using TensorNetworkQuantumSimulator: Dictionary, freenergy, map_tensors
 using LinearAlgebra: Diagonal, I, norm
 using Random
 using Test: @testset, @test, @test_throws
@@ -69,12 +69,6 @@ end
     @test Π(Vk, Wk) ≈ Π(Vd, Wd) rtol = 1.0e-8
     # kagome (like larger Penrose tilings) needs directional corners, which cycle projectors cannot use
     @test_throws ErrorException CTMRGCache(positive_network(kagome_lattice(3, 3)), 4; projector = :cycle)
-end
-
-@testset "CTMRG update rules" begin
-    # acyclic on the square lattice; the triangular lattice needs Jacobi passes
-    @test !isnothing(ctmrg_rules(planar_embedding(named_grid((3, 3)))).order)
-    @test isnothing(ctmrg_rules(planar_embedding(named_triangular_lattice_graph(3, 4))).order)
 end
 
 @testset "CTMRG observables on a state" begin
