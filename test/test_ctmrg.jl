@@ -71,6 +71,10 @@ end
 
     cache = update(CTMRGCache(ψ, 64))
     @test expect(cache, ("Z", [v])) ≈ first(exact) atol = 1.0e-8
+    @test norm_sqr(ψ; alg = "ctmrg", maxdim = 64) ≈ norm_sqr(ψ; alg = "exact") rtol = 1.0e-8
+    @test norm_sqr(cache; alg = "ctmrg") ≈ norm_sqr(ψ; alg = "exact") rtol = 1.0e-8
+    ϕ = random_tensornetworkstate(ComplexF64, g, siteinds(ψ); bond_dimension = 2)
+    @test inner(ψ, ϕ; alg = "ctmrg", maxdim = 64) ≈ inner(ψ, ϕ; alg = "exact") rtol = 1.0e-8
     @test partitionfunction(cache) ≈ norm_sqr(ψ; alg = "exact") rtol = 1.0e-8
     ρ = reduced_density_matrix(cache, [src(e), dst(e)])
     ρ_exact = reduced_density_matrix(ψ, [src(e), dst(e)]; alg = "exact")

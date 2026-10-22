@@ -164,7 +164,7 @@ ip = ITensors.inner(ψ, ϕ; alg = "bp")
 ρ = reduced_density_matrix(ψ, [(3, 3)]; alg = "bp")
 ```
 
-All of these support the same algorithm options as `expect`: `"exact"`, `"bp"`, `"boundarymps"`, and (for norms) `"loopcorrections"`.
+All of these support the same algorithm options as `expect`: `"exact"`, `"bp"`, `"boundarymps"`, `"ctmrg"` (norms, inner products and reduced density matrices), and (for norms) `"loopcorrections"`.
 
 ### Sampling
 

@@ -30,6 +30,7 @@ Compute the squared norm of a `TensorNetworkState` or the state wrapped in an up
     - `"exact"`: Exact contraction of the tensor network.
     - `"bp"`: Belief propagation approximation.
     - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
+    - `"ctmrg"`: CTMRG approximation, on planar graphs (requires `maxdim`).
     - `"loopcorrections"`: Loop corrections to belief propagation (requires `max_configuration_size`).
 - For `alg = "boundarymps"`:
     - `mps_bond_dimension::Integer`: The bond dimension for the boundary MPS approximation.
@@ -55,7 +56,7 @@ nsq_bmps = norm_sqr(ψ; alg = "boundarymps", mps_bond_dimension = 10)
 ```
 """
 
-function norm_sqr(tns::Union{TensorNetworkState, AbstractBeliefPropagationCache}; alg, kwargs...)
+function norm_sqr(tns::Union{TensorNetworkState, AbstractBeliefPropagationCache, CTMRGCache}; alg, kwargs...)
     algorithm_check(tns, "norm_sqr", alg)
     return norm_sqr(Algorithm(alg), tns; kwargs...)
 end
@@ -86,9 +87,23 @@ function norm_sqr(alg::Algorithm"boundarymps", ψ::TensorNetworkState; mps_bond_
     return norm_sqr(alg, ψ_bmps; kwargs...)
 end
 
+function norm_sqr(alg::Algorithm"ctmrg", cache::CTMRGCache)
+    tn = network(cache)
+    z = partitionfunction(cache)
+    tn isa TensorNetworkState && return z
+    tn isa TensorNetwork && return abs2(z)
+    return state_error("TensorNetworkState")
+end
+
+#A norm only needs the free energy converged, not the messages
+function norm_sqr(alg::Algorithm"ctmrg", ψ::TensorNetworkState; maxdim::Integer, cache_update_kwargs = (;))
+    cache_update_kwargs = merge((; convergence = :freenergy), cache_update_kwargs)
+    return norm_sqr(alg, converged_cache(alg, ψ; maxdim, cache_update_kwargs))
+end
+
 function norm_sqr(alg::Algorithm, ψ::TensorNetworkState; kwargs...)
     return algorithm_error()
 end
 
-LinearAlgebra.norm(alg::Algorithm, ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}; kwargs...) = sqrt(norm_sqr(alg, ψ; kwargs...))
-LinearAlgebra.norm(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}; kwargs...) = sqrt(norm_sqr(ψ; kwargs...))
+LinearAlgebra.norm(alg::Algorithm, ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMRGCache}; kwargs...) = sqrt(norm_sqr(alg, ψ; kwargs...))
+LinearAlgebra.norm(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMRGCache}; kwargs...) = sqrt(norm_sqr(ψ; kwargs...))

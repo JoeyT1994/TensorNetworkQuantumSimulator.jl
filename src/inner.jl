@@ -12,6 +12,7 @@ Compute the inner product ⟨ψ|ϕ⟩ between two `TensorNetworkState`s using th
         - `"exact"`: Exact contraction of the tensor network.
         - `"bp"`: Belief propagation approximation.
         - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
+        - `"ctmrg"`: CTMRG approximation, on planar graphs (requires `maxdim`).
         - `"loopcorrections"`: Loop corrections to belief propagation.
     - Extra kwargs for `alg = "boundarymps"`:
         - `mps_bond_dimension::Integer`: The bond dimension for the boundary MPS approximation.
@@ -70,6 +71,12 @@ end
 function inner(alg::Algorithm"boundarymps", ψ::TensorNetworkState, ϕ::TensorNetworkState; mps_bond_dimension::Integer, partition_by = "row", cache_update_kwargs = default_bmps_update_kwargs(ψ), kwargs...)
     ψϕ_bmps = converged_cache(alg, BilinearForm(ψ, ϕ); mps_bond_dimension, partition_by, cache_update_kwargs)
     return inner(alg, ψϕ_bmps; kwargs...)
+end
+
+#An overlap only needs the free energy converged, not the messages
+function inner(alg::Algorithm"ctmrg", ψ::TensorNetworkState, ϕ::TensorNetworkState; maxdim::Integer, cache_update_kwargs = (;))
+    cache_update_kwargs = merge((; convergence = :freenergy), cache_update_kwargs)
+    return partitionfunction(converged_cache(alg, BilinearForm(ψ, ϕ); maxdim, cache_update_kwargs))
 end
 
 function inner(alg::Algorithm"exact", ψ::TensorNetworkState, ϕ::TensorNetworkState)
