@@ -48,6 +48,11 @@ const TNQS = TensorNetworkQuantumSimulator
         @test z_bp ≈ norm_sqr(ψ; alg = "exact")
         @test z_bp ≈ norm_sqr(ψ; alg = "bp")
 
+        # converged messages are fixed points of the message update
+        e = first(edges(g))
+        m, _ = TNQS.updated_message(ψ_BPC, e)
+        @test m ≈ TNQS.message(ψ_BPC, e)
+
         vc = first(center(g))
         ρ_bp = reduced_density_matrix(ψ, vc; alg = "bp")
         ρ_exact = reduced_density_matrix(ψ, vc; alg = "exact")

@@ -216,7 +216,7 @@ function updated_message(
         alg = default_message_update_alg(bp_cache),
         kwargs...,
     )
-    return updated_message(set_default_kwargs(Algorithm(alg; kwargs...)), bp_cache, edge)
+    return updated_message(set_default_kwargs(Algorithm(alg; kwargs...), bp_cache), bp_cache, edge)
 end
 
 """
