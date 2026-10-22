@@ -315,8 +315,8 @@ function _eig_projectors(cache::CTMRGCache, f, ins_of, memo)
 end
 
 #Right and left bases of the kept invariant subspace at every interface of a ring, or `nothing` if
-#the face is left to the SVD projector. They are found at the last interface (matrix-free when the ring is
-#large, else dense) and carried around the ring by the blocks.
+#the face is left to the SVD projector. They are found at the last interface, matrix-free (densely
+#only if the two Krylov solves disagree), and carried around the ring by the blocks.
 function _ring_bases(mats, r, noise)
     n = length(mats)
     N = size(mats[n], 2)
@@ -390,11 +390,10 @@ function _spectral_bases(M::AbstractMatrix, r::Integer; noise::Real = size(M, 1)
 end
 
 #The same, matrix-free, from Krylov-Schur solves for the ring and its transpose; `nothing` (so the
-#dense route decides) if the ring is too small, a solve fails, or the two disagree.
+#dense route decides) if a solve fails or the two disagree.
 function _krylov_spectral_bases(ring, ringᵀ, N, T, r, noise; gap = 1.0e-8)
-    howmany = r + 2
-    krylovdim = 2howmany + 16
-    krylovdim <= N ÷ 2 || return nothing
+    howmany = min(r + 2, N)
+    krylovdim = min(2howmany + 16, N)
     alg = Arnoldi(; krylovdim, tol = noise, maxiter = 100, verbosity = 0)
     rng = Xoshiro(N)
     _, vR, λR, infoR = schursolve(ring, randn(rng, T, N), howmany, :LM, alg)
