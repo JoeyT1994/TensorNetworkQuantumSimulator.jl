@@ -73,11 +73,23 @@ sample_certified
 ```@docs
 heavy_hexagonal_lattice
 lieb_lattice
+triangular_lattice
+kagome_lattice
+penrose_tiling
+```
+
+## Planar Embeddings
+
+```@docs
+PlanarEmbedding
+planar_embedding
+vertex_polygon
 ```
 
 ## Message Passing
 
 ```@docs
+CTMRGCache
 update
 update_iteration!
 ```
