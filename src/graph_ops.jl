@@ -37,9 +37,7 @@ end
 """
     triangular_lattice(nx::Int64, ny::Int64)
 
-Create a triangular lattice of `nx × ny` sites. Vertex `(i, j)` is joined to `(i + 1, j)`, `(i, j + 1)`
-and `(i + 1, j + 1)`; the names are a planar straight-line drawing (a square grid with one
-diagonal per square).
+Create a triangular lattice geometry with `nx` columns and `ny` rows: a square grid with one diagonal per square.
 """
 function triangular_lattice(nx::Int64, ny::Int64)
     g = named_grid((nx, ny))
@@ -52,9 +50,7 @@ end
 """
     kagome_lattice(nx::Int64, ny::Int64)
 
-Create a kagome lattice of `nx × ny` unit cells (three sites each): the triangular lattice on
-`(2nx + 1) × (2ny + 1)` sites with every site whose two coordinates are both even removed. The
-names are a planar straight-line drawing.
+Create a kagome lattice geometry with `nx` columns and `ny` rows of three-site unit cells.
 """
 function kagome_lattice(nx::Int64, ny::Int64)
     g = triangular_lattice(2 * nx + 1, 2 * ny + 1)
@@ -67,10 +63,8 @@ end
 """
     penrose_tiling(ngenerations::Int64)
 
-Create the vertex–edge graph of a Penrose rhombus (P3) tiling: a wheel of ten Robinson triangles
-deflated `ngenerations` times, each pair of triangles sharing a base forming one rhombus. Vertex
-names are their (x, y) positions (rounded), so the names are a planar straight-line drawing; the
-patch fills the unit disc.
+Create a Penrose rhombus (P3) tiling geometry, deflated `ngenerations` times, filling the unit disc.
+Vertex names are their (x, y) positions.
 """
 function penrose_tiling(ngenerations::Int64)
     φ = (1 + sqrt(5)) / 2
@@ -94,7 +88,7 @@ function penrose_tiling(ngenerations::Int64)
         end
         tris = next
     end
-    # merge coincident points (computed along different deflation paths) on a fine grid
+    # the same point is reached along different deflation paths, so merge on a fine grid
     scale = 1.0e8
     keys_ = Dict{Tuple{Int, Int}, Tuple{Float64, Float64}}()
     function name(z)

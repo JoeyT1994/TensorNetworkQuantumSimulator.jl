@@ -9,8 +9,7 @@ using TensorNetworkQuantumSimulator: bp_factors, contraction_sequence, incoming_
 using TensorNetworkQuantumSimulator.TensorInterface: fused_norm_message, fused_norm_scalar, inds, scalar
 using Test: @testset, @test
 
-# The fused double-layer BP kernels (src/kernel_hooks.jl, src/Backends/ITensorsKernels.jl) must
-# agree with the generic contraction they replace, and must actually be taken on dense states.
+# The fused BP kernels must be taken on dense states and agree with the generic contraction.
 
 same_legs(a, b) = issetequal(collect(inds(a)), collect(inds(b)))
 
@@ -43,9 +42,9 @@ end
             e = NamedEdge(v => vn)
             incoming = incoming_messages(bpc, v; ignore_edges = (reverse(e),))
             raw = norm_message_kernel(ψ, v, incoming; normalize = false)
-            @test !isnothing(raw)                                    # the kernel is taken
+            @test !isnothing(raw)   # the kernel is taken
             fast = normalize_message(raw)
-            # the kernel's own normalisation: unit 2-norm, the same message up to phase
+            # the kernel's own normalisation: unit 2-norm, same message up to phase
             own = norm_message_kernel(ψ, v, incoming; normalize = true)
             @test norm(own) ≈ 1
             @test norm(normalize_message(own) - fast) < 1.0e-12
@@ -59,7 +58,7 @@ end
         worst_scalar = 0.0
         for v in vertices(g)
             incoming = incoming_messages(bpc, v)
-            names = nsite == 1 ? ("I", "Z", "X") : ("I",)       # ops need a single site leg
+            names = nsite == 1 ? ("I", "Z", "X") : ("I",)   # ops need a single site leg
             for name in names
                 fast = norm_scalar_kernel(ψ, [v], incoming; op_strings = _ -> name)
                 @test !isnothing(fast)

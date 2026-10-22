@@ -2,8 +2,8 @@
 
 # Internal dispatch record for a circuit-tuple gate name.
 #
-# - `opname`: the operator name looked up by `op` in the operator registry (operators.jl).
-#   Usually equal to the user-facing key, but kept separate so a registry entry can rename if needed.
+# - `opname`: the operator name looked up by `op` (see operators.jl). Usually equal to
+#   the user-facing key, but kept separate so a registry entry can rename if needed.
 # - `paramkeys`: keyword names accepted by the underlying operator definition, e.g.
 #   `(:θ,)`, `(:ϕ,)`, or `(:θ, :β)`. Empty for fixed gates.
 # - `rescale`: applied to the user-supplied parameter(s) before forwarding. Used
@@ -159,8 +159,7 @@ Register a custom gate `name` so it can be used in circuit-tuple form
 
 The matrix itself must be registered separately with [`register_op!`](@ref)
 under `opname` (defaults to `name`). See "Custom Gates" in the gate docs for a
-worked example. (On the ITensors backend, an `ITensors.op` method for `opname`
-also works: names the operator registry does not define fall through to it.)
+worked example.
 
 Modifies the runtime gate registry. The registration lives only in the current
 Julia session — to persist it across sessions, place the `register_gate!` call

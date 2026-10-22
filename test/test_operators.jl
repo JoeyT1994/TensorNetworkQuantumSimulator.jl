@@ -4,9 +4,8 @@ using TensorNetworkQuantumSimulator
 using TensorNetworkQuantumSimulator: GATES, OPERATORS, STATES, toitensor, op, state, register_op!
 using Test: @testset, @test, @test_throws
 
-# The in-house operator library against the ITensors.op it replaced. Names ITensors defines are
-# compared with ITensors.op; the in-house gates, whose ITensors.op overloads lived in this package,
-# with the formulas of those overloads.
+# The operator library against ITensors.op; in-house gates that ITensors does not define are
+# compared with their explicit formulas.
 
 const θ, ϕ, β, λ = 0.37, -0.81, 0.23, 0.59
 
@@ -96,7 +95,7 @@ same(a, b) = ITensors.inds(a) ⊆ ITensors.inds(b) && ITensors.inds(b) ⊆ ITens
         # "Rn" is defined by ITensors but not by the package registry
         @test same(op("Rn", s1; θ, ϕ, λ), ITensors.op("Rn", s1; θ, ϕ, λ))
         @test_throws ArgumentError op("NotAnOperator", s1)
-        # and the other way: the in-house gates stay reachable as ITensors.op (ITensorsCompat)
+        # the in-house gates are also reachable as ITensors.op (ITensorsCompat)
         for name in ("Rxxyy", "Rxxyyzz", "xx_plus_yy")
             kw = op_kwargs(name)
             @test same(ITensors.op(name, s1, s2; kw...), op(name, s1, s2; kw...))

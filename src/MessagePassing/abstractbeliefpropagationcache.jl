@@ -19,8 +19,7 @@ function rescale_vertices!(
     return not_implemented()
 end
 
-#Backend fast paths for the double-layer message update and single-vertex region scalars;
-#`nothing` means no specialization applies and the generic path runs (see kernel_hooks.jl).
+#Backend fast paths for norm-network message updates and vertex scalars; `nothing` falls back to the generic path
 norm_message_kernel(net, vertex, incoming_ms; kwargs...) = nothing
 norm_scalar_kernel(net, vertices, incoming_ms; kwargs...) = nothing
 
@@ -201,13 +200,8 @@ function updated_message(
     return updated_message, (cache_key, sequence, seq_changed)
 end
 
-# Unit 2-norm with the phase of the element sum removed. The 2-norm rather than the sum sets the
-# scale: the sum can cancel to ~0 for signed or complex networks. But the 2-norm alone leaves each
-# message's global phase free, and an outgoing message's phase is the sum of its incoming messages'
-# phases, so on a loopy graph roundoff phases grow exponentially (measured ~5× per sweep on a complex
-# hexagonal state: messages lost Hermiticity entirely within 25 sweeps and `symmetric_gauge!` took
-# square roots of negative eigenvalues). Dividing out the sum's phase, wherever the sum is not
-# cancelled to roundoff, pins it. message_diff is phase-invariant so convergence is unaffected.
+# Unit 2-norm (the element sum can cancel for signed or complex networks), with the phase of the
+# sum divided out so that roundoff phases do not accumulate around loops.
 function normalize_message(m)
     n = norm(m)
     iszero(n) && return m

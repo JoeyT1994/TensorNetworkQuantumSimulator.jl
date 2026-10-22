@@ -1,28 +1,13 @@
-#=
-Planar embeddings from supplied vertex coordinates.
-
-CTMRG on a planar graph needs its combinatorial embedding — the cyclic (counterclockwise) order
-of the edges around every vertex, which fixes the faces and, dually, the polygon surrounding each
-vertex. Here the embedding is read off a straight-line drawing: the user supplies a position for
-every vertex (by default the vertex names themselves, when they are 2-tuples of numbers — named
-grids, hexagonal and heavy-hexagonal lattices, and the lattice constructors in graph_ops.jl), the
-drawing is checked to be planar (no two edges cross, no vertex lies on an edge), neighbours are
-sorted by angle, and the faces are traced from the darts (directed edges).
-
-Conventions: every dart u → v has exactly one face on its LEFT. Inner faces are traced
-counterclockwise; the outer face, traced the same way, runs clockwise (negative signed area).
-Around a vertex v with counterclockwise neighbours u₁, …, u_z, face fᵢ = face left of v → uᵢ is
-the face between edges (v, uᵢ) and (v, uᵢ₊₁): the polygon around v alternates edge (v, u₁),
-face f₁, edge (v, u₂), face f₂, … (see `vertex_polygon`).
-=#
+# Planar embeddings read off a straight-line drawing of the graph.
+# Every dart u → v has one face on its left. Inner faces are traced counterclockwise, the outer
+# face clockwise; around v the polygon alternates edge (v, uᵢ) and the face left of v → uᵢ.
 
 """
     PlanarEmbedding
 
 A connected planar graph with a straight-line drawing: vertex positions, the counterclockwise
-neighbour order around each vertex, and the faces. Build with [`planar_embedding`](@ref).
-
-Faces are numbered `1:length(faces(emb))` (inner faces) and `0` (the outer face).
+neighbour order around each vertex, and the faces. Inner faces are numbered `1:length(faces(emb))`,
+the outer face is `0`. Build with [`planar_embedding`](@ref).
 """
 struct PlanarEmbedding{V, G <: AbstractGraph{V}}
     graph::G
@@ -38,11 +23,7 @@ positions(emb::PlanarEmbedding) = emb.positions
 faces(emb::PlanarEmbedding) = emb.faces
 outer_face(emb::PlanarEmbedding) = emb.outer
 
-"""
-    default_positions(g)
-
-Vertex positions read off the vertex names, when every name is a 2-tuple of numbers.
-"""
+# Vertex positions read off the vertex names, when every name is a 2-tuple of numbers
 function default_positions(g::AbstractGraph)
     vs = collect(vertices(g))
     all(v -> v isa Tuple && length(v) == 2 && all(x -> x isa Real, v), vs) || throw(ArgumentError(
@@ -55,9 +36,17 @@ end
 """
     planar_embedding(g; positions = default_positions(g))
 
-The planar embedding of the connected graph `g` given by its straight-line drawing at
-`positions` (vertex => (x, y)). Errors if the drawing is not planar: two edges cross, a vertex lies
-on an edge, or two vertices coincide.
+Build the planar embedding of a connected graph from a straight-line drawing of it.
+Errors if the drawing is not planar (crossing edges, a vertex on an edge, or coincident vertices).
+
+# Arguments
+- `g::AbstractGraph`: The connected graph.
+
+# Keyword Arguments
+- `positions`: Dictionary `vertex => (x, y)`. Defaults to the vertex names, which must then be 2-tuples of numbers.
+
+# Returns
+- `PlanarEmbedding`: The embedding.
 """
 function planar_embedding(g::AbstractGraph{V}; positions = default_positions(g)) where {V}
     is_connected(g) || throw(ArgumentError("planar_embedding: the graph is not connected"))
@@ -160,10 +149,15 @@ end
 """
     vertex_polygon(emb, v)
 
-The polygon surrounding `v` in the dual description: a vector of `(u, f)` pairs in
-counterclockwise order, one per incident edge, where `u` is the neighbour across the edge and `f`
-the face that follows that edge counterclockwise (the face between edges (v, u) and the next
-one). Face `0` is the outer face.
+Get the polygon surrounding vertex `v` in the planar embedding.
+
+# Arguments
+- `emb::PlanarEmbedding`: The planar embedding.
+- `v`: The vertex.
+
+# Returns
+- `Vector`: `(u, f)` pairs in counterclockwise order, one per incident edge, with `u` the neighbour
+  across the edge and `f` the face between that edge and the next one (`0` for the outer face).
 """
 function vertex_polygon(emb::PlanarEmbedding, v)
     return [(u, emb.dart_face[(v, u)]) for u in emb.rotation[v]]
@@ -179,8 +173,7 @@ face_vertices(emb::PlanarEmbedding, f::Integer) = f == 0 ? emb.outer : emb.faces
 """
     face_centroid(emb, f)
 
-The centroid of the vertices of inner face `f` — the dual vertex, a corner of the polygons
-around the face's vertices.
+The centroid of the vertices of inner face `f`.
 """
 function face_centroid(emb::PlanarEmbedding, f::Integer)
     f == 0 && throw(ArgumentError("face_centroid: the outer face has no centroid"))

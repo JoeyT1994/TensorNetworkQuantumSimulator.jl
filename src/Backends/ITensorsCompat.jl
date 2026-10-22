@@ -1,13 +1,6 @@
-#=
-ITensorsCompat: ITensors-facing compatibility for code written against the ITensors-backed
-releases, kept here so the rest of the package stays backend-agnostic. Delete it together with
-the ITensors backend.
-
-Before the seam existed the package extended ITensors' own functions, so user scripts (and some
-tests and examples) call them on package objects — `ITensors.contract(ψ; alg = "exact")`,
-`datatype(ψ)` imported from ITensors — or build the package's in-house gates through
-`ITensors.op("Rxxyy", s1, s2; θ)`. These methods forward such calls to the package.
-=#
+# Forwards ITensors functions called on package objects (e.g. `ITensors.contract(ψ)`,
+# `ITensors.op("Rxxyy", s1, s2; θ)`) to the package, for scripts written against earlier
+# releases. Delete together with the ITensors backend.
 module ITensorsCompat
 
 using ITensors: ITensors, Index

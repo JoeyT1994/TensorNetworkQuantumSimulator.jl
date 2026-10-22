@@ -1,37 +1,22 @@
-#=
-Geometry and update rules of CTMRG (the cache that uses them is in ctmrg.jl).
-
-On a planar embedding every inner face f carries a ring of CORNERS C(p, f), one per vertex p of f,
-and every dart u → v a MESSAGE T(u → v). Each block stands for a region of the network, cut off
-from the rest along RAYS: dual paths that start at an edge of a face and run to the outer face.
-The cut across the edge (p → q) of an inner face f (f on its left) is an INTERFACE, keyed by that
-dart. Its legs are the bond(s) of the edge plus the interface where the ray continues: the ray
-enters h, the face right of p → q, and leaves it through the edge chosen by the EXIT rule.
-Truncating every interface with a projector pair is the CTMRG approximation.
-
-Every block, and every closed region used for the free energy and for observables, is written once
-as a RECIPE, a list of parts:
-
-    (:site, v)                         the network's factors at v
-    (:message, (u, v))                 T(u → v)
-    (:corner, (p, f))                  C(p, f)
-    (:enlarged, (p, f))                the enlarged corner of (p, f), itself a recipe (`_enlarged`)
-    (:inverse, corners, (I1, I2))      pseudo-inverse of the chain `corners`, a map between the
-                                       interfaces I1 and I2 (each corner counted with sign −1)
-    (:projector, (p, q), :A or :B)     one side of the projector pair at interface (p, q)
-
-Contracting a recipe gives a tensor (ctmrg.jl). Summing it as a signed multiset of vertices
-gives the block's REGION, and listing its blocks gives its dependencies; that is how the update
-rules are chosen and certified below, without touching a tensor. Enlarged corners are nested parts
-so that each is contracted once and reused, and the lists to contract stay short.
-=#
+# CTMRG on a planar embedding: its blocks, how each is built (a recipe), and the rules for updating
+# them. The cache that holds the tensors is in ctmrg.jl.
+#
+# Every inner face f has a corner C(p, f) at each of its vertices p, and every dart u → v a message
+# T(u → v). Each block is the contraction of a region of the network cut off along rays to the outer
+# face. The cut across the edge (p → q) of a face (f on its left) is an interface, keyed by that dart;
+# its ray continues into the face beyond, leaving it through the edge picked by the exit rule.
+#
+# Blocks and closed regions are recipes, lists of parts:
+#   (:site, v), (:message, (u, v)), (:corner, (p, f)), (:enlarged, (p, f)),
+#   (:inverse, corners, (I1, I2))   the pseudo-inverse of a chain of corners, between two interfaces,
+#   (:projector, I, :A or :B)       one side of the projector pair at interface I.
+# Contracting a recipe gives its tensor (ctmrg.jl). Summing it as a signed multiset of vertices gives
+# its region, which is how the update rules are chosen and certified here without any tensors.
 
 """
     CTMRGRules
 
-How a [`CTMRGCache`](@ref) updates its blocks, fixed by the geometry alone (see
-[`ctmrg_rules`](@ref)): the exit of every ray, the update used for every corner, and the
-order in which the blocks are recomputed.
+How a `CTMRGCache` updates its blocks, fixed by the geometry alone. See `ctmrg_rules`.
 """
 struct CTMRGRules{V}
     exits::Dict{Tuple{V, V}, Int}                         # interface → its exit in the next face
@@ -64,7 +49,6 @@ _corner_keys(emb::PlanarEmbedding) = [(p, f) for (f, w) in enumerate(faces(emb))
 # u's neighbour on face h other than v
 _other_neighbor(emb::PlanarEmbedding, h, u, v) = (w = _walk(emb, h, u); w[2] == v ? w[end] : w[2])
 
-# ── Rays ────────────────────────────────────────────────────────────────────────────────────
 
 # Number of faces between each inner face and the outer face.
 function _dual_distance(emb::PlanarEmbedding)
@@ -90,9 +74,9 @@ function _dual_distance(emb::PlanarEmbedding)
     return d
 end
 
-# An exit rule picks, for a ray entering face h across (p, q), the edge (x_j, x_{j+1}) it leaves
-# through, where wh = [p = x_0, x_1, …, x_{n−1} = q] is h's walk. In order of preference: straight
-# on, the opposite edge, or toward the outer face (which always gets there).
+# An exit rule picks the edge (x_j, x_{j+1}) a ray leaves a face through, given the face's walk
+# wh = [p = x_0, …, x_{n−1} = q] from the edge it entered by. Tried in this order: straight on, the
+# opposite edge, toward the outer face.
 function _exit_rule(emb::PlanarEmbedding, rule::Symbol)
     rule === :straight && return wh -> 1
     rule === :opposite && return wh -> (n = length(wh); n == 3 ? 1 : fld(n - 2, 2))
@@ -143,7 +127,6 @@ function _ray_lengths(next::Dict{K}) where {K}
     return len
 end
 
-# ── Recipes ─────────────────────────────────────────────────────────────────────────────────
 
 _corners(f, vs) = Any[(:corner, (x, f)) for x in vs]
 
@@ -318,11 +301,11 @@ function _factor_enlarged(emb::PlanarEmbedding, parts, candidates)
     return parts
 end
 
-# Kikuchi counting numbers: c_f = 1, c_e = 1 − (inner faces on e), c_v = 1 + (inner faces at v) − z_v.
+# Kikuchi counting numbers: 1 for a face, 1 − (inner faces on it) for an edge and
+# 1 + (inner faces at it) − (its degree) for a vertex.
 _counting_number(emb::PlanarEmbedding, v) = 1 + count(_isinner ∘ last, vertex_polygon(emb, v)) - length(vertex_polygon(emb, v))
 _counting_number(emb::PlanarEmbedding, u, v) = 1 - _isinner(face_of_dart(emb, u, v)) - _isinner(face_of_dart(emb, v, u))
 
-# ── Regions ─────────────────────────────────────────────────────────────────────────────────
 
 # The signed vertex multiset a recipe covers, given the regions of the blocks (projectors are the
 # identity at lossless χ, so they cover nothing).
@@ -360,11 +343,9 @@ end
 
 const _CORNER_MODES = (:diag, :prev, :next)
 
-# The minimum-depth acyclic choice of corner updates, as a least fixed point: a message's level is
-# 1 + the largest level among the blocks it reads, a corner's 1 + the smallest such over its
-# candidate updates. Finite levels are well founded, so the minimising choice is a DAG whose depth
-# is minimal among these candidates. Returns (modes, blocks in level order), or `nothing` when some
-# block has no finite level, i.e. no acyclic choice exists.
+# The corner updates that make the blocks' dependencies acyclic with the fewest levels: a message
+# sits one level above the blocks it reads, a corner one above the best of its candidate updates.
+# Returns the modes, the blocks in level order and the depth, or `nothing` if no acyclic choice exists.
 function _acyclic_modes(emb::PlanarEmbedding{V}, exits) where {V}
     messages = Any[(:message, d) for d in _darts(emb)]
     corners = Any[(:corner, k) for k in _corner_keys(emb)]
@@ -390,9 +371,8 @@ function _acyclic_modes(emb::PlanarEmbedding{V}, exits) where {V}
     return modes, sort(collect(keys(level)); by = b -> level[b]), maximum(values(level))
 end
 
-# Whether the rules are exact at lossless χ: starting from empty blocks, the passes (one in
-# dependency order, or Jacobi passes until the regions settle) must leave every closed region
-# covering each vertex exactly once.
+# The rules are exact at lossless χ if, starting from empty blocks, the passes (one in dependency
+# order, or enough Jacobi passes) leave every closed region covering each vertex exactly once.
 function _certify(emb::PlanarEmbedding, exits, modes, order)
     blocks = Any[[(:message, d) for d in _darts(emb)]; [(:corner, k) for k in _corner_keys(emb)]]
     regions = Dict{Any, Dict{Any, Int}}(b => Dict{Any, Int}() for b in blocks)
@@ -416,16 +396,21 @@ function _certify(emb::PlanarEmbedding, exits, modes, order)
 end
 
 """
-    ctmrg_rules(emb::PlanarEmbedding)
+    ctmrg_rules(emb::PlanarEmbedding; jacobi = false)
 
-The update rules of CTMRG on `emb`, certified exact at lossless bond dimension.
+Choose how a `CTMRGCache` on the embedding `emb` updates its blocks: the exit of every ray, the
+update of every corner and the order of the blocks, certified exact at lossless bond dimension.
 
-Each exit rule (straight, opposite, geodesic) whose rays all reach the outer face is tried, and the
-corner updates are chosen to make the blocks' dependencies acyclic with the fewest levels; the
-shallowest certified choice wins, and its blocks are recomputed once per pass in dependency order. When no acyclic choice exists (e.g.
-the triangular lattice) every corner uses its diagonal update and the passes are Jacobi sweeps,
-provided those certify. With `jacobi = true` those are the rules from the start, as cycle
-projectors need (see `CTMRGCache`). Errors if no rule set certifies.
+# Arguments
+- `emb::PlanarEmbedding`: The planar embedding of the network's graph.
+
+# Keyword Arguments
+- `jacobi::Bool = false`: Use diagonal corners under Jacobi passes, as the cycle projector needs.
+  Otherwise the corners are chosen so the blocks can be recomputed once per pass in dependency
+  order, with the fewest levels, and Jacobi passes are the fallback.
+
+# Returns
+- A `CTMRGRules`. Errors if no rule set certifies on this graph.
 """
 function ctmrg_rules(emb::PlanarEmbedding{V}; jacobi::Bool = false) where {V}
     best = nothing
@@ -453,9 +438,10 @@ function ctmrg_rules(emb::PlanarEmbedding{V}; jacobi::Bool = false) where {V}
             end
         end
     end
-    isnothing(best) && error(jacobi ?
-        "CTMRG: diagonal corners under Jacobi passes do not certify on this graph (it needs directional corners), so `projector = :cycle` is not available here" :
-        "CTMRG: no certified update rules for this graph")
+    if isnothing(best)
+        jacobi && error("CTMRG: this graph needs directional corners, so `projector = :cycle` is not available")
+        error("CTMRG: no certified update rules for this graph")
+    end
     interfaces = sort(collect(keys(best.next)); by = I -> best.lengths[I])
     return CTMRGRules{V}(best.exits, best.next, interfaces, best.modes, best.order)
 end

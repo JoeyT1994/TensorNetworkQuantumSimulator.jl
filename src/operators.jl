@@ -1,14 +1,7 @@
-#=
-Operator and state library: plain matrices keyed by name, no tensor library.
-
-A site is identified by its dimension — 2 is S=1/2 (a qubit), 3 is S=1 — and the matrices follow
-the ITensors basis conventions: |↑⟩ = |0⟩ is the first basis state, and on several sites the
-FIRST site is the most significant (the matrix of A on site 1 and B on site 2 is `kron(A, B)`).
-The only tensor verb used is `from_array(A, outs, ins)`.
-
-Names the registry does not define fall through to the backend's own operator library
-(`backend_op`); register new ones with [`register_op!`](@ref).
-=#
+# Operator and state library as plain matrices, keyed by number of sites, site dimension (2 for
+# S=1/2, 3 for S=1) and name. Conventions follow ITensors: |↑⟩ = |0⟩ is the first basis state and
+# the first site is the most significant (A on site 1, B on site 2 is `kron(A, B)`). Unknown names
+# fall through to the backend's library (`backend_op`).
 
 const _σ0 = [1.0 0.0; 0.0 1.0]
 const _σx = [0.0 1.0; 1.0 0.0]
@@ -133,13 +126,21 @@ OPERATORS[(1, 2)]["S"] = (; kw...) -> OPERATORS[(1, 2)]["Phase"](; ϕ = π / 2)
 """
     register_op!(name::String, f; nsites = 1, sitedim = 2)
 
-Register the operator `name` acting on `nsites` sites of dimension `sitedim`. `f` is either a
-matrix or a function `f(; kwargs...)` returning one; it is `sitedim^nsites` square, in the basis
-where the first site is the most significant (`kron(A, B)` is A on the first site, B on the
-second). Afterwards `op(name, sites...; kwargs...)` builds it, and a gate registered with
-[`register_gate!`](@ref) under the same name can be used in circuits.
+Register the operator `name` acting on `nsites` sites of dimension `sitedim`, so that
+`op(name, sites...; kwargs...)` builds it. Registrations last for the current Julia session.
 
-Like the gate registry, registrations live only in the current Julia session.
+# Arguments
+- `name::String`: The operator name. A gate registered with [`register_gate!`](@ref) under the
+  same name can then be used in circuits.
+- `f`: A `sitedim^nsites` square matrix, or a function `f(; kwargs...)` returning one. The first
+  site is the most significant (`kron(A, B)` is A on the first site, B on the second).
+
+# Keyword Arguments
+- `nsites::Integer`: Number of sites the operator acts on (default 1).
+- `sitedim::Integer`: Dimension of each site (default 2).
+
+# Returns
+- `name`.
 """
 function register_op!(name::String, f; nsites::Integer = 1, sitedim::Integer = 2)
     g = f isa AbstractMatrix ? (; kw...) -> f : f
@@ -153,9 +154,8 @@ function operator_matrix(name::AbstractString, nsites::Integer, d::Integer; kwar
     return isnothing(f) ? nothing : f(; kwargs...)
 end
 
-# A matrix on (sites′, sites) as a tensor. ITensors' layout: the matrix is read column-major
-# onto the legs in REVERSED order, which is what makes the first site the most significant.
-# Integer matrices are promoted to floating point.
+# A matrix on (sites′, sites) as a tensor. Legs are reversed so that, read column-major, the first
+# site is the most significant. Integer matrices are promoted to floating point.
 function operator_tensor(m::AbstractMatrix, sites::Vector)
     return from_array(float.(m), reverse(prime.(sites)), reverse(sites))
 end
@@ -163,8 +163,18 @@ end
 """
     op(name::String, sites...; kwargs...)
 
-The operator `name` on `sites` (indices) as a tensor with legs (sites′..., sites...), from the
-package's operator registry, else from the backend's own library.
+Build the operator `name` on `sites` from the package's registry, falling back to the backend's
+own library.
+
+# Arguments
+- `name::String`: The operator name, e.g. `"X"`, `"CNOT"`, `"Rx"`.
+- `sites...`: The site indices it acts on.
+
+# Keyword Arguments
+- Parameters of the operator, e.g. `θ` for `"Rx"`.
+
+# Returns
+- A tensor with legs (sites′..., sites...).
 """
 function op(name::AbstractString, sites...; kwargs...)
     d = dim(first(sites))
@@ -203,7 +213,10 @@ end
 """
     state(name::String, site)
 
-The basis or product state `name` on the index `site`, as a one-leg tensor.
+Build the single-site state `name` (e.g. `"0"`, `"+"`, `"Up"`) on the index `site`.
+
+# Returns
+- A one-leg tensor on `site`.
 """
 function state(name::AbstractString, site)
     v = get(get(STATES, dim(site), Dict{String, Vector}()), name, nothing)

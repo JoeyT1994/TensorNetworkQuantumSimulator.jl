@@ -1,18 +1,12 @@
-#=
-ITensorsBackend: the TensorInterface seam on ITensors 0.9 (General registry), dense storage only.
-
-Every verb forwards to its ITensors namesake, whose conventions the seam follows (see the header
-of src/tensor_interface.jl); the few the seam adds (`truncated_svd`, `pad_index`, `charge_sectors`,
-`dense`, `scale!`, ...) are written here in ITensors terms. Graded queries answer for dense data:
-`isdual` is false and `space` is the dimension. This is the only module that references ITensors,
-together with the compatibility shim ITensorsCompat.jl.
-=#
+# The TensorInterface seam on ITensors (dense storage only). Most verbs forward to their
+# ITensors namesake; graded queries answer for dense data.
 module ITensorsBackend
 
 using ITensors: ITensors, ITensor, Index
 using ITensors.NDTensors: NDTensors
 using LinearAlgebra: LinearAlgebra, I, diag, rmul!
 using Random: Random
+using Adapt: adapt
 
 import ..TensorInterface as TI
 
@@ -79,9 +73,9 @@ TI.delta(elt::Type{<:Number}, xs::IndexLike...) = ITensors.delta(elt, xs...)
 # unfuse its legs whole, so it is made explicit by fusing an identity through it.
 function TI.dense(t::ITensor)
     ITensors.storage(t) isa NDTensors.Combiner || return ITensors.denseblocks(t)
-    is = collect(ITensors.inds(t))[2:end]               # the combined index comes first
+    is = collect(ITensors.inds(t))[2:end]   # the combined index comes first
     n = ITensors.dim(is)
-    js = ITensors.sim.(is)                   # fresh copies: priming could collide (b and b′ legs)
+    js = ITensors.sim.(is)                  # not prime: b and b′ legs could collide
     Id = ITensor(Matrix{Float64}(I, n, n), is..., js...)
     return ITensors.replaceinds(Id * t, js, is)
 end
@@ -95,8 +89,7 @@ TI.directsum(news, p1::Pair{ITensor}, p2::Pair{ITensor}; kwargs...) =
 TI.charge_sectors(legs) = [Index(1, "Charge")]
 
 # ── Contraction ─────────────────────────────────────────────────────────────────────────
-# ITensors warns about high-order intermediates; the package chooses its own sequences, so the
-# warning is noise here.
+# The package chooses its own sequences, so ITensors' high-order warning is noise.
 function TI.contract(ts::AbstractVector{<:ITensor}; kwargs...)
     return ITensors.@disable_warn_order ITensors.contract(ts; kwargs...)
 end
@@ -113,18 +106,18 @@ TI.map_diag!(f::Function, out::ITensor, t::ITensor) = ITensors.map_diag!(f, out,
 TI.factorize_svd(t::ITensor, args...; kwargs...) = ITensors.factorize_svd(t, args...; kwargs...)
 TI.gram(a::ITensor, b::ITensor, legs) = ITensors.dag(a) * b
 
-# The full SVD, then the seam's truncation rule on its (sorted) spectrum: U, S, V restricted to
-# the kept singular triplets on fresh bonds that keep the original bonds' tags.
+# Full SVD, then restrict U, S, V to the kept singular triplets on fresh bonds.
 function TI.truncated_svd(t::ITensor, linds; trunc::TI.TruncationStrategy)
     U, S, V = LinearAlgebra.svd(t, linds)
     u = ITensors.commonind(U, S)
     v = ITensors.commonind(S, V)
-    s = abs.(diag(ITensors.array(S, u, v)))
+    s = Array(abs.(diag(ITensors.array(S, u, v))))       # the rule runs on the host
     k = TI.kept_count(s, trunc)
     k == length(s) && return U, S, V
     uk, vk = Index(k, ITensors.tags(u)), Index(k, ITensors.tags(v))
-    Pu = ITensor(Matrix{real(eltype(S))}(I, length(s), k), u, uk)
-    Pv = ITensor(Matrix{real(eltype(S))}(I, length(s), k), v, vk)
+    on_device(t) = adapt(ITensors.datatype(S))(t)
+    Pu = on_device(ITensor(Matrix{real(eltype(S))}(I, length(s), k), u, uk))
+    Pv = on_device(ITensor(Matrix{real(eltype(S))}(I, length(s), k), v, vk))
     return U * Pu, Pu * ITensors.denseblocks(S) * Pv, V * Pv
 end
 
@@ -139,8 +132,7 @@ function TI.scale!(t::ITensor, x::Number)
 end
 
 # ── Hooks ───────────────────────────────────────────────────────────────────────────────
-# ITensors' own operator library, for names the package registry does not define; ITensors
-# signals an unknown name with an ArgumentError.
+# ITensors signals an unknown operator name with an ArgumentError.
 function TI.backend_op(name::String, sites::Index...; kwargs...)
     try
         return ITensors.op(name, sites...; kwargs...)

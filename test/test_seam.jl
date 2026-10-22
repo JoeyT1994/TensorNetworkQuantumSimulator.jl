@@ -2,9 +2,8 @@
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test
 
-# The backend seam (src/tensor_interface.jl, rule 1): no source file outside src/Backends/
-# references a tensor library or the backend module. Comments and docstrings may name them as
-# a reference for conventions; code may not.
+# Seam rule 1: no code outside src/Backends/ references a tensor library (comments and
+# docstrings may).
 
 const FORBIDDEN = r"\b(ITensors|NDTensors|ITensorBase|GradedArrays|TensorAlgebra|TensorKit\w*|MatrixAlgebraKit|ITensorsBackend|ITensorsCompat)\b"
 

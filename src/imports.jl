@@ -38,9 +38,8 @@ using NamedGraphs:
 using NamedGraphs: named_grid, named_hexagonal_lattice_graph, named_comb_tree, named_path_graph
 using Graphs: ne
 
-# All tensor-level verbs come from the TensorInterface seam (see tensor_interface.jl), never from
-# a tensor library directly; `Tensor` and `Index` are bound by Backends/Backends.jl. `import` (not
-# `using`) for the names this package extends with its own methods.
+# Tensor-level functions come from TensorInterface, never from a tensor library directly.
+# `import` for the names this package extends with its own methods.
 using .TensorInterface: Algorithm, @Algorithm_str
 using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, noncommoninds,
     hascommoninds, dim, plev, tags, isgraded, isdual, space,

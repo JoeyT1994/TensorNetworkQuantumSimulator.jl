@@ -1,16 +1,9 @@
 # ── Fused double-layer BP kernels (dense data) ──────────────────────────────────────────
-# Ported from FixesV2 (src/Tensors/ITensorBackend.jl, commit d41fa35 "Fused dense BP
-# message/closure kernel"), on ITensors storage instead of ITensorBase's.
-#
-# The BP message update ψ·Πm·ψ̄ is the inner loop of every sweep. The generic sequence path
-# matricises both operands of every pairwise contraction (a permuted copy of the F-sized chain
-# intermediate each time). Here each incoming message is absorbed along its bond with slice GEMMs
-# into a ping-pong buffer (no permutations: the bond dimension is split out of the column-major
-# layout as (pre, D, post)), and the conjugate of ψ is folded into the closing GEMM. Live memory: ψ
-# and two buffers = 3F, plus the D² message. Structure not recognised → `nothing` (generic path).
+# Each incoming message is absorbed along its bond, viewing ψ's data as (pre, D, post) so no
+# permutations are needed, into a pair of reused buffers; conj(ψ) is folded into the closing
+# GEMM. Structures not recognised return `nothing` (generic path).
 
-# ψ's data as a strided array in the order of `inds(ψ)` (aliasing its storage), or nothing when the
-# kernel does not apply.
+# ψ's data as a strided array in the order of `inds(ψ)` (aliasing its storage), or nothing.
 function _fused_data(ψ::ITensor)
     ITensors.hasqns(ψ) && return nothing
     ITensors.storage(ψ) isa NDTensors.Dense || return nothing
@@ -34,12 +27,9 @@ function _fused_message_slot(m::ITensor, ψinds::Vector{<:Index})
     return k, M
 end
 
-# Task-local buffer pool for the chain intermediates: two F-sized buffers per element type, reused
-# across messages (the kernel returns only the D² result, never a buffer). Live memory during a
-# message update is therefore ψ + 2 buffers = 3F + change, and steady-state heap churn ~0.
+# Task-local pool of two buffers for the chain intermediates, keyed by storage family (Array,
+# CuArray, ...) and element type. Kernels never return a buffer.
 function _fused_buffers(ref::AbstractArray, ::Type{T}, n::Integer) where {T}
-    # keyed by the storage family of `ref` (Array, CuArray, …) and the element type, so device data
-    # gets device buffers
     key = (Base.typename(typeof(ref)).wrapper, T)
     pool = get!(task_local_storage(), :tnqs_fused_buffers) do
         Dict{Any, Tuple{AbstractVector, AbstractVector}}()
@@ -52,10 +42,8 @@ function _fused_buffers(ref::AbstractArray, ::Type{T}, n::Integer) where {T}
     return bufs
 end
 
-# out[a, b′, c] = Σ_b cur[a, b, c] · M[b, b′] along dimension k, without permuting. Large `pre`:
-# one GEMM per c-slice. Small `pre` (the site leg in front of the bond): fold it into a single GEMM
-# with kron(Mᵀ, 𝟙_pre) — `pre`× more flops than the slices, but one BLAS call instead of `post`
-# tiny ones (measured 0.63 ms → GEMM-bound at D = 12, pre = 2, post = 1728).
+# out[a, b′, c] = Σ_b cur[a, b, c] · M[b, b′] along dimension k. For small `pre` a single GEMM with
+# kron(Mᵀ, 𝟙_pre) beats `post` tiny per-slice GEMMs despite the extra flops.
 function _absorb_dim!(out::AbstractArray, cur::AbstractArray, M::AbstractMatrix, k::Integer)
     dims = size(cur)
     pre = prod(dims[1:(k - 1)]; init = 1); D = dims[k]; post = prod(dims[(k + 1):end]; init = 1)
@@ -65,8 +53,10 @@ function _absorb_dim!(out::AbstractArray, cur::AbstractArray, M::AbstractMatrix,
     elseif post == 1
         LinearAlgebra.mul!(reshape(O, pre, D), reshape(C, pre, D), M)
     elseif pre <= 8 && post > 8
-        Id = similar(M, pre, pre); fill!(Id, zero(eltype(M))); view(Id, LinearAlgebra.diagind(Id)) .= one(eltype(M))
-        K = kron(transpose(M), Id)                                     # (pre·D)² — small, on M's device
+        Id = similar(M, pre, pre)                                      # on M's device
+        fill!(Id, zero(eltype(M)))
+        view(Id, LinearAlgebra.diagind(Id)) .= one(eltype(M))
+        K = kron(transpose(M), Id)
         LinearAlgebra.mul!(reshape(O, pre * D, post), K, reshape(C, pre * D, post))
     else
         for c in 1:post
@@ -76,13 +66,12 @@ function _absorb_dim!(out::AbstractArray, cur::AbstractArray, M::AbstractMatrix,
     return out
 end
 
-# Absorb every incoming message (and optional site operators) into ψ's data. Returns the chain
-# result (a pooled buffer; ψ's own data is never written) or ψ's data itself when there is nothing
-# to absorb. `slots` are (k, M) pairs.
+# Absorb the (k, M) `slots` into ψ's data (never written). Returns a pooled buffer, or ψ's data
+# itself when there is nothing to absorb.
 function _fused_chain(A::StridedArray, slots::Vector)
     T = promote_type(eltype(A), (eltype(M) for (_, M) in slots)...)
-    isempty(slots) && return T == eltype(A) ? A : T.(A)
     cur = T == eltype(A) ? A : T.(A)
+    isempty(slots) && return cur
     b1, b2 = _fused_buffers(A, T, length(A))
     buf1 = reshape(view(b1, 1:length(A)), size(A)); buf2 = reshape(view(b2, 1:length(A)), size(A))
     out = buf1
@@ -101,10 +90,11 @@ function _close_bond!(R::AbstractMatrix, Ψ3::AbstractArray{<:Any, 3}, T3::Abstr
     if post == 1
         LinearAlgebra.mul!(R, adjoint(reshape(Ψ3, pre, D)), reshape(T3, pre, D))
     elseif pre <= 8
-        G = reshape(Ψ3, pre * D, post) * adjoint(reshape(T3, pre * D, post))   # G[(a,b′),(a2,b)] = Σ_c Ψ T̄
+        # G[(a, b′), (a2, b)] = Σ_c Ψ T̄, then a partial trace over a, using conj(Ψ) T = conj(Ψ T̄)
+        G = reshape(Ψ3, pre * D, post) * adjoint(reshape(T3, pre * D, post))
         fill!(R, zero(T))
         G4 = reshape(G, pre, D, pre, D)
-        for a in 1:pre                                                      # partial trace over a: conj(Ψ) T = conj(Ψ T̄)
+        for a in 1:pre
             R .+= conj.(view(G4, a, :, a, :))
         end
     else
@@ -116,7 +106,7 @@ function _close_bond!(R::AbstractMatrix, Ψ3::AbstractArray{<:Any, 3}, T3::Abstr
     return R
 end
 
-# The (k, M) slots of `incoming` on ψ's legs, with the covered positions; nothing when a message is
+# The (k, M) slots of `incoming` on ψ's legs and the covered positions; nothing when a message is
 # not a standard doubled one or two messages share a bond.
 function _fused_slots(ψinds::Vector{<:Index}, incoming::Vector)
     slots = Any[]
@@ -158,7 +148,7 @@ function TI.fused_norm_message(ψ::ITensor, sinds, incoming::Vector; normalize::
         legs = (boutp, bout)
     end
     if normalize
-        # the 2-norm, as the generic message update normalises
+        # the 2-norm, as in the generic message update
         n = LinearAlgebra.norm(R)
         iszero(n) || rmul!(R, inv(n))
     end
@@ -181,9 +171,9 @@ function TI.fused_norm_scalar(ψ::ITensor, sinds, incoming::Vector, ops::Vector)
         k = findfirst(==(s), ψinds)
         (k === nothing || covered[k]) && return nothing
         covered[k] = true
-        push!(slots, (k, ITensors.array(o, s, sp)))   # M[s, s′] = O[s′, s]: T[…s′…] = Σ_s ψ[…s…] O[s′, s]
+        push!(slots, (k, ITensors.array(o, s, sp)))   # M[s, s′] = O[s′, s]
     end
     all(k -> covered[k] || ψinds[k] in sinds, eachindex(ψinds)) || return nothing
     Tm = _fused_chain(A, slots)
-    return LinearAlgebra.dot(vec(A), vec(Tm))                    # Σ conj(ψ) T
+    return LinearAlgebra.dot(vec(A), vec(Tm))   # Σ conj(ψ) T
 end
