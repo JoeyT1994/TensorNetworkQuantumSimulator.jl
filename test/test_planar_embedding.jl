@@ -10,7 +10,7 @@ const LATTICES = [
     ("square", named_grid((5, 4)), [4]),
     ("honeycomb", named_hexagonal_lattice_graph(3, 2), [6]),
     ("heavy-hex", heavy_hexagonal_lattice(2, 2), [12]),
-    ("triangular", triangular_lattice(5, 4), [3]),
+    ("triangular", named_triangular_lattice_graph(4, 6), [3]),
     ("kagome", kagome_lattice(2, 2), [3, 6]),
     ("Lieb", lieb_lattice(5, 5), [8]),
     ("Penrose", penrose_tiling(3), [4]),

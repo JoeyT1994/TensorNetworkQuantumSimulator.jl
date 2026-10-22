@@ -121,7 +121,7 @@ export
     virtualinds,
     nv,
     heavy_hexagonal_lattice,
-    triangular_lattice,
+    named_triangular_lattice_graph,
     kagome_lattice,
     penrose_tiling,
     PlanarEmbedding,

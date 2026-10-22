@@ -35,25 +35,16 @@ function lieb_lattice(nx::Int64, ny::Int64; periodic = false)
 end
 
 """
-    triangular_lattice(nx::Int64, ny::Int64)
-
-Create a triangular lattice geometry with `nx` columns and `ny` rows: a square grid with one diagonal per square.
-"""
-function triangular_lattice(nx::Int64, ny::Int64)
-    g = named_grid((nx, ny))
-    for i in 1:(nx - 1), j in 1:(ny - 1)
-        g = add_edge(g, NamedEdge((i, j) => (i + 1, j + 1)))
-    end
-    return g
-end
-
-"""
     kagome_lattice(nx::Int64, ny::Int64)
 
 Create a kagome lattice geometry with `nx` columns and `ny` rows of three-site unit cells.
 """
 function kagome_lattice(nx::Int64, ny::Int64)
-    g = triangular_lattice(2 * nx + 1, 2 * ny + 1)
+    #a square grid with one diagonal per square (a triangular lattice), less every (even, even) vertex
+    g = named_grid((2 * nx + 1, 2 * ny + 1))
+    for i in 1:(2 * nx), j in 1:(2 * ny)
+        g = add_edge(g, NamedEdge((i, j) => (i + 1, j + 1)))
+    end
     for v in collect(vertices(g))
         iseven(first(v)) && iseven(last(v)) && (g = rem_vertex(g, v))
     end

@@ -35,7 +35,7 @@ using NamedGraphs:
     add_edges,
     rem_vertex!
 
-using NamedGraphs: named_grid, named_hexagonal_lattice_graph, named_comb_tree, named_path_graph
+using NamedGraphs: named_grid, named_hexagonal_lattice_graph, named_triangular_lattice_graph, named_comb_tree, named_path_graph
 using Graphs: ne
 
 # Tensor-level functions come from TensorInterface, never from a tensor library directly.

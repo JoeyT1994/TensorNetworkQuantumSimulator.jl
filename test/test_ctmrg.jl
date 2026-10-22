@@ -15,7 +15,7 @@ end
         ("square", named_grid((4, 3))),
         ("honeycomb", named_hexagonal_lattice_graph(2, 2)),
         ("kagome", kagome_lattice(2, 2)),
-        ("triangular", triangular_lattice(3, 3)),
+        ("triangular", named_triangular_lattice_graph(3, 4)),
     ]
     Random.seed!(3)
     tn = positive_network(g)
@@ -74,7 +74,7 @@ end
 @testset "CTMRG update rules" begin
     # acyclic on the square lattice; the triangular lattice needs Jacobi passes
     @test !isnothing(ctmrg_rules(planar_embedding(named_grid((3, 3)))).order)
-    @test isnothing(ctmrg_rules(planar_embedding(triangular_lattice(3, 3))).order)
+    @test isnothing(ctmrg_rules(planar_embedding(named_triangular_lattice_graph(3, 4))).order)
 end
 
 @testset "CTMRG observables on a state" begin
