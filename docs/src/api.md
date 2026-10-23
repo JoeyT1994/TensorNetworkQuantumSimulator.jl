@@ -44,6 +44,7 @@ unregister_gate!
 ```@docs
 expect
 inner
+norm_sqr
 reduced_density_matrix
 ```
 

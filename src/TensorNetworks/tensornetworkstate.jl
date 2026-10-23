@@ -1,4 +1,3 @@
-
 """
     TensorNetworkState{V} <: AbstractTensorNetwork{V}
 
@@ -81,7 +80,7 @@ Generate a random `TensorNetworkState` on graph `g` with local state indices giv
 # Arguments
 - `eltype`: The number type of the tensor elements (e.g. `Float64`, `ComplexF32`). Default is `Float64`.
 - `g::AbstractGraph`: The underlying graph of the tensor network.
-- `siteinds::Dictionary`: A dictionary mapping vertices to Tensor indices representing the local states. Defaults to spin-1/2.
+- `siteinds::Dictionary`: A dictionary mapping vertices to their site indices. Defaults to spin-1/2.
 
 # Keyword Arguments
 - `bond_dimension::Integer`: The bond dimension of the virtual indices connecting neighbouring tensors (default is `1`).
@@ -132,7 +131,7 @@ The local states can be given as strings (e.g. `"↑"`, `"↓"`, `"0"`, `"1"`) o
 - `eltype`: The number type of the tensor elements (e.g. `Float64`, `ComplexF32`). Default is `Float64`.
 - `f::Function`: A function mapping vertices of the graph to local states.
 - `g::AbstractGraph`: The underlying graph of the tensor network.
-- `siteinds::Dictionary`: A dictionary mapping vertices to Tensor indices representing the local states. Defaults to spin-1/2.
+- `siteinds::Dictionary`: A dictionary mapping vertices to their site indices. Defaults to spin-1/2.
 
 # Returns
 - A `TensorNetworkState` representing the constructed tensor network state.

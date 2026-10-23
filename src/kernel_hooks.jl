@@ -1,15 +1,14 @@
-# Fused double-layer BP paths (message updates and single-vertex scalars) that avoid forming the
-# ket⊗bra tensor. Both return `nothing` for anything the backend kernel does not handle
-# (non-tensor messages, ρ insertions, multi-vertex regions, ...) and the caller falls back to the
-# generic contraction.
+# Fused double-layer BP paths (message updates and single-vertex scalars) that never form the
+# ket⊗bra tensor. `nothing` (e.g. for ρ insertions or multi-vertex regions) means the caller takes
+# the generic contraction.
+norm_message_kernel(net, vertex, incoming_ms) = nothing
+norm_scalar_kernel(net, vertices, incoming_ms; kwargs...) = nothing
 
-function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector; normalize)
-    all(m -> m isa Tensor, incoming_ms) || return nothing
-    return fused_norm_message(tns[v], siteinds(tns, v), incoming_ms; normalize)
+function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector)
+    return fused_norm_message(tns[v], siteinds(tns, v), incoming_ms)
 end
 
 function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Vector; op_strings::Function)
-    all(m -> m isa Tensor, incoming_ms) || return nothing
     length(vs) == 1 || return nothing
     v = only(vs)
     sinds = siteinds(tns, v)

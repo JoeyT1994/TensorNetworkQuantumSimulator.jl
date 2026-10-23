@@ -45,24 +45,24 @@ end
 _interfaces(emb::PlanarEmbedding) = [(w[k], w[mod1(k + 1, length(w))]) for w in faces(emb) for k in eachindex(w)]
 _darts(emb::PlanarEmbedding) = [d for e in edges(graph(emb)) for d in ((src(e), dst(e)), (dst(e), src(e)))]
 _corner_keys(emb::PlanarEmbedding) = [(p, f) for (f, w) in enumerate(faces(emb)) for p in w]
+_blocks(emb::PlanarEmbedding) = Any[[(:message, d) for d in _darts(emb)]; [(:corner, k) for k in _corner_keys(emb)]]
 
 # u's neighbour on face h other than v
 _other_neighbor(emb::PlanarEmbedding, h, u, v) = (w = _walk(emb, h, u); w[2] == v ? w[end] : w[2])
-
 
 # Number of faces between each inner face and the outer face.
 function _dual_distance(emb::PlanarEmbedding)
     d = fill(typemax(Int), length(faces(emb)))
     queue = Int[]
     for (f, w) in enumerate(faces(emb))
-        if any(k -> face_of_dart(emb, w[mod1(k + 1, length(w))], w[k]) == 0, eachindex(w))
+        if any(k -> !_isinner(face_of_dart(emb, w[mod1(k + 1, length(w))], w[k])), eachindex(w))
             d[f] = 1
             push!(queue, f)
         end
     end
     while !isempty(queue)
         f = popfirst!(queue)
-        w = faces(emb)[f]
+        w = face_vertices(emb, f)
         for k in eachindex(w)
             h = face_of_dart(emb, w[mod1(k + 1, length(w))], w[k])
             if _isinner(h) && d[h] == typemax(Int)
@@ -75,8 +75,8 @@ function _dual_distance(emb::PlanarEmbedding)
 end
 
 # An exit rule picks the edge (x_j, x_{j+1}) a ray leaves a face through, given the face's walk
-# wh = [p = x_0, …, x_{n−1} = q] from the edge it entered by. Tried in this order: straight on, the
-# opposite edge, toward the outer face.
+# wh = [p = x_0, …, x_{n−1} = q] from the edge it entered by: straight on, the opposite edge, or
+# toward the outer face.
 function _exit_rule(emb::PlanarEmbedding, rule::Symbol)
     rule === :straight && return wh -> 1
     rule === :opposite && return wh -> (n = length(wh); n == 3 ? 1 : fld(n - 2, 2))
@@ -87,6 +87,7 @@ function _exit_rule(emb::PlanarEmbedding, rule::Symbol)
         return argmin(j -> (distance(face_of_dart(emb, wh[mod1(j + 2, n)], wh[j + 1])), abs(2j - (n - 2)), j), 0:(n - 2))
     end
 end
+# The exit rules, in the order ctmrg_rules prefers them.
 const _EXIT_RULES = (:straight, :opposite, :geodesic)
 
 function _exits(emb::PlanarEmbedding{V}, rule::Symbol) where {V}
@@ -119,14 +120,13 @@ function _ray_lengths(next::Dict{K}) where {K}
             J = next[J]
         end
         n = isnothing(J) ? 0 : len[J]
-        for K′ in reverse(path)
+        for L in reverse(path)
             n += 1
-            len[K′] = n
+            len[L] = n
         end
     end
     return len
 end
-
 
 _corners(f, vs) = Any[(:corner, (x, f)) for x in vs]
 
@@ -177,9 +177,9 @@ function _full_connector(emb::PlanarEmbedding, h, p, q)
     return Any[(:inverse, [(wh[2], h)], (_interface(emb, h, p, wh[2]), _interface(emb, h, wh[2], q)))]
 end
 
-# The projector of face f at its edge {u, w}, on u's side, with its connector.
-function _side(emb::PlanarEmbedding, exits, f, u, w)
-    I = _interface(emb, f, u, w)
+# The projector of face f at its edge {u, x}, on u's side, with its connector.
+function _side(emb::PlanarEmbedding, exits, f, u, x)
+    I = _interface(emb, f, u, x)
     left, right = _connectors(emb, exits, I...)
     return u == first(I) ? Any[left; (:projector, I, :A)] : Any[right; (:projector, I, :B)]
 end
@@ -287,7 +287,7 @@ function _edge_region(emb::PlanarEmbedding, u, v)
 end
 
 function _face_region(emb::PlanarEmbedding, f)
-    w = faces(emb)[f]
+    w = face_vertices(emb, f)
     parts = Any[]
     for k in eachindex(w)
         p, q = w[k], w[mod1(k + 1, length(w))]
@@ -318,10 +318,9 @@ end
 _counting_number(emb::PlanarEmbedding, v) = 1 + count(_isinner ∘ last, vertex_polygon(emb, v)) - length(vertex_polygon(emb, v))
 _counting_number(emb::PlanarEmbedding, u, v) = 1 - _isinner(face_of_dart(emb, u, v)) - _isinner(face_of_dart(emb, v, u))
 
-
-# The signed vertex multiset a recipe covers, given the regions of the blocks (projectors are the
+# The signed vertex multiset a recipe covers, given what the blocks cover (projectors are the
 # identity at lossless χ, so they cover nothing).
-function _region(emb::PlanarEmbedding, parts, regions)
+function _coverage(emb::PlanarEmbedding, parts, coverage)
     r = Dict{Any, Int}()
     add!(x, c) = (r[x] = get(r, x, 0) + c)
     for part in parts
@@ -329,11 +328,11 @@ function _region(emb::PlanarEmbedding, parts, regions)
         if kind === :site
             add!(part[2], 1)
         elseif kind === :message || kind === :corner
-            foreach(((x, c),) -> add!(x, c), regions[part])
+            foreach(((x, c),) -> add!(x, c), coverage[part])
         elseif kind === :enlarged
-            foreach(((x, c),) -> add!(x, c), _region(emb, _enlarged(emb, part[2]...), regions))
+            foreach(((x, c),) -> add!(x, c), _coverage(emb, _enlarged(emb, part[2]...), coverage))
         elseif kind === :inverse
-            for k in part[2], (x, c) in regions[(:corner, k)]
+            for k in part[2], (x, c) in coverage[(:corner, k)]
                 add!(x, -c)
             end
         end
@@ -386,15 +385,16 @@ end
 # The rules are exact at lossless χ if, starting from empty blocks, the passes (one in dependency
 # order, or enough Jacobi passes) leave every closed region covering each vertex exactly once.
 function _certify(emb::PlanarEmbedding, exits, modes, order)
-    blocks = Any[[(:message, d) for d in _darts(emb)]; [(:corner, k) for k in _corner_keys(emb)]]
-    regions = Dict{Any, Dict{Any, Int}}(b => Dict{Any, Int}() for b in blocks)
+    blocks = _blocks(emb)
+    coverage = Dict{Any, Dict{Any, Int}}(b => Dict{Any, Int}() for b in blocks)
     if isnothing(order)
+        # each pass carries coverage one block further; this many crosses any face structure
         for _ in 1:(4 * (length(faces(emb)) + 4))
-            regions = Dict{Any, Dict{Any, Int}}(b => _region(emb, _block_recipe(emb, exits, modes, b), regions) for b in blocks)
+            coverage = Dict{Any, Dict{Any, Int}}(b => _coverage(emb, _block_recipe(emb, exits, modes, b), coverage) for b in blocks)
         end
     else
         for b in order
-            regions[b] = _region(emb, _block_recipe(emb, exits, modes, b), regions)
+            coverage[b] = _coverage(emb, _block_recipe(emb, exits, modes, b), coverage)
         end
     end
     g = graph(emb)
@@ -404,7 +404,7 @@ function _certify(emb::PlanarEmbedding, exits, modes, order)
         (_edge_region(emb, src(e), dst(e)) for e in edges(g)),
         (_face_region(emb, f) for f in eachindex(faces(emb))),
     ))
-    return all(r -> _region(emb, r, regions) == whole, closed)
+    return all(r -> _coverage(emb, r, coverage) == whole, closed)
 end
 
 """
@@ -425,30 +425,28 @@ update of every corner and the order of the blocks, certified exact at lossless 
 - A `CTMRGRules`. Errors if no rule set certifies on this graph.
 """
 function ctmrg_rules(emb::PlanarEmbedding{V}; jacobi::Bool = false) where {V}
-    best = nothing
-    for rule in (jacobi ? () : _EXIT_RULES)
+    candidates = []
+    for rule in _EXIT_RULES
         exits, next = _exits(emb, rule)
         lengths = _ray_lengths(next)
-        isnothing(lengths) && continue
-        found = _acyclic_modes(emb, exits)
-        isnothing(found) && continue
-        modes, order, depth = found
-        _certify(emb, exits, modes, order) || continue
-        if isnothing(best) || depth < best.depth
-            best = (; exits, next, lengths, modes, order, depth)
+        isnothing(lengths) || push!(candidates, (; exits, next, lengths))
+    end
+    best = nothing
+    if !jacobi
+        for c in candidates
+            found = _acyclic_modes(emb, c.exits)
+            isnothing(found) && continue
+            modes, order, depth = found
+            _certify(emb, c.exits, modes, order) || continue
+            if isnothing(best) || depth < best.depth
+                best = (; c..., modes, order, depth)
+            end
         end
     end
     if isnothing(best)
-        for rule in _EXIT_RULES
-            exits, next = _exits(emb, rule)
-            lengths = _ray_lengths(next)
-            isnothing(lengths) && continue
-            modes = Dict{Tuple{V, Int}, Symbol}(k => :diag for k in _corner_keys(emb))
-            if _certify(emb, exits, modes, nothing)
-                best = (; exits, next, lengths, modes, order = nothing)
-                break
-            end
-        end
+        diagonal = Dict{Tuple{V, Int}, Symbol}(k => :diag for k in _corner_keys(emb))
+        i = findfirst(c -> _certify(emb, c.exits, diagonal, nothing), candidates)
+        isnothing(i) || (best = (; candidates[i]..., modes = diagonal, order = nothing))
     end
     if isnothing(best)
         jacobi && error("CTMRG: this graph needs directional corners, so `projector = :eig` is not available")

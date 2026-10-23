@@ -38,9 +38,9 @@ end
 adapt_like(ref, t) = adapt(datatype(ref))(t)
 
 function identity_tensor(eltype, row_inds::Vector{<:Index}, col_inds::Vector{<:Index})
-    c_row, c_col = combiner(row_inds),combiner(col_inds)
-    t= dense(delta(eltype, combinedind(c_row), combinedind(c_col)))
-    return (t * c_row)*c_col
+    c_row, c_col = combiner(row_inds), combiner(col_inds)
+    t = dense(delta(eltype, combinedind(c_row), combinedind(c_col)))
+    return (t * c_row) * c_col
 end
 
 #Function for checking the correct algorithm is being used for the given cache type and functionality
@@ -123,7 +123,8 @@ end
 
 """
     safe_eigen(m::Tensor, args...; kwargs...)
-    A wrapper around eigen that ensures eigen computations are done in Float64/ComplexF64 precision on CPU for better numerical stability.
+
+The eigendecomposition of `m` (the backend's `eigen`), computed in Float64/ComplexF64 precision on the CPU for numerical stability.
 """
 function safe_eigen(m::Tensor, args...; kwargs...)
     dtype = datatype(m)

@@ -70,7 +70,8 @@ function toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_g
         incoming_inds = [e_dict[e] for e in incoming_es]
         sv = only(s[v])
 
-        state = from_array(zeros(ComplexF64, dim.([incoming_inds..., sv])...), [incoming_inds..., sv])
+        is = [incoming_inds..., sv]
+        state = from_array(zeros(ComplexF64, dim.(is)...), is)
 
         north_index = e_dict[NamedEdge((mod1(v[1]+1, n), v[2]) => v)]
         east_index = e_dict[NamedEdge((v[1], mod1(v[2]+1, n)) => v)]

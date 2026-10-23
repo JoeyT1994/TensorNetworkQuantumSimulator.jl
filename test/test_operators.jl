@@ -13,7 +13,11 @@ const X, Y, Z, Id2 = [0 1; 1 0], [0 -im; im 0], [1 0; 0 -1], [1 0; 0 1]
 
 m(name, nsites = 1, d = 2; kw...) = operator_matrix(name, nsites, d; kw...)
 cexp(A) = exp(Matrix{ComplexF64}(A))
-controlled(u, ncontrols = 1) = (n = 2^ncontrols * size(u, 1); M = Matrix{ComplexF64}(I, n, n); M[(end - size(u, 1) + 1):end, (end - size(u, 1) + 1):end] = u; M)
+function controlled(u, ncontrols = 1)
+    M = Matrix{ComplexF64}(I, 2^ncontrols * size(u, 1), 2^ncontrols * size(u, 1))
+    M[(end - size(u, 1) + 1):end, (end - size(u, 1) + 1):end] = u
+    return M
+end
 isunitary(U) = U' * U ≈ I
 
 @testset "Qubit operators" begin
@@ -23,10 +27,8 @@ isunitary(U) = U' * U ≈ I
     @test m("Rx"; θ) ≈ cexp(-im * θ / 2 * X)
     @test m("Ry"; θ) ≈ cexp(-im * θ / 2 * Y)
     @test m("Rz"; θ) ≈ cexp(-im * θ / 2 * Z)
-    @test m("Rz"; ϕ = θ) ≈ m("Rz"; θ)
-    @test_throws ArgumentError m("Rz"; θ, ϕ)
     @test m("Phase"; θ) ≈ Diagonal([1, exp(im * θ)])
-    @test m("P"; θ) ≈ m("Phase"; ϕ = θ)
+    @test m("P"; θ) == m("Phase"; θ)
     @test m("S") ≈ Diagonal([1, im]) && m("T") ≈ Diagonal([1, exp(im * π / 4)])
     @test m("T")^2 ≈ m("S") && m("S")^2 ≈ Z && m("√NOT")^2 ≈ X
     @test m("Sdg") ≈ m("S")' && m("Tdg") ≈ m("T")'
@@ -44,7 +46,6 @@ isunitary(U) = U' * U ≈ I
     @test m("iSy") ≈ im * m("Sy")
     @test m("S2") ≈ m("Sx")^2 + m("Sy")^2 + m("Sz")^2
     @test m("Proj0") + m("Proj1") == Id2 && m("Proj0") * m("Proj1") == zeros(2, 2)
-    @test m("F") == Id2
 end
 
 @testset "Multi-qubit operators" begin
@@ -100,9 +101,6 @@ end
     @test v("0") == v("↑") == v("Up") && v("1") == v("↓") == v("Dn")
     @test X * v("+") ≈ v("+") && X * v("-") ≈ -v("-")
     @test Y * v("i") ≈ v("i") && Y * v("-i") ≈ -v("-i")
-    # the tetrahedral states are a SIC-POVM: pairwise overlaps of 1/3
-    tetra = [v("Tetra$k") for k in 1:4]
-    @test all(abs2(tetra[j]' * tetra[k]) ≈ 1 / 3 for j in 1:4 for k in 1:4 if j != k)
     Sx, Sy, Sz = m("Sx", 1, 3), m("Sy", 1, 3), m("Sz", 1, 3)
     @test Sz * v("Up", 3) ≈ v("Up", 3) && Sz * v("Z0", 3) ≈ zeros(3) && Sz * v("Dn", 3) ≈ -v("Dn", 3)
     @test Sx * v("X+", 3) ≈ v("X+", 3) && Sy * v("Y+", 3) ≈ v("Y+", 3)

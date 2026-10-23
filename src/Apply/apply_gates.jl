@@ -4,7 +4,7 @@
 Apply a sequence of gates, via simple update, to a `TensorNetworkState` or a `BeliefPropagationCache` wrapping a `TensorNetworkState`, using belief propagation to update the environment.
 
 # Arguments
-- `circuit::Vector`: A vector of tuples where each tuple contains a gate (as a `Tensor`) and the vertices it acts on.
+- `circuit::Vector`: The gates, as tuples `(name, vertices)` or `(name, vertices, parameters)`, or as gate tensors.
 - `ψ::TensorNetworkState`: The tensor network state to which the gates will be applied.
 
 # Keyword Arguments
@@ -33,9 +33,7 @@ function apply_gates(
     )
     g = graph(ψ_bpc)
     circuit = toitensor(circuit, g, siteinds(network(ψ_bpc)))
-    gate_vertices = [gate[2] for gate in circuit]
-    itensors = [gate[1] for gate in circuit]
-    return apply_gates(itensors, ψ_bpc; gate_vertices, kwargs...)
+    return apply_gates(first.(circuit), ψ_bpc; gate_vertices = last.(circuit), kwargs...)
 end
 
 function adapt_gate(gate::Tensor, ψ_bpc::BeliefPropagationCache)

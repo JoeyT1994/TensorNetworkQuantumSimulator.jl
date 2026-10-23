@@ -6,7 +6,7 @@ using Random
 using TensorNetworkQuantumSimulator
 using TensorNetworkQuantumSimulator: bp_factors, contraction_sequence, incoming_messages, network,
     norm_factors, norm_message_kernel, norm_scalar_kernel, normalize_message, op, vertex_scalar
-using TensorNetworkQuantumSimulator.TensorInterface: fused_norm_message, fused_norm_scalar, inds, scalar
+using TensorNetworkQuantumSimulator.TensorInterface: fused_norm_message, inds, scalar
 using Test: @testset, @test
 
 # The fused BP kernels must be taken on dense states and agree with the generic contraction.
@@ -41,13 +41,9 @@ end
         for v in vertices(g), vn in neighbors(g, v)
             e = NamedEdge(v => vn)
             incoming = incoming_messages(bpc, v; ignore_edges = (reverse(e),))
-            raw = norm_message_kernel(ψ, v, incoming; normalize = false)
+            raw = norm_message_kernel(ψ, v, incoming)
             @test !isnothing(raw)   # the kernel is taken
             fast = normalize_message(raw)
-            # the kernel's own normalisation: unit 2-norm, same message up to phase
-            own = norm_message_kernel(ψ, v, incoming; normalize = true)
-            @test norm(own) ≈ 1
-            @test norm(normalize_message(own) - fast) < 1.0e-12
             ref = generic_message(ψ, v, incoming)
             @test same_legs(fast, ref)
             worst_msg = max(worst_msg, norm(fast - ref))
@@ -85,15 +81,12 @@ end
     v = (2, 2)
     incoming = incoming_messages(bpc, v)
     # every bond covered: no single outgoing bond, so no message
-    @test isnothing(fused_norm_message(ψ[v], collect(siteinds(ψ, v)), incoming; normalize = true))
+    @test isnothing(fused_norm_message(ψ[v], collect(siteinds(ψ, v)), incoming))
     # multi-vertex regions and ρ insertions take the generic path
     @test isnothing(norm_scalar_kernel(ψ, [(1, 1), (1, 2)], incoming_messages(bpc, [(1, 1), (1, 2)]); op_strings = _ -> "I"))
     @test isnothing(norm_scalar_kernel(ψ, [v], incoming; op_strings = _ -> "ρ"))
-    # a non-tensor (boundary-MPS style) message
-    @test isnothing(norm_message_kernel(ψ, v, Any[[first(incoming)]]; normalize = true))
-    # and the seam's fallback is `nothing` for objects no backend claims
-    @test isnothing(fused_norm_message(1.0, [], []; normalize = true))
-    @test isnothing(fused_norm_scalar(1.0, [], [], []))
+    # a message that is not a (b, b′) matrix, e.g. a CTMRG one
+    @test isnothing(norm_message_kernel(ψ, v, [first(incoming) * first(incoming)']))
     # vertex_scalar goes through the kernel and agrees with the generic contraction
     @test vertex_scalar(bpc, v) ≈ generic_scalar(ψ, v, incoming, "I") rtol = 1.0e-12
 end

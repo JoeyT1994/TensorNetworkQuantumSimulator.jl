@@ -11,19 +11,23 @@ _ImportedCircuit(nqubits::Integer = 0) = _ImportedCircuit(nqubits, Set{Int}(), [
 
 _measure!(circuit::_ImportedCircuit, qubits) = (union!(circuit.measured, qubits); circuit)
 
-# Add the registry's gate `name` on `qubits`; false if the registry does not have it.
+# Add the registry's gate `name` on `qubits`, under its canonical name; false if the registry does
+# not have the gate.
 function _add_gate!(circuit::_ImportedCircuit, name, params, qubits)
     for k in qubits
         k in circuit.measured && throw(ArgumentError(
             "gate \"$name\" acts on a qubit after it is measured; mid-circuit measurements are not supported"
         ))
     end
-    spec = _resolve_gate(name)
-    (isnothing(spec) || length(qubits) > 2) && return false
+    canon = _canonical_name(name)
+    isnothing(canon) && return false
+    spec = GATES[canon]
+    haskey(get(OPERATORS, (length(qubits), 2), Dict()), spec.opname) ||
+        throw(ArgumentError("gate \"$name\" does not act on $(length(qubits)) qubit(s)"))
     length(params) == length(spec.paramkeys) || throw(ArgumentError(
         "gate \"$name\" takes $(length(spec.paramkeys)) parameter(s), got $(length(params))"
     ))
-    push!(circuit.gates, (name, collect(qubits), collect(Float64, params)))
+    push!(circuit.gates, (canon, collect(qubits), collect(Float64, params)))
     return true
 end
 
@@ -34,17 +38,15 @@ function _unsupported_gate(name, qubits)
     throw(ArgumentError("unknown gate \"$name\""))
 end
 
-# The gate list, on the vertices `qubits` (the qubit numbers by default), under the registry's
-# canonical gate names.
+# The gate list, on the vertices `qubits` (the qubit numbers by default).
 function _gate_list(circuit::_ImportedCircuit; qubits = nothing)
     if !isnothing(qubits) && length(qubits) != circuit.nqubits
         throw(ArgumentError("the circuit has $(circuit.nqubits) qubits but `qubits` has $(length(qubits)) vertices"))
     end
     vertex = isnothing(qubits) ? identity : (k -> qubits[k])
     return map(circuit.gates) do (name, qs, params)
-        canon = haskey(GATES, name) ? name : ALIASES[name]
-        isempty(params) && return (canon, vertex.(qs))
-        return (canon, vertex.(qs), length(params) == 1 ? only(params) : Tuple(params))
+        isempty(params) && return (name, vertex.(qs))
+        return (name, vertex.(qs), length(params) == 1 ? only(params) : Tuple(params))
     end
 end
 
@@ -60,10 +62,13 @@ and measurements at the end of the circuit are dropped. Build the graph from the
 `build_graph_from_circuit`, or pass the vertex of each qubit as `qubits`; two-qubit gates must
 then act on neighbouring vertices.
 
+Gates on three or more qubits, `unitary` instructions, resets and gates after a measurement are
+not supported; transpile such circuits to one- and two-qubit basis gates first.
+
 # Keyword Arguments
 - `qubits = nothing`: The vertex of each qubit, in order. Defaults to the qubit numbers `1, 2, ...`.
 
-Gates on three or more qubits, `unitary` instructions, resets and gates after a measurement are
-not supported; transpile such circuits to one- and two-qubit basis gates first.
+# Returns
+- A `Vector` of gates, `(name, vertices)` or `(name, vertices, parameters)`.
 """
 function circuit_from_qiskit end

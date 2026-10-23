@@ -1,10 +1,9 @@
-# ── Fused double-layer BP kernels (dense data) ──────────────────────────────────────────
-# Each incoming message is absorbed along its bond into a pair of reused buffers, and conj(ψ) is
-# folded into the closing GEMM, so the peak is ψ plus two buffers of ψ's size. On the CPU ψ's
-# data is viewed as (pre, D, post) and middle bonds are absorbed slice by slice, with no
-# permutations; on other devices (GPUs) the many small GEMMs are slow, so the bond is instead
-# permuted to the front and absorbed by one GEMM (the "rotated" chain). Structures not recognised
-# return `nothing` (generic path).
+# Fused double-layer BP kernels on dense data. Each incoming message is absorbed along its bond into
+# a pair of reused buffers, and conj(ψ) is folded into the closing GEMM, so the peak is ψ plus two
+# buffers of ψ's size. On the CPU ψ's data is viewed as (pre, D, post) and middle bonds are absorbed
+# slice by slice, with no permutations. On other devices (GPUs) the many small GEMMs are slow, so the
+# bond is instead permuted to the front and absorbed by one GEMM (the "rotated" chain). Structures
+# not recognised return `nothing`.
 
 # ψ's data as a strided array in the order of `inds(ψ)` (aliasing its storage), or nothing.
 function _fused_data(ψ::ITensor)
@@ -15,14 +14,21 @@ function _fused_data(ψ::ITensor)
     return A
 end
 
-# For a standard doubled message on bond `b` of ψ (legs (b, b′) with b′ = prime(b)), the position
-# of `b` among ψ's legs and the message matrix M[b, b′]; nothing otherwise.
+# The legs (x, x′) of a dense two-leg tensor on x and x′ = prime(x), or nothing.
+function _primed_pair(t::ITensor)
+    (ndims(t) == 2 && !ITensors.hasqns(t)) || return nothing
+    i1, i2 = ITensors.inds(t)
+    x, xp = ITensors.plev(i1) == 0 ? (i1, i2) : (i2, i1)
+    (ITensors.plev(x) == 0 && xp == ITensors.prime(x)) || return nothing
+    return x, xp
+end
+
+# For a doubled message on bond `b` of ψ (legs (b, b′)), the position of `b` among ψ's legs and the
+# message matrix M[b, b′]; nothing otherwise.
 function _fused_message_slot(m::ITensor, ψinds::Vector{<:Index})
-    ndims(m) == 2 || return nothing
-    ITensors.hasqns(m) && return nothing
-    i1, i2 = ITensors.inds(m)
-    b, bp = ITensors.plev(i1) == 0 ? (i1, i2) : (i2, i1)
-    (ITensors.plev(b) == 0 && ITensors.plev(bp) == 1 && ITensors.noprime(bp) == b) || return nothing
+    legs = _primed_pair(m)
+    isnothing(legs) && return nothing
+    b, bp = legs
     k = findfirst(==(b), ψinds)
     k === nothing && return nothing
     M = ITensors.array(m, b, bp)
@@ -44,8 +50,8 @@ function _fused_buffers(ref::AbstractArray, ::Type{T}, n::Integer) where {T}
     return bufs
 end
 
-# out[a, b′, c] = Σ_b cur[a, b, c] · M[b, b′] along dimension k. For small `pre` a single GEMM with
-# kron(Mᵀ, 𝟙_pre) beats `post` tiny per-slice GEMMs despite the extra flops.
+# out[a, b′, c] = Σ_b cur[a, b, c] · M[b, b′] along dimension k, on the CPU. For small `pre` a
+# single GEMM with kron(Mᵀ, 𝟙_pre) beats `post` tiny per-slice GEMMs despite the extra flops.
 function _absorb_dim!(out::AbstractArray, cur::AbstractArray, M::AbstractMatrix, k::Integer)
     dims = size(cur)
     pre = prod(dims[1:(k - 1)]; init = 1); D = dims[k]; post = prod(dims[(k + 1):end]; init = 1)
@@ -55,10 +61,7 @@ function _absorb_dim!(out::AbstractArray, cur::AbstractArray, M::AbstractMatrix,
     elseif post == 1
         LinearAlgebra.mul!(reshape(O, pre, D), reshape(C, pre, D), M)
     elseif pre <= 8 && post > 8
-        Id = similar(M, pre, pre)                                      # on M's device
-        fill!(Id, zero(eltype(M)))
-        view(Id, LinearAlgebra.diagind(Id)) .= one(eltype(M))
-        K = kron(transpose(M), Id)
+        K = kron(transpose(M), Matrix{eltype(M)}(I, pre, pre))
         LinearAlgebra.mul!(reshape(O, pre * D, post), K, reshape(C, pre * D, post))
     else
         for c in 1:post
@@ -84,7 +87,7 @@ function _fused_chain(A::StridedArray, slots::Vector)
     return cur
 end
 
-# ψ's data with its legs in `order` (positions in `inds(ψ)`) permuted to `neworder`, into `dst`.
+# `src`, with its legs in `order` (positions in `inds(ψ)`), permuted to `neworder` into `dst`.
 function _reorder!(dst::AbstractVector, src::AbstractVector, dims, order, neworder)
     perm = [findfirst(==(l), order) for l in neworder]
     permutedims!(reshape(dst, dims[neworder]...), reshape(src, dims[order]...), perm)
@@ -146,7 +149,7 @@ function _close_bond!(R::AbstractMatrix, Ψ3::AbstractArray{<:Any, 3}, T3::Abstr
 end
 
 # The (k, M) slots of `incoming` on ψ's legs and the covered positions; nothing when a message is
-# not a standard doubled one or two messages share a bond.
+# not a doubled one or two messages share a bond.
 function _fused_slots(ψinds::Vector{<:Index}, incoming::Vector)
     slots = Any[]
     covered = falses(length(ψinds))
@@ -161,58 +164,36 @@ function _fused_slots(ψinds::Vector{<:Index}, incoming::Vector)
     return slots, covered
 end
 
-function TI.fused_norm_message(ψ::ITensor, sinds, incoming::Vector; normalize::Bool = true)
-    return TI.with_kernel_workspace(() -> _fused_norm_message(ψ, sinds, incoming; normalize))
-end
+# The kernels open a workspace for their buffers unless the caller already has one.
+TI.fused_norm_message(ψ::ITensor, sinds, incoming::Vector) =
+    TI.with_kernel_workspace(() -> _fused_norm_message(ψ, sinds, incoming))
+TI.fused_norm_scalar(ψ::ITensor, sinds, incoming::Vector, ops::Vector) =
+    TI.with_kernel_workspace(() -> _fused_norm_scalar(ψ, sinds, incoming, ops))
 
-function _fused_norm_message(ψ::ITensor, sinds, incoming::Vector; normalize::Bool)
+function _fused_norm_message(ψ::ITensor, sinds, incoming::Vector)
     A = _fused_data(ψ)
     A === nothing && return nothing
     ψinds = collect(Index, ITensors.inds(ψ))
     sc = _fused_slots(ψinds, incoming)
     sc === nothing && return nothing
     slots, covered = sc
-    open = [k for k in eachindex(ψinds) if !covered[k] && !(ψinds[k] in sinds)]
-    length(open) == 1 || return nothing
-    kout = only(open)
-    bout = ψinds[kout]; boutp = ITensors.prime(bout)
+    outgoing = [k for k in eachindex(ψinds) if !covered[k] && !(ψinds[k] in sinds)]
+    length(outgoing) == 1 || return nothing
+    kout = only(outgoing)
     D = size(A, kout)
-    if !(A isa Array)
-        Tm, Ψ = _rotated_chain(A, slots, kout)
-        R = similar(A, eltype(Tm), D, D)
-        LinearAlgebra.mul!(R, adjoint(reshape(Ψ, :, D)), reshape(Tm, :, D))   # R[b′, b]
-        return _finish_message(R, (boutp, bout), normalize)
-    end
-    Tm = _fused_chain(A, slots)
-    dims = size(A)
-    pre = prod(dims[1:(kout - 1)]; init = 1); post = prod(dims[(kout + 1):end]; init = 1)
-    Ψ3 = reshape(A, pre, D, post); T3 = reshape(Tm, pre, D, post)
-    R = similar(A, eltype(Tm), D, D)
-    if pre == 1
-        # R[b, b′] = Σ_c T[b, c] conj(ψ[b′, c])
-        LinearAlgebra.mul!(R, reshape(T3, D, post), adjoint(reshape(Ψ3, D, post)))
-        legs = (bout, boutp)
+    if A isa Array
+        Tm, Ψ = _fused_chain(A, slots), A
+        pre, post = prod(size(A)[1:(kout - 1)]; init = 1), prod(size(A)[(kout + 1):end]; init = 1)
     else
-        _close_bond!(R, Ψ3, T3)
-        legs = (boutp, bout)
+        Tm, Ψ = _rotated_chain(A, slots, kout)   # with the outgoing bond last
+        pre, post = length(A) ÷ D, 1
     end
-    return _finish_message(R, legs, normalize)
-end
-
-function _finish_message(R::AbstractMatrix, legs, normalize::Bool)
-    if normalize
-        # the 2-norm, as in the generic message update
-        n = LinearAlgebra.norm(R)
-        iszero(n) || rmul!(R, inv(n))
-    end
-    return ITensors.itensor(R, legs...)
+    R = _close_bond!(similar(A, eltype(Tm), D, D), reshape(Ψ, pre, D, post), reshape(Tm, pre, D, post))
+    bout = ψinds[kout]
+    return ITensors.itensor(R, ITensors.prime(bout), bout)
 end
 
 # Single-vertex closure ψ·Πm·(ops)·ψ̄ → scalar; `ops` are (s′, s) operator tensors on site legs.
-function TI.fused_norm_scalar(ψ::ITensor, sinds, incoming::Vector, ops::Vector)
-    return TI.with_kernel_workspace(() -> _fused_norm_scalar(ψ, sinds, incoming, ops))
-end
-
 function _fused_norm_scalar(ψ::ITensor, sinds, incoming::Vector, ops::Vector)
     A = _fused_data(ψ)
     A === nothing && return nothing
@@ -221,20 +202,15 @@ function _fused_norm_scalar(ψ::ITensor, sinds, incoming::Vector, ops::Vector)
     sc === nothing && return nothing
     slots, covered = sc
     for o in ops
-        (o isa ITensor && ndims(o) == 2 && !ITensors.hasqns(o)) || return nothing
-        i1, i2 = ITensors.inds(o)
-        s, sp = ITensors.plev(i1) == 0 ? (i1, i2) : (i2, i1)
-        (ITensors.plev(sp) == 1 && ITensors.noprime(sp) == s && s in sinds) || return nothing
+        legs = o isa ITensor ? _primed_pair(o) : nothing
+        isnothing(legs) && return nothing
+        s, sp = legs
         k = findfirst(==(s), ψinds)
-        (k === nothing || covered[k]) && return nothing
+        (s in sinds && !isnothing(k) && !covered[k]) || return nothing
         covered[k] = true
         push!(slots, (k, ITensors.array(o, s, sp)))   # M[s, s′] = O[s′, s]
     end
     all(k -> covered[k] || ψinds[k] in sinds, eachindex(ψinds)) || return nothing
-    if !(A isa Array)
-        Tm, Ψ = _rotated_chain(A, slots, nothing)
-        return LinearAlgebra.dot(Ψ, Tm)
-    end
-    Tm = _fused_chain(A, slots)
-    return LinearAlgebra.dot(vec(A), vec(Tm))   # Σ conj(ψ) T
+    Tm, Ψ = A isa Array ? (_fused_chain(A, slots), A) : _rotated_chain(A, slots, nothing)
+    return LinearAlgebra.dot(vec(Ψ), vec(Tm))   # Σ conj(ψ) T
 end

@@ -119,20 +119,20 @@ end
 Compute the Rényi entropy of order `α` of the reduced density matrix on `verts`.
 
 Constructs the reduced density matrix on the specified vertices and computes its Rényi entropy.
-Supports `BeliefPropagationCache`, `BoundaryMPSCache`, and `TensorNetworkState` inputs.
+Supports `TensorNetworkState` inputs and caches (`BeliefPropagationCache`, `BoundaryMPSCache`, `CTMRGCache`).
 For single-bond entanglement entropy with BP, prefer the edge-based method
 `renyi_entropy(bp_cache, e; α)` which avoids constructing the full RDM.
 
 # Arguments
-- `ψ`: A `TensorNetworkState`, `BeliefPropagationCache`, or `BoundaryMPSCache`.
+- `ψ`: A `TensorNetworkState` or a cache wrapping one.
 - `verts`: Vector of vertices defining the subsystem.
 
 # Keyword Arguments
-- `alg`: Contraction algorithm (`"bp"`, `"boundarymps"`, or `"exact"`).
+- `alg`: Contraction algorithm (`"bp"`, `"boundarymps"`, `"ctmrg"` or `"exact"`).
 - `α`: Rényi index.
 - Additional kwargs are forwarded to `reduced_density_matrix`.
 """
-function renyi_entropy(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, verts::Vector; alg, α::Real, kwargs...)
+function renyi_entropy(ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}, verts::Vector; alg, α::Real, kwargs...)
     algorithm_check(ψ, "rdm", alg)
     return renyi_entropy(reduced_density_matrix(ψ, verts; alg, normalize = false, kwargs...); normalize = true, α)
 end

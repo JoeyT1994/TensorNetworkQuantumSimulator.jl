@@ -1,11 +1,9 @@
 @eval module $(gensym())
 using TensorNetworkQuantumSimulator
-using TensorNetworkQuantumSimulator: NamedEdge, NamedGraph, add_edge, face_centroid, face_of_dart,
-    face_vertices, faces, ne, outer_face
+using TensorNetworkQuantumSimulator: face_of_dart, face_vertices, faces, ne, outer_face, positions
 using Test: @testset, @test, @test_throws
 
-# The embedding is read off a straight-line drawing; these lattices name their vertices by
-# positions (or the default positions of their names). Expected inner-face sizes per lattice.
+# Lattices whose vertex names are their positions, with the sizes of their inner faces.
 const LATTICES = [
     ("square", named_grid((5, 4)), [4]),
     ("honeycomb", named_hexagonal_lattice_graph(3, 2), [6]),
@@ -24,7 +22,7 @@ signed_area(pts) = sum(pts[i][1] * pts[mod1(i + 1, end)][2] - pts[mod1(i + 1, en
     # Euler for a connected planar graph, counting the outer face
     @test nv(g) - ne(g) + length(fs) + 1 == 2
     @test issetequal(unique(length.(fs)), sizes)
-    pos = TensorNetworkQuantumSimulator.positions(emb)
+    pos = positions(emb)
     # inner faces counterclockwise, the outer one clockwise
     @test all(f -> signed_area([pos[v] for v in f]) > 0, fs)
     @test signed_area([pos[v] for v in outer_face(emb)]) < 0
@@ -47,12 +45,6 @@ signed_area(pts) = sum(pts[i][1] * pts[mod1(i + 1, end)][2] - pts[mod1(i + 1, en
         @test length(poly) == length(neighbors(g, v))
         @test issetequal(first.(poly), neighbors(g, v))
         @test all(((u, f),) -> v in face_vertices(emb, f) && u in face_vertices(emb, f), poly)
-    end
-    # face centroids lie inside convex faces (all of these lattices' faces are convex)
-    for f in eachindex(fs)
-        c = face_centroid(emb, f)
-        walk = fs[f]
-        @test all(i -> signed_area([pos[walk[i]], pos[walk[mod1(i + 1, length(walk))]], c]) > 0, eachindex(walk))
     end
 end
 

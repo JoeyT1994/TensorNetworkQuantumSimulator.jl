@@ -21,6 +21,10 @@ Compute the inner product ⟨ψ|ϕ⟩ between two `TensorNetworkState`s using th
     - Extra kwargs for `alg = "bp"` or `"loopcorrections"`:
         - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
         - `max_configuration_size`: Maximum configuration size for loop corrections (only for `"loopcorrections"`).
+    - Extra kwargs for `alg = "ctmrg"`:
+        - `maxdim::Integer`: The bond dimension of the CTMRG environments.
+        - `cache_update_kwargs`: Additional keyword arguments for updating the cache (by default
+          only the free energy is converged).
 
     # Returns
     - The computed inner product as a scalar value.

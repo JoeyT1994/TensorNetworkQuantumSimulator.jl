@@ -30,7 +30,7 @@ function default_positions(g::AbstractGraph)
         "planar_embedding: the vertex names are not (x, y) coordinates; pass `positions` " *
             "(a dictionary vertex => (x, y)) explicitly"
     ))
-    return Dict(v => (Float64(v[1]), Float64(v[2])) for v in vs)
+    return Dict(v => v for v in vs)
 end
 
 """
@@ -54,6 +54,9 @@ function planar_embedding(g::AbstractGraph{V}; positions = default_positions(g))
     _check_drawing(g, pos)
     rotation = Dict{V, Vector{V}}(v => sort(collect(neighbors(g, v));
         by = u -> atan(pos[u][2] - pos[v][2], pos[u][1] - pos[v][1])) for v in vertices(g))
+    if nv(g) == 1
+        return PlanarEmbedding{V, typeof(g)}(g, pos, rotation, Vector{V}[], V[only(vertices(g))], Dict{Tuple{V, V}, Int}())
+    end
     # position of each neighbour in v's counterclockwise list
     slot = Dict{Tuple{V, V}, Int}((v, u) => i for v in vertices(g) for (i, u) in enumerate(rotation[v]))
     # Trace the face to the left of every dart: from u → v continue with v → w, w the neighbour of v
@@ -73,9 +76,6 @@ function planar_embedding(g::AbstractGraph{V}; positions = default_positions(g))
         end
         push!(walks, walk)
     end
-    if nv(g) == 1
-        return PlanarEmbedding{V, typeof(g)}(g, pos, rotation, Vector{V}[], V[only(vertices(g))], Dict{Tuple{V, V}, Int}())
-    end
     # The outer walk runs clockwise (negative area; zero for a tree, whose one walk is the outer
     # face); every inner walk runs counterclockwise.
     areas = [_signed_area(w, pos) for w in walks]
@@ -85,10 +85,7 @@ function planar_embedding(g::AbstractGraph{V}; positions = default_positions(g))
     renumber = Dict(i => (i == io ? 0 : i - (i > io)) for i in eachindex(walks))
     inner = [walks[i] for i in eachindex(walks) if i != io]
     dart_face = Dict(d => renumber[i] for (d, i) in dart_walk)
-    emb = PlanarEmbedding{V, typeof(g)}(g, pos, rotation, inner, walks[io], dart_face)
-    # Euler: V − E + F = 2 counting the outer face
-    nv(g) - ne(g) + length(inner) + 1 == 2 || error("planar_embedding: Euler characteristic check failed")
-    return emb
+    return PlanarEmbedding{V, typeof(g)}(g, pos, rotation, inner, walks[io], dart_face)
 end
 
 _signed_area(walk, pos) = sum(
@@ -169,17 +166,6 @@ end
 The counterclockwise vertex walk of face `f` (`0`: the outer face, clockwise).
 """
 face_vertices(emb::PlanarEmbedding, f::Integer) = f == 0 ? emb.outer : emb.faces[f]
-
-"""
-    face_centroid(emb, f)
-
-The centroid of the vertices of inner face `f`.
-"""
-function face_centroid(emb::PlanarEmbedding, f::Integer)
-    f == 0 && throw(ArgumentError("face_centroid: the outer face has no centroid"))
-    w = emb.faces[f]
-    return (sum(emb.positions[v][1] for v in w) / length(w), sum(emb.positions[v][2] for v in w) / length(w))
-end
 
 """
     face_of_dart(emb, u, v)

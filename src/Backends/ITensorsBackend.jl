@@ -1,5 +1,5 @@
 # The TensorInterface seam on ITensors (dense storage only). Most verbs forward to their
-# ITensors namesake; graded queries answer for dense data.
+# ITensors namesake.
 module ITensorsBackend
 
 using ITensors: ITensors, ITensor, Index
@@ -19,18 +19,16 @@ const IndexCollection = Union{AbstractVector{<:Index}, Tuple{Vararg{Index}}}
 const IndexLike = Union{Index, IndexCollection}
 const TensorOrIndex = Union{ITensor, IndexLike}
 
-# ── Index queries, transforms, replacement ──────────────────────────────────────────────
+# Index queries, transforms, replacement
 TI.inds(t::ITensor; kwargs...) = ITensors.inds(t; kwargs...)
 for f in (:commonind, :commoninds, :uniqueinds, :unioninds, :noncommonind, :noncommoninds,
         :hascommoninds)
     @eval TI.$f(a::TensorOrIndex, b...; kwargs...) = ITensors.$f(a, b...; kwargs...)
 end
-TI.dim(x::Union{ITensor, IndexLike}) = ITensors.dim(x)
+TI.dim(x::TensorOrIndex) = ITensors.dim(x)
 TI.plev(i::Index) = ITensors.plev(i)
 TI.tags(x::Union{ITensor, Index}) = ITensors.tags(x)
 TI.isgraded(x::Union{ITensor, Index}) = ITensors.hasqns(x)
-TI.isdual(i::Index) = false
-TI.space(i::Index) = ITensors.dim(i)
 
 TI.dag(x::TensorOrIndex) = ITensors.dag(x)
 TI.dag(t::ITensor, cod) = ITensors.dag(t)          # dense: the map adjoint is the bra (rule 5)
@@ -41,13 +39,8 @@ TI.sim(is::IndexCollection; kwargs...) = map(i -> ITensors.sim(i; kwargs...), is
 TI.replaceind(t::ITensor, args...) = ITensors.replaceind(t, args...)
 TI.replaceinds(t::ITensor, args...) = ITensors.replaceinds(t, args...)
 
-# ── Construction ────────────────────────────────────────────────────────────────────────
+# Construction
 TI.new_index(d::Integer; tags = "") = Index(Int(d), tags)
-TI.new_index(ref, d::Integer; tags = "") = Index(Int(d), tags)
-function TI.pad_index(w::Index, ins, kt::Integer; tags = "Link,pad")
-    k = ITensors.dim(w)
-    return k >= kt ? nothing : Index(Int(kt) - k, tags)
-end
 
 TI.from_array(A::AbstractArray, is::IndexCollection) = ITensor(copy(A), is...)
 TI.from_array(A::AbstractArray, i::Index, is::Index...) = ITensor(copy(A), i, is...)
@@ -58,12 +51,7 @@ function TI.random_tensor(rng::Random.AbstractRNG, elt::Type, is::IndexCollectio
     isempty(is) && return ITensor(fill(randn(rng, elt)))
     return ITensors.random_itensor(rng, elt, is...)
 end
-TI.random_tensor(rng::Random.AbstractRNG, elt::Type, i::Index, is::Index...) =
-    TI.random_tensor(rng, elt, [i, is...])
 TI.random_tensor(elt::Type, is::IndexCollection) = TI.random_tensor(Random.default_rng(), elt, is)
-TI.random_tensor(elt::Type, i::Index, is::Index...) = TI.random_tensor(elt, [i, is...])
-TI.random_tensor(is::IndexCollection) = TI.random_tensor(Float64, is)
-TI.random_tensor(i::Index, is::Index...) = TI.random_tensor(Float64, [i, is...])
 
 TI.onehot(p::Pair{<:Index}...) = ITensors.onehot(p...)
 TI.onehot(elt::Type, p::Pair{<:Index}...) = ITensors.onehot(elt, p...)
@@ -86,25 +74,20 @@ TI.directsum(p1::Pair{ITensor}, p2::Pair{ITensor}; tags = "sum") =
     first(ITensors.directsum(p1, p2; tags))
 TI.directsum(news, p1::Pair{ITensor}, p2::Pair{ITensor}; kwargs...) =
     ITensors.directsum(news, p1, p2; kwargs...)
-TI.charge_sectors(legs) = [Index(1, "Charge")]
 
-# ── Contraction ─────────────────────────────────────────────────────────────────────────
+# Contraction
 # The package chooses its own sequences, so ITensors' high-order warning is noise.
 function TI.contract(ts::AbstractVector{<:ITensor}; kwargs...)
     return ITensors.@disable_warn_order ITensors.contract(ts; kwargs...)
 end
-function TI.contract(ts::AbstractVector; kwargs...)
-    all(t -> t isa ITensor, ts) || throw(ArgumentError("contract: expected a vector of tensors"))
-    return TI.contract(convert(Vector{ITensor}, ts); kwargs...)
-end
+TI.contract(ts::AbstractVector; kwargs...) = TI.contract(convert(Vector{ITensor}, ts); kwargs...)
 TI.scalar(t::ITensor) = ITensors.scalar(t)
 TI.apply(o::ITensor, t::ITensor; kwargs...) = ITensors.apply(o, t; kwargs...)
 
-# ── Diagonal ops, factorizations ────────────────────────────────────────────────────────
+# Diagonal ops, factorizations
 TI.map_diag(f::Function, t::ITensor) = ITensors.map_diag(f, t)
 TI.map_diag!(f::Function, out::ITensor, t::ITensor) = ITensors.map_diag!(f, out, t)
 TI.factorize_svd(t::ITensor, args...; kwargs...) = ITensors.factorize_svd(t, args...; kwargs...)
-TI.gram(a::ITensor, b::ITensor, legs) = ITensors.dag(a) * b
 
 # Full SVD, then restrict U, S, V to the kept singular triplets on fresh bonds.
 function TI.truncated_svd(t::ITensor, linds; trunc::TI.TruncationStrategy)
@@ -121,11 +104,10 @@ function TI.truncated_svd(t::ITensor, linds; trunc::TI.TruncationStrategy)
     return U * Pu, Pu * ITensors.denseblocks(S) * Pv, V * Pv
 end
 
-# ── Storage / type queries ──────────────────────────────────────────────────────────────
+# Storage / type queries
 TI.datatype(t::ITensor) = ITensors.datatype(t)
 TI.scalartype(t::ITensor) = NDTensors.scalartype(t)
 TI.array(t::ITensor, is::Index...) = ITensors.array(t, is...)
-TI.data(t::ITensor) = ITensors.data(t)
 function TI.scale!(t::ITensor, x::Number)
     rmul!(ITensors.data(t), x)
     return t

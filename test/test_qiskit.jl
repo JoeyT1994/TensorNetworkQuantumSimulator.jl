@@ -41,7 +41,7 @@ end
 
     # it runs, unitarily
     ψ0 = tensornetworkstate(ComplexF64, v -> "↑", build_graph_from_circuit(circuit), "S=1/2")
-    ψ, _ = apply_gates(circuit, ψ0; apply_kwargs = (; maxdim = 64, cutoff = 1.0e-14, normalize_tensors = false), verbose = false)
+    ψ, _ = apply_gates(circuit, ψ0; apply_kwargs = (; maxdim = 64, cutoff = 1.0e-14, normalize_tensors = false))
     @test norm_sqr(ψ; alg = "exact") ≈ 1
 
     three = QuantumCircuit(3)

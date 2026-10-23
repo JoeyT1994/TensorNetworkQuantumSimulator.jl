@@ -19,10 +19,6 @@ function rescale_vertices!(
     return not_implemented()
 end
 
-#Backend fast paths for norm-network message updates and vertex scalars; `nothing` falls back to the generic path
-norm_message_kernel(net, vertex, incoming_ms; kwargs...) = nothing
-norm_scalar_kernel(net, vertices, incoming_ms; kwargs...) = nothing
-
 function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
     incoming_ms = incoming_messages(bp_cache, vertex)
     fast = norm_scalar_kernel(network(bp_cache), [vertex], incoming_ms; op_strings = v -> "I")
@@ -172,19 +168,23 @@ function observable_region(bp_cache::AbstractBeliefPropagationCache, vs)
 end
 
 # The norm network on `region`, with operators from `op_strings`, contracted against its environment.
-function contract_region(bp_cache::AbstractBeliefPropagationCache, region, op_strings::Function)
+function contract_region(
+        bp_cache::AbstractBeliefPropagationCache, region, op_strings::Function;
+        incoming_ms = incoming_messages(bp_cache, region)
+    )
     tensors = norm_factors(network(bp_cache), region; op_strings)
-    append!(tensors, incoming_messages(bp_cache, region))
+    append!(tensors, incoming_ms)
     #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
     sequence = contraction_sequence(tensors; alg = "optimal")
     return contract(tensors; sequence)
 end
 
-# Its value as a scalar, through the backend's fused kernel where it has one.
+# `contract_region` as a scalar, through the backend's fused kernel where it has one.
 function region_scalar(bp_cache::AbstractBeliefPropagationCache, region, op_strings::Function)
-    fast = norm_scalar_kernel(network(bp_cache), region, incoming_messages(bp_cache, region); op_strings)
+    incoming_ms = incoming_messages(bp_cache, region)
+    fast = norm_scalar_kernel(network(bp_cache), region, incoming_ms; op_strings)
     fast !== nothing && return fast
-    return scalar(contract_region(bp_cache, region, op_strings))
+    return scalar(contract_region(bp_cache, region, op_strings; incoming_ms))
 end
 
 function updated_message(
@@ -195,8 +195,7 @@ function updated_message(
         bp_cache, vertex; ignore_edges = (reverse(edge),)
     )
 
-    # unnormalised, so both paths share `normalize_message`
-    m_fast = norm_message_kernel(network(bp_cache), vertex, incoming_ms; normalize = false)
+    m_fast = norm_message_kernel(network(bp_cache), vertex, incoming_ms)
     if m_fast !== nothing
         return (alg.kwargs.normalize ? normalize_message(m_fast) : m_fast), (nothing, nothing, false)
     end
@@ -272,7 +271,7 @@ function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
     converged = false
     avg_diff = nothing
     niter = alg.kwargs.maxiter
-    # the fused kernels share their scratch buffers across the sweeps, and drop them afterwards
+    # the fused kernels share one set of scratch buffers across all the sweeps
     with_kernel_workspace() do
         for i in 1:alg.kwargs.maxiter
             diff = compute_error ? Ref(0.0) : nothing

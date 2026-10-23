@@ -51,7 +51,7 @@ const TNQS = TensorNetworkQuantumSimulator
         # converged messages are fixed points of the message update
         e = first(edges(g))
         m, _ = TNQS.updated_message(ψ_BPC, e)
-        @test m ≈ TNQS.message(ψ_BPC, e)
+        @test m ≈ message(ψ_BPC, e)
 
         vc = first(center(g))
         ρ_bp = reduced_density_matrix(ψ, vc; alg = "bp")

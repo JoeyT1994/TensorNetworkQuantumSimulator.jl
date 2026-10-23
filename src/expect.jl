@@ -14,8 +14,7 @@ function expect(
         numer = scalar(contract(ψOψ_tensors; sequence = numer_seq))
         return coeff * (numer / denom)
     end
-    # Observables can differ in type (e.g. "Z" real, "Y" complex), so promote to a common concrete type
-    return convert(Vector{mapreduce(typeof, promote_type, out; init = Union{})}, out)
+    return out
 end
 
 function expect(
@@ -50,7 +49,9 @@ Compute the expectation value of one or more observables on a tensor network sta
 """
 function expect(ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}, observable; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "expect", alg)
-    return expect(Algorithm(alg), ψ, observable; kwargs...)
+    out = expect(Algorithm(alg), ψ, observable; kwargs...)
+    # observables can differ in type (e.g. "Z" real, "Y" complex): promote to a common concrete type
+    return out isa Vector ? convert(Vector{mapreduce(typeof, promote_type, out; init = Union{})}, out) : out
 end
 
 # BP and CTMRG: the observable's region, with the operator inserted, over the same region without

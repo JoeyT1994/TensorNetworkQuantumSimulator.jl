@@ -39,7 +39,8 @@ struct CTMRGCache{V, N} <: AbstractBeliefPropagationCache{V}
     sides::Dict{Tuple{V, V}, Index}            # interface → its current truncated leg
     messages::Dictionary{NamedEdge, Tensor}    # u => v → the message from u into v
     corners::Dict{Tuple{V, Int}, Tensor}       # (p, f) → the corner at p in face f
-    projectors::Dict{Tuple{V, V}, Any}         # interface → (P_A, P_B, its truncated leg)
+    projectors::Dict{Tuple{V, V}, Tuple{Tensor, Tensor, Index}}  # interface → (P_A, P_B, its truncated leg)
+    sequences::Dict{Any, Any}                  # contraction orders, by the structure of the tensor list
 end
 
 network(cache::CTMRGCache) = cache.network
@@ -50,7 +51,8 @@ contraction_sequences(cache::CTMRGCache) = nothing
 function Base.copy(cache::CTMRGCache)
     return CTMRGCache(
         copy(cache.network), cache.embedding, cache.rules, cache.maxdim, cache.projector, cache.pinv_rtol, copy(cache.rng),
-        copy(cache.bonds), copy(cache.sides), copy(cache.messages), copy(cache.corners), copy(cache.projectors)
+        copy(cache.bonds), copy(cache.sides), copy(cache.messages), copy(cache.corners), copy(cache.projectors),
+        cache.sequences
     )
 end
 
@@ -74,7 +76,8 @@ function CTMRGCache(
     sides = Dict{Tuple{V, V}, Index}(I => new_index(1; tags = "Link,ctm") for I in rules.interfaces)
     cache = CTMRGCache(
         network, emb, rules, Int(maxdim), projector, Float64(pinv_rtol), Xoshiro(seed),
-        bonds, sides, Dictionary{NamedEdge, Tensor}(), Dict{Tuple{V, Int}, Tensor}(), Dict{Tuple{V, V}, Any}()
+        bonds, sides, Dictionary{NamedEdge, Tensor}(), Dict{Tuple{V, Int}, Tensor}(),
+        Dict{Tuple{V, V}, Tuple{Tensor, Tensor, Index}}(), Dict{Any, Any}()
     )
     _initialize_blocks!(cache)
     return cache
@@ -86,7 +89,6 @@ function _setblock!(cache::CTMRGCache, (kind, key), t)
     kind === :message ? set!(cache.messages, NamedEdge(key[1] => key[2]), t) : (cache.corners[key] = t)
     return cache
 end
-_blocks(cache::CTMRGCache) = Any[[(:message, (src(e), dst(e))) for e in keys(cache.messages)]; [(:corner, k) for k in keys(cache.corners)]]
 
 function _shared_legs(network, u, v)
     legs(x) = unique(Iterators.flatten(inds(t) for t in bp_factors(network, x)))
@@ -94,7 +96,7 @@ function _shared_legs(network, u, v)
     return Index[i for i in legs(u) if i in lv]
 end
 
-#Every block starts as a tensor of ones on its legs: the bonds it cuts and its interfaces.
+# Every block starts as a tensor of ones on its legs: the bonds it cuts and its interfaces.
 function _initialize_blocks!(cache::CTMRGCache)
     emb = cache.embedding
     ref = first(bp_factors(network(cache), first(vertices(graph(cache)))))
@@ -104,7 +106,7 @@ function _initialize_blocks!(cache::CTMRGCache)
         for h in (face_of_dart(emb, u, v), face_of_dart(emb, v, u))
             _isinner(h) && push!(legs, cache.sides[_interface(emb, h, u, _other_neighbor(emb, h, u, v))])
         end
-        _setblock!(cache, (:message, (u, v)), ones_on(legs))
+        set!(cache.messages, NamedEdge(u => v), ones_on(legs))
     end
     for (p, f) in _corner_keys(emb)
         w = _walk(emb, f, p)
@@ -113,9 +115,8 @@ function _initialize_blocks!(cache::CTMRGCache)
     return cache
 end
 
-
-#The tensors of a recipe. `projectors` and `site` can be overridden (a pass's new projectors, a site
-#with an operator inserted); enlarged corners are kept in `memo`, if given, while the blocks don't change.
+# The tensors of a recipe. `projectors` and `site` can be overridden (a pass's new projectors, a site
+# with an operator inserted); enlarged corners are kept in `memo`, if given, while the blocks don't change.
 function _tensors(
         cache::CTMRGCache, parts;
         projectors = cache.projectors,
@@ -133,7 +134,7 @@ function _tensors(
             enlarged() = _evaluate(cache, _enlarged(cache.embedding, part[2]...); projectors, site)
             push!(ts, isnothing(memo) ? enlarged() : get!(enlarged, memo, part[2]))
         elseif kind === :inverse
-            chain = _contract([cache.corners[k] for k in part[2]])
+            chain = _contract(cache, [cache.corners[k] for k in part[2]])
             push!(ts, _pseudo_inverse(chain, cache.sides[part[3][1]], cache.sides[part[3][2]], cache.pinv_rtol))
         else
             P = projectors[part[2]]
@@ -143,44 +144,45 @@ function _tensors(
     return ts
 end
 
-_evaluate(cache::CTMRGCache, parts; kwargs...) = _contract(_tensors(cache, parts; kwargs...))
+_evaluate(cache::CTMRGCache, parts; kwargs...) = _contract(cache, _tensors(cache, parts; kwargs...))
 
-#The same lists recur every pass, so contraction orders are cached by the lists' structure.
-const _SEQUENCES = Dict{Any, Any}()
-function _contract(ts::Vector)
+# The same lists recur every pass, so contraction orders are kept by the lists' structure.
+function _contract(cache::CTMRGCache, ts::Vector)
     length(ts) == 1 && return only(ts)
     length(ts) == 2 && return ts[1] * ts[2]
     seen = Dict{Any, Int}()
     structure = Tuple(Tuple((get!(seen, i, length(seen) + 1), dim(i)) for i in inds(t)) for t in ts)
-    sequence = get!(_SEQUENCES, structure) do
+    sequence = get!(cache.sequences, structure) do
         length(ts) <= 12 ? contraction_sequence(ts; alg = "optimal") :
             contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
     end
     return contract(ts; sequence)
 end
 
-#The pseudo-inverse N of a two-leg connector M, so that M N M = M (bilinearly). Singular values
-#below `rtol` (relative) are dropped.
+# The pseudo-inverse N of a two-leg connector M, so that M N M = M (bilinearly). Singular values
+# below `rtol` (relative) are dropped.
 function _pseudo_inverse(M, l1, l2, rtol)
     U, S, V = svd(M, [l1])
     cut = rtol * maximum(abs, array(S))
     return conj(U * map_diag(s -> abs(s) > cut ? inv(s) : zero(s), S) * V)
 end
 
+# B with a new leg of dimension one, and that leg.
+function _with_trivial_leg(B, tags)
+    c = new_index(1; tags)
+    return B * adapt_like(B, onehot(scalartype(B), c => 1)), c
+end
 
-#A block as a column on the interface `ins`: its other legs fused, normalised.
+# A block as a column on the interface `ins`: its other legs fused, normalised.
 function _column(B, ins)
     B = B / norm(B)
     rest = uniqueinds(B, ins)
-    if isempty(rest)
-        c = new_index(1; tags = "Link,col")
-        return B * adapt_like(B, onehot(scalartype(B), c => 1)), c
-    end
+    isempty(rest) && return _with_trivial_leg(B, "Link,col")
     C = combiner(rest; tags = "Link,col")
     return B * C, combinedind(C)
 end
 
-#Blocks side by side, as the direct sum of their columns.
+# Blocks side by side, as the direct sum of their columns.
 function _stack(blocks, ins)
     acc, c = _column(first(blocks), ins)
     for B in blocks[2:end]
@@ -191,22 +193,20 @@ function _stack(blocks, ins)
     return acc
 end
 
-#One side of an interface reduced to its triangular factor (B = QR) when that makes it smaller.
+# One side of an interface reduced to its triangular factor (B = QR) when that makes it smaller.
 function _triangular(B, ins)
     rest = uniqueinds(B, ins)
-    if isempty(rest)
-        b = new_index(1; tags = "Link,qr")
-        return B * adapt_like(B, onehot(scalartype(B), b => 1))
-    end
+    isempty(rest) && return first(_with_trivial_leg(B, "Link,qr"))
     !isgraded(B) && dim(rest) <= dim(ins) && return B
     _, R = qr(B, rest)
     return R
 end
 
-#The projector pair at an interface, from the blocks on its left (A) and right (B): with the
-#truncated SVD AᵀB = U S V†, P_A = B V S^(-1/2) and P_B = S^(-1/2) U† Aᵀ, so that Aᵀ P_A P_B B = Aᵀ B
-#at full rank. The pairing is bilinear because the network contracts the two sides plainly.
+# The projector pair at an interface, from the blocks on its left (A) and right (B): with the
+# truncated SVD AᵀB = U S V†, P_A = B V S^(-1/2) and P_B = S^(-1/2) U† Aᵀ, so that Aᵀ P_A P_B B = Aᵀ B
+# at full rank. The pairing is bilinear because the network contracts the two sides plainly.
 function _projector_pair(left, right, ins, maxdim)
+    # only blocks with every leg of the interface can be stacked into columns on it
     covers(B) = all(i -> i in inds(B), ins)
     side(blocks) = _triangular(length(blocks) == 1 ? only(blocks) : _stack(filter(covers, blocks), ins), ins)
     A, B = side(left), side(right)
@@ -219,7 +219,7 @@ function _projector_pair(left, right, ins, maxdim)
     return PA, replaceind(PB, only(uniqueinds(PB, ins)), dag(w)), w
 end
 
-#A random isometry for the first pass: lossless at lossless maxdim, so that pass is already exact.
+# A random isometry for the first pass: lossless at lossless maxdim, so that pass is already exact.
 function _random_projector(cache::CTMRGCache, ins)
     k = new_index(min(cache.maxdim, dim(ins)))
     ref = first(cache.messages)
@@ -235,7 +235,7 @@ function _set_projectors!(cache::CTMRGCache, projectors)
     return cache
 end
 
-#The legs of interface I: its bonds, and the leg of the interface its ray continues into.
+# The legs of interface I: its bonds, and the leg of the interface its ray continues into.
 function _interface_legs(cache::CTMRGCache, I, side_of)
     J = cache.rules.next[I]
     return isnothing(J) ? cache.bonds[I] : Index[cache.bonds[I]; side_of(J)]
@@ -249,15 +249,15 @@ function _random_projectors!(cache::CTMRGCache)
     return _set_projectors!(cache, new)
 end
 
-#The projectors for a sequential pass, boundary first. The blocks either side of an interface are in
-#the previous pass's coordinates, so their leg on the next interface J is first carried into J's new
-#ones (by P_B(old) M_J P_A(new) on the p side, P_A(old) M_J P_B(new) on the q side). Where a
-#directional corner is projected, which has no enlarged corner behind it, every block projected
-#there is stacked in so that each stays lossless.
+# The projectors for a sequential pass, boundary first. The blocks either side of an interface are in
+# the previous pass's coordinates, so their leg on the next interface J is first carried into J's new
+# ones (by P_B(old) M_J P_A(new) on the p side, P_A(old) M_J P_B(new) on the q side). Where a
+# directional corner is projected, which has no enlarged corner behind it, every block projected
+# there is stacked in so that each stays lossless.
 function _carried_projectors!(cache::CTMRGCache)
     emb, rules = cache.embedding, cache.rules
     memo = Dict{Any, Tensor}()
-    corner(p, f) = only(_tensors(cache, [(:enlarged, (p, f))]; memo))
+    enlarged(p, f) = only(_tensors(cache, [(:enlarged, (p, f))]; memo))
     new = Dict{Any, Any}()
     carry = Dict{Any, Tensor}()
     for I in rules.interfaces
@@ -266,9 +266,9 @@ function _carried_projectors!(cache::CTMRGCache)
         J = rules.next[I]
         Ql, Qr = _connectors(emb, rules.exits, p, q)
         moved(t, side) = isnothing(J) ? t : t * carry[(J, side)]
-        on(Q, side, parts...) = moved(_contract([_tensors(cache, Q); parts...]), side)
-        left = Tensor[on(Ql, :A, corner(p, f))]
-        right = Tensor[on(Qr, :B, corner(q, f))]
+        on(Q, side, parts...) = moved(_contract(cache, [_tensors(cache, Q); parts...]), side)
+        left = Tensor[on(Ql, :A, enlarged(p, f))]
+        right = Tensor[on(Qr, :B, enlarged(q, f))]
         directional = []
         for c in (p, q)
             rules.modes[(c, f)] === :diag && continue
@@ -276,31 +276,36 @@ function _carried_projectors!(cache::CTMRGCache)
             a == (c == p ? q : p) && push!(directional, (c, parts))
         end
         if !isempty(directional)
+            # the messages into p and q from their other neighbours on f
             w = face_vertices(emb, f)
             k = findfirst(==(p), w)
-            push!(left, on(Ql, :A, _tensors(cache, first(_message_core(emb, p, w[mod1(k - 1, length(w))])))...))
-            push!(right, on(Qr, :B, _tensors(cache, first(_message_core(emb, q, w[mod1(k + 2, length(w))])))...))
+            before_p, after_q = w[mod1(k - 1, length(w))], w[mod1(k + 2, length(w))]
+            push!(left, on(Ql, :A, _tensors(cache, first(_message_core(emb, p, before_p)))...))
+            push!(right, on(Qr, :B, _tensors(cache, first(_message_core(emb, q, after_q)))...))
             for (c, parts) in directional
-                c == p ? push!(left, on(Ql, :A, _tensors(cache, parts)...)) : push!(right, on(Qr, :B, _tensors(cache, parts)...))
+                if c == p
+                    push!(left, on(Ql, :A, _tensors(cache, parts)...))
+                else
+                    push!(right, on(Qr, :B, _tensors(cache, parts)...))
+                end
             end
         end
         new[I] = _projector_pair(left, right, _interface_legs(cache, I, J -> new[J][3]), cache.maxdim)
         old = cache.projectors[I]
-        carry[(I, :A)] = _contract(isnothing(J) ? [old[2], new[I][1]] : [old[2], carry[(J, :A)], new[I][1]])
-        carry[(I, :B)] = _contract(isnothing(J) ? [old[1], new[I][2]] : [old[1], carry[(J, :B)], new[I][2]])
+        carry[(I, :A)] = _contract(cache, isnothing(J) ? [old[2], new[I][1]] : [old[2], carry[(J, :A)], new[I][1]])
+        carry[(I, :B)] = _contract(cache, isnothing(J) ? [old[1], new[I][2]] : [old[1], carry[(J, :B)], new[I][2]])
     end
     return _set_projectors!(cache, new)
 end
 
-
-#Eigenvalue projectors for the interfaces of face f. They cut the ring of its enlarged corners,
-#Z_f = tr(K_1 ⋯ K_n), and each keeps the dominant invariant subspaces of the ring's transfer matrix
-#at that interface (the eigenvalues all the transfer matrices share). A face whose spectrum fits in
-#maxdim is left to the SVD projector, which is lossless there: these would drop the ring's
-#kernel, which other faces see. `nothing` also if a block has legs beyond its two interfaces.
+# Eigenvalue projectors for the interfaces of face f. They cut the ring of its enlarged corners,
+# Z_f = tr(K_1 ⋯ K_n), and each keeps the dominant invariant subspaces of the ring's transfer matrix
+# at that interface (the eigenvalues all the transfer matrices share). A face whose spectrum fits in
+# maxdim is left to the SVD projector, which is lossless there: these would drop the ring's
+# kernel, which other faces see. `nothing` also if a block has legs beyond its two interfaces.
 function _eig_projectors(cache::CTMRGCache, f, ins_of, memo)
     emb, exits = cache.embedding, cache.rules.exits
-    w = faces(emb)[f]
+    w = face_vertices(emb, f)
     n = length(w)
     I = [(w[k], w[mod1(k + 1, n)]) for k in 1:n]
     ins = [ins_of(I[k]) for k in 1:n]
@@ -311,24 +316,27 @@ function _eig_projectors(cache::CTMRGCache, f, ins_of, memo)
         return _evaluate(cache, [Qr; (:enlarged, (w[k], f)); Ql]; memo)
     end
     all(k -> issetequal(inds(K[k]), [before(k); ins[k]]), 1:n) || return nothing
-    #the ring's eigenproblem is small and runs on the host
+    # the ring's eigenproblem is small and runs on the host
     mats = [Array(reshape(array(K[k], before(k)..., ins[k]...), dim(before(k)), dim(ins[k]))) for k in 1:n]
-    #The ring is a product of n blocks, so its eigenvalues are only known to about N ε ∏‖K‖
+    # The ring is a product of n blocks, so its eigenvalues are only known to about N ε ∏‖K‖
     noise = maximum(size.(mats, 2)) * eps(real(eltype(first(mats)))) * prod(norm, mats)
     bases = _ring_bases(mats, min(cache.maxdim, minimum(size.(mats, 2))), noise)
     isnothing(bases) && return nothing
-    pairs = Dict{Any, Any}()
+    projectors = Dict{Any, Any}()
     for k in 1:n
-        basis(X, tags) = (c = new_index(size(X, 2); tags); from_array(reshape(X, dim.(ins[k])..., size(X, 2)), [ins[k]; c]))
+        function basis(X, tags)
+            c = new_index(size(X, 2); tags)
+            return from_array(reshape(X, dim.(ins[k])..., size(X, 2)), [ins[k]; c])
+        end
         V, W = basis(bases[1][k], "Link,right"), basis(bases[2][k], "Link,left")
-        pairs[I[k]] = _projector_pair([adapt_like(K[k], W)], [adapt_like(K[k], V)], ins[k], cache.maxdim)
+        projectors[I[k]] = _projector_pair([adapt_like(K[k], W)], [adapt_like(K[k], V)], ins[k], cache.maxdim)
     end
-    return pairs
+    return projectors
 end
 
-#Right and left bases of the kept invariant subspace at every interface of a ring, or `nothing` if
-#the face is left to the SVD projector. They are found at the last interface, matrix-free (densely
-#only if the two Krylov solves disagree), and carried around the ring by the blocks.
+# Right and left bases of the kept invariant subspace at every interface of a ring, or `nothing` if
+# the face is left to the SVD projector. They are found at the last interface, matrix-free (densely
+# only if the two Krylov solves disagree), and carried around the ring by the blocks.
 function _ring_bases(mats, r, noise)
     n = length(mats)
     N = size(mats[n], 2)
@@ -336,7 +344,7 @@ function _ring_bases(mats, r, noise)
     ringᵀ(y) = foldl((y, K) -> transpose(K) * y, mats; init = y)
     found = _krylov_spectral_bases(ring, ringᵀ, N, eltype(first(mats)), r, noise)
     if isnothing(found)
-        found = _spectral_bases(ring(Matrix{eltype(first(mats))}(LinearAlgebra.I, N, N)), r; noise)
+        found = _spectral_bases(ring(Matrix{eltype(first(mats))}(LinearAlgebra.I, N, N)), r, noise)
     end
     (isnothing(found) || !found[3]) && return nothing
     orthonormal(X) = Matrix(qr(X).Q)[:, 1:size(X, 2)]
@@ -352,10 +360,13 @@ function _ring_bases(mats, r, noise)
     return Vs, Ws
 end
 
-#Which eigenvalues to keep: at most r of the largest, none within the `noise`, and never splitting a
-#conjugate pair or a cluster (where the subspace is ill-defined). Returns the kept mask and whether
-#anything above the noise was left out, or `nothing` if nothing is kept.
-function _kept_eigenvalues(λ, r, noise, isreal_matrix; gap = 1.0e-8)
+# Relative distance below which two eigenvalues count as one cluster.
+const _EIGENVALUE_GAP = 1.0e-8
+
+# Which eigenvalues to keep: at most r of the largest, none within the `noise`, and never splitting a
+# conjugate pair or a cluster (where the subspace is ill-defined). Returns the kept mask and whether
+# anything above the noise was left out, or `nothing` if nothing is kept.
+function _kept_eigenvalues(λ, r, noise, isreal_matrix)
     order = sortperm(abs.(λ); rev = true)
     scale = abs(λ[first(order)])
     nonzero = filter(i -> abs(λ[i]) > noise, order)
@@ -366,7 +377,7 @@ function _kept_eigenvalues(λ, r, noise, isreal_matrix; gap = 1.0e-8)
         group = [i]
         if isreal_matrix && !isreal(λ[i])
             partner = findfirst(j -> j != i && !taken[j] && λ[j] ≈ conj(λ[i]), eachindex(λ))
-            isnothing(partner) && break   #its partner lies beyond what was computed
+            isnothing(partner) && break  # its partner lies beyond what was computed
             push!(group, partner)
         end
         taken[group] .= true
@@ -377,7 +388,7 @@ function _kept_eigenvalues(λ, r, noise, isreal_matrix; gap = 1.0e-8)
         count(keep) + length(group) > r && break
         keep[group] .= true
     end
-    separated(keep) = all(abs(λ[i] - λ[j]) > gap * scale for i in findall(keep), j in nonzero if !keep[j])
+    separated(keep) = all(abs(λ[i] - λ[j]) > _EIGENVALUE_GAP * scale for i in findall(keep), j in nonzero if !keep[j])
     while any(keep) && !separated(keep)
         keep[groups[findlast(g -> all(keep[g]), groups)]] .= false
     end
@@ -385,9 +396,9 @@ function _kept_eigenvalues(λ, r, noise, isreal_matrix; gap = 1.0e-8)
     return keep, count(keep) < length(nonzero)
 end
 
-#Dense right and left bases (Wᵀ V = 1) of the kept invariant subspace of M, both from one Schur
-#decomposition so that they belong to the same eigenvalues; the left one from a Sylvester solve.
-function _spectral_bases(M::AbstractMatrix, r::Integer; noise::Real = size(M, 1) * eps(real(eltype(M))) * norm(M))
+# Dense right and left bases (Wᵀ V = 1) of the kept invariant subspace of M, both from one Schur
+# decomposition so that they belong to the same eigenvalues; the left one from a Sylvester solve.
+function _spectral_bases(M::AbstractMatrix, r::Integer, noise::Real)
     F = schur(M)
     kept = _kept_eigenvalues(F.values, r, noise, eltype(M) <: Real)
     isnothing(kept) && return nothing
@@ -401,37 +412,36 @@ function _spectral_bases(M::AbstractMatrix, r::Integer; noise::Real = size(M, 1)
     return Z[:, 1:k], transpose(Wt), truncated
 end
 
-#The same, matrix-free, from Krylov-Schur solves for the ring and its transpose; `nothing` (so the
-#dense route decides) if a solve fails or the two disagree.
-function _krylov_spectral_bases(ring, ringᵀ, N, T, r, noise; gap = 1.0e-8)
+# The same, matrix-free, from Krylov-Schur solves for the ring and its transpose; `nothing` (so the
+# dense route decides) if a solve fails or the two disagree.
+function _krylov_spectral_bases(ring, ringᵀ, N, T, r, noise)
     howmany = min(r + 2, N)
     krylovdim = min(2howmany + 16, N)
     alg = Arnoldi(; krylovdim, tol = noise, maxiter = 100, verbosity = 0)
     rng = Xoshiro(N)
     _, vR, λR, infoR = schursolve(ring, randn(rng, T, N), howmany, :LM, alg)
     _, vL, λL, infoL = schursolve(ringᵀ, randn(rng, T, N), howmany, :LM, alg)
-    #Fewer converged than asked is fine if the rest are noise: there is nothing more above it
+    # Fewer converged than asked is fine if the rest are noise: there is nothing more above it
     for (λ, info) in ((λR, infoR), (λL, infoL))
         all(μ -> abs(μ) <= noise, λ[(info.converged + 1):end]) || return nothing
     end
     λR, vR = λR[1:infoR.converged], vR[1:infoR.converged]
     λL, vL = λL[1:infoL.converged], vL[1:infoL.converged]
     isempty(λR) && return nothing
-    kept = _kept_eigenvalues(λR, r, noise, T <: Real; gap)
+    kept = _kept_eigenvalues(λR, r, noise, T <: Real)
     isnothing(kept) && return nothing
     keep, truncated = kept
     k = count(keep)
     all(keep[1:k]) || return nothing
-    #the left solve must find the same kept eigenvalues
+    # the left solve must find the same kept eigenvalues
     left = collect(λL[1:min(k, length(λL))])
     for λ in λR[1:k]
-        j = findfirst(μ -> abs(μ - λ) <= gap * abs(λR[1]), left)
+        j = findfirst(μ -> abs(μ - λ) <= _EIGENVALUE_GAP * abs(λR[1]), left)
         isnothing(j) && return nothing
         deleteat!(left, j)
     end
     return reduce(hcat, vR[1:k]), reduce(hcat, vL[1:k]), truncated
 end
-
 
 function _recompute(cache::CTMRGCache, block; kwargs...)
     rules = cache.rules
@@ -439,7 +449,7 @@ function _recompute(cache::CTMRGCache, block; kwargs...)
     return t / norm(t)
 end
 
-#A sequential pass: new projectors, then every block once, in dependency order.
+# A sequential pass: new projectors, then every block once, in dependency order.
 function _sequential_pass!(cache::CTMRGCache)
     isempty(cache.projectors) ? _random_projectors!(cache) : _carried_projectors!(cache)
     for block in cache.rules.order
@@ -448,7 +458,7 @@ function _sequential_pass!(cache::CTMRGCache)
     return cache
 end
 
-#A Jacobi pass: new projectors, then every block, all from the blocks of the previous pass.
+# A Jacobi pass: new projectors, then every block, all from the blocks of the previous pass.
 function _jacobi_pass!(cache::CTMRGCache)
     emb, rules = cache.embedding, cache.rules
     memo = Dict{Any, Tensor}()
@@ -469,8 +479,10 @@ function _jacobi_pass!(cache::CTMRGCache)
         Be = _evaluate(cache, [Qr; (:enlarged, (q, f))]; memo)
         new[I] = _projector_pair([Bw], [Be], ins(I), cache.maxdim)
     end
-    blocks = Dict(b => _recompute(cache, b; projectors = new, memo) for b in _blocks(cache))
-    foreach(((b, t),) -> _setblock!(cache, b, t), blocks)
+    blocks = Dict(b => _recompute(cache, b; projectors = new, memo) for b in _blocks(emb))
+    for (b, t) in blocks
+        _setblock!(cache, b, t)
+    end
     return _set_projectors!(cache, new)
 end
 
@@ -520,7 +532,7 @@ function update(
     return cache
 end
 
-#The environment of every vertex: the messages into it and the corners around it, contracted.
+# The environment of every vertex: the messages into it and the corners around it, contracted.
 function _environments(cache::CTMRGCache)
     return map(v -> _evaluate(cache, _vertex_environment(cache.embedding, v)), collect(vertices(cache)))
 end
@@ -531,11 +543,7 @@ end
 The environment of one vertex, or of the two ends of an edge: the messages into it and the
 corners around it.
 """
-function incoming_messages(cache::CTMRGCache, vs::Vector; ignore_edges = [])
-    isempty(ignore_edges) || throw(ArgumentError("a CTMRG environment cannot leave out edges"))
-    return _tensors(cache, _environment(cache, vs))
-end
-
+incoming_messages(cache::CTMRGCache, vs::Vector) = _tensors(cache, _environment(cache, vs))
 
 _log(z) = real(z) < 0 ? log(complex(z)) : log(z)
 
@@ -562,30 +570,33 @@ function freenergy(cache::CTMRGCache)
     return F
 end
 
-partitionfunction(cache::CTMRGCache) = exp(freenergy(cache))
-
-#The environment of, and the closed region around, one vertex or the two ends of an edge.
-_environment(cache::CTMRGCache, vs) = _on_region(cache, vs, _vertex_environment, _edge_environment)
-_region(cache::CTMRGCache, vs) = _on_region(cache, vs, _vertex_region, _edge_region)
-function _on_region(cache::CTMRGCache, vs, at_vertex, at_edge)
-    length(vs) == 1 && return at_vertex(cache.embedding, only(vs))
-    length(vs) == 2 && has_edge(graph(cache), vs...) && return at_edge(cache.embedding, vs...)
-    return error("alg = \"ctmrg\" supports regions of one vertex or the two ends of an edge; got $vs.")
+# A CTMRG cache closes regions of one vertex or of the two ends of an edge.
+function observable_region(cache::CTMRGCache, vs)
+    length(vs) == 1 || (length(vs) == 2 && has_edge(graph(cache), vs...)) ||
+        error("alg = \"ctmrg\" supports regions of one vertex or the two ends of an edge; got $vs.")
+    return vs
 end
 
-#A CTMRG observable is closed on its own vertices, which must be one vertex or an edge.
-observable_region(cache::CTMRGCache, vs) = _on_region(cache, vs, (_, v) -> [v], (_, u, v) -> [u, v])
+# The environment of, and the closed region around, such a region.
+function _environment(cache::CTMRGCache, region)
+    region = observable_region(cache, region)
+    return length(region) == 1 ? _vertex_environment(cache.embedding, only(region)) : _edge_environment(cache.embedding, region...)
+end
+function _region(cache::CTMRGCache, region)
+    region = observable_region(cache, region)
+    return length(region) == 1 ? _vertex_region(cache.embedding, only(region)) : _edge_region(cache.embedding, region...)
+end
 
-#The region's sites, with operators from `op_strings`, contracted against its environment. The
-#closed region's recipe orders the contraction through enlarged corners.
-function contract_region(cache::CTMRGCache, vs, op_strings::Function)
+# The region's sites, with operators from `op_strings`, contracted against its environment. The
+# closed region's recipe orders the contraction through enlarged corners.
+function contract_region(cache::CTMRGCache, region, op_strings::Function)
     site = v -> norm_factors(network(cache), [v]; op_strings)
-    return _evaluate(cache, _region(cache, vs); site)
+    return _evaluate(cache, _region(cache, region); site)
 end
 
-region_scalar(cache::CTMRGCache, vs, op_strings::Function) = scalar(contract_region(cache, vs, op_strings))
+region_scalar(cache::CTMRGCache, region, op_strings::Function) = scalar(contract_region(cache, region, op_strings))
 
-#Messages and factors as for any cache, and the corners and projectors with them.
+# Messages and factors as for any cache, and the corners and projectors with them.
 function Adapt.adapt_structure(to, cache::CTMRGCache)
     cache = adapt_factors(to, adapt_messages(to, cache))
     map!(adapt(to), values(cache.corners))

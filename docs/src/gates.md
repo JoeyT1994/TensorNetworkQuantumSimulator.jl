@@ -114,10 +114,10 @@ The first vertex of a controlled gate is the control.
 | `"SWAP"`, `"iSWAP"` | `"swap"`, `"iswap"` | -- | SWAP / iSWAP |
 | `"DCX"` | `"dcx"` | -- | Double CNOT: CX from the first vertex, then from the second |
 | `"ECR"` | `"ecr"` | -- | Echoed cross-resonance |
-| `"√SWAP"`, `"√iSWAP"` | — | -- | Square-root SWAP variants (no qiskit equivalent) |
+| `"√SWAP"`, `"√iSWAP"` | `"√swap"`, `"√iswap"` | -- | Square-root SWAP variants (no qiskit equivalent) |
 | `"Rxx"`, `"Ryy"`, `"Rzz"` | `"rxx"`, `"ryy"`, `"rzz"` | θ | Pauli-pair rotations |
 | `"Rzx"` | `"rzx"` | θ | `exp(-iθ/2 Z⊗X)`, Z on the first vertex |
-| `"xx_plus_yy"`, `"xx_minus_yy"` | (canonical) | (θ, β) | qiskit's `XXPlusYYGate` and `XXMinusYYGate` |
+| `"xx_plus_yy"`, `"xx_minus_yy"` | `"xx_plus_yy"`, `"xx_minus_yy"` | (θ, β) | qiskit's `XXPlusYYGate` and `XXMinusYYGate` |
 | `"Rxxyy"`, `"Rxxyyzz"` | — | θ | XX+YY and XX+YY+ZZ rotations (no qiskit equivalent) |
 
 Gates on three or more qubits are not supported: decompose them into one- and two-qubit gates first.
@@ -126,18 +126,15 @@ Gates on three or more qubits are not supported: decompose them into one- and tw
 
 There are two paths for using a gate that isn't in the built-in registry, depending on whether the gate is one-off or reusable.
 
-#### Path 1: Pass an `ITensor` directly
+#### Path 1: Pass gate tensors directly
 
-For a one-off gate, build the `ITensor` yourself from the physical site indices and pass it to `apply_gates`. No registration needed:
+For a one-off gate, register its matrix with [`register_op!`](@ref) (first site most significant), build the gate tensor with [`op`](@ref) on the site indices, and pass the tensors to `apply_gates`:
 
 ```julia
-using ITensors: ITensor
-
 s = siteinds(ψ)
-# Custom gates
-gate1 = ITensor(my_local_matrix, s[v1], s[v1]')
-gate2 = ITensor(my_nn_gate, s[v1], s[v2], s[v1]', s[v2]')
-ψ, errors = apply_gates([gate1, gate2], ψ; apply_kwargs)
+register_op!("MyGate", my_nn_gate; nsites = 2)
+gate = op("MyGate", only(s[v1]), only(s[v2]))
+ψ, errors = apply_gates([gate], ψ; apply_kwargs)
 ```
 
 #### Path 2: Register a named gate
@@ -168,7 +165,8 @@ The keyword arguments map as:
 
 - `paramkeys = (:θ, :ϕ)` — names of the kwargs your operator expects, in the order they appear in the circuit-tuple parameter. For a single-parameter gate, use a 1-tuple like `(:θ,)`.
 - `opname = "FSim"` — defaults to the gate name; override if your circuit-level name should differ from the name the operator is registered under.
-- `rescale = identity` — applied to the parameter(s) before forwarding to the operator. Useful when your operator is written in a different convention from the circuit's (e.g. `rescale = θ -> θ/2` for an operator defined as `exp(-iϕ XX)` when the circuit passes qiskit's `θ`). The built-in operators all follow qiskit, so none of them needs one.
+
+Parameters are forwarded to the operator unchanged.
 
 To add a qiskit-style alias for your gate (so e.g. `"fsim"` resolves to `"FSim"`), call [`register_alias!`](@ref):
 

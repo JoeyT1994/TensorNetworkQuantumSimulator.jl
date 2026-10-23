@@ -1,12 +1,12 @@
 function algorithm_error()
-    error("Algorithm choice not supported. Currently supported: bp, boundarymps, loopcorrections and exact.")
+    error("Algorithm choice not supported. Currently supported: bp, boundarymps, ctmrg, loopcorrections and exact.")
 end
 
 function state_error(expected::String)
     error("Network type inside the cache is not a $expected.")
 end
 
-# Contract a belief-propagation / boundary-MPS cache down to its (scalar) partition function.
+# Contract a cache down to its (scalar) partition function.
 function cache_partitionfunction(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
     if alg == Algorithm("bp") || alg == Algorithm("boundarymps") || alg == Algorithm("ctmrg")
         return partitionfunction(cache)
@@ -39,6 +39,10 @@ Compute the squared norm of a `TensorNetworkState` or the state wrapped in an up
 - For `alg = "bp"` or `"loopcorrections"`:
     - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
     - `max_configuration_size`: Maximum configuration size for loop corrections (only for `"loopcorrections"`).
+- For `alg = "ctmrg"`:
+    - `maxdim::Integer`: The bond dimension of the CTMRG environments.
+    - `cache_update_kwargs`: Additional keyword arguments for updating the cache (by default only
+      the free energy is converged).
 
 # Returns
 - The computed squared norm as a scalar value.
@@ -55,7 +59,6 @@ nsq_bp = norm_sqr(ψ; alg = "bp")
 nsq_bmps = norm_sqr(ψ; alg = "boundarymps", mps_bond_dimension = 10)
 ```
 """
-
 function norm_sqr(tns::Union{TensorNetworkState, AbstractBeliefPropagationCache}; alg, kwargs...)
     algorithm_check(tns, "norm_sqr", alg)
     return norm_sqr(Algorithm(alg), tns; kwargs...)

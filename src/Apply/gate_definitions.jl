@@ -5,18 +5,15 @@
 # - `opname`: the operator name looked up by `op` (see operators.jl). Usually equal to
 #   the user-facing key, but kept separate so a registry entry can rename if needed.
 # - `paramkeys`: keyword names accepted by the underlying operator definition, e.g.
-#   `(:θ,)` or `(:θ, :β)`. Empty for fixed gates.
-# - `rescale`: applied to the user-supplied parameter(s) before forwarding, for operators defined
-#   in another convention. For multi-parameter gates it receives and returns a tuple/vector.
+#   `(:θ,)` or `(:θ, :β)`. Empty for fixed gates. Parameters are forwarded unchanged.
 struct GateSpec
     opname::String
     paramkeys::Tuple{Vararg{Symbol}}
-    rescale::Function
 end
-GateSpec(opname; paramkeys = (), rescale = identity) = GateSpec(opname, paramkeys, rescale)
+GateSpec(opname; paramkeys = ()) = GateSpec(opname, paramkeys)
 
-# Registry of circuit-tuple gates. Adding a new gate is one entry here (plus a
-# `register_op!` entry if the operator registry doesn't already provide one).
+# Registry of circuit-tuple gates. Adding a new gate is one entry here (plus its matrix in
+# `OPERATORS`, operators.jl, if it is not there already).
 const GATES = Dict{String, GateSpec}(
     # Single-qubit fixed
     "I" => GateSpec("I"),
@@ -31,7 +28,7 @@ const GATES = Dict{String, GateSpec}(
     "SX" => GateSpec("SX"),
     "SXdg" => GateSpec("SXdg"),
 
-    # Parametric gates: the registry follows qiskit, so parameters are forwarded unchanged
+    # Single-qubit parametric
     "Rx"  => GateSpec("Rx";  paramkeys = (:θ,)),
     "Ry"  => GateSpec("Ry";  paramkeys = (:θ,)),
     "Rz"  => GateSpec("Rz";  paramkeys = (:θ,)),
@@ -39,9 +36,7 @@ const GATES = Dict{String, GateSpec}(
     "Rz+" => GateSpec("Rz+"; paramkeys = (:θ,)),
     "R"   => GateSpec("R";   paramkeys = (:θ, :ϕ)),
     "U"   => GateSpec("U";   paramkeys = (:θ, :ϕ, :λ)),
-    "U1"  => GateSpec("U1";  paramkeys = (:θ,)),
     "U2"  => GateSpec("U2";  paramkeys = (:ϕ, :λ)),
-    "U3"  => GateSpec("U3";  paramkeys = (:θ, :ϕ, :λ)),
 
     # Two-qubit fixed
     "CNOT"   => GateSpec("CNOT"),
@@ -59,6 +54,7 @@ const GATES = Dict{String, GateSpec}(
     "√SWAP"  => GateSpec("√SWAP"),
     "√iSWAP" => GateSpec("√iSWAP"),
 
+    # Two-qubit parametric
     "Rxx" => GateSpec("Rxx"; paramkeys = (:θ,)),
     "Ryy" => GateSpec("Ryy"; paramkeys = (:θ,)),
     "Rzz" => GateSpec("Rzz"; paramkeys = (:θ,)),
@@ -69,16 +65,14 @@ const GATES = Dict{String, GateSpec}(
     "CRz"    => GateSpec("CRz";    paramkeys = (:θ,)),
     "CPHASE" => GateSpec("CPHASE"; paramkeys = (:θ,)),
     "CU"     => GateSpec("CU";     paramkeys = (:θ, :ϕ, :λ, :γ)),
-    "CU1"    => GateSpec("CU1";    paramkeys = (:θ,)),
     "CU3"    => GateSpec("CU3";    paramkeys = (:θ, :ϕ, :λ)),
-
-    "Rz+z+" => GateSpec("Rz+z+"; paramkeys = (:θ,)),
-
-    # In-house parametric gates (matrices in operators.jl)
-    "Rxxyy"      => GateSpec("Rxxyy";      paramkeys = (:θ,)),
-    "Rxxyyzz"    => GateSpec("Rxxyyzz";    paramkeys = (:θ,)),
     "xx_plus_yy"  => GateSpec("xx_plus_yy";  paramkeys = (:θ, :β)),
     "xx_minus_yy" => GateSpec("xx_minus_yy"; paramkeys = (:θ, :β)),
+
+    # No qiskit equivalent
+    "Rz+z+"   => GateSpec("Rz+z+";   paramkeys = (:θ,)),
+    "Rxxyy"   => GateSpec("Rxxyy";   paramkeys = (:θ,)),
+    "Rxxyyzz" => GateSpec("Rxxyyzz"; paramkeys = (:θ,)),
 )
 
 # Snapshot of built-in canonical names taken at module load. Used to prevent
@@ -96,22 +90,20 @@ const ALIASES = let
         l != canon && (m[l] = canon)
     end
     # Genuine name differences (qiskit name => our canonical name)
-    m["cp"] = "CPHASE"
-    m["id"] = "I"
+    for (alias, canon) in ["cp" => "CPHASE", "id" => "I", "U1" => "P", "u1" => "P", "U3" => "U",
+            "u3" => "U", "CU1" => "CPHASE", "cu1" => "CPHASE"]
+        m[alias] = canon
+    end
     m
 end
 
-# Resolve a gate name to its `GateSpec`, consulting `ALIASES` on miss. Returns
-# `nothing` if the name is not registered under either.
-function _resolve_gate(name::AbstractString)
-    spec = get(GATES, name, nothing)
-    spec !== nothing && return spec
-    canon = get(ALIASES, name, nothing)
-    canon === nothing ? nothing : GATES[canon]
-end
+# The canonical name of a gate, or `nothing` if it is not registered.
+_canonical_name(name::AbstractString) = haskey(GATES, name) ? name : get(ALIASES, name, nothing)
 
-# True if `s` is a string of Pauli letters (X/Y/Z, case-insensitive)
-_ispaulistring(s::String) = all(c ∈ ('X', 'Y', 'Z', 'x', 'y', 'z') for c in s)
+function _resolve_gate(name::AbstractString)
+    canon = _canonical_name(name)
+    return isnothing(canon) ? nothing : GATES[canon]
+end
 
 # Suggest canonical gate names close to `name` (case-insensitive edit distance).
 # Returns up to `topk` keys ranked by distance, only those within `maxdist`.
@@ -138,9 +130,11 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
 
     # Multi-letter Pauli-string sugar: "XYZ" → X⊗Y⊗Z applied componentwise.
     # Single-letter "X"/"Y"/"Z" goes through the registry below.
-    if _ispaulistring(name) && length(name) > 1
-        t = prod(op(string(c), sind) for (c, sind) in zip(name, s_inds))
-        return t, verts
+    if length(name) > 1 && all(in("XYZ"), name)
+        length(name) == length(verts) || throw(ArgumentError(
+            "Pauli string \"$name\" has $(length(name)) letters but acts on $(length(verts)) vertices."
+        ))
+        return prod(op(string(c), sind) for (c, sind) in zip(name, s_inds)), verts
     end
 
     spec = _resolve_gate(name)
@@ -159,7 +153,7 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
         return op(spec.opname, s_inds...), verts
     end
 
-    raw = spec.rescale(gate[3])
+    raw = gate[3]
     pvals = raw isa Union{Tuple, AbstractVector} ? Tuple(raw) : (raw,)
     length(pvals) == length(spec.paramkeys) || throw(ArgumentError(
         "Gate \"$name\" expects $(length(spec.paramkeys)) parameter(s), got $(length(pvals))."
@@ -171,23 +165,15 @@ end
 # --- Public registration API ------------------------------------------------
 
 """
-    register_gate!(name::String; opname = name, paramkeys = (), rescale = identity)
+    register_gate!(name::String; opname = name, paramkeys = ())
 
 Register a custom gate `name` so it can be used in circuit-tuple form
-`(name, vertices, parameter)` with `apply_gates`.
+`(name, vertices, parameter)` with `apply_gates`, for the current Julia session.
 
 The matrix itself must be registered separately with [`register_op!`](@ref)
 under `opname` (defaults to `name`). See "Custom Gates" in the gate docs for a
-worked example.
-
-Modifies the runtime gate registry. The registration lives only in the current
-Julia session — to persist it across sessions, place the `register_gate!` call
-in your script's startup, or in a downstream package's `__init__()`.
-
-Built-in gates are locked: passing a built-in name throws `ArgumentError`.
-Choose a different name for your custom gate, or — if you really need a new
-matrix under an existing name — register it with `register_op!` under a new
-`opname`. Previously user-registered names may be overwritten freely.
+worked example. Built-in gates cannot be overwritten (`ArgumentError`); gates
+registered earlier can.
 
 # Arguments
 - `name`: name used in circuit tuples.
@@ -197,23 +183,14 @@ matrix under an existing name — register it with `register_op!` under a new
 - `paramkeys`: tuple of keyword names accepted by the underlying operator, e.g.
   `(:θ,)` for a single rotation angle, `(:θ, :β)` for a two-parameter gate.
   Empty (`()`) for non-parametric gates.
-- `rescale`: applied to the user-supplied parameter(s) before forwarding. Use
-  this if your operator definition expects a different convention from your
-  circuit-level parameter (e.g. half-angle conventions). For multi-parameter
-  gates, `rescale` receives and returns a tuple/vector.
 """
-function register_gate!(
-        name::String;
-        opname::String = name,
-        paramkeys::Tuple = (),
-        rescale = identity,
-    )
+function register_gate!(name::String; opname::String = name, paramkeys::Tuple = ())
     name in BUILTIN_GATES && throw(ArgumentError(
         "\"$name\" is a built-in gate and cannot be overwritten. " *
         "Choose a different name for your custom gate, or register a new " *
         "operator with `register_op!` if you need a different matrix."
     ))
-    GATES[name] = GateSpec(opname, paramkeys, rescale)
+    GATES[name] = GateSpec(opname, paramkeys)
     return name
 end
 

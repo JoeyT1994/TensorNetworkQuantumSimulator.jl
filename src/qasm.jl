@@ -51,7 +51,7 @@ end
 
 function _qasm_tokens(text::AbstractString)
     text = replace(text, r"//[^\n]*" => "")
-    pattern = r"\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_]*|(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?|->|==|\S"
+    pattern = r"\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_]*|(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?|->|\S"
     return [m.match for m in eachmatch(pattern, text)]
 end
 
@@ -107,7 +107,10 @@ end
 function _parse_program!(p::_QASMProgram)
     while !isnothing(_peek(p))
         t = _next!(p)
-        if t == "OPENQASM" || t == "include" || t == "creg"
+        if t == "OPENQASM"
+            startswith(_next!(p), "2") || _qasm_error("only OpenQASM 2 is supported")
+            _skip_statement!(p)
+        elseif t in ("include", "creg", "opaque", "barrier")
             _skip_statement!(p)
         elseif t == "qreg"
             name = String(_next!(p)); _expect!(p, "[")
@@ -123,12 +126,8 @@ function _parse_program!(p::_QASMProgram)
                 a == "," || push!(args, String(a))
             end
             p.definitions[name] = (params, args, _until!(p, "{", "}"))
-        elseif t == "opaque"
-            _skip_statement!(p)
-        elseif t == "barrier"
-            _skip_statement!(p)
         elseif t == "measure"
-            _measure!(p.circuit, _qubit_list(p, _until_semicolon!(p, "->")))
+            _measure!(p.circuit, _qubit_list(p, _tokens_until!(p, "->")))
             _skip_statement!(p)
         elseif t == "reset"
             _qasm_error("reset is not supported")
@@ -141,7 +140,7 @@ function _parse_program!(p::_QASMProgram)
     return p
 end
 
-function _until_semicolon!(p::_QASMProgram, stop = ";")
+function _tokens_until!(p::_QASMProgram, stop = ";")
     out = SubString{String}[]
     while (t = _next!(p)) != stop
         push!(out, t)
@@ -149,11 +148,12 @@ function _until_semicolon!(p::_QASMProgram, stop = ";")
     return out
 end
 
-# A gate call `name(params) args;` at the top level, with registers broadcast over their qubits.
-function _gate_statement!(p::_QASMProgram, name)
+# A gate call `name(params) args;`, with registers broadcast over their qubits. In a gate
+# definition's body, `env` binds its parameters and `bound` its qubit arguments.
+function _gate_statement!(p::_QASMProgram, name; env = Dict{String, Float64}(), bound = nothing)
     exprs = _peek(p) == "(" ? (_next!(p); _split_commas(_until!(p, "(", ")"))) : Vector{SubString{String}}[]
-    params = [_evaluate_expression(e, Dict{String, Float64}()) for e in exprs]
-    operands = [_operand(p, a) for a in _split_commas(_until_semicolon!(p))]
+    params = [_evaluate_expression(e, env) for e in exprs]
+    operands = [_operand(p, a, bound) for a in _split_commas(_tokens_until!(p))]
     n = maximum(length, operands; init = 1)
     all(o -> length(o) in (1, n), operands) || _qasm_error("registers of different sizes in \"$name\"")
     for i in 1:n
@@ -162,9 +162,10 @@ function _gate_statement!(p::_QASMProgram, name)
     return p
 end
 
-# The qubits of an operand: `q[i]` or the whole register `q`.
-function _operand(p::_QASMProgram, tokens)
+# The qubits of an operand: `q[i]`, the whole register `q`, or a bound argument of a definition.
+function _operand(p::_QASMProgram, tokens, bound = nothing)
     name = String(first(tokens))
+    isnothing(bound) || return [get(() -> _qasm_error("unknown argument \"$name\" in a gate definition"), bound, name)]
     haskey(p.registers, name) || _qasm_error("unknown register \"$name\"")
     reg = p.registers[name]
     length(tokens) == 1 && return collect(reg)
@@ -188,36 +189,12 @@ end
 
 # The body of a gate definition, with its parameters and qubit arguments bound.
 function _expand!(p::_QASMProgram, body, env, bound)
-    i = 1
-    while i <= length(body)
-        j = something(findnext(==(";"), body, i), length(body) + 1)
-        statement = body[i:(j - 1)]
-        i = j + 1
-        (isempty(statement) || first(statement) == "barrier") && continue
-        name = String(first(statement))
-        k = 2
-        exprs = Vector{SubString{String}}[]
-        if k <= length(statement) && statement[k] == "("
-            close = _matching(statement, k)
-            exprs = _split_commas(statement[(k + 1):(close - 1)])
-            k = close + 1
-        end
-        params = [_evaluate_expression(e, env) for e in exprs]
-        qubits = [get(() -> _qasm_error("unknown argument \"$(only(a))\" in a gate definition"), bound, String(only(a)))
-            for a in _split_commas(statement[k:end])]
-        _call!(p, name, params, qubits)
+    q = _QASMProgram(body, 1, p.registers, p.definitions, p.circuit)
+    while !isnothing(_peek(q))
+        t = _next!(q)
+        t == "barrier" ? _skip_statement!(q) : _gate_statement!(q, String(t); env, bound)
     end
     return p
-end
-
-function _matching(tokens, k)
-    depth = 0
-    for j in k:length(tokens)
-        tokens[j] == "(" && (depth += 1)
-        tokens[j] == ")" && (depth -= 1)
-        depth == 0 && return j
-    end
-    return _qasm_error("unbalanced parentheses")
 end
 
 # --- Parameter expressions: numbers, pi, the definition's parameters, + - * / ^ and functions ---
@@ -275,14 +252,13 @@ function _primary(ts, k, env)
     elseif t == "pi"
         return Float64(π), k + 1
     elseif haskey(_QASM_FUNCTIONS, t)
-        (k + 1 <= length(ts) && ts[k + 1] == "(") || _qasm_error("expected \"(\" after \"$t\"")
-        value, k = _sum(ts, k + 2, env)
-        (k <= length(ts) && ts[k] == ")") || _qasm_error("unbalanced parentheses in $(join(ts))")
-        return _QASM_FUNCTIONS[t](value), k + 1
+        (k < length(ts) && ts[k + 1] == "(") || _qasm_error("expected \"(\" after \"$t\"")
+        value, k = _primary(ts, k + 1, env)
+        return _QASM_FUNCTIONS[t](value), k
     elseif haskey(env, t)
         return env[t], k + 1
     end
-    value = tryparse(Float64, t)
+    value = isdigit(first(t)) || first(t) == '.' ? tryparse(Float64, t) : nothing
     isnothing(value) && _qasm_error("unknown symbol \"$t\" in expression $(join(ts))")
     return value, k + 1
 end

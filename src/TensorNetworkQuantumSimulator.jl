@@ -42,7 +42,8 @@ include("entanglement.jl")
 include("truncate.jl")
 include("rdm.jl")
 
-include("Backends/Compat.jl")
+# extends the backend library's own functions for package types, so it comes last
+include("Backends/ITensorsCompat.jl")
 
 
 export

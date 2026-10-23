@@ -17,7 +17,7 @@ Rules:
      `dag(t, cod)` is the adjoint of `t` as a map with codomain legs `cod`, so that
      `dag(U, cod) * U` is the identity for an isometry `U`; passing `cod` or its complement gives
      the same tensor. They agree on dense and bosonic data but differ by parity twists for
-     fermions, so use the right one. `gram(a, b, legs) = dag(a, legs) * b`.
+     fermions, so use the right one.
   6. `Tensor` and `Index` (bound in Backends.jl) are used only in annotations; new indices come
      from `new_index`, new tensors from the construction verbs.
   7. Verbs have no fallbacks. Hooks (`fused_norm_message`, `fused_norm_scalar`)
@@ -26,7 +26,7 @@ Rules:
 =#
 module TensorInterface
 
-# ── Algorithm-selection machinery ───────────────────────────────────────────────────────
+# Algorithm selection
 """
     Algorithm{Alg, Kwargs}
 
@@ -50,42 +50,36 @@ function Base.show(io::IO, alg::Algorithm{Alg}) where {Alg}
     return nothing
 end
 
-# ── Seam verbs ──────────────────────────────────────────────────────────────────────────
-# Contracts (ITensors semantics unless noted):
-# - `isgraded(x)`, `isdual(i)`: symmetry sectors / arrow of an index (dense: false).
-# - `space(i)`: legs with equal `space` are interchangeable (dense: the dimension).
-# - `new_index(d; tags)`, `new_index(ref, d; tags)`: a fresh index; `ref` lets graded backends
-#   choose sectors compatible with those legs.
-# - `pad_index(w, ins, kt; tags)`: index padding bond `w` to width `kt` (`nothing` if already
-#   wide enough); its sectors depend only on `ins` and `kt`.
+# Seam verbs, with ITensors semantics unless noted:
+# - `isgraded(x)`: whether `x` carries symmetry sectors (dense: false).
+# - `new_index(d; tags)`: a fresh index.
 # - `from_array(A, inds)`, `from_array(A, outs, ins)`: tensor with (a copy of) data `A` on the
 #   legs in order; the second form is a map `ins -> outs` (graded backends keep only the
 #   symmetry-allowed blocks).
 # - `dense(t)`: structured storage (diagonal, combiner) made explicit.
 # - `directsum(a => ia, b => ib; tags)`: direct sum along paired legs, on a new summed bond.
-# - `charge_sectors(legs)`: the dim-1 legs completing a tensor on `legs` to flux zero.
 # - `contract(ts; sequence)`: `sequence = nothing` lets the backend choose. `apply(o, t)` is
 #   `noprime(o * t)`.
 # - `factorize_svd(t, linds; ...)`: truncated SVD split (L, R, spec); `truncated_svd(t, linds;
 #   trunc)`: U, S, V truncated by a `TruncationStrategy`.
-# - `data(t)`: raw storage (a copy on block-sparse data); mutate with `scale!(t, x)`.
+# - `scale!(t, x)`: multiply `t` by `x` in place.
 for f in [
         # index queries
         :inds, :commonind, :commoninds, :uniqueinds, :unioninds, :noncommonind,
-        :noncommoninds, :hascommoninds, :dim, :plev, :tags, :isgraded, :isdual, :space,
+        :noncommoninds, :hascommoninds, :dim, :plev, :tags, :isgraded,
         # index/tensor transforms
         :dag, :prime, :noprime, :sim, :replaceind, :replaceinds,
         # construction
-        :new_index, :pad_index, :from_array, :random_tensor, :onehot, :delta, :dense,
-        :combiner, :combinedind, :directsum, :charge_sectors,
+        :new_index, :from_array, :random_tensor, :onehot, :delta, :dense,
+        :combiner, :combinedind, :directsum,
         # contraction / evaluation
         :contract, :scalar, :apply, :inner,
         # diagonal ops
         :map_diag, :map_diag!,
         # factorizations (beyond the LinearAlgebra generics)
-        :factorize_svd, :truncated_svd, :gram,
+        :factorize_svd, :truncated_svd,
         # storage / type queries
-        :datatype, :array, :data, :scale!,
+        :datatype, :array, :scale!,
     ]
     @eval function $f end
 end
@@ -103,7 +97,7 @@ datatype(A::AbstractArray) = typeof(A)
 # Some backends return full contractions as raw numbers.
 scalar(x::Number) = x
 
-# ── Truncation strategies ───────────────────────────────────────────────────────────────
+# Truncation strategies
 """
     TruncationStrategy(maxdim, rtol, degtol)
 
@@ -137,23 +131,21 @@ function kept_count(s::AbstractVector{<:Real}, st::TruncationStrategy)
     return k
 end
 
-# ── Hooks (rule 7) ─────────────────────────────────────────────────────────────────────
+# Hooks (rule 7)
 """
-    fused_norm_message(ψ, sinds, incoming; normalize = true)
+    fused_norm_message(ψ, sinds, incoming)
 
 Optional fused double-layer BP kernel: the outgoing message on the one bond of `ψ` not covered by
 the `incoming` (b, b′) messages, i.e. `contract([incoming; ψ; ψ̄])` with ket and bra sharing the
-site indices `sinds` and the bra's virtual legs primed — without forming the double-layer tensor.
-With `normalize`, the result has unit 2-norm. `nothing` where the backend has no fused path.
+site indices `sinds` and the bra's virtual legs primed, without forming the double-layer tensor.
 """
-fused_norm_message(ψ, sinds, incoming; normalize = true) = nothing
+fused_norm_message(ψ, sinds, incoming) = nothing
 
 """
     fused_norm_scalar(ψ, sinds, incoming, ops)
 
 Optional fused single-vertex closure: the scalar `contract([incoming; ψ; ops; ψ̄])`, where `ops`
-are (s′, s) operators on site legs `s ∈ sinds` (empty for the norm). `nothing` where the backend
-has no fused path.
+are (s′, s) operators on site legs `s ∈ sinds` (empty for the norm).
 """
 fused_norm_scalar(ψ, sinds, incoming, ops) = nothing
 
