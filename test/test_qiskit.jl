@@ -34,15 +34,9 @@ end
     qc.barrier()
     foreach(k -> qc.measure(k, k), 1:4)
 
-    circuit = circuit_from_qiskit(qc)
-    @test length(circuit) == length(GATES_1Q) + length(GATES_2Q)
-    @test circuit == circuit_from_qasm(qasm(qc))
+    # the same gate list as from the circuit's OpenQASM, which is checked against qiskit
+    @test circuit_from_qiskit(qc) == circuit_from_qasm(qasm(qc))
     @test circuit_from_qiskit(qc; qubits = [(1, k) for k in 1:4]) == circuit_from_qasm(qasm(qc); qubits = [(1, k) for k in 1:4])
-
-    # it runs, unitarily
-    ψ0 = tensornetworkstate(ComplexF64, v -> "↑", build_graph_from_circuit(circuit), "S=1/2")
-    ψ, _ = apply_gates(circuit, ψ0; apply_kwargs = (; maxdim = 64, cutoff = 1.0e-14, normalize_tensors = false))
-    @test norm_sqr(ψ; alg = "exact") ≈ 1
 
     three = QuantumCircuit(3)
     three.ccx(1, 2, 3)

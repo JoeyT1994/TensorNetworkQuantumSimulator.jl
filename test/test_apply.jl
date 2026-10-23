@@ -1,7 +1,25 @@
 @eval module $(gensym())
 using Random
 using TensorNetworkQuantumSimulator
+using TensorNetworkQuantumSimulator: GATES, OPERATORS, state, toitensor
+using TensorNetworkQuantumSimulator.TensorInterface: apply, array
 using Test: @testset, @test, @test_throws
+
+@testset "Circuit gates are their registry operators" begin
+    g = named_path_graph(2)
+    s = siteinds("S=1/2", g)
+    s1, s2 = only(s[1]), only(s[2])
+    # the first site is the most significant: CNOT, controlled on s1, flips s2
+    ψ = apply(op("CNOT", s1, s2), state("1", s1) * state("0", s2))
+    @test array(ψ, s1, s2) ≈ array(state("1", s1) * state("1", s2), s1, s2)
+    # parameters are forwarded unchanged
+    for (name, spec) in GATES
+        nsites = haskey(OPERATORS[(1, 2)], spec.opname) ? 1 : 2
+        params = (0.37, -0.81, 0.59, 0.23)[1:length(spec.paramkeys)]
+        gate = isempty(params) ? (name, collect(1:nsites)) : (name, collect(1:nsites), length(params) == 1 ? only(params) : params)
+        @test first(toitensor(gate, g, s)) ≈ op(spec.opname, [s1, s2][1:nsites]...; NamedTuple{spec.paramkeys}(params)...)
+    end
+end
 
 
 @testset "Test Apply Circuit" begin

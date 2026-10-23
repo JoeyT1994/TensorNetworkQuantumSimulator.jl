@@ -197,68 +197,30 @@ function _expand!(p::_QASMProgram, body, env, bound)
     return p
 end
 
-# --- Parameter expressions: numbers, pi, the definition's parameters, + - * / ^ and functions ---
+# --- Parameter expressions ---
+# Parsed as Julia, whose precedence matches OpenQASM's, and evaluated by walking the expression
+# over a whitelist (numbers, pi, the definition's parameters, + - * / ^ and a few functions),
+# never with `eval`.
 
-const _QASM_FUNCTIONS = Dict("sin" => sin, "cos" => cos, "tan" => tan, "exp" => exp, "ln" => log, "sqrt" => sqrt)
+const _QASM_OPERATORS = Dict(:+ => +, :- => -, :* => *, :/ => /, :^ => ^)
+const _QASM_FUNCTIONS = Dict(:sin => sin, :cos => cos, :tan => tan, :exp => exp, :ln => log, :sqrt => sqrt)
 
 function _evaluate_expression(tokens, env)
-    value, k = _sum(tokens, 1, env)
-    k <= length(tokens) && _qasm_error("unexpected \"$(tokens[k])\" in expression $(join(tokens))")
-    return value
+    text = join(tokens)
+    return _evaluate(Meta.parse(text; raise = false), env, text)
 end
 
-function _sum(ts, k, env)
-    value, k = _product(ts, k, env)
-    while k <= length(ts) && ts[k] in ("+", "-")
-        op = ts[k]
-        rhs, k = _product(ts, k + 1, env)
-        value = op == "+" ? value + rhs : value - rhs
+_evaluate(x::Real, env, text) = Float64(x)
+function _evaluate(x::Symbol, env, text)
+    x === :pi && return Float64(π)
+    return get(() -> _qasm_error("unknown symbol \"$x\" in expression $text"), env, String(x))
+end
+function _evaluate(x::Expr, env, text)
+    if x.head === :call
+        f, args = x.args[1], [_evaluate(a, env, text) for a in x.args[2:end]]
+        haskey(_QASM_OPERATORS, f) && return _QASM_OPERATORS[f](args...)
+        haskey(_QASM_FUNCTIONS, f) && length(args) == 1 && return _QASM_FUNCTIONS[f](only(args))
     end
-    return value, k
+    return _qasm_error("unsupported expression $text")
 end
-
-function _product(ts, k, env)
-    value, k = _unary(ts, k, env)
-    while k <= length(ts) && ts[k] in ("*", "/")
-        op = ts[k]
-        rhs, k = _unary(ts, k + 1, env)
-        value = op == "*" ? value * rhs : value / rhs
-    end
-    return value, k
-end
-
-function _unary(ts, k, env)
-    k <= length(ts) || _qasm_error("incomplete expression $(join(ts))")
-    ts[k] == "-" && (((v, k) = _unary(ts, k + 1, env)); return -v, k)
-    ts[k] == "+" && return _unary(ts, k + 1, env)
-    return _power(ts, k, env)
-end
-
-function _power(ts, k, env)
-    base, k = _primary(ts, k, env)
-    if k <= length(ts) && ts[k] == "^"
-        exponent, k = _unary(ts, k + 1, env)
-        return base^exponent, k
-    end
-    return base, k
-end
-
-function _primary(ts, k, env)
-    t = ts[k]
-    if t == "("
-        value, k = _sum(ts, k + 1, env)
-        (k <= length(ts) && ts[k] == ")") || _qasm_error("unbalanced parentheses in $(join(ts))")
-        return value, k + 1
-    elseif t == "pi"
-        return Float64(π), k + 1
-    elseif haskey(_QASM_FUNCTIONS, t)
-        (k < length(ts) && ts[k + 1] == "(") || _qasm_error("expected \"(\" after \"$t\"")
-        value, k = _primary(ts, k + 1, env)
-        return _QASM_FUNCTIONS[t](value), k
-    elseif haskey(env, t)
-        return env[t], k + 1
-    end
-    value = isdigit(first(t)) || first(t) == '.' ? tryparse(Float64, t) : nothing
-    isnothing(value) && _qasm_error("unknown symbol \"$t\" in expression $(join(ts))")
-    return value, k + 1
-end
+_evaluate(x, env, text) = _qasm_error("unsupported expression $text")

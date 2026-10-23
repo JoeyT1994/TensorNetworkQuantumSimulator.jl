@@ -86,4 +86,17 @@ end
     @test all(message(bpc, edge) == new_message for (edge, new_message) in zip(directed_edges, new_messages))
 end
 
+@testset "BP uses the fused kernels, which match the generic contraction" begin
+    Random.seed!(1)
+    ψ = random_tensornetworkstate(ComplexF64, named_grid((3, 3)); bond_dimension = 2)
+    bpc = update(BeliefPropagationCache(ψ))
+    v = (2, 2)
+    incoming = TNQS.incoming_messages(bpc, v; ignore_edges = (NamedEdge((2, 3) => v),))
+    fast = TNQS.norm_message_kernel(ψ, v, incoming)
+    @test !isnothing(fast)
+    ts = [incoming; TNQS.bp_factors(ψ, v)]
+    @test TNQS.normalize_message(fast) ≈ TNQS.normalize_message(contract(ts; sequence = TNQS.contraction_sequence(ts; alg = "optimal")))
+    @test !isnothing(TNQS.norm_scalar_kernel(ψ, [v], TNQS.incoming_messages(bpc, v); op_strings = _ -> "Z"))
+end
+
 end
