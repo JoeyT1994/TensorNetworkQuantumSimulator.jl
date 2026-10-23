@@ -27,6 +27,7 @@ ising_partitionfunction
 apply_gates
 simple_update
 full_update
+circuit_from_qasm
 ```
 
 ## Custom Gate Registration
