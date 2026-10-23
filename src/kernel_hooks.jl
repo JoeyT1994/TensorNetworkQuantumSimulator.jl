@@ -4,8 +4,10 @@
 norm_message_kernel(net, vertex, incoming_ms) = nothing
 norm_scalar_kernel(net, vertices, incoming_ms; kwargs...) = nothing
 
+# The kernels pool their scratch buffers in a workspace, which a caller (e.g. a BP update) may
+# already have opened.
 function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector)
-    return fused_norm_message(tns[v], siteinds(tns, v), incoming_ms)
+    return with_kernel_workspace(() -> fused_norm_message(tns[v], siteinds(tns, v), incoming_ms))
 end
 
 function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Vector; op_strings::Function)
@@ -19,5 +21,5 @@ function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Ve
         (name == "ρ" || length(sinds) != 1) && return nothing
         push!(ops, adapt_like(tns[v], op(name, only(sinds))))
     end
-    return fused_norm_scalar(tns[v], sinds, incoming_ms, ops)
+    return with_kernel_workspace(() -> fused_norm_scalar(tns[v], sinds, incoming_ms, ops))
 end

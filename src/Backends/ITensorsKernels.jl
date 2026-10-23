@@ -36,12 +36,13 @@ function _fused_message_slot(m::ITensor, ψinds::Vector{<:Index})
     return k, M
 end
 
-# Two buffers for the chain intermediates, pooled in the kernel workspace (see
-# `TI.with_kernel_workspace`) by storage family (Array, CuArray, ...) and element type. Kernels
+# Two buffers for the chain intermediates, pooled in the kernel workspace if one is open (see
+# `TI.with_kernel_workspace`), by storage family (Array, CuArray, ...) and element type. Kernels
 # never return a buffer.
 function _fused_buffers(ref::AbstractArray, ::Type{T}, n::Integer) where {T}
-    key = (Base.typename(typeof(ref)).wrapper, T)
     pool = TI.kernel_workspace()
+    isnothing(pool) && return (similar(ref, T, n), similar(ref, T, n))
+    key = (Base.typename(typeof(ref)).wrapper, T)
     bufs = get(pool, key, nothing)
     if bufs === nothing || length(bufs[1]) < n
         bufs = (similar(ref, T, n), similar(ref, T, n))
@@ -164,19 +165,20 @@ function _fused_slots(ψinds::Vector{<:Index}, incoming::Vector)
     return slots, covered
 end
 
-# The kernels open a workspace for their buffers unless the caller already has one.
-TI.fused_norm_message(ψ::ITensor, sinds, incoming::Vector) =
-    TI.with_kernel_workspace(() -> _fused_norm_message(ψ, sinds, incoming))
-TI.fused_norm_scalar(ψ::ITensor, sinds, incoming::Vector, ops::Vector) =
-    TI.with_kernel_workspace(() -> _fused_norm_scalar(ψ, sinds, incoming, ops))
-
-function _fused_norm_message(ψ::ITensor, sinds, incoming::Vector)
+# ψ's data, its legs, and the slots and covered legs of `incoming`; nothing if either is unsupported.
+function _fused_setup(ψ::ITensor, incoming::Vector)
     A = _fused_data(ψ)
     A === nothing && return nothing
     ψinds = collect(Index, ITensors.inds(ψ))
     sc = _fused_slots(ψinds, incoming)
     sc === nothing && return nothing
-    slots, covered = sc
+    return A, ψinds, sc...
+end
+
+function TI.fused_norm_message(ψ::ITensor, sinds, incoming::Vector)
+    setup = _fused_setup(ψ, incoming)
+    isnothing(setup) && return nothing
+    A, ψinds, slots, covered = setup
     outgoing = [k for k in eachindex(ψinds) if !covered[k] && !(ψinds[k] in sinds)]
     length(outgoing) == 1 || return nothing
     kout = only(outgoing)
@@ -194,13 +196,10 @@ function _fused_norm_message(ψ::ITensor, sinds, incoming::Vector)
 end
 
 # Single-vertex closure ψ·Πm·(ops)·ψ̄ → scalar; `ops` are (s′, s) operator tensors on site legs.
-function _fused_norm_scalar(ψ::ITensor, sinds, incoming::Vector, ops::Vector)
-    A = _fused_data(ψ)
-    A === nothing && return nothing
-    ψinds = collect(Index, ITensors.inds(ψ))
-    sc = _fused_slots(ψinds, incoming)
-    sc === nothing && return nothing
-    slots, covered = sc
+function TI.fused_norm_scalar(ψ::ITensor, sinds, incoming::Vector, ops::Vector)
+    setup = _fused_setup(ψ, incoming)
+    isnothing(setup) && return nothing
+    A, ψinds, slots, covered = setup
     for o in ops
         legs = o isa ITensor ? _primed_pair(o) : nothing
         isnothing(legs) && return nothing
