@@ -19,10 +19,17 @@ GateSpec(opname; paramkeys = (), rescale = identity) = GateSpec(opname, paramkey
 # `register_op!` entry if the operator registry doesn't already provide one).
 const GATES = Dict{String, GateSpec}(
     # Single-qubit fixed
+    "I" => GateSpec("I"),
     "X" => GateSpec("X"),
     "Y" => GateSpec("Y"),
     "Z" => GateSpec("Z"),
     "H" => GateSpec("H"),
+    "S" => GateSpec("S"),
+    "Sdg" => GateSpec("Sdg"),
+    "T" => GateSpec("T"),
+    "Tdg" => GateSpec("Tdg"),
+    "SX" => GateSpec("SX"),
+    "SXdg" => GateSpec("SXdg"),
 
     # Parametric gates: the registry follows qiskit, so parameters are forwarded unchanged
     "Rx"  => GateSpec("Rx";  paramkeys = (:θ,)),
@@ -30,12 +37,23 @@ const GATES = Dict{String, GateSpec}(
     "Rz"  => GateSpec("Rz";  paramkeys = (:θ,)),
     "P"   => GateSpec("P";   paramkeys = (:θ,)),
     "Rz+" => GateSpec("Rz+"; paramkeys = (:θ,)),
+    "R"   => GateSpec("R";   paramkeys = (:θ, :ϕ)),
+    "U"   => GateSpec("U";   paramkeys = (:θ, :ϕ, :λ)),
+    "U1"  => GateSpec("U1";  paramkeys = (:θ,)),
+    "U2"  => GateSpec("U2";  paramkeys = (:ϕ, :λ)),
+    "U3"  => GateSpec("U3";  paramkeys = (:θ, :ϕ, :λ)),
 
     # Two-qubit fixed
     "CNOT"   => GateSpec("CNOT"),
     "CX"     => GateSpec("CX"),
     "CY"     => GateSpec("CY"),
     "CZ"     => GateSpec("CZ"),
+    "CH"     => GateSpec("CH"),
+    "CS"     => GateSpec("CS"),
+    "CSdg"   => GateSpec("CSdg"),
+    "CSX"    => GateSpec("CSX"),
+    "DCX"    => GateSpec("DCX"),
+    "ECR"    => GateSpec("ECR"),
     "SWAP"   => GateSpec("SWAP"),
     "iSWAP"  => GateSpec("iSWAP"),
     "√SWAP"  => GateSpec("√SWAP"),
@@ -44,18 +62,23 @@ const GATES = Dict{String, GateSpec}(
     "Rxx" => GateSpec("Rxx"; paramkeys = (:θ,)),
     "Ryy" => GateSpec("Ryy"; paramkeys = (:θ,)),
     "Rzz" => GateSpec("Rzz"; paramkeys = (:θ,)),
+    "Rzx" => GateSpec("Rzx"; paramkeys = (:θ,)),
 
     "CRx"    => GateSpec("CRx";    paramkeys = (:θ,)),
     "CRy"    => GateSpec("CRy";    paramkeys = (:θ,)),
     "CRz"    => GateSpec("CRz";    paramkeys = (:θ,)),
     "CPHASE" => GateSpec("CPHASE"; paramkeys = (:θ,)),
+    "CU"     => GateSpec("CU";     paramkeys = (:θ, :ϕ, :λ, :γ)),
+    "CU1"    => GateSpec("CU1";    paramkeys = (:θ,)),
+    "CU3"    => GateSpec("CU3";    paramkeys = (:θ, :ϕ, :λ)),
 
     "Rz+z+" => GateSpec("Rz+z+"; paramkeys = (:θ,)),
 
     # In-house parametric gates (matrices in operators.jl)
     "Rxxyy"      => GateSpec("Rxxyy";      paramkeys = (:θ,)),
     "Rxxyyzz"    => GateSpec("Rxxyyzz";    paramkeys = (:θ,)),
-    "xx_plus_yy" => GateSpec("xx_plus_yy"; paramkeys = (:θ, :β)),
+    "xx_plus_yy"  => GateSpec("xx_plus_yy";  paramkeys = (:θ, :β)),
+    "xx_minus_yy" => GateSpec("xx_minus_yy"; paramkeys = (:θ, :β)),
 )
 
 # Snapshot of built-in canonical names taken at module load. Used to prevent
@@ -74,6 +97,7 @@ const ALIASES = let
     end
     # Genuine name differences (qiskit name => our canonical name)
     m["cp"] = "CPHASE"
+    m["id"] = "I"
     m
 end
 

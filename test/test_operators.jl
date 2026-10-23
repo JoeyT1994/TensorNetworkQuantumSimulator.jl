@@ -29,10 +29,15 @@ isunitary(U) = U' * U ≈ I
     @test m("P"; θ) ≈ m("Phase"; ϕ = θ)
     @test m("S") ≈ Diagonal([1, im]) && m("T") ≈ Diagonal([1, exp(im * π / 4)])
     @test m("T")^2 ≈ m("S") && m("S")^2 ≈ Z && m("√NOT")^2 ≈ X
+    @test m("Sdg") ≈ m("S")' && m("Tdg") ≈ m("T")'
+    @test m("SX") == m("√NOT") && m("SXdg") ≈ m("SX")'
+    @test m("R"; θ, ϕ) ≈ cexp(-im * θ / 2 * (cos(ϕ) * X + sin(ϕ) * Y))
     # qiskit's U(θ, ϕ, λ)
     @test m("Rn"; θ, ϕ = -π / 2, λ = π / 2) ≈ m("Rx"; θ)
     @test m("Rn"; θ, ϕ = 0, λ = 0) ≈ m("Ry"; θ)
     @test m("Rn̂"; θ, ϕ, λ) == m("Rn"; θ, ϕ, λ)
+    @test m("U"; θ, ϕ, λ) == m("U3"; θ, ϕ, λ) == m("Rn"; θ, ϕ, λ)
+    @test m("U1"; θ) ≈ m("Phase"; θ) && m("U2"; ϕ, λ) ≈ m("U"; θ = π / 2, ϕ, λ)
     @test m("Rz+"; θ) ≈ Diagonal([1, exp(-im * θ / 2)])
     @test m("Sx") ≈ X / 2 && m("Sy") ≈ Y / 2 && m("Sz") ≈ Z / 2
     @test m("S+") ≈ m("Sx") + im * m("Sy") && m("S-") ≈ m("Sx") - im * m("Sy")
@@ -48,18 +53,27 @@ end
     @test m("CRx", 2; θ) ≈ controlled(m("Rx"; θ)) && m("CRy", 2; θ) ≈ controlled(m("Ry"; θ))
     @test m("CRz", 2; θ) ≈ controlled(m("Rz"; θ))
     @test m("CRn", 2; θ, ϕ, λ) ≈ controlled(m("Rn"; θ, ϕ, λ))
-    @test m("CPHASE", 2; θ) ≈ controlled(m("Phase"; θ))
+    @test m("CPHASE", 2; θ) ≈ controlled(m("Phase"; θ)) && m("CU1", 2; θ) ≈ m("CPHASE", 2; θ)
+    @test m("CH", 2) ≈ controlled(m("H")) && m("CSX", 2) ≈ controlled(m("SX"))
+    @test m("CS", 2) ≈ controlled(m("S")) && m("CSdg", 2) ≈ controlled(m("Sdg"))
+    @test m("CU", 2; θ, ϕ, λ, γ = β) ≈ controlled(exp(im * β) * m("U"; θ, ϕ, λ))
+    @test m("CU3", 2; θ, ϕ, λ) ≈ controlled(m("U"; θ, ϕ, λ))
     # qiskit: R_PP(θ) = exp(-iθ/2 P⊗P)
     @test m("Rxx", 2; θ) ≈ cexp(-im * θ / 2 * XX)
     @test m("Ryy", 2; θ) ≈ cexp(-im * θ / 2 * YY)
     @test m("Rzz", 2; θ) ≈ cexp(-im * θ / 2 * ZZ)
+    @test m("Rzx", 2; θ) ≈ cexp(-im * θ / 2 * kron(Z, X))
     @test m("Rxxyy", 2; θ) ≈ cexp(-im * θ / 2 * (XX + YY)) && m("Rxy", 2; θ) == m("Rxxyy", 2; θ)
     @test m("Rxxyyzz", 2; θ) ≈ cexp(-im * θ / 2 * (XX + YY + ZZ))
-    # qiskit's XXPlusYYGate(θ, β)
-    Rzβ = kron(Id2, m("Rz"; θ = β))
-    @test m("xx_plus_yy", 2; θ, β) ≈ Rzβ' * cexp(-im * θ / 4 * (XX + YY)) * Rzβ
+    # qiskit's XXPlusYYGate(θ, β) and XXMinusYYGate(θ, β), first site = qiskit's qubit 0
+    Rz0, Rz1 = kron(m("Rz"; θ = β), Id2), kron(Id2, m("Rz"; θ = β))
+    @test m("xx_plus_yy", 2; θ, β) ≈ Rz0' * cexp(-im * θ / 4 * (XX + YY)) * Rz0
+    @test m("xx_minus_yy", 2; θ, β) ≈ Rz1 * cexp(-im * θ / 4 * (XX - YY)) * Rz1'
     @test m("Rz+z+", 2; θ) ≈ Diagonal([1, 1, 1, exp(-im * θ / 2)])
     SWAP = [1 0 0 0; 0 0 1 0; 0 1 0 0; 0 0 0 1]
+    # DCX: CX from the first site, then from the second; ECR as qiskit decomposes it
+    @test m("DCX", 2) ≈ SWAP * controlled(X) * SWAP * controlled(X)
+    @test m("ECR", 2) ≈ m("Rzx", 2; θ = -π / 4) * kron(X, Id2) * m("Rzx", 2; θ = π / 4)
     @test m("SWAP", 2) == SWAP && m("√SWAP", 2)^2 ≈ SWAP
     @test m("iSWAP", 2) ≈ [1 0 0 0; 0 0 im 0; 0 im 0 0; 0 0 0 1] && m("√iSWAP", 2)^2 ≈ m("iSWAP", 2)
     @test m("Toffoli", 3) ≈ controlled(X, 2) && m("CCNOT", 3) == m("Toffoli", 3)
@@ -107,12 +121,16 @@ end
 
     # every circuit gate is its registry operator, with the parameters forwarded unchanged
     for (name, spec) in GATES
-        nsites = name in ("X", "Y", "Z", "H", "Rx", "Ry", "Rz", "P", "Rz+") ? 1 : 2
-        verts = nsites == 1 ? [1] : [1, 2]
-        param = length(spec.paramkeys) == 2 ? (θ, β) : θ
-        t, vs = toitensor(isempty(spec.paramkeys) ? (name, verts) : (name, verts, param), g, s)
-        kw = NamedTuple{spec.paramkeys}(isempty(spec.paramkeys) ? () : (param isa Tuple ? param : (param,)))
-        @test t ≈ op(spec.opname, (nsites == 1 ? [s1] : [s1, s2])...; kw...)
+        nsites = haskey(OPERATORS[(1, 2)], spec.opname) ? 1 : 2
+        params = (θ, ϕ, λ, β)[1:length(spec.paramkeys)]
+        gate = isempty(params) ? (name, collect(1:nsites)) : (name, collect(1:nsites), length(params) == 1 ? only(params) : params)
+        t, vs = toitensor(gate, g, s)
+        @test t ≈ op(spec.opname, [s1, s2][1:nsites]...; NamedTuple{spec.paramkeys}(params)...)
+    end
+    # qiskit's gate names (lowercase) resolve to the same gates
+    for name in ("id", "s", "sdg", "t", "tdg", "sx", "sxdg", "ch", "cs", "csdg", "csx", "dcx", "ecr")
+        nsites = name in ("ch", "cs", "csdg", "csx", "dcx", "ecr") ? 2 : 1
+        @test first(toitensor((name, collect(1:nsites)), g, s)) isa TensorNetworkQuantumSimulator.Tensor
     end
 
     register_op!("MyHalfZ", [0.5 0.0; 0.0 -0.5])

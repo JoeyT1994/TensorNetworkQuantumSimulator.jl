@@ -29,8 +29,12 @@ function _angle(θ, ϕ)
     return isnothing(θ) ? ϕ : θ
 end
 
-# exp(-i θ/2 P⊗P)
-_pauli_pair_rotation(θ, P) = cos(θ / 2) * kron(_σ0, _σ0) - im * sin(θ / 2) * kron(P, P)
+# exp(-i θ/2 P⊗Q)
+_pauli_pair_rotation(θ, P, Q = P) = cos(θ / 2) * kron(_σ0, _σ0) - im * sin(θ / 2) * kron(P, Q)
+
+const _H = [1 1; 1 -1] / sqrt(2)
+const _SX = [(1 + im)/2 (1 - im)/2; (1 - im)/2 (1 + im)/2]
+const _CNOT = _controlled(_σx)
 
 # (nsites, site dimension) => name => (; kwargs...) -> matrix
 const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
@@ -41,10 +45,13 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
         "Y" => (; kw...) -> _σy,
         "Z" => (; kw...) -> _σz,
         "iY" => (; kw...) -> [0.0 1.0; -1.0 0.0],
-        "H" => (; kw...) -> [1 1; 1 -1] / sqrt(2),
-        "√NOT" => (; kw...) -> [(1 + im)/2 (1 - im)/2; (1 - im)/2 (1 + im)/2],
+        "H" => (; kw...) -> _H,
+        "√NOT" => (; kw...) -> _SX,
+        "SXdg" => (; kw...) -> _SX',
+        "Sdg" => (; kw...) -> [1 0; 0 -im],
         "Phase" => (; θ = nothing, ϕ = nothing, kw...) -> [1 0; 0 exp(im * _angle(θ, ϕ))],
         "π/8" => (; kw...) -> [1 0; 0 1 / sqrt(2) + im / sqrt(2)],
+        "Tdg" => (; kw...) -> [1 0; 0 1 / sqrt(2) - im / sqrt(2)],
         "Rx" => (; θ::Number, kw...) -> _rx(θ),
         "Ry" => (; θ::Number, kw...) -> _ry(θ),
         "Rz" => (; θ = nothing, ϕ = nothing, kw...) -> _rz(_angle(θ, ϕ)),
@@ -52,6 +59,9 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
         "Rz+" => (; θ::Number, kw...) -> [1 0; 0 exp(-im * θ / 2)],
         # general rotation, U(θ, ϕ, λ) in qiskit's notation
         "Rn" => (; θ::Number, ϕ::Number, λ::Number, kw...) -> _rn(θ, ϕ, λ),
+        "U2" => (; ϕ::Number, λ::Number, kw...) -> _rn(π / 2, ϕ, λ),
+        # rotation by θ about cos(ϕ) X + sin(ϕ) Y
+        "R" => (; θ::Number, ϕ::Number, kw...) -> [cos(θ / 2) -im*exp(-im * ϕ)*sin(θ / 2); -im*exp(im * ϕ)*sin(θ / 2) cos(θ / 2)],
         "Sx" => (; kw...) -> _σx / 2,
         "Sy" => (; kw...) -> _σy / 2,
         "iSy" => (; kw...) -> [0.0 0.5; -0.5 0.0],
@@ -63,7 +73,17 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
         "Proj1" => (; kw...) -> [0.0 0.0; 0.0 1.0],
     ),
     (2, 2) => Dict{String, Function}(
-        "CNOT" => (; kw...) -> _controlled(_σx),
+        "CNOT" => (; kw...) -> _CNOT,
+        "CH" => (; kw...) -> _controlled(_H),
+        "CS" => (; kw...) -> _controlled([1 0; 0 im]),
+        "CSdg" => (; kw...) -> _controlled([1 0; 0 -im]),
+        "CSX" => (; kw...) -> _controlled(_SX),
+        # e^{iγ} U(θ, ϕ, λ), controlled
+        "CU" => (; θ::Number, ϕ::Number, λ::Number, γ::Number, kw...) -> _controlled(exp(im * γ) * _rn(θ, ϕ, λ)),
+        # CNOT on (1, 2) then on (2, 1)
+        "DCX" => (; kw...) -> _SWAP * _CNOT * _SWAP * _CNOT,
+        # echoed cross-resonance, (X⊗1 - Y⊗X)/√2
+        "ECR" => (; kw...) -> (kron(_σx, _σ0) - kron(_σy, _σx)) / sqrt(2),
         "CY" => (; kw...) -> _controlled(_σy),
         "CZ" => (; kw...) -> _controlled(_σz),
         "CRx" => (; θ::Number, kw...) -> _controlled(_rx(θ)),
@@ -78,6 +98,7 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
         "Rxx" => (; θ::Number, kw...) -> _pauli_pair_rotation(θ, _σx),
         "Ryy" => (; θ::Number, kw...) -> _pauli_pair_rotation(θ, _σy),
         "Rzz" => (; θ::Number, kw...) -> _pauli_pair_rotation(θ, _σz),
+        "Rzx" => (; θ::Number, kw...) -> _pauli_pair_rotation(θ, _σz, _σx),
         # diag(1, 1, 1, e^{-iθ/2}): a ZZ-type rotation acting on |11⟩ only, at a halved angle
         "Rz+z+" => (; θ::Number, kw...) -> [1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 exp(-im * θ / 2)],
         # exp(-iθ (XX + YY) / 2)
@@ -85,12 +106,18 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
         # exp(-iθ (XX + YY + ZZ) / 2)
         "Rxxyyzz" => (; θ::Number, kw...) ->
             exp(-im * θ * 0.5 * (kron(_σx, _σx) + kron(_σy, _σy) + kron(_σz, _σz))),
-        # Rotation by XX+YY at angle θ with Rz(β) rotations either side; consistent with qiskit.
+        # qiskit's XXPlusYYGate and XXMinusYYGate: Rz(∓β)·exp(-iθ (XX ± YY)/4)·Rz(±β), Rz on the first site
         "xx_plus_yy" => (; θ::Number, β::Number, kw...) -> [
             1 0 0 0
-            0 cos(θ / 2) -im*sin(θ / 2)*exp(-im * β) 0
-            0 -im*sin(θ / 2)*exp(im * β) cos(θ / 2) 0
+            0 cos(θ / 2) -im*sin(θ / 2)*exp(im * β) 0
+            0 -im*sin(θ / 2)*exp(-im * β) cos(θ / 2) 0
             0 0 0 1
+        ],
+        "xx_minus_yy" => (; θ::Number, β::Number, kw...) -> [
+            cos(θ / 2) 0 0 -im*sin(θ / 2)*exp(-im * β)
+            0 1 0 0
+            0 0 1 0
+            -im*sin(θ / 2)*exp(im * β) 0 0 cos(θ / 2)
         ],
     ),
     (3, 2) => Dict{String, Function}(
@@ -120,7 +147,8 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
 const _OPERATOR_ALIASES = Dict(
     (1, 2) => [
         "σx" => "X", "σ1" => "X", "σy" => "Y", "σ2" => "Y", "σz" => "Z", "σ3" => "Z",
-        "iσy" => "iY", "iσ2" => "iY", "√X" => "√NOT", "P" => "Phase", "T" => "π/8", "Rn̂" => "Rn",
+        "iσy" => "iY", "iσ2" => "iY", "√X" => "√NOT", "SX" => "√NOT", "P" => "Phase", "T" => "π/8", "Rn̂" => "Rn",
+        "U" => "Rn", "U3" => "Rn", "U1" => "Phase",
         "Sˣ" => "Sx", "Sʸ" => "Sy", "iSʸ" => "iSy", "Sᶻ" => "Sz", "S⁺" => "S+", "Splus" => "S+",
         "S⁻" => "S-", "Sminus" => "S-", "S²" => "S2",
         "ProjUp" => "Proj0", "projUp" => "Proj0", "ProjDn" => "Proj1", "projDn" => "Proj1",
@@ -128,11 +156,11 @@ const _OPERATOR_ALIASES = Dict(
     (2, 2) => [
         "CX" => "CNOT", "CRX" => "CRx", "CRY" => "CRy", "CRZ" => "CRz", "Cphase" => "CPHASE",
         "Swap" => "SWAP", "√Swap" => "√SWAP", "iSwap" => "iSWAP", "√iSwap" => "√iSWAP",
-        "RXX" => "Rxx", "RYY" => "Ryy", "RZZ" => "Rzz", "Rxy" => "Rxxyy", "RXY" => "Rxxyy", "CRn̂" => "CRn",
+        "RXX" => "Rxx", "RYY" => "Ryy", "RZZ" => "Rzz", "RZX" => "Rzx", "Rxy" => "Rxxyy", "RXY" => "Rxxyy",
+        "CRn̂" => "CRn", "CU3" => "CRn", "CU1" => "CPHASE",
     ],
-    # "CS" is the controlled SWAP, as in ITensors
     (3, 2) => ["CCNOT" => "Toffoli", "CCX" => "Toffoli", "TOFF" => "Toffoli",
-        "CSWAP" => "Fredkin", "CSwap" => "Fredkin", "CS" => "Fredkin"],
+        "CSWAP" => "Fredkin", "CSwap" => "Fredkin"],
     (1, 3) => [
         "Sˣ" => "Sx", "Sʸ" => "Sy", "iSʸ" => "iSy", "Sᶻ" => "Sz", "S⁺" => "S+", "Splus" => "S+",
         "Sp" => "S+", "S⁻" => "S-", "Sminus" => "S-", "Sm" => "S-", "S²" => "S2",

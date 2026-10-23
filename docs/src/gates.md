@@ -81,26 +81,42 @@ equivalent are marked `—`.
 
 ### One-qubit Gates
 
-| Gate | Alias | Parameter | Description |
-|------|-------|-----------|-------------|
+| Gate | Alias | Parameters | Description |
+|------|-------|------------|-------------|
+| `"I"` | `"i"`, `"id"` | -- | Identity |
 | `"X"`, `"Y"`, `"Z"` | `"x"`, `"y"`, `"z"` | -- | Pauli gates |
 | `"H"` | `"h"` | -- | Hadamard |
-| `"P"` | `"p"` | phase | Phase gate |
-| `"Rx"`, `"Ry"`, `"Rz"` | `"rx"`, `"ry"`, `"rz"` | angle | Pauli rotation |
-| `"CRx"`, `"CRy"`, `"CRz"` | `"crx"`, `"cry"`, `"crz"` | angle | Controlled Pauli rotation (single-qubit part) |
+| `"S"`, `"Sdg"`, `"T"`, `"Tdg"` | `"s"`, `"sdg"`, `"t"`, `"tdg"` | -- | Phase gates by π/2 and π/4, and their inverses |
+| `"SX"`, `"SXdg"` | `"sx"`, `"sxdg"` | -- | Square root of X, and its inverse |
+| `"P"`, `"U1"` | `"p"`, `"u1"` | θ | Phase gate |
+| `"Rx"`, `"Ry"`, `"Rz"` | `"rx"`, `"ry"`, `"rz"` | θ | Pauli rotation |
+| `"R"` | `"r"` | (θ, ϕ) | Rotation by θ about the axis cos(ϕ) X + sin(ϕ) Y |
+| `"U"`, `"U3"` | `"u"`, `"u3"` | (θ, ϕ, λ) | General single-qubit gate |
+| `"U2"` | `"u2"` | (ϕ, λ) | `U(π/2, ϕ, λ)` |
 
 ### Two-qubit Gates
 
-| Gate | Alias | Parameter | Description |
-|------|-------|-----------|-------------|
+The first vertex of a controlled gate is the control.
+
+| Gate | Alias | Parameters | Description |
+|------|-------|------------|-------------|
 | `"CNOT"`, `"CX"` | `"cnot"`, `"cx"` | -- | Controlled-X (qiskit name is `"cx"`; `"cnot"` is a convenience alias) |
-| `"CY"`, `"CZ"` | `"cy"`, `"cz"` | -- | Controlled-Y / Z |
+| `"CY"`, `"CZ"`, `"CH"` | `"cy"`, `"cz"`, `"ch"` | -- | Controlled-Y / Z / H |
+| `"CS"`, `"CSdg"`, `"CSX"` | `"cs"`, `"csdg"`, `"csx"` | -- | Controlled-S / S† / √X |
+| `"CRx"`, `"CRy"`, `"CRz"` | `"crx"`, `"cry"`, `"crz"` | θ | Controlled Pauli rotation |
+| `"CPHASE"`, `"CU1"` | `"cp"`, `"cu1"` | θ | Controlled phase (qiskit name is `"cp"`) |
+| `"CU3"` | `"cu3"` | (θ, ϕ, λ) | Controlled `U(θ, ϕ, λ)` |
+| `"CU"` | `"cu"` | (θ, ϕ, λ, γ) | Controlled `e^{iγ} U(θ, ϕ, λ)` |
 | `"SWAP"`, `"iSWAP"` | `"swap"`, `"iswap"` | -- | SWAP / iSWAP |
+| `"DCX"` | `"dcx"` | -- | Double CNOT: CX from the first vertex, then from the second |
+| `"ECR"` | `"ecr"` | -- | Echoed cross-resonance |
 | `"√SWAP"`, `"√iSWAP"` | — | -- | Square-root SWAP variants (no qiskit equivalent) |
-| `"Rxx"`, `"Ryy"`, `"Rzz"` | `"rxx"`, `"ryy"`, `"rzz"` | angle | Pauli-pair rotations |
-| `"Rxxyy"`, `"Rxxyyzz"` | — | angle | XX+YY and XX+YY+ZZ rotations (no qiskit equivalent) |
-| `"xx_plus_yy"` | (canonical) | (angle, phase) | XX+YY interaction with relative phase (qiskit `XXPlusYYGate`) |
-| `"CPHASE"` | `"cp"` | phase | Controlled phase (qiskit name is `"cp"`) |
+| `"Rxx"`, `"Ryy"`, `"Rzz"` | `"rxx"`, `"ryy"`, `"rzz"` | θ | Pauli-pair rotations |
+| `"Rzx"` | `"rzx"` | θ | `exp(-iθ/2 Z⊗X)`, Z on the first vertex |
+| `"xx_plus_yy"`, `"xx_minus_yy"` | (canonical) | (θ, β) | qiskit's `XXPlusYYGate` and `XXMinusYYGate` |
+| `"Rxxyy"`, `"Rxxyyzz"` | — | θ | XX+YY and XX+YY+ZZ rotations (no qiskit equivalent) |
+
+Gates on three or more qubits are not supported: decompose them into one- and two-qubit gates first.
 
 ### Custom Gates
 
