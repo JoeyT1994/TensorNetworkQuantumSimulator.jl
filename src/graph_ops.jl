@@ -34,6 +34,76 @@ function lieb_lattice(nx::Int64, ny::Int64; periodic = false)
 
 end
 
+"""
+    kagome_lattice(nx::Int64, ny::Int64)
+
+Create a kagome lattice geometry with `nx` columns and `ny` rows of three-site unit cells.
+"""
+function kagome_lattice(nx::Int64, ny::Int64)
+    #a square grid with one diagonal per square (a triangular lattice), less every (even, even) vertex
+    g = named_grid((2 * nx + 1, 2 * ny + 1))
+    for i in 1:(2 * nx), j in 1:(2 * ny)
+        g = add_edge(g, NamedEdge((i, j) => (i + 1, j + 1)))
+    end
+    for v in collect(vertices(g))
+        iseven(first(v)) && iseven(last(v)) && (g = rem_vertex(g, v))
+    end
+    return g
+end
+
+"""
+    penrose_tiling(ngenerations::Int64)
+
+Create a Penrose rhombus (P3) tiling geometry, deflated `ngenerations` times, filling the decagon inscribed in the unit circle.
+Vertex names are their (x, y) positions.
+"""
+function penrose_tiling(ngenerations::Int64)
+    φ = (1 + sqrt(5)) / 2
+    # Robinson triangles (kind, A, B, C): kind 0 halves a thin rhombus, kind 1 a thick one
+    tris = Tuple{Int, ComplexF64, ComplexF64, ComplexF64}[]
+    for i in 0:9
+        b, c = cis((2i - 1) * π / 10), cis((2i + 1) * π / 10)
+        iseven(i) && ((b, c) = (c, b))
+        push!(tris, (0, 0.0im, b, c))
+    end
+    for _ in 1:ngenerations
+        next = similar(tris, 0)
+        for (kind, a, b, c) in tris
+            if kind == 0
+                p = a + (b - a) / φ
+                push!(next, (0, c, p, b), (1, p, c, a))
+            else
+                q = b + (a - b) / φ
+                r = b + (c - b) / φ
+                push!(next, (1, r, c, a), (1, q, r, b), (0, r, q, a))
+            end
+        end
+        tris = next
+    end
+    # the same point is reached along different deflation paths, so merge on a fine grid
+    scale = 1.0e8
+    seen = Dict{Tuple{Int, Int}, Tuple{Float64, Float64}}()
+    function name(z)
+        k = (round(Int, real(z) * scale), round(Int, imag(z) * scale))
+        for di in -1:1, dj in -1:1
+            haskey(seen, (k[1] + di, k[2] + dj)) && return seen[(k[1] + di, k[2] + dj)]
+        end
+        seen[k] = (round(real(z); digits = 8), round(imag(z); digits = 8))
+        return seen[k]
+    end
+    # each triangle contributes its two legs C–A and A–B; the base B–C is the rhombus diagonal
+    es = Set{Tuple{Tuple{Float64, Float64}, Tuple{Float64, Float64}}}()
+    for (_, a, b, c) in tris
+        na, nb, nc = name(a), name(b), name(c)
+        push!(es, minmax(nc, na), minmax(na, nb))
+    end
+    g = NamedGraph(unique(Iterators.flatten(es)))
+    for (u, v) in es
+        g = add_edge(g, NamedEdge(u => v))
+    end
+    return g
+end
+
 function topologytograph(topology)
     # TODO: adapt this to named graphs with non-integer labels
     # find number of vertices

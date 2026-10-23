@@ -8,7 +8,11 @@ using Test
     include("test_boundarymps.jl")
     include("test_beliefpropagation.jl")
     include("test_apply.jl")
+    include("test_qasm.jl")
+    include("test_qiskit.jl")
     include("test_sampling.jl")
     include("test_truncate.jl")
     include("test_contraction_sequences.jl")
+    include("test_planar_embedding.jl")
+    include("test_ctmrg.jl")
 end

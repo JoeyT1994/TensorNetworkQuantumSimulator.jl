@@ -1,6 +1,6 @@
 # Caches
 
-The two central data structures in TensorNetworkQuantumSimulator.jl are the `BeliefPropagationCache` and the `BoundaryMPSCache`, both subtypes of `AbstractBeliefPropagationCache`. Each wraps a tensor network together with auxiliary _message_ tensors that encode approximate environment information — the effective contribution of the rest of the network as seen from each bond. Understanding what these caches store, how they are updated, and when to use each is key to getting the most out of the package.
+The central data structures in TensorNetworkQuantumSimulator.jl are the `BeliefPropagationCache`, the `BoundaryMPSCache` and the `CTMRGCache`, all subtypes of `AbstractBeliefPropagationCache`. Each wraps a tensor network together with auxiliary _message_ tensors that encode approximate environment information — the effective contribution of the rest of the network as seen from each bond. Understanding what these caches store, how they are updated, and when to use each is key to getting the most out of the package.
 
 ## Belief Propagation Cache
 
@@ -150,15 +150,64 @@ You can also specify the partitioning explicitly:
 sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 16, partition_by = "col")
 ```
 
-## Choosing between BP and Boundary MPS
+## CTMRG Cache
 
-| | Belief Propagation | Boundary MPS |
-|---|---|---|
-| **Graph requirement** | Any | Planar |
-| **Accuracy** | Exact on trees, approximate on loopy graphs | Controllably accurate, converges to exact |
-| **Cost** | Low (linear in graph size per iteration) | Moderate (cubic in MPS bond dimension) |
-| **Tuning parameter** | Number of iterations | MPS bond dimension |
-| **Best for** | Fast approximate results, gate application environments | High-accuracy measurements, sampling |
+### What it stores
+
+A `CTMRGCache` holds corner transfer matrix (CTMRG) environments for a tensor network on any **planar** graph: square, hexagonal, triangular, kagome, Penrose tilings and so on. Every inner face of the graph carries a ring of _corner_ tensors, one per vertex of the face, and every directed edge carries a _message_ tensor. Each of these is the contraction of a region of the network, and the cuts between regions are truncated to a bond dimension `maxdim`. The environment of a vertex or edge is then its incoming messages together with the corners around it. The vertices need positions in the plane: by default the vertex names are used as coordinates, as for `named_grid` and the other lattice constructors, otherwise pass `positions = Dict(v => (x, y), ...)`.
+
+The order in which the corners and messages are updated is worked out from the geometry when the cache is built, and is checked to give the exact contraction at large enough `maxdim`.
+
+### When to use it
+
+- **Accurate expectation values on planar graphs that are not grids**, where boundary MPS cannot partition the graph into rows or columns.
+- **Free energies and partition functions** of planar classical models, via `contract(tn; alg = "ctmrg", maxdim)`.
+- Like boundary MPS, results converge to the exact answer as `maxdim` grows.
+
+### Basic usage
+
+```julia
+# From a TensorNetworkState (constructs and converges the cache internally)
+sz = expect(ψ, ("Z", [(3, 3)]); alg = "ctmrg", maxdim = 16)
+
+# Or construct the cache explicitly for reuse
+ψ_ctm = update(CTMRGCache(ψ, 16))
+sz = expect(ψ_ctm, ("Z", [(3, 3)]))
+szz = expect(ψ_ctm, ("ZZ", [(3, 3), (3, 4)]))
+ρ = reduced_density_matrix(ψ_ctm, [(3, 3), (3, 4)])
+
+# Partition function of a single-layer network
+Z = contract(tn; alg = "ctmrg", maxdim = 16)
+```
+
+Observables can act on one vertex or on the two ends of an edge.
+
+### Controlling the update
+
+```julia
+ψ_ctm = update(ψ_ctm;
+    convergence = :messages,   # :messages (for observables) or :freenergy (enough for free energies)
+    tolerance = 1e-12,
+    maxiter = 30,
+    verbose = true,
+)
+```
+
+`convergence = :messages` waits for the environment of every vertex to settle, which is what expectation values need. The free energy settles earlier, so `convergence = :freenergy` is enough, and cheaper, when only the free energy is wanted.
+
+### Projectors
+
+`CTMRGCache(ψ, maxdim; projector = :svd)` chooses how the cuts are truncated. The default, `:svd`, keeps the best approximation (a truncated SVD) of the two enlarged corners on either side of each cut. `projector = :eig` (experimental) truncates the cuts of a face together, keeping the dominant eigenvalues of the ring of corners around it; it is often more accurate when `maxdim` is small relative to the entanglement of the state, but is not available on graphs that need more general corner updates (such as kagome lattices or large Penrose tilings).
+
+## Choosing between BP, Boundary MPS and CTMRG
+
+| | Belief Propagation | Boundary MPS | CTMRG |
+|---|---|---|---|
+| **Graph requirement** | Any | Planar, partitionable into rows or columns | Planar |
+| **Accuracy** | Exact on trees, approximate on loopy graphs | Controllably accurate, converges to exact | Controllably accurate, converges to exact |
+| **Cost** | Low (linear in graph size per iteration) | Moderate (cubic in MPS bond dimension) | Moderate (cubic in `maxdim`) |
+| **Tuning parameter** | Number of iterations | MPS bond dimension | `maxdim` |
+| **Best for** | Fast approximate results, gate application environments | High-accuracy measurements, sampling | High-accuracy measurements and free energies on any planar graph |
 
 In practice, a common workflow is to use BP for gate application — where speed matters and approximate environments suffice, since any approximation error can be compensated by increasing the bond dimension — and boundary MPS for final measurements, where accuracy is critical:
 

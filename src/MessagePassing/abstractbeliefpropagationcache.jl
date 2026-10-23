@@ -6,7 +6,7 @@ abstract type AbstractBeliefPropagationCache{V} <: AbstractNamedGraph{V} end
 #Interface
 messages(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 contraction_sequences(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
-default_messages() = Dictionary{NamedEdge, Union{ITensor, Vector{ITensor}}}()
+default_messages() = Dictionary{NamedEdge, Union{Tensor, Vector{Tensor}}}()
 
 function rescale_messages!(
         bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge}; kwargs...
@@ -21,6 +21,8 @@ end
 
 function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
     incoming_ms = incoming_messages(bp_cache, vertex)
+    fast = norm_scalar_kernel(network(bp_cache), [vertex], incoming_ms; op_strings = v -> "I")
+    fast !== nothing && return fast
     state = bp_factors(bp_cache, vertex)
     contract_list = [state; incoming_ms]
     sequence = contraction_sequence(contract_list; alg = "optimal")
@@ -41,8 +43,8 @@ for f in [
         :(bp_factors),
         :(default_bp_maxiter),
         :(virtualinds),
-        :(ITensors.datatype),
-        :(ITensors.NDTensors.scalartype),
+        :datatype,
+        :scalartype,
         :(maxvirtualdim),
         :(default_message),
         :(siteinds),
@@ -60,7 +62,7 @@ function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCa
     return bp_cache
 end
 
-function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::ITensor, vertex)
+function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::Tensor, vertex)
     setindex_preserve!(network(bp_cache), value, vertex)
     return bp_cache
 end
@@ -91,7 +93,7 @@ function deletemessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdg
     return bp_cache
 end
 
-function setmessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdge, message::Union{ITensor, Vector{<:ITensor}})
+function setmessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdge, message::Union{Tensor, Vector{<:Tensor}})
     ms = messages(bp_cache)
     set!(ms, e, message)
     return bp_cache
@@ -103,11 +105,11 @@ function message(bp_cache::AbstractBeliefPropagationCache, edge::AbstractEdge; k
 end
 
 function messages(bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge})
-    isempty(edges) && return ITensor[]
-    ms = ITensor[]
+    isempty(edges) && return Tensor[]
+    ms = Tensor[]
     for e in edges
         m = message(bp_cache, e)
-        if m isa ITensor
+        if m isa Tensor
             push!(ms, m)
         else
             append!(ms, m)
@@ -160,6 +162,31 @@ function incoming_messages(bp_cache::AbstractBeliefPropagationCache, vertex; kwa
     return incoming_messages(bp_cache, [vertex]; kwargs...)
 end
 
+# The vertices an observable on `vs` is closed on: `vs` joined by a Steiner tree.
+function observable_region(bp_cache::AbstractBeliefPropagationCache, vs)
+    return length(vs) == 1 ? vs : collect(vertices(steiner_tree(network(bp_cache), vs)))
+end
+
+# The norm network on `region`, with operators from `op_strings`, contracted against its environment.
+function contract_region(
+        bp_cache::AbstractBeliefPropagationCache, region, op_strings::Function;
+        incoming_ms = incoming_messages(bp_cache, region)
+    )
+    tensors = norm_factors(network(bp_cache), region; op_strings)
+    append!(tensors, incoming_ms)
+    #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
+    sequence = contraction_sequence(tensors; alg = "optimal")
+    return contract(tensors; sequence)
+end
+
+# `contract_region` as a scalar, through the backend's fused kernel where it has one.
+function region_scalar(bp_cache::AbstractBeliefPropagationCache, region, op_strings::Function)
+    incoming_ms = incoming_messages(bp_cache, region)
+    fast = norm_scalar_kernel(network(bp_cache), region, incoming_ms; op_strings)
+    fast !== nothing && return fast
+    return scalar(contract_region(bp_cache, region, op_strings; incoming_ms))
+end
+
 function updated_message(
         alg::Algorithm"contract", bp_cache::AbstractBeliefPropagationCache, edge::NamedEdge
     )
@@ -167,8 +194,14 @@ function updated_message(
     incoming_ms = incoming_messages(
         bp_cache, vertex; ignore_edges = (reverse(edge),)
     )
+
+    m_fast = norm_message_kernel(network(bp_cache), vertex, incoming_ms)
+    if m_fast !== nothing
+        return (alg.kwargs.normalize ? normalize_message(m_fast) : m_fast), (nothing, nothing, false)
+    end
+
     state = bp_factors(bp_cache, vertex)
-    contract_list = ITensor[incoming_ms; state]
+    contract_list = Tensor[incoming_ms; state]
     cache_key = vertex => edge
     seq_cache = contraction_sequences(bp_cache)
     seq_changed = false
@@ -181,13 +214,20 @@ function updated_message(
     updated_message = contract(contract_list; sequence)
 
     if alg.kwargs.normalize
-        message_norm = sum(updated_message)
-        if !iszero(message_norm)
-            updated_message = updated_message / message_norm
-        end
+        updated_message = normalize_message(updated_message)
     end
 
     return updated_message, (cache_key, sequence, seq_changed)
+end
+
+# Unit 2-norm (the element sum can cancel for signed or complex networks), with the phase of the
+# sum divided out so that roundoff phases do not accumulate around loops.
+function normalize_message(m)
+    n = norm(m)
+    iszero(n) && return m
+    s = sum(m)
+    phase = abs(s) > sqrt(eps(real(typeof(s)))) * n ? s / abs(s) : one(s)
+    return m / (n * phase)
 end
 
 function updated_message(
@@ -196,7 +236,7 @@ function updated_message(
         alg = default_message_update_alg(bp_cache),
         kwargs...,
     )
-    return updated_message(set_default_kwargs(Algorithm(alg; kwargs...)), bp_cache, edge)
+    return updated_message(set_default_kwargs(Algorithm(alg; kwargs...), bp_cache), bp_cache, edge)
 end
 
 """
@@ -231,15 +271,18 @@ function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
     converged = false
     avg_diff = nothing
     niter = alg.kwargs.maxiter
-    for i in 1:alg.kwargs.maxiter
-        diff = compute_error ? Ref(0.0) : nothing
-        update_iteration!(alg, bpc, alg.kwargs.edge_sequence; (update_diff!) = diff)
-        if compute_error
-            avg_diff = diff.x / length(alg.kwargs.edge_sequence)
-            if avg_diff <= alg.kwargs.tolerance
-                converged = true
-                niter = i
-                break
+    # the fused kernels share one set of scratch buffers across all the sweeps
+    with_kernel_workspace() do
+        for i in 1:alg.kwargs.maxiter
+            diff = compute_error ? Ref(0.0) : nothing
+            update_iteration!(alg, bpc, alg.kwargs.edge_sequence; (update_diff!) = diff)
+            if compute_error
+                avg_diff = diff.x / length(alg.kwargs.edge_sequence)
+                if avg_diff <= alg.kwargs.tolerance
+                    converged = true
+                    niter = i
+                    break
+                end
             end
         end
     end

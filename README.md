@@ -158,13 +158,13 @@ n = norm(ψ; alg = "bp")
 ψ = normalize(ψ; alg = "bp")
 
 # Inner product between two states
-ip = ITensors.inner(ψ, ϕ; alg = "bp")
+ip = inner(ψ, ϕ; alg = "bp")
 
 # Reduced density matrix on a set of vertices
 ρ = reduced_density_matrix(ψ, [(3, 3)]; alg = "bp")
 ```
 
-All of these support the same algorithm options as `expect`: `"exact"`, `"bp"`, `"boundarymps"`, and (for norms) `"loopcorrections"`.
+All of these support the same algorithm options as `expect`: `"exact"`, `"bp"`, `"boundarymps"`, `"ctmrg"` (all but `normalize`), and (for norms) `"loopcorrections"`.
 
 ### Sampling
 
@@ -261,8 +261,7 @@ We encourage users to read the literature listed below and explore the [tests](t
 You can also work directly in the Heisenberg picture, representing a many-body operator as a TNS with two indices per site.
 
 ```julia
-using ITensors: noprime, op
-using TensorNetworkQuantumSimulator: setindex_preserve!
+using TensorNetworkQuantumSimulator: noprime, setindex_preserve!
 
 # Start with the Z operator on a single site vz, identity elsewhere
 s = siteinds("S=1/2", g; inds_per_site = 2)

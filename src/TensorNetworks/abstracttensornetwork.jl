@@ -1,6 +1,4 @@
 using Graphs: Graphs, has_vertex
-using ITensors: ITensors
-using ITensors.NDTensors: NDTensors
 using NamedGraphs: NamedGraphs
 using Adapt
 
@@ -9,7 +7,7 @@ abstract type AbstractTensorNetwork{V} <: AbstractNamedGraph{V} end
 graph(tn::AbstractTensorNetwork) = not_implemented()
 tensors(tn::AbstractTensorNetwork) = not_implemented()
 NamedGraphs.rem_vertex!(tn::AbstractTensorNetwork, v) = not_implemented()
-add_tensor!(tn::AbstractTensorNetwork, tensor::ITensor, v) = not_implemented()
+add_tensor!(tn::AbstractTensorNetwork, tensor::Tensor, v) = not_implemented()
 
 Graphs.is_directed(::Type{<:AbstractTensorNetwork}) = false
 
@@ -21,14 +19,14 @@ NamedGraphs.edges(tn::AbstractTensorNetwork) = NamedGraphs.edges(graph(tn))
 NamedGraphs.edgetype(tn::AbstractTensorNetwork) = NamedGraphs.edgetype(graph(tn))
 NamedGraphs.vertextype(tn::AbstractTensorNetwork) = NamedGraphs.vertextype(graph(tn))
 
-virtualinds(tn::AbstractTensorNetwork, e::NamedEdge) = ITensors.commoninds(tn[src(e)], tn[dst(e)])
+virtualinds(tn::AbstractTensorNetwork, e::NamedEdge) = commoninds(tn[src(e)], tn[dst(e)])
 virtualind(tn::AbstractTensorNetwork, e::NamedEdge) = only(virtualinds(tn, e))
 
 function maxvirtualdim(tn::AbstractTensorNetwork)
     return maximum(maximum.([dim.(virtualinds(tn, e)) for e in edges(tn)]))
 end
 
-function ITensors.uniqueinds(tn::AbstractTensorNetwork, v)
+function uniqueinds(tn::AbstractTensorNetwork, v)
     tv_inds = Index[i for i in inds(tn[v])]
     vns = neighbors(tn, v)
     isempty(vns) && return tv_inds
@@ -37,23 +35,23 @@ function ITensors.uniqueinds(tn::AbstractTensorNetwork, v)
     return is
 end
 
-function setindex_preserve!(tn::AbstractTensorNetwork, value::ITensor, vertex)
+function setindex_preserve!(tn::AbstractTensorNetwork, value::Tensor, vertex)
     tensors(tn)[vertex] = value
     return tn
 end
 
-function Base.setindex!(tn::AbstractTensorNetwork, value::ITensor, vertex)
+function Base.setindex!(tn::AbstractTensorNetwork, value::Tensor, vertex)
     !has_vertex(graph(tn), vertex) && error("Vertex not in tensor network")
     add_tensor!(tn, value, vertex)
     return tn
 end
 
-function NDTensors.scalartype(tn::AbstractTensorNetwork)
+function scalartype(tn::AbstractTensorNetwork)
     return mapreduce(v -> scalartype(tn[v]), promote_type, vertices(tn))
 end
 
-function ITensors.datatype(tn::AbstractTensorNetwork)
-    return mapreduce(v -> ITensors.datatype(tn[v]), promote_type, vertices(tn))
+function datatype(tn::AbstractTensorNetwork)
+    return mapreduce(v -> datatype(tn[v]), promote_type, vertices(tn))
 end
 
 function map_tensors!(f::Function, tn::AbstractTensorNetwork)
@@ -75,8 +73,8 @@ end
 function insert_virtualinds!(tn::AbstractTensorNetwork; bond_dimension::Integer = 1)
     dtype = datatype(tn)
     for e in edges(tn)
-        if isempty(ITensors.commoninds(tn[src(e)], tn[dst(e)]))
-            l = Index(bond_dimension)
+        if isempty(commoninds(tn[src(e)], tn[dst(e)]))
+            l = new_index(bond_dimension)
             p = adapt(dtype)(onehot(l => 1))
             setindex_preserve!(tn, tn[src(e)] * p, src(e))
             setindex_preserve!(tn, tn[dst(e)] * p, dst(e))
@@ -92,10 +90,10 @@ end
 
 function map_virtualinds!(f::Function, tn::AbstractTensorNetwork)
     for e in edges(tn)
-        vinds = ITensors.commoninds(tn[src(e)], tn[dst(e)])
+        vinds = commoninds(tn[src(e)], tn[dst(e)])
         vinds_sim = f(vinds)
-        setindex_preserve!(tn, ITensors.replaceinds(tn[src(e)], vinds, vinds_sim), src(e))
-        setindex_preserve!(tn, ITensors.replaceinds(tn[dst(e)], vinds, vinds_sim), dst(e))
+        setindex_preserve!(tn, replaceinds(tn[src(e)], vinds, vinds_sim), src(e))
+        setindex_preserve!(tn, replaceinds(tn[dst(e)], vinds, vinds_sim), dst(e))
     end
     return tn
 end
@@ -108,9 +106,9 @@ end
 function combine_virtualinds!(tn::AbstractTensorNetwork)
     dtype = datatype(tn)
     for e in edges(tn)
-        vinds = ITensors.commoninds(tn[src(e)], tn[dst(e)])
+        vinds = commoninds(tn[src(e)], tn[dst(e)])
         if length(vinds) > 1
-            C = adapt(dtype)(ITensors.combiner(vinds))
+            C = adapt(dtype)(combiner(vinds))
             setindex_preserve!(tn, tn[src(e)] * C, src(e))
             setindex_preserve!(tn, tn[dst(e)] * C, dst(e))
         end
@@ -139,7 +137,7 @@ function add(tn1::AbstractTensorNetwork, tn2::AbstractTensorNetwork)
         zip(
             es,
             [
-                Index(
+                new_index(
                         dim(only(virtualinds(tn1, e))) + dim(only(virtualinds(tn2, e))),
                     ) for e in es
             ],
@@ -155,7 +153,7 @@ function add(tn1::AbstractTensorNetwork, tn2::AbstractTensorNetwork)
         tn12v_linkinds = Index[new_edge_indices[e] for e in es_v]
 
         setindex_preserve!(
-            tn12, ITensors.directsum(
+            tn12, directsum(
                 tn12v_linkinds,
                 tn1[v] => Tuple(tn1v_linkinds),
                 tn2[v] => Tuple(tn2v_linkinds)

@@ -28,28 +28,28 @@ function renyi_entropy(ρ::AbstractMatrix, α::Real; normalize = true)
     return log(sum(λs .^ α)) / (1 - α)
 end
 
-function matricize(a::ITensor, row_inds = filter(i -> plev(i) ==0, inds(a)))
+function matricize(a::Tensor, row_inds = filter(i -> plev(i) ==0, inds(a)))
     col_inds = prime.(row_inds)
-    return ITensors.array(a * ITensors.combiner(row_inds) * ITensors.combiner(col_inds))
+    return array(a * combiner(row_inds) * combiner(col_inds))
 end
 
 """
-    renyi_entropy(a::ITensor, row_inds = ...; normalize = true, α = 1)
+    renyi_entropy(a::Tensor, row_inds = ...; normalize = true, α = 1)
 
-Compute the Rényi entropy of order `α` of a density matrix represented as an `ITensor`.
+Compute the Rényi entropy of order `α` of a density matrix represented as a `Tensor`.
 
 The tensor `a` is interpreted as a density matrix where unprimed indices are row indices
 and primed indices are column indices.
 
 # Arguments
-- `a`: Density matrix as an `ITensor`.
+- `a`: Density matrix as a `Tensor`.
 - `row_inds`: The row (ket) indices. Defaults to all unprimed indices of `a`.
 
 # Keyword Arguments
 - `normalize`: If `true` (default), normalise by the trace.
 - `α`: Rényi index (default `1`, i.e. von Neumann entropy).
 """
-function renyi_entropy(a::ITensor, row_inds = filter(i -> plev(i) ==0, inds(a)); normalize = true, α = 1)
+function renyi_entropy(a::Tensor, row_inds = filter(i -> plev(i) ==0, inds(a)); normalize = true, α = 1)
     return renyi_entropy(matricize(a, row_inds), α; normalize)
 end
 
@@ -80,8 +80,8 @@ function renyi_entropy(
     edge_ind = only(virtualinds(bp_cache, e))
     root_m2 = first(pseudo_sqrt_inv_sqrt(m2))
 
-    ρ =(m1 * replaceind(root_m2, edge_ind', edge_ind''))* root_m2
-    ρ= replaceind(ρ, edge_ind'', edge_ind')
+    ρ =(m1 * replaceind(root_m2, prime(edge_ind), prime(edge_ind, 2)))* root_m2
+    ρ= replaceind(ρ, prime(edge_ind, 2), prime(edge_ind))
     return renyi_entropy(ρ; α)
 end
 
@@ -119,20 +119,20 @@ end
 Compute the Rényi entropy of order `α` of the reduced density matrix on `verts`.
 
 Constructs the reduced density matrix on the specified vertices and computes its Rényi entropy.
-Supports `BeliefPropagationCache`, `BoundaryMPSCache`, and `TensorNetworkState` inputs.
+Supports `TensorNetworkState` inputs and caches (`BeliefPropagationCache`, `BoundaryMPSCache`, `CTMRGCache`).
 For single-bond entanglement entropy with BP, prefer the edge-based method
 `renyi_entropy(bp_cache, e; α)` which avoids constructing the full RDM.
 
 # Arguments
-- `ψ`: A `TensorNetworkState`, `BeliefPropagationCache`, or `BoundaryMPSCache`.
+- `ψ`: A `TensorNetworkState` or a cache wrapping one.
 - `verts`: Vector of vertices defining the subsystem.
 
 # Keyword Arguments
-- `alg`: Contraction algorithm (`"bp"`, `"boundarymps"`, or `"exact"`).
+- `alg`: Contraction algorithm (`"bp"`, `"boundarymps"`, `"ctmrg"` or `"exact"`).
 - `α`: Rényi index.
 - Additional kwargs are forwarded to `reduced_density_matrix`.
 """
-function renyi_entropy(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, verts::Vector; alg, α::Real, kwargs...)
+function renyi_entropy(ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}, verts::Vector; alg, α::Real, kwargs...)
     algorithm_check(ψ, "rdm", alg)
     return renyi_entropy(reduced_density_matrix(ψ, verts; alg, normalize = false, kwargs...); normalize = true, α)
 end

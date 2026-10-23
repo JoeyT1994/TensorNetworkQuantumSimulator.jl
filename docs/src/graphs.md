@@ -12,6 +12,9 @@ g = named_grid((3, 3, 3); periodic = true)      # 3D cubic lattice
 g = named_hexagonal_lattice_graph(4, 4; periodic = false)         # hexagonal lattice
 g = heavy_hexagonal_lattice(5, 5)               # heavy-hexagonal lattice (IBM topology)
 g = lieb_lattice(5, 5)                          # Lieb lattice
+g = named_triangular_lattice_graph(5, 5)        # triangular lattice
+g = kagome_lattice(3, 3)                        # kagome lattice
+g = penrose_tiling(3)                           # Penrose tiling (3 generations of deflation)
 g = named_path_graph(10)                        # 1D chain (MPS)
 g = named_comb_tree(4, 4)                       # comb tree
 ```

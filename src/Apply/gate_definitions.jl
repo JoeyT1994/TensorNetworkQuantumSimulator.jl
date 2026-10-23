@@ -2,65 +2,77 @@
 
 # Internal dispatch record for a circuit-tuple gate name.
 #
-# - `opname`: the `OpName` string forwarded to `ITensors.op`. Usually equal to the
-#   user-facing key, but kept separate so a registry entry can rename if needed.
-# - `paramkeys`: keyword names accepted by the underlying `op` definition, e.g.
-#   `(:θ,)`, `(:ϕ,)`, or `(:θ, :β)`. Empty for fixed gates.
-# - `rescale`: applied to the user-supplied parameter(s) before forwarding. Used
-#   when our (qiskit) convention differs from the `ITensors.op` convention. For
-#   multi-parameter gates, `rescale` receives and returns a tuple/vector.
+# - `opname`: the operator name looked up by `op` (see operators.jl). Usually equal to
+#   the user-facing key, but kept separate so a registry entry can rename if needed.
+# - `paramkeys`: keyword names accepted by the underlying operator definition, e.g.
+#   `(:θ,)` or `(:θ, :β)`. Empty for fixed gates. Parameters are forwarded unchanged.
 struct GateSpec
     opname::String
     paramkeys::Tuple{Vararg{Symbol}}
-    rescale::Function
 end
-GateSpec(opname; paramkeys = (), rescale = identity) = GateSpec(opname, paramkeys, rescale)
+GateSpec(opname; paramkeys = ()) = GateSpec(opname, paramkeys)
 
-# Registry of circuit-tuple gates. Adding a new gate is one entry here (plus an
-# `ITensors.op` method if upstream doesn't already provide one).
+# Registry of circuit-tuple gates. Adding a new gate is one entry here (plus its matrix in
+# `OPERATORS`, operators.jl, if it is not there already).
 const GATES = Dict{String, GateSpec}(
     # Single-qubit fixed
+    "I" => GateSpec("I"),
     "X" => GateSpec("X"),
     "Y" => GateSpec("Y"),
     "Z" => GateSpec("Z"),
     "H" => GateSpec("H"),
+    "S" => GateSpec("S"),
+    "Sdg" => GateSpec("Sdg"),
+    "T" => GateSpec("T"),
+    "Tdg" => GateSpec("Tdg"),
+    "SX" => GateSpec("SX"),
+    "SXdg" => GateSpec("SXdg"),
 
-    # Single-qubit parametric (qiskit and ITensors agree on convention)
+    # Single-qubit parametric
     "Rx"  => GateSpec("Rx";  paramkeys = (:θ,)),
     "Ry"  => GateSpec("Ry";  paramkeys = (:θ,)),
     "Rz"  => GateSpec("Rz";  paramkeys = (:θ,)),
-    "P"   => GateSpec("P";   paramkeys = (:ϕ,)),
+    "P"   => GateSpec("P";   paramkeys = (:θ,)),
     "Rz+" => GateSpec("Rz+"; paramkeys = (:θ,)),
+    "R"   => GateSpec("R";   paramkeys = (:θ, :ϕ)),
+    "U"   => GateSpec("U";   paramkeys = (:θ, :ϕ, :λ)),
+    "U2"  => GateSpec("U2";  paramkeys = (:ϕ, :λ)),
 
     # Two-qubit fixed
     "CNOT"   => GateSpec("CNOT"),
     "CX"     => GateSpec("CX"),
     "CY"     => GateSpec("CY"),
     "CZ"     => GateSpec("CZ"),
+    "CH"     => GateSpec("CH"),
+    "CS"     => GateSpec("CS"),
+    "CSdg"   => GateSpec("CSdg"),
+    "CSX"    => GateSpec("CSX"),
+    "DCX"    => GateSpec("DCX"),
+    "ECR"    => GateSpec("ECR"),
     "SWAP"   => GateSpec("SWAP"),
     "iSWAP"  => GateSpec("iSWAP"),
     "√SWAP"  => GateSpec("√SWAP"),
     "√iSWAP" => GateSpec("√iSWAP"),
 
-    # Two-qubit parametric.
-    # qiskit:   Rxx(θ) = exp(-i θ XX / 2)
-    # ITensors: op("Rxx"; ϕ) = exp(-i ϕ XX)
-    # We expose qiskit's θ and forward ϕ = θ/2 to ITensors.
-    "Rxx" => GateSpec("Rxx"; paramkeys = (:ϕ,), rescale = θ -> θ / 2),
-    "Ryy" => GateSpec("Ryy"; paramkeys = (:ϕ,), rescale = θ -> θ / 2),
-    "Rzz" => GateSpec("Rzz"; paramkeys = (:ϕ,), rescale = θ -> θ / 2),
+    # Two-qubit parametric
+    "Rxx" => GateSpec("Rxx"; paramkeys = (:θ,)),
+    "Ryy" => GateSpec("Ryy"; paramkeys = (:θ,)),
+    "Rzz" => GateSpec("Rzz"; paramkeys = (:θ,)),
+    "Rzx" => GateSpec("Rzx"; paramkeys = (:θ,)),
 
     "CRx"    => GateSpec("CRx";    paramkeys = (:θ,)),
     "CRy"    => GateSpec("CRy";    paramkeys = (:θ,)),
     "CRz"    => GateSpec("CRz";    paramkeys = (:θ,)),
-    "CPHASE" => GateSpec("CPHASE"; paramkeys = (:ϕ,)),
+    "CPHASE" => GateSpec("CPHASE"; paramkeys = (:θ,)),
+    "CU"     => GateSpec("CU";     paramkeys = (:θ, :ϕ, :λ, :γ)),
+    "CU3"    => GateSpec("CU3";    paramkeys = (:θ, :ϕ, :λ)),
+    "xx_plus_yy"  => GateSpec("xx_plus_yy";  paramkeys = (:θ, :β)),
+    "xx_minus_yy" => GateSpec("xx_minus_yy"; paramkeys = (:θ, :β)),
 
-    "Rz+z+" => GateSpec("Rz+z+"; paramkeys = (:θ,)),
-
-    # In-house parametric gates (definitions below)
-    "Rxxyy"      => GateSpec("Rxxyy";      paramkeys = (:θ,)),
-    "Rxxyyzz"    => GateSpec("Rxxyyzz";    paramkeys = (:θ,)),
-    "xx_plus_yy" => GateSpec("xx_plus_yy"; paramkeys = (:θ, :β)),
+    # No qiskit equivalent
+    "Rz+z+"   => GateSpec("Rz+z+";   paramkeys = (:θ,)),
+    "Rxxyy"   => GateSpec("Rxxyy";   paramkeys = (:θ,)),
+    "Rxxyyzz" => GateSpec("Rxxyyzz"; paramkeys = (:θ,)),
 )
 
 # Snapshot of built-in canonical names taken at module load. Used to prevent
@@ -78,21 +90,20 @@ const ALIASES = let
         l != canon && (m[l] = canon)
     end
     # Genuine name differences (qiskit name => our canonical name)
-    m["cp"] = "CPHASE"
+    for (alias, canon) in ["cp" => "CPHASE", "id" => "I", "U1" => "P", "u1" => "P", "U3" => "U",
+            "u3" => "U", "CU1" => "CPHASE", "cu1" => "CPHASE"]
+        m[alias] = canon
+    end
     m
 end
 
-# Resolve a gate name to its `GateSpec`, consulting `ALIASES` on miss. Returns
-# `nothing` if the name is not registered under either.
-function _resolve_gate(name::AbstractString)
-    spec = get(GATES, name, nothing)
-    spec !== nothing && return spec
-    canon = get(ALIASES, name, nothing)
-    canon === nothing ? nothing : GATES[canon]
-end
+# The canonical name of a gate, or `nothing` if it is not registered.
+_canonical_name(name::AbstractString) = haskey(GATES, name) ? name : get(ALIASES, name, nothing)
 
-# True if `s` is a string of Pauli letters (X/Y/Z, case-insensitive)
-_ispaulistring(s::String) = all(c ∈ ('X', 'Y', 'Z', 'x', 'y', 'z') for c in s)
+function _resolve_gate(name::AbstractString)
+    canon = _canonical_name(name)
+    return isnothing(canon) ? nothing : GATES[canon]
+end
 
 # Suggest canonical gate names close to `name` (case-insensitive edit distance).
 # Returns up to `topk` keys ranked by distance, only those within `maxdist`.
@@ -104,14 +115,14 @@ function _gate_suggestions(name::AbstractString; topk::Int = 3, maxdist::Int = 2
     return [first(p) for p in Iterators.take(scored, topk)]
 end
 
-# --- Circuit-tuple → ITensor -------------------------------------------------
+# --- Circuit-tuple → Tensor -------------------------------------------------
 
-# Vector of gates → vector of (ITensor, vertices)
+# Vector of gates → vector of (Tensor, vertices)
 function toitensor(circuit::Vector, g::NamedGraph, sinds::Dictionary)
     return [toitensor(gate, g, sinds) for gate in circuit]
 end
 
-# Single circuit tuple → (ITensor, vertices)
+# Single circuit tuple → (Tensor, vertices)
 function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     name = gate[1]
     verts = collect_vertices(gate[2], g)
@@ -119,9 +130,11 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
 
     # Multi-letter Pauli-string sugar: "XYZ" → X⊗Y⊗Z applied componentwise.
     # Single-letter "X"/"Y"/"Z" goes through the registry below.
-    if _ispaulistring(name) && length(name) > 1
-        t = prod(ITensors.op(string(c), sind) for (c, sind) in zip(name, s_inds))
-        return t, verts
+    if length(name) > 1 && all(in("XYZ"), name)
+        length(name) == length(verts) || throw(ArgumentError(
+            "Pauli string \"$name\" has $(length(name)) letters but acts on $(length(verts)) vertices."
+        ))
+        return prod(op(string(c), sind) for (c, sind) in zip(name, s_inds)), verts
     end
 
     spec = _resolve_gate(name)
@@ -137,64 +150,47 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     end
 
     if isempty(spec.paramkeys)
-        return ITensors.op(spec.opname, s_inds...), verts
+        return op(spec.opname, s_inds...), verts
     end
 
-    raw = spec.rescale(gate[3])
+    raw = gate[3]
     pvals = raw isa Union{Tuple, AbstractVector} ? Tuple(raw) : (raw,)
     length(pvals) == length(spec.paramkeys) || throw(ArgumentError(
         "Gate \"$name\" expects $(length(spec.paramkeys)) parameter(s), got $(length(pvals))."
     ))
     kwargs = NamedTuple{spec.paramkeys}(pvals)
-    return ITensors.op(spec.opname, s_inds...; kwargs...), verts
+    return op(spec.opname, s_inds...; kwargs...), verts
 end
 
 # --- Public registration API ------------------------------------------------
 
 """
-    register_gate!(name::String; opname = name, paramkeys = (), rescale = identity)
+    register_gate!(name::String; opname = name, paramkeys = ())
 
 Register a custom gate `name` so it can be used in circuit-tuple form
-`(name, vertices, parameter)` with `apply_gates`.
+`(name, vertices, parameter)` with `apply_gates`, for the current Julia session.
 
-The matrix itself must be defined separately as an `ITensors.op` method whose
-`OpName` matches `opname` (defaults to `name`). See "Custom Gates" in the gate
-docs for a worked example.
-
-Modifies the runtime gate registry. The registration lives only in the current
-Julia session — to persist it across sessions, place the `register_gate!` call
-in your script's startup, or in a downstream package's `__init__()`.
-
-Built-in gates are locked: passing a built-in name throws `ArgumentError`.
-Choose a different name for your custom gate, or — if you really need a new
-matrix under an existing name — define your own `ITensors.op` method directly.
-Previously user-registered names may be overwritten freely.
+The matrix itself must be registered separately with [`register_op!`](@ref)
+under `opname` (defaults to `name`). See "Custom Gates" in the gate docs for a
+worked example. Built-in gates cannot be overwritten (`ArgumentError`); gates
+registered earlier can.
 
 # Arguments
 - `name`: name used in circuit tuples.
 
 # Keyword Arguments
-- `opname`: the `OpName` string forwarded to `ITensors.op`. Defaults to `name`.
-- `paramkeys`: tuple of keyword names accepted by the underlying `op`, e.g.
+- `opname`: the operator name looked up by `op`. Defaults to `name`.
+- `paramkeys`: tuple of keyword names accepted by the underlying operator, e.g.
   `(:θ,)` for a single rotation angle, `(:θ, :β)` for a two-parameter gate.
   Empty (`()`) for non-parametric gates.
-- `rescale`: applied to the user-supplied parameter(s) before forwarding. Use
-  this if your `op` definition expects a different convention from your
-  circuit-level parameter (e.g. half-angle conventions). For multi-parameter
-  gates, `rescale` receives and returns a tuple/vector.
 """
-function register_gate!(
-        name::String;
-        opname::String = name,
-        paramkeys::Tuple = (),
-        rescale = identity,
-    )
+function register_gate!(name::String; opname::String = name, paramkeys::Tuple = ())
     name in BUILTIN_GATES && throw(ArgumentError(
         "\"$name\" is a built-in gate and cannot be overwritten. " *
-        "Choose a different name for your custom gate, or define your own " *
-        "`ITensors.op` method directly if you need to override the matrix."
+        "Choose a different name for your custom gate, or register a new " *
+        "operator with `register_op!` if you need a different matrix."
     ))
-    GATES[name] = GateSpec(opname, paramkeys, rescale)
+    GATES[name] = GateSpec(opname, paramkeys)
     return name
 end
 
@@ -234,45 +230,3 @@ function unregister_gate!(name::String)
     end
     return name
 end
-
-# --- In-house gate definitions ----------------------------------------------
-
-"""
-    ITensors.op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Number)
-
-Gate for rotation by XX+YY at a given angle with Rz rotations either side. Consistent with qiskit.
-"""
-function ITensors.op(::OpName"xx_plus_yy", ::SiteType"S=1/2"; θ::Number, β::Number)
-    return [
-        [1 0 0 0];
-        [0 cos(θ / 2) -im * sin(θ / 2) * exp(-im * β) 0]
-        [0 -im * sin(θ / 2) * exp(im * β) cos(θ / 2) 0]
-        [0 0 0 1]
-    ]
-end
-ITensors.op(o::OpName"xx_plus_yy", ::SiteType"Qubit"; θ::Number, β::Number) =
-    ITensors.op(o, ITensors.SiteType("S=1/2"); θ, β)
-
-"""
-    ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2"; θ::Number)
-
-Gate for rotation by XXYY at a given angle.
-"""
-function ITensors.op(::OpName"Rxxyy", ::SiteType"S=1/2", s1::Index, s2::Index; θ = 1)
-    h = 0.5 * (op("X", s1) * op("X", s2) + op("Y", s1) * op("Y", s2))
-    return exp(-im * θ * h)
-end
-ITensors.op(o::OpName"Rxxyy", ::SiteType"Qubit"; θ::Number) =
-    ITensors.op(o, ITensors.SiteType("S=1/2"); θ)
-
-"""
-    ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2"; θ::Number)
-
-Gate for rotation by XXYYZZ at a given angle.
-"""
-function ITensors.op(::OpName"Rxxyyzz", ::SiteType"S=1/2", s1::Index, s2::Index; θ = 1)
-    h = 0.5 * (op("X", s1) * op("X", s2) + op("Y", s1) * op("Y", s2) + op("Z", s1) * op("Z", s2))
-    return exp(-im * θ * h)
-end
-ITensors.op(o::OpName"Rxxyyzz", ::SiteType"Qubit"; θ::Number) =
-    ITensors.op(o, ITensors.SiteType("S=1/2"); θ)

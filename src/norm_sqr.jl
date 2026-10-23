@@ -1,14 +1,14 @@
 function algorithm_error()
-    error("Algorithm choice not supported. Currently supported: bp, boundarymps, loopcorrections and exact.")
+    error("Algorithm choice not supported. Currently supported: bp, boundarymps, ctmrg, loopcorrections and exact.")
 end
 
 function state_error(expected::String)
     error("Network type inside the cache is not a $expected.")
 end
 
-# Contract a belief-propagation / boundary-MPS cache down to its (scalar) partition function.
+# Contract a cache down to its (scalar) partition function.
 function cache_partitionfunction(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
-    if alg == Algorithm("bp") || alg == Algorithm("boundarymps")
+    if alg == Algorithm("bp") || alg == Algorithm("boundarymps") || alg == Algorithm("ctmrg")
         return partitionfunction(cache)
     elseif alg == Algorithm("loopcorrections")
         return loopcorrected_partitionfunction(cache, max_configuration_size)
@@ -30,6 +30,7 @@ Compute the squared norm of a `TensorNetworkState` or the state wrapped in an up
     - `"exact"`: Exact contraction of the tensor network.
     - `"bp"`: Belief propagation approximation.
     - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
+    - `"ctmrg"`: CTMRG approximation, on planar graphs (requires `maxdim`).
     - `"loopcorrections"`: Loop corrections to belief propagation (requires `max_configuration_size`).
 - For `alg = "boundarymps"`:
     - `mps_bond_dimension::Integer`: The bond dimension for the boundary MPS approximation.
@@ -38,6 +39,10 @@ Compute the squared norm of a `TensorNetworkState` or the state wrapped in an up
 - For `alg = "bp"` or `"loopcorrections"`:
     - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
     - `max_configuration_size`: Maximum configuration size for loop corrections (only for `"loopcorrections"`).
+- For `alg = "ctmrg"`:
+    - `maxdim::Integer`: The bond dimension of the CTMRG environments.
+    - `cache_update_kwargs`: Additional keyword arguments for updating the cache (by default only
+      the free energy is converged).
 
 # Returns
 - The computed squared norm as a scalar value.
@@ -54,7 +59,6 @@ nsq_bp = norm_sqr(ψ; alg = "bp")
 nsq_bmps = norm_sqr(ψ; alg = "boundarymps", mps_bond_dimension = 10)
 ```
 """
-
 function norm_sqr(tns::Union{TensorNetworkState, AbstractBeliefPropagationCache}; alg, kwargs...)
     algorithm_check(tns, "norm_sqr", alg)
     return norm_sqr(Algorithm(alg), tns; kwargs...)
@@ -86,9 +90,15 @@ function norm_sqr(alg::Algorithm"boundarymps", ψ::TensorNetworkState; mps_bond_
     return norm_sqr(alg, ψ_bmps; kwargs...)
 end
 
+#A norm only needs the free energy converged, not the messages
+function norm_sqr(alg::Algorithm"ctmrg", ψ::TensorNetworkState; maxdim::Integer, cache_update_kwargs = (;))
+    cache_update_kwargs = merge((; convergence = :freenergy), cache_update_kwargs)
+    return norm_sqr(alg, converged_cache(alg, ψ; maxdim, cache_update_kwargs))
+end
+
 function norm_sqr(alg::Algorithm, ψ::TensorNetworkState; kwargs...)
     return algorithm_error()
 end
 
-LinearAlgebra.norm(alg::Algorithm, ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}; kwargs...) = sqrt(norm_sqr(alg, ψ; kwargs...))
-LinearAlgebra.norm(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}; kwargs...) = sqrt(norm_sqr(ψ; kwargs...))
+LinearAlgebra.norm(alg::Algorithm, ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}; kwargs...) = sqrt(norm_sqr(alg, ψ; kwargs...))
+LinearAlgebra.norm(ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}; kwargs...) = sqrt(norm_sqr(ψ; kwargs...))

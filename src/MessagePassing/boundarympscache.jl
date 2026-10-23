@@ -4,7 +4,7 @@ using NamedGraphs: add_edges!, forest_cover_edge_sequence, all_edges
 using SplitApplyCombine: group
 
 #TODO: Make this show() nicely.
-struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{V}, M <: Union{ITensor, Vector{<:ITensor}}} <: AbstractBeliefPropagationCache{V}
+struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{V}, M <: Union{Tensor, Vector{<:Tensor}}} <: AbstractBeliefPropagationCache{V}
     network::N
     messages::Dictionary{NamedEdge, M}
     supergraph::PartitionedGraph
@@ -39,7 +39,7 @@ end
 default_message_update_alg(bmps_cache::BoundaryMPSCache) = default_bmps_message_update_alg(network(bmps_cache))
 
 default_normalize(alg::Algorithm"fitting") = true
-default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(ITensors.NDTensors.scalartype(bmps_cache))
+default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(scalartype(bmps_cache))
 _default_boundarymps_update_niters = 50
 function set_default_kwargs(alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache)
     normalize = get(alg.kwargs, :normalize, default_normalize(alg))
@@ -187,7 +187,7 @@ function set_interpartition_messages!(
         end
         for i in 1:(length(es) - 1)
             virt_dim = virtual_index_dimension(bmps_cache, es[i], es[i + 1])
-            ind = Index(virt_dim, "m$(i)$(i + 1)")
+            ind = new_index(virt_dim; tags = "m$(i)$(i + 1)")
             m1, m2 = message(bmps_cache, es[i]), message(bmps_cache, es[i + 1])
             t = adapt_like(m1, dense(delta(ind)))
             setmessage!(bmps_cache, es[i], m1 * t)
@@ -297,7 +297,7 @@ function inserter!(
         alg::Algorithm,
         bmps_cache::BoundaryMPSCache,
         update_e::NamedEdge,
-        m::ITensor
+        m::Tensor
     )
     setmessage!(bmps_cache, reverse(update_e), dag(m))
     return bmps_cache
@@ -374,7 +374,7 @@ function prev_quotientedge(bmps_cache::BoundaryMPSCache, pe::QuotientEdge)
     return parent(dst(pe)) == v2 && return QuotientEdge(v1 => parent(src(pe)))
 end
 
-function set_interpartition_message!(bmps_cache::BoundaryMPSCache, M::AbstractVector{<:ITensor}, pe::QuotientEdge)
+function set_interpartition_message!(bmps_cache::BoundaryMPSCache, M::AbstractVector{<:Tensor}, pe::QuotientEdge)
     sorted_es = sorted_edges(bmps_cache, pe)
     for i in 1:length(M)
         setmessage!(bmps_cache, sorted_es[i], M[i])
@@ -383,7 +383,7 @@ function set_interpartition_message!(bmps_cache::BoundaryMPSCache, M::AbstractVe
 end
 
 # Position-indexed MPS·MPO application with truncation: a zip-up forward sweep followed by a
-# right-to-left SVD recompression. Works on a raw `Vector{ITensor}` chain so it needs no MPS/MPO
+# right-to-left SVD recompression. Works on a raw `Vector{Tensor}` chain so it needs no MPS/MPO
 # wrapper types.
 #
 #   `mpo`        : the contiguous chain of tensors at positions 1:b.
@@ -392,11 +392,11 @@ end
 #   `right_inds` : per-position outgoing site legs (`right_inds[i]` may be empty); these become the
 #                  site indices of the result, one output tensor per non-empty entry.
 #
-# Returns the truncated result as a `Vector{ITensor}`, one tensor per non-empty `right_inds[i]`, in
+# Returns the truncated result as a `Vector{Tensor}`, one tensor per non-empty `right_inds[i]`, in
 # increasing position order.
 function generic_apply(
-        mpo::Vector{<:ITensor},
-        mps::Dictionary{Int, <:ITensor},
+        mpo::Vector{<:Tensor},
+        mps::Dictionary{Int, <:Tensor},
         right_inds::Vector{<:Vector{<:Index}};
         cutoff = 0.0,
         maxdim = typemax(Int),
@@ -406,7 +406,7 @@ function generic_apply(
     @assert length(right_inds) == b
 
     # Forward sweep: carry · MPO[i] · MPS[i], peel off the output legs, truncate the new bond.
-    out = ITensor[]
+    out = Tensor[]
     carry = nothing        # forward environment: singular values + still-open virtual bonds
     left_link = nothing    # bond from the previously emitted output tensor into `carry`
     for i in 1:b
@@ -461,10 +461,10 @@ function _bmps_apply_inputs(bmps_cache::BoundaryMPSCache, pe::QuotientEdge; inco
     b = length(sorted_vs)
 
     # One MPO tensor per site (position) of the source partition.
-    mpo = ITensor[net[v] for v in sorted_vs]
+    mpo = Tensor[net[v] for v in sorted_vs]
 
     # Incoming MPS, keyed by the site each tensor attaches to.
-    mps = Dictionary{Int, ITensor}()
+    mps = Dictionary{Int, Tensor}()
     prev_pe = prev_quotientedge(bmps_cache, pe)
     if prev_pe !== nothing
         for (k, e) in enumerate(sorted_edges(bmps_cache, prev_pe))   # e = prev_v => current_v
@@ -507,7 +507,7 @@ end
 
 function edge_scalar(bmps_cache::BoundaryMPSCache, pe::QuotientEdge)
     es = sorted_edges(bmps_cache, pe)
-    out = ITensor(one(Bool))
+    out = from_array(fill(one(Bool)), Index[])
     for e in es
         out = (out * (message(bmps_cache, e))) * message(bmps_cache, reverse(e))
     end

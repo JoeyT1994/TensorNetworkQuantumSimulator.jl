@@ -4,7 +4,7 @@
 Apply a sequence of gates, via simple update, to a `TensorNetworkState` or a `BeliefPropagationCache` wrapping a `TensorNetworkState`, using belief propagation to update the environment.
 
 # Arguments
-- `circuit::Vector`: A vector of tuples where each tuple contains a gate (as an `ITensor`) and the vertices it acts on.
+- `circuit::Vector`: The gates, as tuples `(name, vertices)` or `(name, vertices, parameters)`, or as gate tensors.
 - `ψ::TensorNetworkState`: The tensor network state to which the gates will be applied.
 
 # Keyword Arguments
@@ -33,18 +33,16 @@ function apply_gates(
     )
     g = graph(ψ_bpc)
     circuit = toitensor(circuit, g, siteinds(network(ψ_bpc)))
-    gate_vertices = [gate[2] for gate in circuit]
-    itensors = [gate[1] for gate in circuit]
-    return apply_gates(itensors, ψ_bpc; gate_vertices, kwargs...)
+    return apply_gates(first.(circuit), ψ_bpc; gate_vertices = last.(circuit), kwargs...)
 end
 
-function adapt_gate(gate::ITensor, ψ_bpc::BeliefPropagationCache)
+function adapt_gate(gate::Tensor, ψ_bpc::BeliefPropagationCache)
     gate = scalartype(gate) <: Complex ? adapt(complex(scalartype(ψ_bpc)), gate) : adapt(scalartype(ψ_bpc), gate)
     return adapt(unspecify_type_parameters(datatype(ψ_bpc)), gate)
 end
 
 function apply_gates(
-        circuit::Vector{<:ITensor},
+        circuit::Vector{<:Tensor},
         ψ_bpc::BeliefPropagationCache;
         gate_vertices::Vector = vertices.(circuit, (network(ψ_bpc),)),
         apply_kwargs = (;),
@@ -84,7 +82,7 @@ function apply_gates(
 
         # actually apply the gate
         gate = adapt_gate(gate, ψ_bpc)
-        t = @timed ψ_bpc, truncation_errors[ii] = apply_gate!(gate, ψ_bpc; v⃗ = gate_vertices[ii], apply_kwargs)
+        ψ_bpc, truncation_errors[ii] = apply_gate!(gate, ψ_bpc; v⃗ = gate_vertices[ii], apply_kwargs)
         for v in gate_vertices[ii]
             push!(affected_vertices, v)
         end
@@ -99,7 +97,7 @@ end
 
 #Apply function for a single gate
 function apply_gate!(
-        gate::ITensor,
+        gate::Tensor,
         ψ_bpc::BeliefPropagationCache;
         v⃗ = vertices(gate, network(ψ_bpc)),
         apply_kwargs
@@ -121,16 +119,16 @@ function apply_gate!(
 
     envs = nv == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
 
-    ψ⃗ = ITensor[network(ψ_bpc)[v] for v in v⃗]
+    ψ⃗ = Tensor[network(ψ_bpc)[v] for v in v⃗]
     updated_tensors, s_values, err = simple_update(gate, ψ⃗; envs, apply_kwargs...)
     if nv == 2
         v1, v2 = v⃗
         e = NamedEdge(v1 => v2)
         ind2 = commonind(s_values, first(updated_tensors))
         δuv = dag(copy(s_values))
-        δuv = replaceind(δuv, ind2, ind2')
+        δuv = replaceind(δuv, ind2, prime(ind2))
         map_diag!(sign, δuv, δuv)
-        s_values = denseblocks(s_values) * denseblocks(δuv)
+        s_values = dense(s_values) * dense(δuv)
         setmessage!(ψ_bpc, e, dag(s_values))
         setmessage!(ψ_bpc, reverse(e), s_values)
     end

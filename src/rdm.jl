@@ -1,4 +1,4 @@
-function normalize_rdm(ρ::ITensor)
+function normalize_rdm(ρ::Tensor)
     dtype = datatype(ρ)
     tr_ρ = copy(ρ)
     for i in inds(ρ; plev = 0)
@@ -13,18 +13,18 @@ end
 Compute the reduced density matrix on the vertices `verts` of the tensor network state `ψ`.
 
 # Arguments
-- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}`: The tensor network state or its associated cache.
+- `ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}`: The tensor network state or its associated cache.
 - `verts`: The vertices over which to compute the reduced density matrix. Can be a single vertex or a collection of vertices.
 
 # Keyword Arguments
-- `alg::Union{String, Nothing}`: The contraction algorithm to use. If not provided, defaults based on the type of `ψ`. Supported algorithms are `"exact"`, `"bp"`, and `"boundarymps"`.
+- `alg::Union{String, Nothing}`: The contraction algorithm to use. If not provided, defaults based on the type of `ψ`. Supported algorithms are `"exact"`, `"bp"`, `"boundarymps"` and `"ctmrg"` (one vertex or the two ends of an edge, requires `maxdim`).
 - `normalize::Bool = true`: Whether to normalize the reduced density matrix so that its trace is 1.
 - `kwargs...`: Additional keyword arguments specific to the chosen algorithm.
 
 # Returns
-- An `ITensor` representing the reduced density matrix on the specified vertices.
+- A `Tensor` representing the reduced density matrix on the specified vertices.
 """
-function reduced_density_matrix(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, verts; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
+function reduced_density_matrix(ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}, verts; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "rdm", alg)
     verts = collect_vertices(verts, graph(ψ))
     return reduced_density_matrix(Algorithm(alg), ψ, verts; kwargs...)
@@ -37,7 +37,6 @@ function reduced_density_matrix(
         contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod()),
         normalize = true
     )
-    ITensors.disable_warn_order()
     op_string_f = v -> v ∈ verts ? "ρ" : "I"
     ρ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
     seq = contraction_sequence(ρ_tensors; contraction_sequence_kwargs...)
@@ -50,21 +49,12 @@ end
 
 
 function reduced_density_matrix(
-        alg::Algorithm"bp",
-        cache::BeliefPropagationCache,
+        alg::Union{Algorithm"bp", Algorithm"ctmrg"},
+        cache::AbstractBeliefPropagationCache,
         vs::Vector;
         normalize = true
     )
-    steiner_vs = length(vs) == 1 ? vs : collect(vertices(steiner_tree(network(cache), vs)))
-    incoming_ms = incoming_messages(cache, steiner_vs)
-
-    op_string_f = v -> v ∈ vs ? "ρ" : "I"
-
-    #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
-    ρ_tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
-    append!(ρ_tensors, incoming_ms)
-    seq = contraction_sequence(ρ_tensors; alg = "optimal")
-    ρ = contract(ρ_tensors; sequence = seq)
+    ρ = contract_region(cache, observable_region(cache, vs), v -> v ∈ vs ? "ρ" : "I")
 
     if normalize
         ρ = normalize_rdm(ρ)
@@ -99,6 +89,19 @@ function reduced_density_matrix(
     ψ_bpc = converged_cache(alg, ψ; cache_update_kwargs)
 
     return reduced_density_matrix(alg, ψ_bpc, verts; kwargs...)
+end
+
+function reduced_density_matrix(
+        alg::Algorithm"ctmrg",
+        ψ::TensorNetworkState,
+        verts::Vector;
+        maxdim::Integer,
+        cache_update_kwargs = (;),
+        kwargs...,
+    )
+    ψ_ctm = converged_cache(alg, ψ; maxdim, cache_update_kwargs)
+
+    return reduced_density_matrix(alg, ψ_ctm, verts; kwargs...)
 end
 
 function reduced_density_matrix(

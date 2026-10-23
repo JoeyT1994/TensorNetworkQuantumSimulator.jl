@@ -12,6 +12,7 @@ Compute the inner product ⟨ψ|ϕ⟩ between two `TensorNetworkState`s using th
         - `"exact"`: Exact contraction of the tensor network.
         - `"bp"`: Belief propagation approximation.
         - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
+        - `"ctmrg"`: CTMRG approximation, on planar graphs (requires `maxdim`).
         - `"loopcorrections"`: Loop corrections to belief propagation.
     - Extra kwargs for `alg = "boundarymps"`:
         - `mps_bond_dimension::Integer`: The bond dimension for the boundary MPS approximation.
@@ -20,6 +21,10 @@ Compute the inner product ⟨ψ|ϕ⟩ between two `TensorNetworkState`s using th
     - Extra kwargs for `alg = "bp"` or `"loopcorrections"`:
         - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
         - `max_configuration_size`: Maximum configuration size for loop corrections (only for `"loopcorrections"`).
+    - Extra kwargs for `alg = "ctmrg"`:
+        - `maxdim::Integer`: The bond dimension of the CTMRG environments.
+        - `cache_update_kwargs`: Additional keyword arguments for updating the cache (by default
+          only the free energy is converged).
 
     # Returns
     - The computed inner product as a scalar value.
@@ -31,22 +36,22 @@ Compute the inner product ⟨ψ|ϕ⟩ between two `TensorNetworkState`s using th
     ϕ = random_tensornetworkstate(ComplexF32, g, s; bond_dimension = 4)
 
     # Exact inner product
-    ip_exact = ITensors.inner(ψ, ϕ; alg = "exact")
+    ip_exact = inner(ψ, ϕ; alg = "exact")
 
     # Belief propagation inner product
-    ip_bp = ITensors.inner(ψ, ϕ; alg = "bp")
+    ip_bp = inner(ψ, ϕ; alg = "bp")
 
     # Boundary MPS inner product with bond dimension 10
-    ip_bmps = ITensors.inner(ψ, ϕ; alg = "boundarymps", mps_bond_dimension = 10)
+    ip_bmps = inner(ψ, ϕ; alg = "boundarymps", mps_bond_dimension = 10)
     ```
 """
-function ITensors.inner(ψ::TensorNetworkState, ϕ::TensorNetworkState; alg, kwargs...)
+function inner(ψ::TensorNetworkState, ϕ::TensorNetworkState; alg, kwargs...)
     algorithm_check(ψ, "inner", alg)
     algorithm_check(ϕ, "inner", alg)
     return inner(Algorithm(alg), ψ, ϕ; kwargs...)
 end
 
-function ITensors.inner(
+function inner(
         alg::Algorithm"exact", blf::BilinearForm;
         contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod())
     )
@@ -55,23 +60,29 @@ function ITensors.inner(
     return scalar(contract(blf_tensors; sequence = seq))
 end
 
-function ITensors.inner(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
+function inner(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
     tn = network(cache)
     z = cache_partitionfunction(alg, cache; max_configuration_size)
     tn isa BilinearForm && return z
     return state_error("BilinearForm")
 end
 
-function ITensors.inner(alg::Union{Algorithm"bp", Algorithm"loopcorrections"}, ψ::TensorNetworkState, ϕ::TensorNetworkState; cache_update_kwargs = default_bp_update_kwargs(ψ), kwargs...)
+function inner(alg::Union{Algorithm"bp", Algorithm"loopcorrections"}, ψ::TensorNetworkState, ϕ::TensorNetworkState; cache_update_kwargs = default_bp_update_kwargs(ψ), kwargs...)
     ψϕ_bpc = converged_cache(alg, BilinearForm(ψ, ϕ); cache_update_kwargs)
     return inner(alg, ψϕ_bpc; kwargs...)
 end
 
-function ITensors.inner(alg::Algorithm"boundarymps", ψ::TensorNetworkState, ϕ::TensorNetworkState; mps_bond_dimension::Integer, partition_by = "row", cache_update_kwargs = default_bmps_update_kwargs(ψ), kwargs...)
+function inner(alg::Algorithm"boundarymps", ψ::TensorNetworkState, ϕ::TensorNetworkState; mps_bond_dimension::Integer, partition_by = "row", cache_update_kwargs = default_bmps_update_kwargs(ψ), kwargs...)
     ψϕ_bmps = converged_cache(alg, BilinearForm(ψ, ϕ); mps_bond_dimension, partition_by, cache_update_kwargs)
     return inner(alg, ψϕ_bmps; kwargs...)
 end
 
-function ITensors.inner(alg::Algorithm"exact", ψ::TensorNetworkState, ϕ::TensorNetworkState)
+#An overlap only needs the free energy converged, not the messages
+function inner(alg::Algorithm"ctmrg", ψ::TensorNetworkState, ϕ::TensorNetworkState; maxdim::Integer, cache_update_kwargs = (;))
+    cache_update_kwargs = merge((; convergence = :freenergy), cache_update_kwargs)
+    return inner(alg, converged_cache(alg, BilinearForm(ψ, ϕ); maxdim, cache_update_kwargs))
+end
+
+function inner(alg::Algorithm"exact", ψ::TensorNetworkState, ϕ::TensorNetworkState)
     return inner(alg, BilinearForm(ψ, ϕ))
 end

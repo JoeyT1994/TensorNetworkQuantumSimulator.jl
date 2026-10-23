@@ -48,6 +48,11 @@ const TNQS = TensorNetworkQuantumSimulator
         @test z_bp ≈ norm_sqr(ψ; alg = "exact")
         @test z_bp ≈ norm_sqr(ψ; alg = "bp")
 
+        # converged messages are fixed points of the message update
+        e = first(edges(g))
+        m, _ = TNQS.updated_message(ψ_BPC, e)
+        @test m ≈ message(ψ_BPC, e)
+
         vc = first(center(g))
         ρ_bp = reduced_density_matrix(ψ, vc; alg = "bp")
         ρ_exact = reduced_density_matrix(ψ, vc; alg = "exact")
@@ -79,6 +84,19 @@ end
 
     @test TNQS.setmessages!(bpc, directed_edges, new_messages) === bpc
     @test all(message(bpc, edge) == new_message for (edge, new_message) in zip(directed_edges, new_messages))
+end
+
+@testset "BP uses the fused kernels, which match the generic contraction" begin
+    Random.seed!(1)
+    ψ = random_tensornetworkstate(ComplexF64, named_grid((3, 3)); bond_dimension = 2)
+    bpc = update(BeliefPropagationCache(ψ))
+    v = (2, 2)
+    incoming = TNQS.incoming_messages(bpc, v; ignore_edges = (NamedEdge((2, 3) => v),))
+    fast = TNQS.norm_message_kernel(ψ, v, incoming)
+    @test !isnothing(fast)
+    ts = [incoming; TNQS.bp_factors(ψ, v)]
+    @test TNQS.normalize_message(fast) ≈ TNQS.normalize_message(contract(ts; sequence = TNQS.contraction_sequence(ts; alg = "optimal")))
+    @test !isnothing(TNQS.norm_scalar_kernel(ψ, [v], TNQS.incoming_messages(bpc, v); op_strings = _ -> "Z"))
 end
 
 end
