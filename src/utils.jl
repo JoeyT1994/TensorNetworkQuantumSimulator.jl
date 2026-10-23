@@ -44,7 +44,7 @@ function identity_tensor(eltype, row_inds::Vector{<:Index}, col_inds::Vector{<:I
 end
 
 #Function for checking the correct algorithm is being used for the given cache type and functionality
-function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState, CTMRGCache}, f::String, alg)
+function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState}, f::String, alg)
     if alg == "bp"
         if !((tns isa BeliefPropagationCache) || (tns isa TensorNetworkState))
             return error("Expected BeliefPropagationCache or TensorNetworkState for 'bp' algorithm, got $(typeof(tns))")

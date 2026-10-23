@@ -254,21 +254,33 @@ function _block_recipe(emb::PlanarEmbedding, exits, modes, block)
     return _corner_recipe(emb, exits, key..., modes[key])
 end
 
-# The closed regions: the whole network, with one vertex, one edge or one face explicit.
-function _vertex_region(emb::PlanarEmbedding, v)
-    parts = Any[(:site, v)]
+# The environments of one vertex and of the two ends of an edge: the messages and corners that
+# close them.
+function _vertex_environment(emb::PlanarEmbedding, v)
+    parts = Any[]
     for (u, f) in vertex_polygon(emb, v)
         push!(parts, (:message, (u, v)))
         append!(parts, _ring(emb, v, f))
     end
+    return parts
+end
+
+function _edge_environment(emb::PlanarEmbedding, u, v)
+    parts = Any[_far_chain(emb, u, (v,)); _far_chain(emb, v, (u,))]
+    for (p, q) in ((u, v), (v, u))
+        append!(parts, _full_connector(emb, face_of_dart(emb, q, p), p, q))
+    end
+    return parts
+end
+
+# The closed regions: the whole network, with one vertex, one edge or one face explicit.
+function _vertex_region(emb::PlanarEmbedding, v)
+    parts = Any[(:site, v); _vertex_environment(emb, v)]
     return _factor_enlarged(emb, parts, [(v, f) for (_, f) in vertex_polygon(emb, v) if _isinner(f)])
 end
 
 function _edge_region(emb::PlanarEmbedding, u, v)
-    parts = Any[(:site, u); (:site, v); _far_chain(emb, u, (v,)); _far_chain(emb, v, (u,))]
-    for (p, q) in ((u, v), (v, u))
-        append!(parts, _full_connector(emb, face_of_dart(emb, q, p), p, q))
-    end
+    parts = Any[(:site, u); (:site, v); _edge_environment(emb, u, v)]
     fs = filter(_isinner, [face_of_dart(emb, u, v), face_of_dart(emb, v, u)])
     parts = _factor_enlarged(emb, parts, [(u, f) for f in fs])
     return _factor_enlarged(emb, parts, [(v, f) for f in fs])

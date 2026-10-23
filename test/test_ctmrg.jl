@@ -1,6 +1,6 @@
 @eval module $(gensym())
 using TensorNetworkQuantumSimulator
-using TensorNetworkQuantumSimulator: Dictionary, freenergy, map_tensors
+using TensorNetworkQuantumSimulator: Dictionary, freenergy, incoming_messages, map_tensors, scalar, setindex_preserve!
 using Random
 using Test: @testset, @test, @test_throws
 
@@ -22,6 +22,13 @@ end
     cache = update(CTMRGCache(tn, 256))
     @test freenergy(cache) ≈ lnZ atol = 1.0e-8
     @test contract(tn; alg = "ctmrg", maxdim = 256) ≈ exp(lnZ) rtol = 1.0e-8
+    # a vertex's environment (its messages and corners) is exact and independent of its tensor
+    v = first(vertices(g))
+    env = incoming_messages(cache, v)
+    tn′ = copy(tn)
+    setindex_preserve!(tn′, tn[v] .^ 2, v)
+    closed(t) = scalar(reduce(*, [t; env]))
+    @test closed(tn′[v]) / closed(tn[v]) ≈ contract(tn′; alg = "exact") / exp(lnZ) rtol = 1.0e-8
 end
 
 @testset "CTMRG Ising free energy" begin

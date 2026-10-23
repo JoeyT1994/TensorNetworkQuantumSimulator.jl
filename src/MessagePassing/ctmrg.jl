@@ -4,10 +4,11 @@ using KrylovKit: Arnoldi, schursolve
 """
     CTMRGCache(network, maxdim::Integer; positions, projector = :svd, pinv_rtol = 1e-3, seed = 1)
 
-Corner transfer matrix (CTMRG) environments for a tensor network on any planar graph. Every inner
-face carries a ring of corners and every directed edge a message, each the contraction of a region
-of the network, with the cuts between them truncated to `maxdim`. Call `update` on it before
-computing free energies or expectation values.
+Corner transfer matrix (CTMRG) environments for a tensor network on any planar graph. Every directed
+edge carries a message, as in belief propagation, and every inner face a ring of corners, each the
+contraction of a region of the network, with the cuts between them truncated to `maxdim`. The
+environment of a vertex or edge (`incoming_messages`) is its messages together with the corners
+around it. Call `update` on it before computing free energies or expectation values.
 
 # Arguments
 - `network`: A `TensorNetwork`, a `TensorNetworkState` (its norm network) or a form, on a planar graph.
@@ -26,7 +27,7 @@ computing free energies or expectation values.
 # Returns
 - A `CTMRGCache`, whose update rules are fixed and certified exact at lossless `maxdim` (see `ctmrg_rules`).
 """
-struct CTMRGCache{V, N}
+struct CTMRGCache{V, N} <: AbstractBeliefPropagationCache{V}
     network::N
     embedding::PlanarEmbedding{V}
     rules::CTMRGRules{V}
@@ -36,17 +37,20 @@ struct CTMRGCache{V, N}
     rng::Xoshiro
     bonds::Dict{Tuple{V, V}, Vector{Index}}    # dart → the network's legs on that edge
     sides::Dict{Tuple{V, V}, Index}            # interface → its current truncated leg
-    blocks::Dict{Any, Tensor}                  # (:message, dart) or (:corner, (p, f)) → tensor
+    messages::Dictionary{NamedEdge, Tensor}    # u => v → the message from u into v
+    corners::Dict{Tuple{V, Int}, Tensor}       # (p, f) → the corner at p in face f
     projectors::Dict{Tuple{V, V}, Any}         # interface → (P_A, P_B, its truncated leg)
 end
 
 network(cache::CTMRGCache) = cache.network
 graph(cache::CTMRGCache) = graph(network(cache))
+messages(cache::CTMRGCache) = cache.messages
+contraction_sequences(cache::CTMRGCache) = nothing
 
 function Base.copy(cache::CTMRGCache)
     return CTMRGCache(
-        cache.network, cache.embedding, cache.rules, cache.maxdim, cache.projector, cache.pinv_rtol, copy(cache.rng),
-        copy(cache.bonds), copy(cache.sides), copy(cache.blocks), copy(cache.projectors)
+        copy(cache.network), cache.embedding, cache.rules, cache.maxdim, cache.projector, cache.pinv_rtol, copy(cache.rng),
+        copy(cache.bonds), copy(cache.sides), copy(cache.messages), copy(cache.corners), copy(cache.projectors)
     )
 end
 
@@ -70,11 +74,19 @@ function CTMRGCache(
     sides = Dict{Tuple{V, V}, Index}(I => new_index(1; tags = "Link,ctm") for I in rules.interfaces)
     cache = CTMRGCache(
         network, emb, rules, Int(maxdim), projector, Float64(pinv_rtol), Xoshiro(seed),
-        bonds, sides, Dict{Any, Tensor}(), Dict{Tuple{V, V}, Any}()
+        bonds, sides, Dictionary{NamedEdge, Tensor}(), Dict{Tuple{V, Int}, Tensor}(), Dict{Tuple{V, V}, Any}()
     )
     _initialize_blocks!(cache)
     return cache
 end
+
+# A message or corner by its recipe part, (:message, (u, v)) or (:corner, (p, f)).
+_block(cache::CTMRGCache, (kind, key)) = kind === :message ? cache.messages[NamedEdge(key[1] => key[2])] : cache.corners[key]
+function _setblock!(cache::CTMRGCache, (kind, key), t)
+    kind === :message ? set!(cache.messages, NamedEdge(key[1] => key[2]), t) : (cache.corners[key] = t)
+    return cache
+end
+_blocks(cache::CTMRGCache) = Any[[(:message, (src(e), dst(e))) for e in keys(cache.messages)]; [(:corner, k) for k in keys(cache.corners)]]
 
 function _shared_legs(network, u, v)
     legs(x) = unique(Iterators.flatten(inds(t) for t in bp_factors(network, x)))
@@ -92,11 +104,11 @@ function _initialize_blocks!(cache::CTMRGCache)
         for h in (face_of_dart(emb, u, v), face_of_dart(emb, v, u))
             _isinner(h) && push!(legs, cache.sides[_interface(emb, h, u, _other_neighbor(emb, h, u, v))])
         end
-        cache.blocks[(:message, (u, v))] = ones_on(legs)
+        _setblock!(cache, (:message, (u, v)), ones_on(legs))
     end
     for (p, f) in _corner_keys(emb)
         w = _walk(emb, f, p)
-        cache.blocks[(:corner, (p, f))] = ones_on([cache.sides[_interface(emb, f, w[end], p)], cache.sides[_interface(emb, f, p, w[2])]])
+        cache.corners[(p, f)] = ones_on([cache.sides[_interface(emb, f, w[end], p)], cache.sides[_interface(emb, f, p, w[2])]])
     end
     return cache
 end
@@ -116,12 +128,12 @@ function _tensors(
         if kind === :site
             append!(ts, site(part[2]))
         elseif kind === :message || kind === :corner
-            push!(ts, cache.blocks[part])
+            push!(ts, _block(cache, part))
         elseif kind === :enlarged
             enlarged() = _evaluate(cache, _enlarged(cache.embedding, part[2]...); projectors, site)
             push!(ts, isnothing(memo) ? enlarged() : get!(enlarged, memo, part[2]))
         elseif kind === :inverse
-            chain = _contract([cache.blocks[(:corner, k)] for k in part[2]])
+            chain = _contract([cache.corners[k] for k in part[2]])
             push!(ts, _pseudo_inverse(chain, cache.sides[part[3][1]], cache.sides[part[3][2]], cache.pinv_rtol))
         else
             P = projectors[part[2]]
@@ -210,7 +222,7 @@ end
 #A random isometry for the first pass: lossless at lossless maxdim, so that pass is already exact.
 function _random_projector(cache::CTMRGCache, ins)
     k = new_index(min(cache.maxdim, dim(ins)))
-    ref = first(cache.blocks)[2]
+    ref = first(cache.messages)
     Q, _ = qr(adapt_like(ref, random_tensor(cache.rng, real(scalartype(ref)), [ins; k])), ins)
     return Q, dag(Q, ins), only(uniqueinds(Q, ins))
 end
@@ -431,7 +443,7 @@ end
 function _sequential_pass!(cache::CTMRGCache)
     isempty(cache.projectors) ? _random_projectors!(cache) : _carried_projectors!(cache)
     for block in cache.rules.order
-        cache.blocks[block] = _recompute(cache, block)
+        _setblock!(cache, block, _recompute(cache, block))
     end
     return cache
 end
@@ -457,8 +469,8 @@ function _jacobi_pass!(cache::CTMRGCache)
         Be = _evaluate(cache, [Qr; (:enlarged, (q, f))]; memo)
         new[I] = _projector_pair([Bw], [Be], ins(I), cache.maxdim)
     end
-    blocks = Dict(b => _recompute(cache, b; projectors = new, memo) for b in keys(cache.blocks))
-    merge!(cache.blocks, blocks)
+    blocks = Dict(b => _recompute(cache, b; projectors = new, memo) for b in _blocks(cache))
+    foreach(((b, t),) -> _setblock!(cache, b, t), blocks)
     return _set_projectors!(cache, new)
 end
 
@@ -510,15 +522,18 @@ end
 
 #The environment of every vertex: the messages into it and the corners around it, contracted.
 function _environments(cache::CTMRGCache)
-    emb = cache.embedding
-    return map(collect(vertices(graph(emb)))) do v
-        parts = Any[]
-        for (u, f) in vertex_polygon(emb, v)
-            push!(parts, (:message, (u, v)))
-            append!(parts, _ring(emb, v, f))
-        end
-        return _evaluate(cache, parts)
-    end
+    return map(v -> _evaluate(cache, _vertex_environment(cache.embedding, v)), collect(vertices(cache)))
+end
+
+"""
+    incoming_messages(cache::CTMRGCache, vertices)
+
+The environment of one vertex, or of the two ends of an edge: the messages into it and the
+corners around it.
+"""
+function incoming_messages(cache::CTMRGCache, vs::Vector; ignore_edges = [])
+    isempty(ignore_edges) || throw(ArgumentError("a CTMRG environment cannot leave out edges"))
+    return _tensors(cache, _environment(cache, vs))
 end
 
 
@@ -549,9 +564,33 @@ end
 
 partitionfunction(cache::CTMRGCache) = exp(freenergy(cache))
 
-#The closed region around one vertex, or around the two ends of an edge.
-function _observable_region(cache::CTMRGCache, vs)
-    length(vs) == 1 && return _vertex_region(cache.embedding, only(vs))
-    length(vs) == 2 && has_edge(graph(cache), vs...) && return _edge_region(cache.embedding, vs...)
-    return error("alg = \"ctmrg\" supports observables on one vertex or on the two ends of an edge; got $vs.")
+#The environment of, and the closed region around, one vertex or the two ends of an edge.
+_environment(cache::CTMRGCache, vs) = _on_region(cache, vs, _vertex_environment, _edge_environment)
+_region(cache::CTMRGCache, vs) = _on_region(cache, vs, _vertex_region, _edge_region)
+function _on_region(cache::CTMRGCache, vs, at_vertex, at_edge)
+    length(vs) == 1 && return at_vertex(cache.embedding, only(vs))
+    length(vs) == 2 && has_edge(graph(cache), vs...) && return at_edge(cache.embedding, vs...)
+    return error("alg = \"ctmrg\" supports regions of one vertex or the two ends of an edge; got $vs.")
+end
+
+#A CTMRG observable is closed on its own vertices, which must be one vertex or an edge.
+observable_region(cache::CTMRGCache, vs) = _on_region(cache, vs, (_, v) -> [v], (_, u, v) -> [u, v])
+
+#The region's sites, with operators from `op_strings`, contracted against its environment. The
+#closed region's recipe orders the contraction through enlarged corners.
+function contract_region(cache::CTMRGCache, vs, op_strings::Function)
+    site = v -> norm_factors(network(cache), [v]; op_strings)
+    return _evaluate(cache, _region(cache, vs); site)
+end
+
+region_scalar(cache::CTMRGCache, vs, op_strings::Function) = scalar(contract_region(cache, vs, op_strings))
+
+#Messages and factors as for any cache, and the corners and projectors with them.
+function Adapt.adapt_structure(to, cache::CTMRGCache)
+    cache = adapt_factors(to, adapt_messages(to, cache))
+    map!(adapt(to), values(cache.corners))
+    for (I, (PA, PB, k)) in cache.projectors
+        cache.projectors[I] = (adapt(to)(PA), adapt(to)(PB), k)
+    end
+    return cache
 end

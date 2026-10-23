@@ -166,6 +166,27 @@ function incoming_messages(bp_cache::AbstractBeliefPropagationCache, vertex; kwa
     return incoming_messages(bp_cache, [vertex]; kwargs...)
 end
 
+# The vertices an observable on `vs` is closed on: `vs` joined by a Steiner tree.
+function observable_region(bp_cache::AbstractBeliefPropagationCache, vs)
+    return length(vs) == 1 ? vs : collect(vertices(steiner_tree(network(bp_cache), vs)))
+end
+
+# The norm network on `region`, with operators from `op_strings`, contracted against its environment.
+function contract_region(bp_cache::AbstractBeliefPropagationCache, region, op_strings::Function)
+    tensors = norm_factors(network(bp_cache), region; op_strings)
+    append!(tensors, incoming_messages(bp_cache, region))
+    #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
+    sequence = contraction_sequence(tensors; alg = "optimal")
+    return contract(tensors; sequence)
+end
+
+# Its value as a scalar, through the backend's fused kernel where it has one.
+function region_scalar(bp_cache::AbstractBeliefPropagationCache, region, op_strings::Function)
+    fast = norm_scalar_kernel(network(bp_cache), region, incoming_messages(bp_cache, region); op_strings)
+    fast !== nothing && return fast
+    return scalar(contract_region(bp_cache, region, op_strings))
+end
+
 function updated_message(
         alg::Algorithm"contract", bp_cache::AbstractBeliefPropagationCache, edge::NamedEdge
     )

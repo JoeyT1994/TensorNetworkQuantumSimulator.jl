@@ -1,6 +1,6 @@
 # Caches
 
-The central data structures in TensorNetworkQuantumSimulator.jl are the `BeliefPropagationCache` and the `BoundaryMPSCache`, both subtypes of `AbstractBeliefPropagationCache`, and the `CTMRGCache`. Each wraps a tensor network together with auxiliary _message_ tensors that encode approximate environment information — the effective contribution of the rest of the network as seen from each bond. Understanding what these caches store, how they are updated, and when to use each is key to getting the most out of the package.
+The central data structures in TensorNetworkQuantumSimulator.jl are the `BeliefPropagationCache`, the `BoundaryMPSCache` and the `CTMRGCache`, all subtypes of `AbstractBeliefPropagationCache`. Each wraps a tensor network together with auxiliary _message_ tensors that encode approximate environment information — the effective contribution of the rest of the network as seen from each bond. Understanding what these caches store, how they are updated, and when to use each is key to getting the most out of the package.
 
 ## Belief Propagation Cache
 
@@ -154,7 +154,7 @@ sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 16, par
 
 ### What it stores
 
-A `CTMRGCache` holds corner transfer matrix (CTMRG) environments for a tensor network on any **planar** graph: square, hexagonal, triangular, kagome, Penrose tilings and so on. Every inner face of the graph carries a ring of _corner_ tensors, one per vertex of the face, and every directed edge carries a _message_ tensor. Each of these is the contraction of a region of the network, and the cuts between regions are truncated to a bond dimension `maxdim`. The vertices need positions in the plane: by default the vertex names are used as coordinates, as for `named_grid` and the other lattice constructors, otherwise pass `positions = Dict(v => (x, y), ...)`.
+A `CTMRGCache` holds corner transfer matrix (CTMRG) environments for a tensor network on any **planar** graph: square, hexagonal, triangular, kagome, Penrose tilings and so on. Every inner face of the graph carries a ring of _corner_ tensors, one per vertex of the face, and every directed edge carries a _message_ tensor. Each of these is the contraction of a region of the network, and the cuts between regions are truncated to a bond dimension `maxdim`. The environment of a vertex or edge is then its incoming messages together with the corners around it. The vertices need positions in the plane: by default the vertex names are used as coordinates, as for `named_grid` and the other lattice constructors, otherwise pass `positions = Dict(v => (x, y), ...)`.
 
 The order in which the corners and messages are updated is worked out from the geometry when the cache is built, and is checked to give the exact contraction at large enough `maxdim`.
 

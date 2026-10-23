@@ -33,7 +33,7 @@ end
 Compute the expectation value of one or more observables on a tensor network state.
 
 # Arguments
-- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMRGCache}`: The tensor network state or cache wrapping the state to measure the observable(s) on.
+- `ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}`: The tensor network state or cache wrapping the state to measure the observable(s) on.
 - `observable::Union{Tuple, Vector{<:Tuple}}`: The observable(s) to measure. Should be a tuple or vector of tuples of the form `(ops, vertices, coeff=1)`.
 
 # Keyword Arguments
@@ -48,34 +48,24 @@ Compute the expectation value of one or more observables on a tensor network sta
 # Returns
 - A single number if measuring one observable, or a vector of numbers if measuring multiple observables.
 """
-function expect(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMRGCache}, observable; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
+function expect(ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}, observable; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "expect", alg)
     return expect(Algorithm(alg), ψ, observable; kwargs...)
 end
 
+# BP and CTMRG: the observable's region, with the operator inserted, over the same region without
+# it, both closed by their environment in the cache.
 function expect(
-        alg::Algorithm"bp",
-        cache::BeliefPropagationCache,
+        alg::Union{Algorithm"bp", Algorithm"ctmrg"},
+        cache::AbstractBeliefPropagationCache,
         obs::Tuple
     )
     op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
     iszero(coeff) && return zero(coeff)
-
-    steiner_vs = length(obs_vs) == 1 ? obs_vs : collect(vertices(steiner_tree(network(cache), obs_vs)))
-    incoming_ms = incoming_messages(cache, steiner_vs)
-
-    #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
-    function contract_region(op_string_f)
-        fast = norm_scalar_kernel(network(cache), steiner_vs, incoming_ms; op_strings = op_string_f)
-        fast !== nothing && return fast
-        tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
-        append!(tensors, incoming_ms)
-        seq = contraction_sequence(tensors; alg = "optimal")
-        return scalar(contract(tensors; sequence = seq))
-    end
+    region = observable_region(cache, obs_vs)
 
     numer, denom = with_kernel_workspace() do
-        contract_region(op_string_function(op_strings, obs_vs)), contract_region(v -> "I")
+        region_scalar(cache, region, op_string_function(op_strings, obs_vs)), region_scalar(cache, region, v -> "I")
     end
 
     return coeff * numer / denom
@@ -112,12 +102,11 @@ function expect(
 end
 
 function expect(
-        alg::Algorithm"bp",
-        cache::BeliefPropagationCache,
-        observables::Vector{<:Tuple};
-        kwargs...,
+        alg::Union{Algorithm"bp", Algorithm"ctmrg"},
+        cache::AbstractBeliefPropagationCache,
+        observables::Vector{<:Tuple}
     )
-    return with_kernel_workspace(() -> map(obs -> expect(alg, cache, obs; kwargs...), observables))
+    return with_kernel_workspace(() -> map(obs -> expect(alg, cache, obs), observables))
 end
 
 function expect(
@@ -131,37 +120,6 @@ function expect(
     ψ_bpc = converged_cache(alg, ψ; cache_update_kwargs)
 
     return expect(alg, ψ_bpc, observable; kwargs...)
-end
-
-# CTMRG: the closed region around the observable's vertex (or edge), with the operator
-# inserted, over the same region without it.
-function expect(
-        alg::Algorithm"ctmrg",
-        cache::CTMRGCache,
-        obs::Tuple
-    )
-    op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
-    iszero(coeff) && return zero(coeff)
-    parts = _observable_region(cache, obs_vs)
-
-    function contract_region(op_string_f)
-        site = v -> norm_factors(network(cache), [v]; op_strings = op_string_f)
-        return scalar(_evaluate(cache, parts; site))
-    end
-
-    numer, denom = with_kernel_workspace() do
-        contract_region(op_string_function(op_strings, obs_vs)), contract_region(v -> "I")
-    end
-
-    return coeff * numer / denom
-end
-
-function expect(
-        alg::Algorithm"ctmrg",
-        cache::CTMRGCache,
-        observables::Vector{<:Tuple}
-    )
-    return map(obs -> expect(alg, cache, obs), observables)
 end
 
 function expect(

@@ -13,7 +13,7 @@ end
 Compute the reduced density matrix on the vertices `verts` of the tensor network state `ψ`.
 
 # Arguments
-- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMRGCache}`: The tensor network state or its associated cache.
+- `ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}`: The tensor network state or its associated cache.
 - `verts`: The vertices over which to compute the reduced density matrix. Can be a single vertex or a collection of vertices.
 
 # Keyword Arguments
@@ -24,7 +24,7 @@ Compute the reduced density matrix on the vertices `verts` of the tensor network
 # Returns
 - A `Tensor` representing the reduced density matrix on the specified vertices.
 """
-function reduced_density_matrix(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache, CTMRGCache}, verts; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
+function reduced_density_matrix(ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}, verts; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
     algorithm_check(ψ, "rdm", alg)
     verts = collect_vertices(verts, graph(ψ))
     return reduced_density_matrix(Algorithm(alg), ψ, verts; kwargs...)
@@ -49,21 +49,12 @@ end
 
 
 function reduced_density_matrix(
-        alg::Algorithm"bp",
-        cache::BeliefPropagationCache,
+        alg::Union{Algorithm"bp", Algorithm"ctmrg"},
+        cache::AbstractBeliefPropagationCache,
         vs::Vector;
         normalize = true
     )
-    steiner_vs = length(vs) == 1 ? vs : collect(vertices(steiner_tree(network(cache), vs)))
-    incoming_ms = incoming_messages(cache, steiner_vs)
-
-    op_string_f = v -> v ∈ vs ? "ρ" : "I"
-
-    #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
-    ρ_tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
-    append!(ρ_tensors, incoming_ms)
-    seq = contraction_sequence(ρ_tensors; alg = "optimal")
-    ρ = contract(ρ_tensors; sequence = seq)
+    ρ = contract_region(cache, observable_region(cache, vs), v -> v ∈ vs ? "ρ" : "I")
 
     if normalize
         ρ = normalize_rdm(ρ)
@@ -98,17 +89,6 @@ function reduced_density_matrix(
     ψ_bpc = converged_cache(alg, ψ; cache_update_kwargs)
 
     return reduced_density_matrix(alg, ψ_bpc, verts; kwargs...)
-end
-
-function reduced_density_matrix(
-        alg::Algorithm"ctmrg",
-        cache::CTMRGCache,
-        vs::Vector;
-        normalize = true
-    )
-    site = v -> norm_factors(network(cache), [v]; op_strings = u -> u ∈ vs ? "ρ" : "I")
-    ρ = _evaluate(cache, _observable_region(cache, vs); site)
-    return normalize ? normalize_rdm(ρ) : ρ
 end
 
 function reduced_density_matrix(

@@ -76,7 +76,7 @@ end
 #An overlap only needs the free energy converged, not the messages
 function inner(alg::Algorithm"ctmrg", ψ::TensorNetworkState, ϕ::TensorNetworkState; maxdim::Integer, cache_update_kwargs = (;))
     cache_update_kwargs = merge((; convergence = :freenergy), cache_update_kwargs)
-    return partitionfunction(converged_cache(alg, BilinearForm(ψ, ϕ); maxdim, cache_update_kwargs))
+    return inner(alg, converged_cache(alg, BilinearForm(ψ, ϕ); maxdim, cache_update_kwargs))
 end
 
 function inner(alg::Algorithm"exact", ψ::TensorNetworkState, ϕ::TensorNetworkState)
