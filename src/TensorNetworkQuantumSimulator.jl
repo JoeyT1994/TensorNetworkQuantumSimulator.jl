@@ -30,6 +30,7 @@ include("Apply/apply_gates.jl")
 include("Apply/simple_update.jl")
 include("Apply/full_update.jl")
 include("Apply/gate_definitions.jl")
+include("circuit_import.jl")
 include("qasm.jl")
 include("expect.jl")
 include("norm_sqr.jl")
@@ -135,6 +136,7 @@ export
     second_renyi_entanglement_entropy,
     build_graph_from_circuit,
     circuit_from_qasm,
+    circuit_from_qiskit,
     reduced_density_matrix,
     rdm,
     norm_factors,

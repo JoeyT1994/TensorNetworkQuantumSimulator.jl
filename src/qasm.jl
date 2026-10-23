@@ -44,18 +44,7 @@ g = build_graph_from_circuit(circuit)
 function circuit_from_qasm(qasm::AbstractString; qubits = nothing)
     program = _QASMProgram(_qasm_tokens(qasm))
     _parse_program!(program)
-    vertex = isnothing(qubits) ? identity : (k -> qubits[k])
-    if !isnothing(qubits) && length(qubits) != program.nqubits
-        throw(ArgumentError("the program declares $(program.nqubits) qubits but `qubits` has $(length(qubits)) vertices"))
-    end
-    return [_registry_gate(name, vertex.(qs), params) for (name, qs, params) in program.gates]
-end
-
-# (name, vertices, parameters) as a gate tuple, under the registry's canonical name.
-function _registry_gate(name, vs, params)
-    canon = haskey(GATES, name) ? name : ALIASES[name]
-    isempty(params) && return (canon, vs)
-    return (canon, vs, length(params) == 1 ? only(params) : Tuple(params))
+    return _gate_list(program.circuit; qubits)
 end
 
 # --- Tokens ---
@@ -70,12 +59,10 @@ mutable struct _QASMProgram
     tokens::Vector{SubString{String}}
     position::Int
     registers::Dict{String, UnitRange{Int}}             # qreg name → its qubits
-    nqubits::Int
     definitions::Dict{String, Any}                       # gate name → (params, args, body tokens)
-    measured::Set{Int}
-    gates::Vector{Tuple{String, Vector{Int}, Vector{Float64}}}
+    circuit::_ImportedCircuit
 end
-_QASMProgram(tokens) = _QASMProgram(tokens, 1, Dict(), 0, Dict(), Set{Int}(), [])
+_QASMProgram(tokens) = _QASMProgram(tokens, 1, Dict(), Dict(), _ImportedCircuit())
 
 _peek(p::_QASMProgram) = p.position <= length(p.tokens) ? p.tokens[p.position] : nothing
 _next!(p::_QASMProgram) = (t = _peek(p); isnothing(t) && _qasm_error("unexpected end of program"); p.position += 1; t)
@@ -125,8 +112,9 @@ function _parse_program!(p::_QASMProgram)
         elseif t == "qreg"
             name = String(_next!(p)); _expect!(p, "[")
             n = parse(Int, _next!(p)); _expect!(p, "]"); _expect!(p, ";")
-            p.registers[name] = (p.nqubits + 1):(p.nqubits + n)
-            p.nqubits += n
+            nq = p.circuit.nqubits
+            p.registers[name] = (nq + 1):(nq + n)
+            p.circuit.nqubits += n
         elseif t == "gate"
             name = String(_next!(p))
             params = _peek(p) == "(" ? (_next!(p); String.(first.(_split_commas(_until!(p, "(", ")"))))) : String[]
@@ -140,9 +128,7 @@ function _parse_program!(p::_QASMProgram)
         elseif t == "barrier"
             _skip_statement!(p)
         elseif t == "measure"
-            for k in _qubit_list(p, _until_semicolon!(p, "->"))
-                push!(p.measured, k)
-            end
+            _measure!(p.circuit, _qubit_list(p, _until_semicolon!(p, "->")))
             _skip_statement!(p)
         elseif t == "reset"
             _qasm_error("reset is not supported")
@@ -190,27 +176,14 @@ end
 
 _qubit_list(p::_QASMProgram, tokens) = reduce(vcat, [_operand(p, a) for a in _split_commas(tokens)]; init = Int[])
 
-# Apply `name` to `qubits`: from the registry if it knows the gate, otherwise from its definition.
+# Apply `name` to `qubits`: from the registry if it has the gate, otherwise from its definition.
 function _call!(p::_QASMProgram, name, params, qubits)
-    for k in qubits
-        k in p.measured && _qasm_error("gate \"$name\" acts on a qubit after it is measured; mid-circuit measurements are not supported")
-    end
-    spec = _resolve_gate(name)
-    if !isnothing(spec) && length(qubits) <= 2
-        length(params) == length(spec.paramkeys) ||
-            _qasm_error("gate \"$name\" takes $(length(spec.paramkeys)) parameter(s), got $(length(params))")
-        push!(p.gates, (name, qubits, params))
-    elseif haskey(p.definitions, name)
-        pnames, args, body = p.definitions[name]
-        (length(pnames) == length(params) && length(args) == length(qubits)) ||
-            _qasm_error("gate \"$name\" called with the wrong number of parameters or qubits")
-        _expand!(p, body, Dict(zip(pnames, params)), Dict(zip(args, qubits)))
-    elseif length(qubits) > 2
-        _qasm_error("gate \"$name\" acts on $(length(qubits)) qubits; only one- and two-qubit gates are supported, so decompose it first")
-    else
-        _qasm_error("unknown gate \"$name\"")
-    end
-    return p
+    _add_gate!(p.circuit, name, params, qubits) && return p
+    haskey(p.definitions, name) || _unsupported_gate(name, qubits)
+    pnames, args, body = p.definitions[name]
+    (length(pnames) == length(params) && length(args) == length(qubits)) ||
+        _qasm_error("gate \"$name\" called with the wrong number of parameters or qubits")
+    return _expand!(p, body, Dict(zip(pnames, params)), Dict(zip(args, qubits)))
 end
 
 # The body of a gate definition, with its parameters and qubit arguments bound.

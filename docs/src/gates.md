@@ -19,17 +19,7 @@ end
 
 ### Circuits from qiskit (OpenQASM)
 
-`circuit_from_qasm` reads an OpenQASM 2 program, such as one written by qiskit's `qasm2.dumps(circuit)`, into a gate list. Every one- and two-qubit qiskit standard gate is supported, and gates the program defines itself are expanded from their definitions. Build the graph from the circuit, or pass the vertex of each qubit to run it on a graph of your own:
-
-```julia
-circuit = circuit_from_qasm(read("circuit.qasm", String))
-g = build_graph_from_circuit(circuit)        # a vertex per qubit, an edge per pair of qubits a gate couples
-
-g = named_hexagonal_lattice_graph(3, 3)
-circuit = circuit_from_qasm(read("circuit.qasm", String); qubits = collect(vertices(g)))
-```
-
-On a graph of your own, every two-qubit gate must act on neighbouring vertices, so transpile the circuit onto the graph's connectivity first. Gates on three or more qubits, resets, classically controlled gates and mid-circuit measurements are not supported; transpile those circuits to one- and two-qubit `basis_gates` first.
+Circuits written in qiskit or exported as OpenQASM 2 convert to gate lists with `circuit_from_qasm` (or `circuit_from_qiskit` for Qiskit.jl circuits). See [Circuits from Qiskit](qiskit.md).
 
 ### Edge Coloring
 

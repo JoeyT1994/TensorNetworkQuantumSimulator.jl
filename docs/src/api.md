@@ -28,6 +28,7 @@ apply_gates
 simple_update
 full_update
 circuit_from_qasm
+circuit_from_qiskit
 ```
 
 ## Custom Gate Registration
@@ -101,6 +102,7 @@ safe_eigen
 add
 fidelity
 optimise_p_q
+TensorNetworkQuantumSimulator.TensorInterface.Algorithm
 ```
 
 ## Operators and States
