@@ -94,6 +94,8 @@ vertex_polygon
 CTMRGCache
 update
 update_iteration!
+partitionfunction
+freenergy
 ```
 
 ## Utilities
