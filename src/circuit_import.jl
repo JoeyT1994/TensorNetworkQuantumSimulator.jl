@@ -14,11 +14,9 @@ _measure!(circuit::_ImportedCircuit, qubits) = (union!(circuit.measured, qubits)
 # Add the registry's gate `name` on `qubits`, under its canonical name; false if the registry does
 # not have the gate.
 function _add_gate!(circuit::_ImportedCircuit, name, params, qubits)
-    for k in qubits
-        k in circuit.measured && throw(ArgumentError(
-            "gate \"$name\" acts on a qubit after it is measured; mid-circuit measurements are not supported"
-        ))
-    end
+    any(in(circuit.measured), qubits) && throw(ArgumentError(
+        "gate \"$name\" acts on a qubit after it is measured; mid-circuit measurements are not supported"
+    ))
     canon = _canonical_name(name)
     isnothing(canon) && return false
     spec = GATES[canon]

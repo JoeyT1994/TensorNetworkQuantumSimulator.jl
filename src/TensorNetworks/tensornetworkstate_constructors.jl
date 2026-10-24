@@ -19,9 +19,7 @@ first half being the "ket" indices and the second half the "bra" indices; index 
 index `n/2 + i`.
 """
 function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2))
-    links = Dictionary(edges(g), [new_index(1; tags = "e$(src(e))_$(dst(e))") for e in edges(g)])
-    links = merge(links, Dictionary(reverse.(edges(g)), [links[e] for e in edges(g)]))
-
+    links = edge_indices(g, 1; tags = e -> "e$(src(e))_$(dst(e))")
     ts = Dictionary{vertextype(g), Tensor}()
     for v in vertices(g)
         es = incident_edges(g, v; dir = :in)
@@ -58,36 +56,21 @@ of a periodic `n × n` named grid.
 Returns a [`TensorNetworkState`](@ref) of bond dimension 2.
 """
 function toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n,n); periodic = true)))
-    g = named_grid((n,n); periodic = true)
-    vs = collect(vertices(g))
+    g = named_grid((n, n); periodic = true)
+    l = edge_indices(g, 2)
+    # |11⟩ ± |22⟩ on a pair of legs
+    bell(a, b, sign) = onehot(ComplexF64, a => 1) * onehot(ComplexF64, b => 1) + sign * onehot(ComplexF64, a => 2) * onehot(ComplexF64, b => 2)
     tensors = Dictionary{vertextype(g), Tensor}()
-    es=  collect(edges(g))
-    e_dict = Dictionary(es, [new_index(2) for e in edges(g)])
-    e_dict = merge(e_dict, Dictionary(reverse.(es), collect(values(e_dict))))
-
     for v in vertices(g)
-        incoming_es = filter(e -> v == src(e) || v == dst(e), es)
-        incoming_inds = [e_dict[e] for e in incoming_es]
+        north = l[NamedEdge((mod1(v[1] + 1, n), v[2]) => v)]
+        east = l[NamedEdge((v[1], mod1(v[2] + 1, n)) => v)]
+        south = l[NamedEdge(v => (mod1(v[1] - 1, n), v[2]))]
+        west = l[NamedEdge(v => (v[1], mod1(v[2] - 1, n)))]
+        # north pairs with east on even sites and with west on odd ones; south with the other
+        a, b = iseven(sum(v)) ? (east, west) : (west, east)
         sv = only(s[v])
-
-        is = [incoming_inds..., sv]
-        state = from_array(zeros(ComplexF64, dim.(is)...), is)
-
-        north_index = e_dict[NamedEdge((mod1(v[1]+1, n), v[2]) => v)]
-        east_index = e_dict[NamedEdge((v[1], mod1(v[2]+1, n)) => v)]
-        south_index = e_dict[NamedEdge(v => (mod1(v[1]-1, n), v[2]))]
-        west_index = e_dict[NamedEdge(v => (v[1], mod1(v[2]-1, n)))]
-
-        if iseven(sum(v))
-            state  = state + (onehot(north_index => 1) * onehot(east_index => 1) + onehot(north_index => 2) * onehot(east_index => 2)) * (onehot(south_index => 1) * onehot(west_index => 1) + onehot(south_index => 2) * onehot(west_index => 2)) * onehot(sv => 1)
-            state  = state + (onehot(north_index => 1) * onehot(east_index => 1) - onehot(north_index => 2) * onehot(east_index => 2)) * (onehot(south_index => 1) * onehot(west_index => 1) - onehot(south_index => 2) * onehot(west_index => 2)) * onehot(sv => 2)
-        else
-            state  = state + (onehot(north_index => 1) * onehot(west_index => 1) + onehot(north_index => 2) * onehot(west_index => 2)) * (onehot(south_index => 1) * onehot(east_index => 1) + onehot(south_index => 2) * onehot(east_index => 2)) * onehot(sv => 1)
-            state  = state + (onehot(north_index => 1) * onehot(west_index => 1) - onehot(north_index => 2) * onehot(west_index => 2)) * (onehot(south_index => 1) * onehot(east_index => 1) - onehot(south_index => 2) * onehot(east_index => 2)) * onehot(sv => 2)
-        end
-        set!(tensors, v, state)
+        set!(tensors, v, bell(north, a, 1) * bell(south, b, 1) * onehot(sv => 1) + bell(north, a, -1) * bell(south, b, -1) * onehot(sv => 2))
     end
-
     return TensorNetworkState(TensorNetwork(tensors, g), s)
 end
 
@@ -104,39 +87,36 @@ of the classical Ising model on graph `g` at inverse temperature `β`.
 
 # Keyword Arguments
 - `Js`: dictionary of edge couplings, keyed by `edges(g)`. Defaults to uniform
-  ferromagnetic couplings (`J_e = 1.0` on every edge). Negative entries are
-  promoted to complex internally so the symmetric square-root factorisation of
-  the Boltzmann weight remains valid.
+  ferromagnetic couplings (`J_e = 1.0` on every edge). The tensors are complex, so
+  negative (antiferromagnetic) couplings, whose Boltzmann weight has no real symmetric
+  square root, are supported.
 
 Returns a `TensorNetwork` (not a `TensorNetworkState`); contract it to obtain
 ``Z(β)``.
 """
 function ising_partitionfunction(g::NamedGraph, β::Real; Js::Dictionary = Dictionary(edges(g), [1.0 for e in edges(g)]))
-    links = Dictionary(edges(g), [new_index(2; tags = "e$(src(e))_$(dst(e))") for e in edges(g)])
-    links = merge(links, Dictionary(reverse.(edges(g)), [links[e] for e in edges(g)]))
+    links = edge_indices(g, 2; tags = e -> "e$(src(e))_$(dst(e))")
 
     # symmetric sqrt of Boltzmann matrix W = exp(β σσ')
-    sqrt_Ws = Dictionary()
+    sqrt_Ws = Dictionary{keytype(links), Matrix}()
     for e in edges(g)
-        arg = β*Js[e]
+        arg = β * Js[e]
         arg = arg < 0 ? Complex(arg) : arg
-        W = [exp(arg)  exp(-arg);
-              exp(-arg) exp(arg)]
-	    λ1, λ2 = cosh(arg), sinh(arg)
+        λ1, λ2 = cosh(arg), sinh(arg)
         α = 0.5 * (sqrt(λ1) + sqrt(λ2))
         ϕ = 0.5 * (sqrt(λ1) - sqrt(λ2))
-        sqrt_W = sqrt(2)*[α ϕ; ϕ α]
+        sqrt_W = sqrt(2) * [α ϕ; ϕ α]
+        @assert sqrt_W * sqrt_W ≈ [exp(arg) exp(-arg); exp(-arg) exp(arg)]
         set!(sqrt_Ws, e, sqrt_W)
         set!(sqrt_Ws, reverse(e), sqrt_W)
-        sqrt_W * sqrt_W ≈ W ? nothing : throw(AssertionError("$(sqrt_W * sqrt_W), $(W)"))
     end
-    
+
     ts = Dictionary{vertextype(g), Tensor}()
     for v in vertices(g)
         es = incident_edges(g, v; dir = :in)
         t = delta([links[e] for e in es])
         for e in es
-            t = noprime(from_array(ComplexF64.(sqrt_Ws[e]), links[e], prime(links[e]))*t)
+            t = noprime(from_array(ComplexF64.(sqrt_Ws[e]), [links[e], prime(links[e])]) * t)
         end
         set!(ts, v, t)
     end

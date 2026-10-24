@@ -9,36 +9,34 @@ function truncatable_edge(cache::AbstractBeliefPropagationCache, e::NamedEdge)
     return true
 end
 
+# The identity on the sites of both ends of e, in the storage of `ref`.
+_identity_gate(ref, s, e) = adapt(datatype(ref))(prod(op("I", sv) for sv in [s[src(e)]; s[dst(e)]]))
+
 function truncate(bpc::BeliefPropagationCache; bp_update_kwargs = default_bp_update_kwargs(bpc), maxdim::Integer, cutoff = nothing, edge_color = true, normalize_tensors = true)
     bpc = copy(bpc)
     s = siteinds(network(bpc))
     apply_kwargs = (; maxdim, cutoff, normalize_tensors)
-    dtype = datatype(bpc)
-    if edge_color
+    # Truncate a group of disjoint edges at a time (the colours of an edge colouring), or one edge
+    # at a time, updating the cache after each group.
+    edge_groups = if edge_color
         g = graph(network(bpc))
-        z = maximum([degree(g, v) for v in vertices(g)])
+        z = maximum(v -> degree(g, v), vertices(g))
         #Vizing's theorem only guarantees Δ + 1 colours suffice. Class 2 graphs (odd cycles, and any
         #lattice containing a triangle) are not Δ-edge-colourable, so fall back to Δ + 1 for those.
-        edge_groups = try
+        try
             SimpleGraphAlgorithms.edge_color(g, z)
-        catch
+        catch err
+            err isa InterruptException && rethrow()
             SimpleGraphAlgorithms.edge_color(g, z + 1)
         end
-        for eg in edge_groups
-            for e in eg
-                if truncatable_edge(bpc, e)
-                    g1, g2 = reduce(*, [op("I", sv) for sv in s[src(e)] ]), reduce(*, [op("I", sv) for sv in s[dst(e)] ])
-                    apply_gate!(adapt(dtype)(g1 * g2), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
-                end
-            end
-            bpc = update(bpc; bp_update_kwargs...)
-        end
     else
-        for e in edges(bpc)
-            g1, g2 = reduce(*, [op("I", sv) for sv in s[src(e)]]), reduce(*, [op("I", sv) for sv in s[dst(e)]])
-            apply_gate!(adapt(dtype)(g1 * g2), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
-            bpc = update(bpc; bp_update_kwargs...)
+        [[e] for e in edges(bpc)]
+    end
+    for eg in edge_groups
+        for e in eg
+            truncatable_edge(bpc, e) && apply_gate!(_identity_gate(bpc, s, e), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
         end
+        bpc = update(bpc; bp_update_kwargs...)
     end
     return bpc
 end
@@ -47,7 +45,6 @@ function truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff = nothin
     bmps_cache = copy(bmps_cache)
     s = siteinds(network(bmps_cache))
     apply_kwargs = (; maxdim, cutoff)
-    dtype = datatype(bmps_cache)
     ps = sort(parent.(quotientvertices(supergraph(bmps_cache))))
     for (i, p) in enumerate(ps)
         g = partition_graph(bmps_cache, QuotientVertex(p))
@@ -56,9 +53,8 @@ function truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff = nothin
         !isempty(seq) && update_partition!(bmps_cache, seq)
         for e in reverse.(reverse(seq))
             if truncatable_edge(bmps_cache, e)
-                g1, g2 = reduce(*, [op("I", sv) for sv in s[src(e)]]), reduce(*, [op("I", sv) for sv in s[dst(e)]])
                 envs = incoming_messages(bmps_cache, [src(e), dst(e)])
-                ρv1, ρv2 = full_update(adapt(dtype)(g1 * g2), network(bmps_cache), [src(e), dst(e)]; envs, apply_kwargs...)
+                ρv1, ρv2 = full_update(_identity_gate(bmps_cache, s, e), network(bmps_cache), [src(e), dst(e)]; envs, apply_kwargs...)
                 if normalize_tensors
                     ρv1 = normalize(ρv1)
                     ρv2 = normalize(ρv2)
@@ -77,28 +73,23 @@ function truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff = nothin
     return bmps_cache
 end
 
-function truncate(alg::Algorithm"bp", tns::TensorNetworkState; kwargs...)
-    bp_cache = BeliefPropagationCache(tns)
-    bp_cache = update(bp_cache)
-    bp_cache = truncate(bp_cache; kwargs...)
-    return network(bp_cache)
+function truncate(alg::Algorithm"bp", tns::TensorNetworkState; bp_update_kwargs = default_bp_update_kwargs(tns), kwargs...)
+    bp_cache = converged_cache(alg, tns; cache_update_kwargs = bp_update_kwargs)
+    return network(truncate(bp_cache; bp_update_kwargs, kwargs...))
 end
 
+# Truncate the bonds within the rows, then within the columns.
 function truncate(alg::Algorithm"boundarymps", tns::TensorNetworkState; mps_bond_dimension::Integer, gauge_state = true, kwargs...)
     tns = copy(tns)
-    bmps_cache = BoundaryMPSCache(tns, mps_bond_dimension; partition_by = "row", gauge_state)
-    leaves = leaf_vertices(quotient_graph(supergraph(bmps_cache)))
-    seq = QuotientEdge.(a_star(quotient_graph(supergraph(bmps_cache)), last(leaves), first(leaves)))
-    bmps_cache = update(bmps_cache; alg = "bp", edge_sequence = seq, maxiter = 1)
-    bmps_cache = truncate(bmps_cache; kwargs...)
-
-    bmps_cache = BoundaryMPSCache(network(bmps_cache), mps_bond_dimension; partition_by = "col", gauge_state)
-    leaves = leaf_vertices(quotient_graph(supergraph(bmps_cache)))
-    seq = QuotientEdge.(a_star(quotient_graph(supergraph(bmps_cache)), last(leaves), first(leaves)))
-    bmps_cache = update(bmps_cache; alg = "bp", edge_sequence = seq, maxiter = 1)
-    bmps_cache = truncate(bmps_cache; kwargs...)
-
-    return network(bmps_cache)
+    for partition_by in ("row", "col")
+        bmps_cache = BoundaryMPSCache(tns, mps_bond_dimension; partition_by, gauge_state)
+        quotient = quotient_graph(supergraph(bmps_cache))
+        leaves = leaf_vertices(quotient)
+        seq = QuotientEdge.(a_star(quotient, last(leaves), first(leaves)))
+        bmps_cache = update(bmps_cache; alg = "bp", edge_sequence = seq, maxiter = 1)
+        tns = network(truncate(bmps_cache; kwargs...))
+    end
+    return tns
 end
 
 """

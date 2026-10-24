@@ -45,32 +45,14 @@ end
 #Algorithmic defaults
 default_update_alg(bp_cache::BeliefPropagationCache) = "bp"
 default_message_update_alg(bp_cache::BeliefPropagationCache) = "contract"
-default_normalize(::Algorithm"contract") = true
-default_sequence_alg(::Algorithm"contract") = "optimal"
 function set_default_kwargs(alg::Algorithm"contract", bp_cache::AbstractBeliefPropagationCache)
-    normalize = get(alg.kwargs, :normalize, default_normalize(alg))
-    sequence_alg = get(alg.kwargs, :sequence_alg, default_sequence_alg(alg))
-    return Algorithm("contract"; normalize, sequence_alg)
+    return Algorithm("contract"; merge((; normalize = true, sequence_alg = "optimal"), alg.kwargs)...)
 end
-default_verbose(::Algorithm"bp") = false
-default_tolerance(::Algorithm"bp") = nothing
 function set_default_kwargs(alg::Algorithm"bp", bp_cache::BeliefPropagationCache)
-    verbose = get(alg.kwargs, :verbose, default_verbose(alg))
-    maxiter = get(alg.kwargs, :maxiter, default_bp_maxiter(bp_cache))
-    _edge_sequence = get(alg.kwargs, :edge_sequence, edge_sequence(bp_cache))
-    tolerance = get(alg.kwargs, :tolerance, default_tolerance(alg))
-    message_update_alg = set_default_kwargs(
-        get(alg.kwargs, :message_update_alg, Algorithm(default_message_update_alg(bp_cache))), bp_cache
-    )
-    return Algorithm("bp"; verbose, maxiter, edge_sequence = _edge_sequence, tolerance, message_update_alg)
-end
-
-function update_message!(
-        message_update_alg::Algorithm, bp_cache::BeliefPropagationCache, edge::AbstractEdge
-    )
-    m, (cache_key, sequence, seq_changed) = updated_message(message_update_alg, bp_cache, edge)
-    seq_changed && set!(contraction_sequences(bp_cache), cache_key, sequence)
-    return setmessage!(bp_cache, edge, m)
+    defaults = (; verbose = false, maxiter = default_bp_maxiter(bp_cache), edge_sequence = edge_sequence(bp_cache), tolerance = nothing)
+    kwargs = merge(defaults, alg.kwargs)
+    message_update_alg = set_default_kwargs(get(kwargs, :message_update_alg, Algorithm(default_message_update_alg(bp_cache))), bp_cache)
+    return Algorithm("bp"; merge(kwargs, (; message_update_alg))...)
 end
 
 function rescale_vertices!(
@@ -101,19 +83,15 @@ function default_tolerance(type)
     return nothing
 end
 
+# One sweep is exact on a tree; otherwise sweep to a tolerance set by the precision.
 function default_bp_update_kwargs(tn::AbstractTensorNetwork)
-    if is_tree(tn)
-        maxiter, tolerance, verbose = 1, nothing, false
-    else
-        maxiter, tolerance, verbose = _default_bp_update_maxiter, default_tolerance(scalartype(tn)), false
-    end
-    return (; maxiter, tolerance, verbose)
+    tree = is_tree(tn)
+    return (; maxiter = default_bp_maxiter(graph(tn)), tolerance = tree ? nothing : default_tolerance(scalartype(tn)), verbose = false)
 end
 
 default_bp_update_kwargs(bp_cache::BeliefPropagationCache) = default_bp_update_kwargs(network(bp_cache))
 
 function rescale_messages!(bp_cache::BeliefPropagationCache, edges::Vector{<:AbstractEdge})
-    ms = messages(bp_cache)
     for e in edges
         me, mer = normalize(message(bp_cache, e)), normalize(message(bp_cache, reverse(e)))
         n = scalar(me * mer)
@@ -121,8 +99,8 @@ function rescale_messages!(bp_cache::BeliefPropagationCache, edges::Vector{<:Abs
             me *= sign(n)
             n *= sign(n)
         end
-        set!(ms, e, me * inv(sqrt(n)))
-        set!(ms, reverse(e), mer * inv(sqrt(n)))
+        setmessage!(bp_cache, e, me * inv(sqrt(n)))
+        setmessage!(bp_cache, reverse(e), mer * inv(sqrt(n)))
     end
     return bp_cache
 end
@@ -133,26 +111,14 @@ function loop_correlation(bpc::BeliefPropagationCache, loop::Vector{<:NamedEdge}
     is_tree(bpc) && return 0
 
     es = vcat(loop, [target_e])
-    incoming_es = boundary_edges(bpc, es)
-    incoming_messages = Tensor[message(bpc, e) for e in incoming_es]
+    incoming_messages = Tensor[message(bpc, e) for e in incoming_edges(bpc, es)]
     vs = unique(vcat(src.(loop), dst.(loop)))
 
     src_vertex = src(target_e)
     e_virtualinds = inds(message(bpc, target_e))
     e_virtualinds_sim = sim.(e_virtualinds)
 
-    local_tensors = Tensor[]
-    ts = bp_factors(bpc, src_vertex)
-
-    for t in ts
-        t_inds = filter(i -> i ∈ e_virtualinds, inds(t))
-        if !isempty(t_inds)
-            t_ind = only(t_inds)
-            t_ind_pos = findfirst(x -> x == t_ind, e_virtualinds)
-            t = replaceind(t, t_ind, e_virtualinds_sim[t_ind_pos])
-        end
-        push!(local_tensors, t)
-    end
+    local_tensors = Tensor[replaceinds(t, e_virtualinds, e_virtualinds_sim) for t in bp_factors(bpc, src_vertex)]
 
     tensors = Tensor[local_tensors; reduce(vcat, [bp_factors(bpc, v) for v in setdiff(vs, [src_vertex])]); incoming_messages]
     seq = contraction_sequence(tensors; alg = "omeinsum", optimizer = GreedyMethod())

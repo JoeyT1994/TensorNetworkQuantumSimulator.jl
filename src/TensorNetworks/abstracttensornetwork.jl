@@ -19,21 +19,25 @@ NamedGraphs.edges(tn::AbstractTensorNetwork) = NamedGraphs.edges(graph(tn))
 NamedGraphs.edgetype(tn::AbstractTensorNetwork) = NamedGraphs.edgetype(graph(tn))
 NamedGraphs.vertextype(tn::AbstractTensorNetwork) = NamedGraphs.vertextype(graph(tn))
 
+# A new index of dimension `d` for every edge of `g` (tagged `tags(e)`), under both orientations.
+function edge_indices(g::AbstractGraph, d::Integer; tags = e -> "")
+    l = Dictionary(collect(edges(g)), [new_index(d; tags = tags(e)) for e in edges(g)])
+    return merge(l, Dictionary(reverse.(collect(edges(g))), collect(l)))
+end
+
 virtualinds(tn::AbstractTensorNetwork, e::NamedEdge) = commoninds(tn[src(e)], tn[dst(e)])
 virtualind(tn::AbstractTensorNetwork, e::NamedEdge) = only(virtualinds(tn, e))
 
-function maxvirtualdim(tn::AbstractTensorNetwork)
-    return maximum(maximum.([dim.(virtualinds(tn, e)) for e in edges(tn)]))
-end
+# The legs a BP message carries for the virtual legs `l` of an edge: `l` itself (a form's virtual
+# legs already include every layer), and for a state's norm network also the bra copies `l′†`.
+message_legs(tn::AbstractTensorNetwork, l) = l
+message_inds(tn::AbstractTensorNetwork, e) = message_legs(tn, virtualinds(tn, e))
 
-function uniqueinds(tn::AbstractTensorNetwork, v)
-    tv_inds = Index[i for i in inds(tn[v])]
-    vns = neighbors(tn, v)
-    isempty(vns) && return tv_inds
-    neighbor_inds = reduce(vcat, [Index[i for i in inds(tn[vn])] for vn in vns])
-    is = setdiff(tv_inds, neighbor_inds)
-    return is
-end
+default_message(tn::AbstractTensorNetwork, e::AbstractEdge) = adapt_like(tn, dense(delta(message_inds(tn, e))))
+
+maxvirtualdim(tn::AbstractTensorNetwork) = maximum(e -> maximum(dim, virtualinds(tn, e)), edges(tn))
+
+uniqueinds(tn::AbstractTensorNetwork, v) = setdiff(inds(tn[v]), (i for vn in neighbors(tn, v) for i in inds(tn[vn])))
 
 function setindex_preserve!(tn::AbstractTensorNetwork, value::Tensor, vertex)
     tensors(tn)[vertex] = value
@@ -110,7 +114,8 @@ function combine_virtualinds!(tn::AbstractTensorNetwork)
         if length(vinds) > 1
             C = adapt(dtype)(combiner(vinds))
             setindex_preserve!(tn, tn[src(e)] * C, src(e))
-            setindex_preserve!(tn, tn[dst(e)] * C, dst(e))
+            # the other end contracts the combined leg with the opposite orientation
+            setindex_preserve!(tn, tn[dst(e)] * dag(C), dst(e))
         end
     end
     return tn

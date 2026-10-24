@@ -318,39 +318,34 @@ end
 _counting_number(emb::PlanarEmbedding, v) = 1 + count(_isinner ∘ last, vertex_polygon(emb, v)) - length(vertex_polygon(emb, v))
 _counting_number(emb::PlanarEmbedding, u, v) = 1 - _isinner(face_of_dart(emb, u, v)) - _isinner(face_of_dart(emb, v, u))
 
-# The signed vertex multiset a recipe covers, given what the blocks cover (projectors are the
-# identity at lossless χ, so they cover nothing).
-function _coverage(emb::PlanarEmbedding, parts, coverage)
-    r = Dict{Any, Int}()
-    add!(x, c) = (r[x] = get(r, x, 0) + c)
+# The sites and blocks a recipe reads, each with the sign it enters with (an inverse subtracts;
+# projectors are the identity at lossless χ, so they read nothing).
+function _reads(emb::PlanarEmbedding, parts)
+    out = Tuple{Any, Int}[]
     for part in parts
         kind = first(part)
-        if kind === :site
-            add!(part[2], 1)
-        elseif kind === :message || kind === :corner
-            foreach(((x, c),) -> add!(x, c), coverage[part])
+        if kind === :site || kind === :message || kind === :corner
+            push!(out, (part, 1))
         elseif kind === :enlarged
-            foreach(((x, c),) -> add!(x, c), _coverage(emb, _enlarged(emb, part[2]...), coverage))
+            append!(out, _reads(emb, _enlarged(emb, part[2]...)))
         elseif kind === :inverse
-            for k in part[2], (x, c) in coverage[(:corner, k)]
-                add!(x, -c)
-            end
+            append!(out, [((:corner, k), -1) for k in part[2]])
         end
+    end
+    return out
+end
+
+# The signed vertex multiset a recipe covers, given what the blocks cover.
+function _coverage(emb::PlanarEmbedding, parts, coverage)
+    r = Dict{Any, Int}()
+    for (part, sign) in _reads(emb, parts), (x, c) in (first(part) === :site ? (part[2] => 1,) : coverage[part])
+        r[x] = get(r, x, 0) + sign * c
     end
     return filter!(((x, c),) -> !iszero(c), r)
 end
 
 # The blocks a recipe reads.
-function _dependencies(emb::PlanarEmbedding, parts)
-    deps = Any[]
-    for part in parts
-        kind = first(part)
-        (kind === :message || kind === :corner) && push!(deps, part)
-        kind === :enlarged && append!(deps, _dependencies(emb, _enlarged(emb, part[2]...)))
-        kind === :inverse && append!(deps, [(:corner, k) for k in part[2]])
-    end
-    return unique!(deps)
-end
+_dependencies(emb::PlanarEmbedding, parts) = unique!(Any[part for (part, _) in _reads(emb, parts) if first(part) !== :site])
 
 const _CORNER_MODES = (:diag, :prev, :next)
 
@@ -388,9 +383,12 @@ function _certify(emb::PlanarEmbedding, exits, modes, order)
     blocks = _blocks(emb)
     coverage = Dict{Any, Dict{Any, Int}}(b => Dict{Any, Int}() for b in blocks)
     if isnothing(order)
-        # each pass carries coverage one block further; this many crosses any face structure
+        # Jacobi passes until the coverage settles; each carries it one block further, so this many
+        # bound it (blocks can also keep rotating while every closed region stays exact)
         for _ in 1:(4 * (length(faces(emb)) + 4))
-            coverage = Dict{Any, Dict{Any, Int}}(b => _coverage(emb, _block_recipe(emb, exits, modes, b), coverage) for b in blocks)
+            next = Dict{Any, Dict{Any, Int}}(b => _coverage(emb, _block_recipe(emb, exits, modes, b), coverage) for b in blocks)
+            next == coverage && break
+            coverage = next
         end
     else
         for b in order

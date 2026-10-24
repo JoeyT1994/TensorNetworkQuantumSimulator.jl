@@ -23,10 +23,7 @@ function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
     incoming_ms = incoming_messages(bp_cache, vertex)
     fast = norm_scalar_kernel(network(bp_cache), [vertex], incoming_ms; op_strings = v -> "I")
     fast !== nothing && return fast
-    state = bp_factors(bp_cache, vertex)
-    contract_list = [state; incoming_ms]
-    sequence = contraction_sequence(contract_list; alg = "optimal")
-    return scalar(contract(contract_list; sequence))
+    return scalar(contract_optimal([bp_factors(bp_cache, vertex); incoming_ms]))
 end
 
 function edge_scalar(
@@ -105,7 +102,6 @@ function message(bp_cache::AbstractBeliefPropagationCache, edge::AbstractEdge; k
 end
 
 function messages(bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge})
-    isempty(edges) && return Tensor[]
     ms = Tensor[]
     for e in edges
         m = message(bp_cache, e)
@@ -172,11 +168,8 @@ function contract_region(
         bp_cache::AbstractBeliefPropagationCache, region, op_strings::Function;
         incoming_ms = incoming_messages(bp_cache, region)
     )
-    tensors = norm_factors(network(bp_cache), region; op_strings)
-    append!(tensors, incoming_ms)
     #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
-    sequence = contraction_sequence(tensors; alg = "optimal")
-    return contract(tensors; sequence)
+    return contract_optimal([norm_factors(network(bp_cache), region; op_strings); incoming_ms])
 end
 
 # `contract_region` as a scalar, through the backend's fused kernel where it has one.
@@ -191,33 +184,19 @@ function updated_message(
         alg::Algorithm"contract", bp_cache::AbstractBeliefPropagationCache, edge::NamedEdge
     )
     vertex = src(edge)
-    incoming_ms = incoming_messages(
-        bp_cache, vertex; ignore_edges = (reverse(edge),)
-    )
-
-    m_fast = norm_message_kernel(network(bp_cache), vertex, incoming_ms)
-    if m_fast !== nothing
-        return (alg.kwargs.normalize ? normalize_message(m_fast) : m_fast), (nothing, nothing, false)
+    incoming_ms = incoming_messages(bp_cache, vertex; ignore_edges = (reverse(edge),))
+    m = norm_message_kernel(network(bp_cache), vertex, incoming_ms)
+    if isnothing(m)
+        # the same list recurs every sweep, so its contraction order is kept in the cache
+        ts = Tensor[incoming_ms; bp_factors(bp_cache, vertex)]
+        sequence = get!(() -> contraction_sequence(ts; alg = alg.kwargs.sequence_alg), contraction_sequences(bp_cache), vertex => edge)
+        m = contract(ts; sequence)
     end
+    return alg.kwargs.normalize ? normalize_message(m) : m
+end
 
-    state = bp_factors(bp_cache, vertex)
-    contract_list = Tensor[incoming_ms; state]
-    cache_key = vertex => edge
-    seq_cache = contraction_sequences(bp_cache)
-    seq_changed = false
-    if haskey(seq_cache, cache_key)
-        sequence = seq_cache[cache_key]
-    else
-        sequence = contraction_sequence(contract_list; alg = alg.kwargs.sequence_alg)
-        seq_changed = true
-    end
-    updated_message = contract(contract_list; sequence)
-
-    if alg.kwargs.normalize
-        updated_message = normalize_message(updated_message)
-    end
-
-    return updated_message, (cache_key, sequence, seq_changed)
+function update_message!(alg::Algorithm"contract", bp_cache::AbstractBeliefPropagationCache, edge::AbstractEdge)
+    return setmessage!(bp_cache, edge, updated_message(alg, bp_cache, edge))
 end
 
 # Unit 2-norm (the element sum can cancel for signed or complex networks), with the phase of the
@@ -240,59 +219,51 @@ function updated_message(
 end
 
 """
-Do a sequential update of the message tensors on `edges`
+    update_iteration!(alg::Algorithm"bp", bpc, edges; diff = false)
+
+Update the messages on `edges` in sequence. Returns the summed change of the messages if `diff`,
+otherwise `nothing`.
 """
-function update_iteration!(
-        alg::Algorithm"bp",
-        bpc::AbstractBeliefPropagationCache,
-        edges::Vector;
-        (update_diff!) = nothing,
-    )
+function update_iteration!(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache, edges::Vector; diff::Bool = false)
+    total = 0.0
     for e in edges
-        prev_message = !isnothing(update_diff!) ? message(bpc, e) : nothing
+        previous = diff ? message(bpc, e) : nothing
         update_message!(alg.kwargs.message_update_alg, bpc, e)
-        if !isnothing(update_diff!)
-            update_diff![] += message_diff(message(bpc, e), prev_message)
-        end
+        diff && (total += message_diff(message(bpc, e), previous))
     end
-    return bpc
+    return diff ? total : nothing
 end
 
-"""
-More generic interface for update, with default params
-"""
-function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
-    compute_error = !isnothing(alg.kwargs.tolerance)
-    if isnothing(alg.kwargs.maxiter)
-        error("You need to specify a number of iterations for BP!")
+# Repeat `step!()`, which returns how much it changed things (or `nothing`), up to `maxiter` times,
+# stopping once the change is at most `tolerance` (never, if `tolerance` is `nothing`). Reports the
+# outcome as `name` and returns the number of steps taken.
+function iterate_to_convergence(step!, maxiter::Integer, tolerance; name, verbose::Bool = false)
+    change = nothing
+    for i in 1:maxiter
+        change = step!()
+        if !isnothing(tolerance) && !isnothing(change) && change <= tolerance
+            verbose && println("$name converged after $i iterations.")
+            return i
+        end
     end
+    if !isnothing(tolerance)
+        msg = "$name did not converge to tolerance $tolerance after $maxiter iterations (final change: $change)."
+        verbose ? println(msg) : @warn(msg)
+    end
+    return maxiter
+end
+
+function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
+    isnothing(alg.kwargs.maxiter) && error("You need to specify a number of iterations for BP!")
     bpc = copy(bpc)
     invalidate_contraction_sequences!(bpc)
-    converged = false
-    avg_diff = nothing
-    niter = alg.kwargs.maxiter
+    es = alg.kwargs.edge_sequence
+    diff = !isnothing(alg.kwargs.tolerance)
+    # the change per sweep is the average message change
+    step!() = (d = update_iteration!(alg, bpc, es; diff); diff ? d / length(es) : nothing)
     # the fused kernels share one set of scratch buffers across all the sweeps
     with_kernel_workspace() do
-        for i in 1:alg.kwargs.maxiter
-            diff = compute_error ? Ref(0.0) : nothing
-            update_iteration!(alg, bpc, alg.kwargs.edge_sequence; (update_diff!) = diff)
-            if compute_error
-                avg_diff = diff.x / length(alg.kwargs.edge_sequence)
-                if avg_diff <= alg.kwargs.tolerance
-                    converged = true
-                    niter = i
-                    break
-                end
-            end
-        end
-    end
-    if compute_error
-        if converged
-            alg.kwargs.verbose && println("BP converged to desired precision after $niter iterations.")
-        else
-            msg = "BP did not converge to tolerance $(alg.kwargs.tolerance) after $niter iterations (final average message change: $avg_diff)."
-            alg.kwargs.verbose ? println(msg) : @warn(msg)
-        end
+        iterate_to_convergence(step!, alg.kwargs.maxiter, alg.kwargs.tolerance; name = "BP", verbose = alg.kwargs.verbose)
     end
     invalidate_contraction_sequences!(bpc)
     return bpc
@@ -330,22 +301,27 @@ function Adapt.adapt_structure(to, bpc::AbstractBeliefPropagationCache)
     return bpc
 end
 
+# The logarithm, on the principal branch for negative reals.
+_log(z) = real(z) < 0 ? log(complex(z)) : log(z)
+
+"""
+    freenergy(cache)
+
+The free energy `-ln Z` of the network the cache was built from, `Z` being its contraction as the
+cache estimates it (for BP and boundary MPS, the ratio of its vertex to its edge scalars).
+"""
 function freenergy(bp_cache::AbstractBeliefPropagationCache)
     numerator_terms, denominator_terms = scalar_factors_quotient(bp_cache)
-    if any(t -> real(t) < 0, numerator_terms)
-        numerator_terms = complex.(numerator_terms)
-    end
-    if any(t -> real(t) < 0, denominator_terms)
-        denominator_terms = complex.(denominator_terms)
-    end
-
     any(iszero, denominator_terms) && return -Inf
-    return sum(log.(numerator_terms)) - sum(log.((denominator_terms)))
+    return sum(_log, denominator_terms) - sum(_log, numerator_terms)
 end
 
-function partitionfunction(bp_cache::AbstractBeliefPropagationCache)
-    return exp(freenergy(bp_cache))
-end
+"""
+    partitionfunction(cache)
+
+The contraction `Z = exp(-freenergy(cache))` of the network the cache was built from.
+"""
+partitionfunction(cache::AbstractBeliefPropagationCache) = exp(-freenergy(cache))
 
 function rescale_messages!(bp_cache::AbstractBeliefPropagationCache, edge::AbstractEdge)
     return rescale_messages!(bp_cache, [edge])

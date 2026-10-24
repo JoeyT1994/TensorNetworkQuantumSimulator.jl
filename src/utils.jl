@@ -15,23 +15,15 @@ function is_ring_graph(g::AbstractGraph)
     return is_line_graph(g_mod)
 end
 
+# The square root and pseudo-inverse square root of a Hermitian two-leg tensor, with eigenvalues
+# at or below `cutoff` in magnitude dropped.
 function pseudo_sqrt_inv_sqrt(M::Tensor; cutoff = 10 * eps(real(scalartype(M))))
     @assert length(inds(M)) == 2
-    Q, D, Qdag = eigendecomp(M, inds(M)[1], inds(M)[2]; ishermitian = true)
-    D_sqrt = map_diag(x -> iszero(x) || abs(x) < cutoff ? 0 : sqrt(x), D)
-    D_inv_sqrt = map_diag(x -> iszero(x) || abs(x) < cutoff ? 0 : inv(sqrt(x)), D)
-    M_sqrt = Q * D_sqrt * Qdag
-    M_inv_sqrt = Q * D_inv_sqrt * Qdag
-    return M_sqrt, M_inv_sqrt
-end
-
-#TODO: Make this work for non-hermitian A
-function eigendecomp(A::Tensor, linds, rinds; ishermitian = false, kwargs...)
-    @assert ishermitian
-    D, U = safe_eigen(A, linds, rinds; ishermitian, kwargs...)
-    ul, ur = noncommonind(D, U), commonind(D, U)
-    Ul = replaceinds(U, vcat(rinds, ur), vcat(linds, ul))
-    return Ul, D, dag(U)
+    l, r = inds(M)
+    D, U = safe_eigen(M, l, r; ishermitian = true)
+    Ul = replaceinds(U, [r, commonind(D, U)], [l, noncommonind(D, U)])
+    root(f) = Ul * map_diag(x -> abs(x) <= cutoff ? zero(x) : f(x), D) * dag(U)
+    return root(sqrt), root(inv ∘ sqrt)
 end
 
 # Adapt `t` to the storage datatype (eltype + device) of `ref`.
@@ -43,46 +35,34 @@ function identity_tensor(eltype, row_inds::Vector{<:Index}, col_inds::Vector{<:I
     return (t * c_row) * c_col
 end
 
-#Function for checking the correct algorithm is being used for the given cache type and functionality
-function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState}, f::String, alg)
-    if alg == "bp"
-        if !((tns isa BeliefPropagationCache) || (tns isa TensorNetworkState))
-            return error("Expected BeliefPropagationCache or TensorNetworkState for 'bp' algorithm, got $(typeof(tns))")
-        end
-        if f ∈ ["sample_certified"]
-            return error("Certified sampling needs an estimate of p(x)/q(x), which the 'bp' sampler does not produce. Use alg = 'boundarymps'.")
-        end
-    elseif alg == "loopcorrections"
-        if !((tns isa BeliefPropagationCache) || (tns isa TensorNetworkState))
-            return error("Expected BeliefPropagationCache or TensorNetworkState for 'loop correction' algorithm, got $(typeof(tns))")
-        end
+# The cache each algorithm works on (or is built from a TensorNetworkState), and the
+# functionality it does not support.
+const _ALGORITHM_CACHES = Dict(
+    "exact" => Any,
+    "bp" => BeliefPropagationCache,
+    "loopcorrections" => BeliefPropagationCache,
+    "boundarymps" => BoundaryMPSCache,
+    "ctmrg" => CTMRGCache,
+)
+const _ALGORITHM_UNSUPPORTED = Dict(
+    "exact" => ("normalize", "sample", "sample_certified", "truncate", "edge_entropy"),
+    "bp" => ("sample_certified",),
+    "loopcorrections" => ("normalize", "expect", "sample", "sample_certified", "truncate", "rdm", "edge_entropy"),
+    "boundarymps" => ("normalize", "edge_entropy"),
+    "ctmrg" => ("normalize", "sample", "sample_certified", "truncate", "edge_entropy"),
+)
 
-        if f ∈ ["normalize", "expect", "sample", "sample_certified", "truncate", "rdm"]
-            return error("Loop correction-based contraction not supported for this functionality yet")
-        end
-    elseif alg == "boundarymps"
-        if !((tns isa BoundaryMPSCache) || (tns isa TensorNetworkState))
-            return error("Expected BoundaryMPSCache or TensorNetworkState for 'boundarymps' algorithm, got $(typeof(tns))")
-        end
-        if f ∈ ["normalize"]
-            return error("boundarymps contraction not supported for this functionality yet")
-        end
-    elseif alg == "ctmrg"
-        if !((tns isa CTMRGCache) || (tns isa TensorNetworkState))
-            return error("Expected CTMRGCache or TensorNetworkState for 'ctmrg' algorithm, got $(typeof(tns))")
-        end
-        if f ∈ ["normalize", "sample", "sample_certified", "truncate"]
-            return error("ctmrg contraction not supported for this functionality yet")
-        end
-    elseif alg == "exact"
-        if f ∈ ["normalize", "sample", "sample_certified", "truncate"]
-            return error("exact contraction not supported for this functionality yet")
-        end
-    elseif alg ∉ ["exact", "bp", "loopcorrections", "boundarymps", "ctmrg"]
-        return error("Unrecognized algorithm specified. Must be one of 'exact', 'bp', 'loopcorrections', 'boundarymps' or 'ctmrg'")
-    else
-        return nothing
-    end
+# Check that `alg` can do `f` on `tns`.
+function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState}, f::String, alg)
+    haskey(_ALGORITHM_CACHES, alg) ||
+        error("Unrecognized algorithm $(repr(alg)). Must be one of $(join(repr.(sort(collect(keys(_ALGORITHM_CACHES)))), ", ")).")
+    cache = _ALGORITHM_CACHES[alg]
+    tns isa Union{cache, TensorNetworkState} ||
+        error("Expected $cache or TensorNetworkState for the $(repr(alg)) algorithm, got $(typeof(tns)).")
+    alg == "bp" && f == "sample_certified" &&
+        error("Certified sampling needs an estimate of p(x)/q(x), which the 'bp' sampler does not produce. Use alg = 'boundarymps'.")
+    f in _ALGORITHM_UNSUPPORTED[alg] && error("The $(repr(alg)) algorithm does not support $f yet.")
+    return nothing
 end
 
 default_alg(bp_cache::BeliefPropagationCache) = "bp"
@@ -94,6 +74,15 @@ default_alg(any) = error("You must specify a contraction algorithm. Currently su
 # entry points of `expect`, `reduced_density_matrix`, `norm_sqr`, `inner` and `normalize`, which all
 # wrap a network in a cache, converge it, then hand off to the corresponding cache-level method.
 # `cache_update_kwargs` is deliberately required: each entry point documents its own default.
+default_cache_update_kwargs(::Union{Algorithm"bp", Algorithm"loopcorrections"}, network) = default_bp_update_kwargs(network)
+default_cache_update_kwargs(::Algorithm"boundarymps", network) = default_bmps_update_kwargs(network)
+default_cache_update_kwargs(::Algorithm"ctmrg", network) = (;)
+
+# A contraction (a norm, an overlap, a partition function) only needs CTMRG's free energy
+# converged, not its messages.
+scalar_cache_update_kwargs(::Algorithm, kwargs) = kwargs
+scalar_cache_update_kwargs(::Algorithm"ctmrg", kwargs) = merge((; convergence = :freenergy), kwargs)
+
 function converged_cache(
         ::Union{Algorithm"bp", Algorithm"loopcorrections"}, network;
         cache_update_kwargs,
@@ -116,7 +105,6 @@ function converged_cache(
         gauge_state = false,
         cache_update_kwargs,
     )
-    # `update` applies the `maxiter` default itself via `set_default_kwargs`, so none is added here
     cache = BoundaryMPSCache(network, mps_bond_dimension; partition_by, gauge_state)
     return update(cache; cache_update_kwargs...)
 end
@@ -124,22 +112,14 @@ end
 """
     safe_eigen(m::Tensor, args...; kwargs...)
 
-The eigendecomposition of `m` (the backend's `eigen`), computed in Float64/ComplexF64 precision on the CPU for numerical stability.
+The eigendecomposition of `m` (the backend's `eigen`) in at least double precision, for numerical
+stability. Lower-precision data is promoted on the host and the factors are returned in `m`'s storage.
 """
 function safe_eigen(m::Tensor, args...; kwargs...)
-    dtype = datatype(m)
-    e = eltype(m)
-    if e == ComplexF64 || e == Float64
-        return eigen(m, args...; kwargs...)
-    elseif e == Float32
-        m = adapt(Vector{Float64}, m)
-        D, U = eigen(m, args...; kwargs...)
-        return adapt(dtype)(D), adapt(dtype)(U)
-    elseif e == ComplexF32
-        m = adapt(Vector{ComplexF64}, m)
-        D, U = eigen(m, args...; kwargs...)
-        return adapt(dtype)(D), adapt(dtype)(U)
-    end
+    T = promote_type(eltype(m), Float64)
+    T == eltype(m) && return eigen(m, args...; kwargs...)
+    D, U = eigen(adapt(Vector{T}, m), args...; kwargs...)
+    return adapt_like(m, D), adapt_like(m, U)
 end
 
 collect_vertices(e::NamedEdge, g::NamedGraph) = collect_vertices([src(e), dst(e)], g)

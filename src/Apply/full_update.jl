@@ -75,8 +75,7 @@ function fidelity(
         ],
         envs,
     )
-    sequence = contraction_sequence(term1_tns; alg = "optimal")
-    term1 = contract(term1_tns; sequence)
+    term1 = contract_optimal(term1_tns)
 
     term2_tns = vcat(
         [
@@ -87,11 +86,8 @@ function fidelity(
         ],
         envs,
     )
-    sequence = contraction_sequence(term2_tns; alg = "optimal")
-    term2 = contract(term2_tns; sequence)
-    term3_tns = vcat([p_prev, q_prev, prime(dag(p_cur)), prime(dag(q_cur)), gate], envs)
-    sequence = contraction_sequence(term3_tns; alg = "optimal")
-    term3 = contract(term3_tns; sequence)
+    term2 = contract_optimal(term2_tns)
+    term3 = contract_optimal(vcat([p_prev, q_prev, prime(dag(p_cur)), prime(dag(q_cur)), gate], envs))
 
     f = scalar(term3) / sqrt(scalar(term1) * scalar(term2))
     return f * conj(f)
@@ -118,36 +114,12 @@ function optimise_p_q(
     qs_ind = setdiff(inds(q_cur), collect(Iterators.flatten(inds.(vcat(envs, p_cur)))))
     ps_ind = setdiff(inds(p_cur), collect(Iterators.flatten(inds.(vcat(envs, q_cur)))))
 
-    function b(p::Tensor, q::Tensor, o::Tensor, envs::Vector{Tensor}, r::Tensor)
-        ts = vcat(Tensor[p, q, o, dag(prime(r))], envs)
-        sequence = contraction_sequence(ts; alg = "optimal")
-        return noprime(contract(ts; sequence))
-    end
-
-    function M_p(envs::Vector{Tensor}, p_q_tensor::Tensor, s_ind, apply_tensor::Tensor)
-        ts = vcat(
-            Tensor[
-                p_q_tensor, replaceinds(prime(dag(p_q_tensor)), prime(s_ind), s_ind), apply_tensor,
-            ],
-            envs,
-        )
-        sequence = contraction_sequence(ts; alg = "optimal")
-        return noprime(contract(ts; sequence))
-    end
-    for i in 1:nfullupdatesweeps
-        b_vec = b(p, q, o, envs, q_cur)
-        M_p_partial = partial(M_p, envs, q_cur, qs_ind)
-
-        p_cur, info = linsolve(
-            M_p_partial, b_vec, p_cur; isposdef = envisposdef, ishermitian = false
-        )
-
-        b_tilde_vec = b(p, q, o, envs, p_cur)
-        M_p_tilde_partial = partial(M_p, envs, p_cur, ps_ind)
-
-        q_cur, info = linsolve(
-            M_p_tilde_partial, b_tilde_vec, q_cur; isposdef = envisposdef, ishermitian = false
-        )
+    # the right-hand side for the tensor other than `r`, and the linear map acting on it
+    rhs(r) = noprime(contract_optimal(vcat(Tensor[p, q, o, dag(prime(r))], envs)))
+    lhs(r, s_ind) = x -> noprime(contract_optimal(vcat(Tensor[r, replaceinds(prime(dag(r)), prime(s_ind), s_ind), x], envs)))
+    for _ in 1:nfullupdatesweeps
+        p_cur, _ = linsolve(lhs(q_cur, qs_ind), rhs(q_cur), p_cur; isposdef = envisposdef, ishermitian = false)
+        q_cur, _ = linsolve(lhs(p_cur, ps_ind), rhs(p_cur), q_cur; isposdef = envisposdef, ishermitian = false)
     end
 
     fend = print_fidelity_loss ? fidelity(envs, p_cur, q_cur, p, q, o) : 0
@@ -161,5 +133,3 @@ function optimise_p_q(
 
     return p_cur, q_cur
 end
-
-partial = (f, a...; c...) -> (b...) -> f(a..., b...; c...)

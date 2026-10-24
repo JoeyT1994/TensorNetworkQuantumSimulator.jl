@@ -152,7 +152,7 @@ end
 # The (k, M) slots of `incoming` on ψ's legs and the covered positions; nothing when a message is
 # not a doubled one or two messages share a bond.
 function _fused_slots(ψinds::Vector{<:Index}, incoming::Vector)
-    slots = Any[]
+    slots = Tuple{Int, StridedArray}[]
     covered = falses(length(ψinds))
     for m in incoming
         m isa ITensor || return nothing

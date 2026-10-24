@@ -89,10 +89,9 @@ const ALIASES = let
         l = lowercase(canon)
         l != canon && (m[l] = canon)
     end
-    # Genuine name differences (qiskit name => our canonical name)
-    for (alias, canon) in ["cp" => "CPHASE", "id" => "I", "U1" => "P", "u1" => "P", "U3" => "U",
-            "u3" => "U", "CU1" => "CPHASE", "cu1" => "CPHASE"]
-        m[alias] = canon
+    # Genuine name differences (qiskit name => our canonical name), in either case
+    for (alias, canon) in ["cp" => "CPHASE", "id" => "I", "U1" => "P", "U3" => "U", "CU1" => "CPHASE"]
+        m[alias] = m[lowercase(alias)] = canon
     end
     m
 end
@@ -153,6 +152,9 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
         return op(spec.opname, s_inds...), verts
     end
 
+    length(gate) >= 3 || throw(ArgumentError(
+        "Gate \"$name\" expects $(length(spec.paramkeys)) parameter(s) as the third entry of its tuple, got none."
+    ))
     raw = gate[3]
     pvals = raw isa Union{Tuple, AbstractVector} ? Tuple(raw) : (raw,)
     length(pvals) == length(spec.paramkeys) || throw(ArgumentError(

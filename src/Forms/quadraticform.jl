@@ -12,7 +12,7 @@ bra_virtualinds(qf::QuadraticForm, edge::NamedEdge) = dag.(prime.(virtualinds(ke
 
 Base.copy(qf::QuadraticForm) = QuadraticForm(copy(qf.ket), copy(qf.operator))
 
-#Constructor, bra is taken to be in the vector space of ket so the dual is taken
+#Constructor: the operator is `f(v)` on every site of vertex v; the bra is the ket's dual
 function QuadraticForm(ket::TensorNetworkState, f::Function = v -> "I")
     sinds = siteinds(ket)
     verts = collect(vertices(ket))

@@ -24,7 +24,7 @@ end
     tn = positive_network(g)
     lnZ = log(contract(tn; alg = "exact"))
     cache = update(CTMRGCache(tn, 256))
-    @test freenergy(cache) ≈ lnZ atol = tol
+    @test freenergy(cache) ≈ -lnZ atol = tol
     @test contract(tn; alg = "ctmrg", maxdim = 256) ≈ exp(lnZ) rtol = tol
     # a vertex's environment (its messages and corners) is exact and independent of its tensor
     v = first(vertices(g))
@@ -46,7 +46,7 @@ end
     Random.seed!(3)
     tn = positive_network(g)
     lnZ = log(contract(tn; alg = "exact"))
-    @test freenergy(update(CTMRGCache(tn, χ); convergence = :freenergy, maxiter = 40)) ≈ lnZ atol = atol
+    @test freenergy(update(CTMRGCache(tn, χ); convergence = :freenergy, maxiter = 40)) ≈ -lnZ atol = atol
 end
 
 @testset "CTMRG Ising free energy" begin
@@ -56,12 +56,12 @@ end
         es = collect(edges(g))
         Js = Dictionary(es, [src(e)[2] == dst(e)[2] ? Kx : Ky for e in es])
         tn = ising_partitionfunction(g, 1.0; Js)
-        @test freenergy(update(CTMRGCache(tn, 40))) ≈ log(contract(tn; alg = "exact")) atol = 1.0e-8
+        @test freenergy(update(CTMRGCache(tn, 40))) ≈ -log(contract(tn; alg = "exact")) atol = 1.0e-8
     end
     # near-critical and too large to be lossless: the error shrinks with χ
     tn = ising_partitionfunction(named_grid((6, 6)), 0.44)
     lnZ = log(contract(tn; alg = "exact"))
-    errs = [abs(freenergy(update(CTMRGCache(tn, χ))) - lnZ) for χ in (2, 8)]
+    errs = [abs(freenergy(update(CTMRGCache(tn, χ))) + lnZ) for χ in (2, 8)]
     @test errs[2] < errs[1]
     @test errs[2] < 1.0e-6
 end
@@ -77,7 +77,7 @@ end
     @test partitionfunction(cache) ≈ norm_sqr(ψ; alg = "exact") rtol = 1.0e-8
     # the free energy criterion, on a single-layer network
     tn = positive_network(named_hexagonal_lattice_graph(2, 2))
-    @test freenergy(update(CTMRGCache(tn, 64; projector = :eig); convergence = :freenergy)) ≈ log(contract(tn; alg = "exact")) atol = 1.0e-8
+    @test freenergy(update(CTMRGCache(tn, 64; projector = :eig); convergence = :freenergy)) ≈ -log(contract(tn; alg = "exact")) atol = 1.0e-8
     @test_throws ArgumentError update(CTMRGCache(tn, 4); convergence = :sometimes)
     @test_throws ArgumentError CTMRGCache(tn, 4; projector = :both)
     # kagome (like larger Penrose tilings) needs directional corners, which eigenvalue projectors cannot use

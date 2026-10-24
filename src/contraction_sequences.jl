@@ -1,9 +1,7 @@
 using OMEinsumContractionOrders: OMEinsumContractionOrders, optimize_code, EinCode, NestedEinsum, TreeSA, GreedyMethod, SABipartite, Treewidth, ExactTreewidth, HyperND, ExhaustiveSearch
 
-# The exact "optimal" contraction order (Pfeifer 2014 netcon) is provided by
-# OMEinsumContractionOrders' `ExhaustiveSearch` optimizer, which ported this routine from
-# TensorOperations. It handles trivial 1-/2-tensor inputs directly, so the previous
-# trivial-tensor pruning and scalar-`Int` workarounds are no longer needed.
+# The exact "optimal" contraction order (Pfeifer 2014 netcon), from OMEinsumContractionOrders'
+# `ExhaustiveSearch` optimizer.
 function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:Tensor})
     return contraction_sequence(Algorithm("omeinsum"), tensors; optimizer = ExhaustiveSearch())
 end
@@ -19,6 +17,9 @@ end
 function contraction_sequence(tensors::Vector{<:Tensor}; alg = "optimal", kwargs...)
     return contraction_sequence(Algorithm(alg), tensors; kwargs...)
 end
+
+# Contract `tensors` in an optimal order (for the small lists of a vertex and its environment).
+contract_optimal(tensors::Vector{<:Tensor}) = contract(tensors; sequence = contraction_sequence(tensors))
 
 #OMEinsumContractionOrders helpers
 function to_eincode(tensors::Vector{<:Tensor})

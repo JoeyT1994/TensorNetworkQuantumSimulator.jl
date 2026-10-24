@@ -187,8 +187,7 @@ function _stack(blocks, ins)
     acc, c = _column(first(blocks), ins)
     for B in blocks[2:end]
         col, cB = _column(B, ins)
-        acc = directsum(acc => c, col => cB; tags = "Link,col")
-        c = only(uniqueinds(acc, ins))
+        acc, c = directsum(acc => c, col => cB; tags = "Link,col")
     end
     return acc
 end
@@ -242,7 +241,7 @@ function _interface_legs(cache::CTMRGCache, I, side_of)
 end
 
 function _random_projectors!(cache::CTMRGCache)
-    new = Dict{Any, Any}()
+    new = empty(cache.projectors)
     for I in cache.rules.interfaces
         new[I] = _random_projector(cache, _interface_legs(cache, I, J -> new[J][3]))
     end
@@ -257,18 +256,17 @@ end
 function _carried_projectors!(cache::CTMRGCache)
     emb, rules = cache.embedding, cache.rules
     memo = Dict{Any, Tensor}()
-    enlarged(p, f) = only(_tensors(cache, [(:enlarged, (p, f))]; memo))
-    new = Dict{Any, Any}()
+    new = empty(cache.projectors)
     carry = Dict{Any, Tensor}()
     for I in rules.interfaces
         p, q = I
         f = face_of_dart(emb, p, q)
         J = rules.next[I]
         Ql, Qr = _connectors(emb, rules.exits, p, q)
-        moved(t, side) = isnothing(J) ? t : t * carry[(J, side)]
-        on(Q, side, parts...) = moved(_contract(cache, [_tensors(cache, Q); parts...]), side)
-        left = Tensor[on(Ql, :A, enlarged(p, f))]
-        right = Tensor[on(Qr, :B, enlarged(q, f))]
+        # a block on side A (p's) or B (q's) of I with its connector, its leg on J carried over
+        block(Q, side, parts) = (t = _evaluate(cache, [Q; parts]; memo); isnothing(J) ? t : t * carry[(J, side)])
+        left = Tensor[block(Ql, :A, [(:enlarged, (p, f))])]
+        right = Tensor[block(Qr, :B, [(:enlarged, (q, f))])]
         directional = []
         for c in (p, q)
             rules.modes[(c, f)] === :diag && continue
@@ -276,18 +274,12 @@ function _carried_projectors!(cache::CTMRGCache)
             a == (c == p ? q : p) && push!(directional, (c, parts))
         end
         if !isempty(directional)
-            # the messages into p and q from their other neighbours on f
-            w = face_vertices(emb, f)
-            k = findfirst(==(p), w)
-            before_p, after_q = w[mod1(k - 1, length(w))], w[mod1(k + 2, length(w))]
-            push!(left, on(Ql, :A, _tensors(cache, first(_message_core(emb, p, before_p)))...))
-            push!(right, on(Qr, :B, _tensors(cache, first(_message_core(emb, q, after_q)))...))
+            # the messages into p and q from their other neighbours on f (f's walk from p is p, q, …)
+            w = _walk(emb, f, p)
+            push!(left, block(Ql, :A, first(_message_core(emb, p, w[end]))))
+            push!(right, block(Qr, :B, first(_message_core(emb, q, w[3]))))
             for (c, parts) in directional
-                if c == p
-                    push!(left, on(Ql, :A, _tensors(cache, parts)...))
-                else
-                    push!(right, on(Qr, :B, _tensors(cache, parts)...))
-                end
+                c == p ? push!(left, block(Ql, :A, parts)) : push!(right, block(Qr, :B, parts))
             end
         end
         new[I] = _projector_pair(left, right, _interface_legs(cache, I, J -> new[J][3]), cache.maxdim)
@@ -322,7 +314,7 @@ function _eig_projectors(cache::CTMRGCache, f, ins_of, memo)
     noise = maximum(size.(mats, 2)) * eps(real(eltype(first(mats)))) * prod(norm, mats)
     bases = _ring_bases(mats, min(cache.maxdim, minimum(size.(mats, 2))), noise)
     isnothing(bases) && return nothing
-    projectors = Dict{Any, Any}()
+    projectors = empty(cache.projectors)
     for k in 1:n
         function basis(X, tags)
             c = new_index(size(X, 2); tags)
@@ -463,7 +455,7 @@ function _jacobi_pass!(cache::CTMRGCache)
     emb, rules = cache.embedding, cache.rules
     memo = Dict{Any, Tensor}()
     ins(I) = _interface_legs(cache, I, J -> cache.sides[J])
-    new = Dict{Any, Any}()
+    new = empty(cache.projectors)
     if cache.projector === :eig
         for f in eachindex(faces(emb))
             pairs = _eig_projectors(cache, f, ins, memo)
@@ -515,20 +507,17 @@ function update(
     convergence in (:messages, :freenergy) || throw(ArgumentError("convergence must be :messages or :freenergy, got $(repr(convergence))"))
     cache = copy(cache)
     pass! = isnothing(cache.rules.order) ? _jacobi_pass! : _sequential_pass!
-    signal(cache) = convergence === :messages ? _environments(cache) : freenergy(cache)
+    signal() = convergence === :messages ? _environments(cache) : freenergy(cache)
     change(a, b) = convergence === :messages ? maximum(message_diff.(a, b)) : abs(a - b) / max(1, abs(a))
     previous = nothing
-    for i in 1:maxiter
+    function step!()
         pass!(cache)
-        current = signal(cache)
-        if !isnothing(previous) && change(current, previous) <= tolerance
-            verbose && println("CTMRG converged after $i passes.")
-            return cache
-        end
+        current = signal()
+        c = isnothing(previous) ? nothing : change(current, previous)
         previous = current
+        return c
     end
-    msg = "CTMRG did not converge to tolerance $tolerance in its $convergence after $maxiter passes."
-    verbose ? println(msg) : @warn(msg)
+    iterate_to_convergence(step!, maxiter, tolerance; name = "CTMRG ($convergence)", verbose)
     return cache
 end
 
@@ -545,13 +534,11 @@ corners around it.
 """
 incoming_messages(cache::CTMRGCache, vs::Vector) = _tensors(cache, _environment(cache, vs))
 
-_log(z) = real(z) < 0 ? log(complex(z)) : log(z)
-
 """
     freenergy(cache::CTMRGCache)
 
-The log of the network's contraction, estimated from the cache by the Kikuchi expansion over the
-regions with one vertex, edge or face explicit.
+The free energy `-ln Z` of the network, `ln Z` estimated from the cache by the Kikuchi expansion
+over the regions with one vertex, edge or face explicit.
 """
 function freenergy(cache::CTMRGCache)
     emb = cache.embedding
@@ -567,7 +554,7 @@ function freenergy(cache::CTMRGCache)
         c = _counting_number(emb, src(e), dst(e))
         iszero(c) || (F += c * lnZ(_edge_region(emb, src(e), dst(e))))
     end
-    return F
+    return -F
 end
 
 # A CTMRG cache closes regions of one vertex or of the two ends of an edge.

@@ -23,16 +23,7 @@ TensorNetworkState(tn::TensorNetwork) = TensorNetworkState(tn, siteinds(tn))
 TensorNetworkState(tensors::Dictionary, g::NamedGraph) = TensorNetworkState(TensorNetwork(tensors, g))
 TensorNetworkState(tensors::Union{Dictionary, Vector{<:Tensor}}) = TensorNetworkState(TensorNetwork(tensors))
 
-#Forward onto the tn
-for f in [
-        :(Base.getindex),
-    ]
-    @eval begin
-        function $f(tns::TensorNetworkState, args...; kwargs...)
-            return $f(tensornetwork(tns), args...; kwargs...)
-        end
-    end
-end
+Base.getindex(tns::TensorNetworkState, args...; kwargs...) = getindex(tensornetwork(tns), args...; kwargs...)
 
 siteinds(tns::TensorNetworkState, v) = siteinds(tns)[v]
 
@@ -67,10 +58,7 @@ end
 norm_factors(tns::TensorNetworkState, v; kwargs...) = norm_factors(tns, [v]; kwargs...)
 bp_factors(tns::TensorNetworkState, v) = norm_factors(tns, v)
 
-function default_message(tns::TensorNetworkState, edge::AbstractEdge)
-    linds = virtualinds(tns, edge)
-    return adapt_like(tns, dense(delta(vcat(linds, prime(dag(linds))))))
-end
+message_legs(::TensorNetworkState, l) = [l; dag.(prime.(l))]
 
 """
     random_tensornetworkstate(eltype, g::AbstractGraph, siteinds::Dictionary; bond_dimension::Integer = 1)
@@ -90,8 +78,7 @@ Generate a random `TensorNetworkState` on graph `g` with local state indices giv
 """
 function random_tensornetworkstate(eltype, g::AbstractGraph, siteinds::Dictionary = default_siteinds(g); bond_dimension::Integer = 1)
     vs = collect(vertices(g))
-    l = Dict(e => new_index(bond_dimension) for e in edges(g))
-    l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
+    l = edge_indices(g, bond_dimension)
     tensors = Dictionary{vertextype(g), Tensor}()
     for v in vs
         is = vcat(siteinds[v], [l[NamedEdge(v => vn)] for vn in neighbors(g, v)])
@@ -150,12 +137,13 @@ function tensornetworkstate(eltype, f::Function, g::AbstractGraph, siteinds::Dic
         end
     end
 
-    l = Dict(e => new_index(1) for e in edges(g))
+    # product state: a trivial bond on every edge
     for e in edges(g)
-        tensors[src(e)] *= onehot(eltype, l[e] => 1)
-        tensors[dst(e)] *= onehot(eltype, l[e] => 1)
+        l = new_index(1)
+        tensors[src(e)] *= onehot(eltype, l => 1)
+        tensors[dst(e)] *= onehot(eltype, l => 1)
     end
-    return TensorNetworkState(tensors, g)
+    return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
 end
 
 """

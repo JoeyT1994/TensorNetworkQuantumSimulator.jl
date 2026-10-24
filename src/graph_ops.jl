@@ -24,15 +24,11 @@ Create a Lieb lattice geometry with `nx` columns of decorated squares and `ny` r
 """
 function lieb_lattice(nx::Int64, ny::Int64; periodic = false)
     @assert (!periodic && isodd(nx) && isodd(ny)) || (periodic && iseven(nx) && iseven(ny))
-    g = named_grid((nx, ny); periodic)
-    for v in vertices(g)
-        if iseven(first(v)) && iseven(last(v))
-            g = rem_vertex(g, v)
-        end
-    end
-    return g
-
+    return _without_even_even(named_grid((nx, ny); periodic))
 end
+
+# g less every (even, even) vertex
+_without_even_even(g) = subgraph(g, filter(v -> !all(iseven, v), collect(vertices(g))))
 
 """
     kagome_lattice(nx::Int64, ny::Int64)
@@ -45,10 +41,7 @@ function kagome_lattice(nx::Int64, ny::Int64)
     for i in 1:(2 * nx), j in 1:(2 * ny)
         g = add_edge(g, NamedEdge((i, j) => (i + 1, j + 1)))
     end
-    for v in collect(vertices(g))
-        iseven(first(v)) && iseven(last(v)) && (g = rem_vertex(g, v))
-    end
-    return g
+    return _without_even_even(g)
 end
 
 """
@@ -104,20 +97,9 @@ function penrose_tiling(ngenerations::Int64)
     return g
 end
 
-function topologytograph(topology)
-    # TODO: adapt this to named graphs with non-integer labels
-    # find number of vertices
-    nq = maximum(maximum.(topology))
-    adjm = zeros(Int, nq, nq)
-    for (ii, jj) in topology
-        adjm[ii, jj] = adjm[jj, ii] = 1
-    end
-    return NamedGraph(SimpleGraph(adjm))
-end
-
 #Given a circuit of two-site and 1-site gates, build the graph induced by the circuit
 #Entries in the circuit should be Tuple(gate_str, Vector{<:Vertices gate acts on}, optional param)
-function build_graph_from_gates(circ::Vector{<:Any})
+function build_graph_from_circuit(circ::Vector{<:Any})
     g = NamedGraph(unique(reduce(vcat, [gate[2] for gate in circ])))
     for gate in circ
         qubits = gate[2]
@@ -132,5 +114,3 @@ function build_graph_from_gates(circ::Vector{<:Any})
     Considering simulating the connected components separately, as no entanglement will be generated between them.")
     return g
 end
-
-const build_graph_from_circuit = build_graph_from_gates

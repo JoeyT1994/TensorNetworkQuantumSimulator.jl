@@ -4,7 +4,7 @@ module ITensorsBackend
 
 using ITensors: ITensors, ITensor, Index
 using ITensors.NDTensors: NDTensors
-using LinearAlgebra: LinearAlgebra, I, diag, rmul!
+using LinearAlgebra: LinearAlgebra, I, diag
 using Random: Random
 using Adapt: adapt
 
@@ -42,10 +42,9 @@ TI.replaceinds(t::ITensor, args...) = ITensors.replaceinds(t, args...)
 # Construction
 TI.new_index(d::Integer; tags = "") = Index(Int(d), tags)
 
-TI.from_array(A::AbstractArray, is::IndexCollection) = ITensor(copy(A), is...)
-TI.from_array(A::AbstractArray, i::Index, is::Index...) = ITensor(copy(A), i, is...)
-TI.from_array(A::AbstractArray, outs::IndexCollection, ins::IndexCollection) =
-    ITensor(copy(A), outs..., ins...)
+# `ITensor(A, is...)` copies the data
+TI.from_array(A::AbstractArray, is::IndexCollection) = ITensor(A, is...)
+TI.from_array(A::AbstractArray, outs::IndexCollection, ins::IndexCollection) = ITensor(A, outs..., ins...)
 
 function TI.random_tensor(rng::Random.AbstractRNG, elt::Type, is::IndexCollection)
     isempty(is) && return ITensor(fill(randn(rng, elt)))
@@ -57,21 +56,11 @@ TI.onehot(p::Pair{<:Index}...) = ITensors.onehot(p...)
 TI.onehot(elt::Type, p::Pair{<:Index}...) = ITensors.onehot(elt, p...)
 TI.delta(x::IndexLike, xs::IndexLike...) = ITensors.delta(x, xs...)
 TI.delta(elt::Type{<:Number}, xs::IndexLike...) = ITensors.delta(elt, xs...)
-# Diagonal storage densifies directly. A combiner is a structured object that can only fuse or
-# unfuse its legs whole, so it is made explicit by fusing an identity through it.
-function TI.dense(t::ITensor)
-    ITensors.storage(t) isa NDTensors.Combiner || return ITensors.denseblocks(t)
-    is = collect(ITensors.inds(t))[2:end]   # the combined index comes first
-    n = ITensors.dim(is)
-    js = ITensors.sim.(is)                  # not prime: b and b′ legs could collide
-    Id = ITensor(Matrix{Float64}(I, n, n), is..., js...)
-    return ITensors.replaceinds(Id * t, js, is)
-end
+TI.dense(t::ITensor) = ITensors.denseblocks(t)
 # collections may nest (a vector of index tuples); ITensors flattens them
 TI.combiner(is::Union{Index, AbstractVector, Tuple}...; kwargs...) = ITensors.combiner(is...; kwargs...)
 TI.combinedind(C::ITensor) = ITensors.combinedind(C)
-TI.directsum(p1::Pair{ITensor}, p2::Pair{ITensor}; tags = "sum") =
-    first(ITensors.directsum(p1, p2; tags))
+TI.directsum(p1::Pair{ITensor, <:Index}, p2::Pair{ITensor, <:Index}; tags = "sum") = ITensors.directsum(p1, p2; tags)
 TI.directsum(news, p1::Pair{ITensor}, p2::Pair{ITensor}; kwargs...) =
     ITensors.directsum(news, p1, p2; kwargs...)
 
@@ -86,7 +75,6 @@ TI.apply(o::ITensor, t::ITensor; kwargs...) = ITensors.apply(o, t; kwargs...)
 
 # Diagonal ops, factorizations
 TI.map_diag(f::Function, t::ITensor) = ITensors.map_diag(f, t)
-TI.map_diag!(f::Function, out::ITensor, t::ITensor) = ITensors.map_diag!(f, out, t)
 TI.factorize_svd(t::ITensor, args...; kwargs...) = ITensors.factorize_svd(t, args...; kwargs...)
 
 # Full SVD, then restrict U, S, V to the kept singular triplets on fresh bonds.
@@ -108,10 +96,6 @@ end
 TI.datatype(t::ITensor) = ITensors.datatype(t)
 TI.scalartype(t::ITensor) = NDTensors.scalartype(t)
 TI.array(t::ITensor, is::Index...) = ITensors.array(t, is...)
-function TI.scale!(t::ITensor, x::Number)
-    rmul!(ITensors.data(t), x)
-    return t
-end
 
 include("ITensorsKernels.jl")
 

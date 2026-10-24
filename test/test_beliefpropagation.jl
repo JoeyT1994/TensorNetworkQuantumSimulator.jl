@@ -50,7 +50,7 @@ const TNQS = TensorNetworkQuantumSimulator
 
         # converged messages are fixed points of the message update
         e = first(edges(g))
-        m, _ = TNQS.updated_message(ψ_BPC, e)
+        m = TNQS.updated_message(ψ_BPC, e)
         @test m ≈ message(ψ_BPC, e)
 
         vc = first(center(g))

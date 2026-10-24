@@ -57,10 +57,6 @@ function add_tensor!(tn::TensorNetwork, tensor::Tensor, v)
     return tn
 end
 
-function default_message(tn::TensorNetwork, edge::NamedEdge)
-    return adapt_like(tn, dense(delta(virtualinds(tn, edge))))
-end
-
 function bp_factors(tn::TensorNetwork, vertex)
     return Tensor[tn[vertex]]
 end
@@ -71,8 +67,7 @@ end
 
 function random_tensornetwork(eltype, g::AbstractGraph; bond_dimension::Integer = 1)
     vs = collect(vertices(g))
-    l = Dict(e => new_index(bond_dimension) for e in edges(g))
-    l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
+    l = edge_indices(g, bond_dimension)
     tensors = Dictionary{vertextype(g), Tensor}()
     for v in vs
         is = [l[NamedEdge(v => vn)] for vn in neighbors(g, v)]

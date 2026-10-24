@@ -22,10 +22,6 @@ function virtualinds(form::AbstractForm, edge::NamedEdge)
     return Index[virtualinds(ket(form), edge); virtualinds(operator(form), edge); bra_virtualinds(form, edge)]
 end
 
-function default_message(form::AbstractForm, edge::AbstractEdge)
-    return adapt_like(form, dense(delta(virtualinds(form, edge))))
-end
-
 function bp_factors(form::AbstractForm, verts::Vector)
     factors = Tensor[]
     for v in verts

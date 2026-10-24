@@ -1,5 +1,18 @@
 using StatsBase
 
+# Sample vertex v of the cache from its marginal. Returns the configuration (1, …, d), its
+# probability, the trace of the unnormalised marginal and the projector onto the configuration.
+function _sample_vertex(cache::AbstractBeliefPropagationCache, v)
+    ψv = network(cache)[v]
+    ρ = contract_optimal([incoming_messages(cache, v); ψv; dag(prime(ψv))])
+    ρ_tr = tr(ρ)
+    p = collect(real.(diag(array(ρ / ρ_tr))))
+    k = StatsBase.sample(eachindex(p), Weights(p))
+    return k, p[k], ρ_tr, adapt_like(ρ, onehot(only(inds(ρ; plev = 0)) => k))
+end
+
+# Each sampler also returns the state it sampled from (gauged and rescaled, if `gauge_state`), which
+# is what the samples' probabilities refer to.
 function sample(
         alg::Algorithm"bp",
         ψ::TensorNetworkState,
@@ -19,30 +32,16 @@ function sample(
         projected_bp_cache = copy(bp_cache)
         bit_string = Dictionary{keytype(vertices(ψ)), Int}()
         for v in vertices(ψ)
-            tensors = incoming_messages(projected_bp_cache, v)
-            ψv, ψv_dag = network(projected_bp_cache)[v], dag(prime(network(projected_bp_cache)[v]))
-            push!(tensors, ψv, ψv_dag)
-            seq = contraction_sequence(tensors; alg = "optimal")
-            ρ = contract(tensors; sequence = seq)
-
-            ρ_tr = tr(ρ)
-            ρ *= inv(ρ_tr)
-            ρ_diag = collect(real.(diag(array(ρ))))
-            config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
-            # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
-            set!(bit_string, v, config - 1)
-            s_ind = inds(ρ)[findfirst(i -> plev(i) == 0, inds(ρ))]
-            P = adapt_like(ρ, onehot(s_ind => config))
-            setindex_preserve!(projected_bp_cache, ψv * P, v)
-
-            if v != last(vertices(ψ))
-                projected_bp_cache = update(projected_bp_cache; bp_update_kwargs...)
-            end
+            k, _, _, P = _sample_vertex(projected_bp_cache, v)
+            # the sample itself is 0, …, d - 1
+            set!(bit_string, v, k - 1)
+            setindex_preserve!(projected_bp_cache, network(projected_bp_cache)[v] * P, v)
+            v != last(vertices(ψ)) && (projected_bp_cache = update(projected_bp_cache; bp_update_kwargs...))
         end
         push!(probs_and_bitstrings, (bitstring = bit_string,))
     end
 
-    return probs_and_bitstrings, ψ
+    return probs_and_bitstrings, network(bp_cache)
 end
 
 function sample(
@@ -71,7 +70,7 @@ function sample(
         push!(probs_and_bitstrings, (poverq = p_over_q_approx, logq = logq, bitstring = bitstring))
     end
 
-    return probs_and_bitstrings, ψ
+    return probs_and_bitstrings, network(norm_bmps_cache)
 end
 
 """
@@ -163,9 +162,9 @@ Draw `nsamples` bitstrings from a 2D open-boundary tensor network state. Samples
 """
 function sample_certified(ψ::TensorNetworkState, nsamples::Int; alg = nothing, certification_mps_bond_dimension = 5 * maxvirtualdim(ψ), certification_cache_message_update_kwargs = (;), kwargs...)
     algorithm_check(ψ, "sample_certified", alg)
-    probs_and_bitstrings, ψ = sample(Algorithm(alg), ψ, nsamples; kwargs...)
-    # send the bitstrings and the logq to the certification function
-    return certify_samples(ψ, probs_and_bitstrings; alg, certification_mps_bond_dimension, certification_cache_message_update_kwargs, gauge_state = false)
+    # certify against the state the samples were drawn from, as it was gauged and rescaled for them
+    probs_and_bitstrings, ψ_sampled = sample(Algorithm(alg), ψ, nsamples; kwargs...)
+    return certify_samples(ψ_sampled, probs_and_bitstrings; alg, certification_mps_bond_dimension, certification_cache_message_update_kwargs, gauge_state = false)
 end
 
 function get_one_sample(
@@ -180,12 +179,11 @@ function get_one_sample(
     bit_string = Dictionary{keytype(vertices(network(norm_bmps_cache))), Int}()
     p_over_q_approx = nothing
     logq = 0
-    partitions = vcat(src.(reverse.(reverse(seq))), [src(first(seq))])
+    partitions = [dst.(reverse(seq)); src(first(seq))]
     incoming_mps = nothing
     for (i, partition) in enumerate(partitions)
         p_over_q_approx, _logq, bit_string, =
             sample_partition!(norm_bmps_cache, partition, bit_string; kwargs...)
-        vs = vertices(supergraph(norm_bmps_cache), partition)
         logq += _logq
 
         if i < length(partitions)
@@ -199,8 +197,8 @@ function get_one_sample(
 
             es = sorted_edges(norm_bmps_cache, pe)
 
-            for (i, e) in enumerate(es)
-                setmessage!(norm_bmps_cache, e, Tensor[outgoing_mps[i], prime(dag(outgoing_mps[i]))])
+            for (k, e) in enumerate(es)
+                setmessage!(norm_bmps_cache, e, Tensor[outgoing_mps[k], prime(dag(outgoing_mps[k]))])
             end
 
             incoming_mps = outgoing_mps
@@ -223,36 +221,22 @@ function sample_partition!(
     leaves = leaf_vertices(g)
     seq = a_star(g, last(leaves), first(leaves))
     !isempty(seq) && update_partition!(norm_bmps_cache, seq)
-    prev_v, traces = nothing, Number[]
-    logq = 0
-    vs = vcat(src.(reverse.(reverse(seq))), [last(leaves)])
-    for v in vs
-        !isnothing(prev_v) && update_partition!(norm_bmps_cache, [NamedEdge(prev_v => v)])
-        incoming_ms = incoming_messages(norm_bmps_cache, [v])
-        ψv = network(norm_bmps_cache)[v]
-        ψvdag = dag(prime(ψv))
-        ts = [incoming_ms; [ψv, ψvdag]]
-        seq = contraction_sequence(ts; alg = "optimal")
-        ρ = contract(ts; sequence = seq)
-        ρ_tr = tr(ρ)
-        push!(traces, ρ_tr)
-        ρ *= inv(ρ_tr)
-        ρ_diag = collect(real.(diag(array(ρ))))
-        config = StatsBase.sample(1:length(ρ_diag), Weights(ρ_diag))
-        # config is 1,2,...,d, but we want 0,1...,d-1 for the sample itself
-        set!(bit_string, v, config - 1)
-        s_ind = inds(ρ)[findfirst(i -> plev(i) == 0, inds(ρ))]
-        P = adapt_like(ρ, onehot(s_ind => config))
-        q = ρ_diag[config]
+    logq = 0.0
+    first_trace = nothing
+    vs = [dst.(reverse(seq)); last(leaves)]
+    for (i, v) in enumerate(vs)
+        i > 1 && update_partition!(norm_bmps_cache, [NamedEdge(vs[i - 1] => v)])
+        k, q, ρ_tr, P = _sample_vertex(norm_bmps_cache, v)
+        i == 1 && (first_trace = ρ_tr)
+        # the sample itself is 0, …, d - 1
+        set!(bit_string, v, k - 1)
         logq += log(q)
-        Pψv = copy(network(norm_bmps_cache)[v]) * inv(sqrt(q)) * P
-        setindex_preserve!(norm_bmps_cache, Pψv, v)
-        prev_v = v
+        setindex_preserve!(norm_bmps_cache, network(norm_bmps_cache)[v] * inv(sqrt(q)) * P, v)
     end
 
     delete_partition_messages!(norm_bmps_cache, partition)
 
-    return first(traces), logq, bit_string
+    return first_trace, logq, bit_string
 end
 
 function certify_sample(
@@ -285,6 +269,6 @@ function certify_sample(
 end
 
 function certify_samples(ψ::TensorNetworkState, probs_and_bitstrings::Vector{<:NamedTuple}; alg = "boundarymps", kwargs...)
-    algorithm_check(ψ, "sample", alg)
+    algorithm_check(ψ, "sample_certified", alg)
     return [certify_sample(Algorithm(alg), ψ, prob_and_bitstring.bitstring, prob_and_bitstring.logq; kwargs...) for prob_and_bitstring in probs_and_bitstrings]
 end

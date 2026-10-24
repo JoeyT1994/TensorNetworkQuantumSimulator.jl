@@ -4,16 +4,11 @@ function contract(alg::Algorithm"exact", tn::AbstractTensorNetwork; contraction_
     return scalar(contract(tn_tensors; sequence = seq))
 end
 
-function contract(alg::Algorithm"bp", tn::TensorNetwork; bp_update_kwargs = default_bp_update_kwargs(tn))
-    return partitionfunction(update(BeliefPropagationCache(tn); bp_update_kwargs...))
-end
-
-function contract(alg::Algorithm"boundarymps", tn::TensorNetwork; mps_bond_dimension::Integer, bmps_update_kwargs = default_bmps_update_kwargs(tn))
-    return partitionfunction(update(BoundaryMPSCache(tn, mps_bond_dimension); bmps_update_kwargs...))
-end
-
-function contract(alg::Algorithm"ctmrg", tn::TensorNetwork; maxdim::Integer, cache_update_kwargs = (;))
-    return partitionfunction(update(CTMRGCache(tn, maxdim); convergence = :freenergy, cache_update_kwargs...))
+# bp, boundarymps, ctmrg: the partition function of the converged cache. `cache_kwargs` are those
+# of the cache (`mps_bond_dimension`, `maxdim`, ...).
+function contract(alg::Union{Algorithm"bp", Algorithm"boundarymps", Algorithm"ctmrg"}, tn::TensorNetwork; cache_update_kwargs = default_cache_update_kwargs(alg, tn), cache_kwargs...)
+    cache_update_kwargs = scalar_cache_update_kwargs(alg, cache_update_kwargs)
+    return partitionfunction(converged_cache(alg, tn; cache_kwargs..., cache_update_kwargs))
 end
 
 function contract(tn::AbstractTensorNetwork; alg = "exact", kwargs...)

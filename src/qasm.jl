@@ -59,7 +59,8 @@ mutable struct _QASMProgram
     tokens::Vector{SubString{String}}
     position::Int
     registers::Dict{String, UnitRange{Int}}             # qreg name → its qubits
-    definitions::Dict{String, Any}                       # gate name → (params, args, body tokens)
+    # gate name → (params, args, body tokens)
+    definitions::Dict{String, Tuple{Vector{String}, Vector{String}, Vector{SubString{String}}}}
     circuit::_ImportedCircuit
 end
 _QASMProgram(tokens) = _QASMProgram(tokens, 1, Dict(), Dict(), _ImportedCircuit())
@@ -71,8 +72,17 @@ function _expect!(p::_QASMProgram, token)
     t == token || _qasm_error("expected \"$token\", got \"$t\"")
     return t
 end
-_skip_statement!(p::_QASMProgram) = (while _next!(p) != ";" end)
 _qasm_error(msg) = throw(ArgumentError("OpenQASM: $msg"))
+
+# Tokens up to `stop` (exclusive), consuming it.
+function _tokens_until!(p::_QASMProgram, stop = ";")
+    out = SubString{String}[]
+    while (t = _next!(p)) != stop
+        push!(out, t)
+    end
+    return out
+end
+_skip_statement!(p::_QASMProgram) = (_tokens_until!(p); nothing)
 
 # Tokens up to the closing `close` (exclusive), consuming it; nesting of `open`/`close` is respected.
 function _until!(p::_QASMProgram, open, close)
@@ -102,6 +112,9 @@ function _split_commas(tokens)
     return groups
 end
 
+# A parenthesised, comma-separated list `( ... )` if one comes next, else no groups.
+_parenthesised!(p::_QASMProgram) = _peek(p) == "(" ? (_next!(p); _split_commas(_until!(p, "(", ")"))) : Vector{SubString{String}}[]
+
 # --- Statements ---
 
 function _parse_program!(p::_QASMProgram)
@@ -120,11 +133,8 @@ function _parse_program!(p::_QASMProgram)
             p.circuit.nqubits += n
         elseif t == "gate"
             name = String(_next!(p))
-            params = _peek(p) == "(" ? (_next!(p); String.(first.(_split_commas(_until!(p, "(", ")"))))) : String[]
-            args = String[]
-            while (a = _next!(p)) != "{"
-                a == "," || push!(args, String(a))
-            end
+            params = String.(first.(_parenthesised!(p)))
+            args = String.(filter(!=(","), _tokens_until!(p, "{")))
             p.definitions[name] = (params, args, _until!(p, "{", "}"))
         elseif t == "measure"
             _measure!(p.circuit, _qubit_list(p, _tokens_until!(p, "->")))
@@ -140,19 +150,10 @@ function _parse_program!(p::_QASMProgram)
     return p
 end
 
-function _tokens_until!(p::_QASMProgram, stop = ";")
-    out = SubString{String}[]
-    while (t = _next!(p)) != stop
-        push!(out, t)
-    end
-    return out
-end
-
 # A gate call `name(params) args;`, with registers broadcast over their qubits. In a gate
 # definition's body, `env` binds its parameters and `bound` its qubit arguments.
 function _gate_statement!(p::_QASMProgram, name; env = Dict{String, Float64}(), bound = nothing)
-    exprs = _peek(p) == "(" ? (_next!(p); _split_commas(_until!(p, "(", ")"))) : Vector{SubString{String}}[]
-    params = [_evaluate_expression(e, env) for e in exprs]
+    params = [_evaluate_expression(e, env) for e in _parenthesised!(p)]
     operands = [_operand(p, a, bound) for a in _split_commas(_tokens_until!(p))]
     n = maximum(length, operands; init = 1)
     all(o -> length(o) in (1, n), operands) || _qasm_error("registers of different sizes in \"$name\"")

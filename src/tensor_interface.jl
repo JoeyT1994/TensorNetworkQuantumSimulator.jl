@@ -56,13 +56,13 @@ end
 # - `from_array(A, inds)`, `from_array(A, outs, ins)`: tensor with (a copy of) data `A` on the
 #   legs in order; the second form is a map `ins -> outs` (graded backends keep only the
 #   symmetry-allowed blocks).
-# - `dense(t)`: structured storage (diagonal, combiner) made explicit.
-# - `directsum(a => ia, b => ib; tags)`: direct sum along paired legs, on a new summed bond.
+# - `dense(t)`: structured (diagonal) storage made explicit.
+# - `directsum(a => ia, b => ib; tags)`: direct sum along paired legs, on a new summed bond;
+#   returns the sum and that bond.
 # - `contract(ts; sequence)`: `sequence = nothing` lets the backend choose. `apply(o, t)` is
 #   `noprime(o * t)`.
 # - `factorize_svd(t, linds; ...)`: truncated SVD split (L, R, spec); `truncated_svd(t, linds;
 #   trunc)`: U, S, V truncated by a `TruncationStrategy`.
-# - `scale!(t, x)`: multiply `t` by `x` in place.
 for f in [
         # index queries
         :inds, :commonind, :commoninds, :uniqueinds, :unioninds, :noncommonind,
@@ -75,11 +75,11 @@ for f in [
         # contraction / evaluation
         :contract, :scalar, :apply, :inner,
         # diagonal ops
-        :map_diag, :map_diag!,
+        :map_diag,
         # factorizations (beyond the LinearAlgebra generics)
         :factorize_svd, :truncated_svd,
         # storage / type queries
-        :datatype, :array, :scale!,
+        :datatype, :array,
     ]
     @eval function $f end
 end

@@ -9,6 +9,10 @@ const _σz = [1.0 0.0; 0.0 -1.0]
 const _H = [1 1; 1 -1] / sqrt(2)
 const _SX = [(1 + im)/2 (1 - im)/2; (1 - im)/2 (1 + im)/2]
 const _SWAP = [1 0 0 0; 0 0 1 0; 0 1 0 0; 0 0 0 1]
+const _S = [1 0; 0 im]
+
+# diag(1, e^{iθ})
+_phase(θ) = [1 0; 0 cis(θ)]
 
 # `u` controlled on all preceding sites, i.e. applied when they are all |1⟩.
 function _controlled(u::AbstractMatrix, ncontrols::Integer = 1)
@@ -41,16 +45,16 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
         "H" => (; kw...) -> _H,
         "√NOT" => (; kw...) -> _SX,
         "SXdg" => (; kw...) -> _SX',
-        "S" => (; kw...) -> [1 0; 0 im],
-        "Sdg" => (; kw...) -> [1 0; 0 -im],
-        "Phase" => (; θ::Number, kw...) -> [1 0; 0 exp(im * θ)],
+        "S" => (; kw...) -> _S,
+        "Sdg" => (; kw...) -> _S',
+        "Phase" => (; θ::Number, kw...) -> _phase(θ),
         "π/8" => (; kw...) -> [1 0; 0 1 / sqrt(2) + im / sqrt(2)],
         "Tdg" => (; kw...) -> [1 0; 0 1 / sqrt(2) - im / sqrt(2)],
         "Rx" => (; θ::Number, kw...) -> _rx(θ),
         "Ry" => (; θ::Number, kw...) -> _ry(θ),
         "Rz" => (; θ::Number, kw...) -> _rz(θ),
         # diag(1, e^{-iθ/2}): a Z rotation acting on |1⟩ only, at a halved angle
-        "Rz+" => (; θ::Number, kw...) -> [1 0; 0 exp(-im * θ / 2)],
+        "Rz+" => (; θ::Number, kw...) -> _phase(-θ / 2),
         # general rotation, U(θ, ϕ, λ) in qiskit's notation
         "Rn" => (; θ::Number, ϕ::Number, λ::Number, kw...) -> _rn(θ, ϕ, λ),
         "U2" => (; ϕ::Number, λ::Number, kw...) -> _rn(π / 2, ϕ, λ),
@@ -69,8 +73,8 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
     (2, 2) => Dict{String, Function}(
         "CNOT" => (; kw...) -> _CNOT,
         "CH" => (; kw...) -> _controlled(_H),
-        "CS" => (; kw...) -> _controlled([1 0; 0 im]),
-        "CSdg" => (; kw...) -> _controlled([1 0; 0 -im]),
+        "CS" => (; kw...) -> _controlled(_S),
+        "CSdg" => (; kw...) -> _controlled(_S'),
         "CSX" => (; kw...) -> _controlled(_SX),
         # e^{iγ} U(θ, ϕ, λ), controlled
         "CU" => (; θ::Number, ϕ::Number, λ::Number, γ::Number, kw...) -> _controlled(exp(im * γ) * _rn(θ, ϕ, λ)),
@@ -84,7 +88,7 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
         "CRy" => (; θ::Number, kw...) -> _controlled(_ry(θ)),
         "CRz" => (; θ::Number, kw...) -> _controlled(_rz(θ)),
         "CRn" => (; θ::Number, ϕ::Number, λ::Number, kw...) -> _controlled(_rn(θ, ϕ, λ)),
-        "CPHASE" => (; θ::Number, kw...) -> _controlled([1 0; 0 exp(im * θ)]),
+        "CPHASE" => (; θ::Number, kw...) -> _controlled(_phase(θ)),
         "SWAP" => (; kw...) -> _SWAP,
         "√SWAP" => (; kw...) -> [1 0 0 0; 0 (1 + im)/2 (1 - im)/2 0; 0 (1 - im)/2 (1 + im)/2 0; 0 0 0 1],
         "iSWAP" => (; kw...) -> [1 0 0 0; 0 0 im 0; 0 im 0 0; 0 0 0 1],
@@ -94,7 +98,7 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
         "Rzz" => (; θ::Number, kw...) -> _pauli_pair_rotation(θ, _σz),
         "Rzx" => (; θ::Number, kw...) -> _pauli_pair_rotation(θ, _σz, _σx),
         # diag(1, 1, 1, e^{-iθ/2}): a ZZ-type rotation acting on |11⟩ only, at a halved angle
-        "Rz+z+" => (; θ::Number, kw...) -> [1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 exp(-im * θ / 2)],
+        "Rz+z+" => (; θ::Number, kw...) -> _controlled(_phase(-θ / 2)),
         # exp(-iθ (XX + YY) / 2)
         "Rxxyy" => (; θ::Number, kw...) -> exp(-im * θ * 0.5 * (kron(_σx, _σx) + kron(_σy, _σy))),
         # exp(-iθ (XX + YY + ZZ) / 2)
@@ -137,14 +141,17 @@ const OPERATORS = Dict{Tuple{Int, Int}, Dict{String, Function}}(
     ),
 )
 
-# Alternative names, per (nsites, site dimension) table.
+# Alternative names, per (nsites, site dimension) table. The spin operators share theirs.
+const _SPIN_ALIASES = [
+    "Sˣ" => "Sx", "Sʸ" => "Sy", "iSʸ" => "iSy", "Sᶻ" => "Sz", "S⁺" => "S+", "Splus" => "S+",
+    "Sp" => "S+", "S⁻" => "S-", "Sminus" => "S-", "Sm" => "S-", "S²" => "S2",
+]
 const _OPERATOR_ALIASES = Dict(
     (1, 2) => [
         "σx" => "X", "σ1" => "X", "σy" => "Y", "σ2" => "Y", "σz" => "Z", "σ3" => "Z",
         "iσy" => "iY", "iσ2" => "iY", "√X" => "√NOT", "SX" => "√NOT", "P" => "Phase", "T" => "π/8", "Rn̂" => "Rn",
         "U" => "Rn", "U3" => "Rn", "U1" => "Phase",
-        "Sˣ" => "Sx", "Sʸ" => "Sy", "iSʸ" => "iSy", "Sᶻ" => "Sz", "S⁺" => "S+", "Splus" => "S+",
-        "S⁻" => "S-", "Sminus" => "S-", "S²" => "S2",
+        _SPIN_ALIASES...,
         "ProjUp" => "Proj0", "projUp" => "Proj0", "ProjDn" => "Proj1", "projDn" => "Proj1",
     ],
     (2, 2) => [
@@ -155,10 +162,7 @@ const _OPERATOR_ALIASES = Dict(
     ],
     (3, 2) => ["CCNOT" => "Toffoli", "CCX" => "Toffoli", "TOFF" => "Toffoli",
         "CSWAP" => "Fredkin", "CSwap" => "Fredkin"],
-    (1, 3) => [
-        "Sˣ" => "Sx", "Sʸ" => "Sy", "iSʸ" => "iSy", "Sᶻ" => "Sz", "S⁺" => "S+", "Splus" => "S+",
-        "Sp" => "S+", "S⁻" => "S-", "Sminus" => "S-", "Sm" => "S-", "S²" => "S2",
-    ],
+    (1, 3) => _SPIN_ALIASES,
 )
 for (key, pairs) in _OPERATOR_ALIASES, (alias, canon) in pairs
     OPERATORS[key][alias] = OPERATORS[key][canon]

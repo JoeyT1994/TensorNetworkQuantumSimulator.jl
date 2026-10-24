@@ -110,30 +110,15 @@ function expect(
     return with_kernel_workspace(() -> map(obs -> expect(alg, cache, obs), observables))
 end
 
+# bp and ctmrg: converge a cache over ψ (`cache_kwargs` are the cache's, e.g. `maxdim`), then measure.
 function expect(
-        alg::Algorithm"bp",
+        alg::Union{Algorithm"bp", Algorithm"ctmrg"},
         ψ::TensorNetworkState,
         observable::Union{Tuple, Vector{<:Tuple}};
-        cache_update_kwargs = default_bp_update_kwargs(ψ),
-        kwargs...,
+        cache_update_kwargs = default_cache_update_kwargs(alg, ψ),
+        cache_kwargs...,
     )
-
-    ψ_bpc = converged_cache(alg, ψ; cache_update_kwargs)
-
-    return expect(alg, ψ_bpc, observable; kwargs...)
-end
-
-function expect(
-        alg::Algorithm"ctmrg",
-        ψ::TensorNetworkState,
-        observable::Union{Tuple, Vector{<:Tuple}};
-        maxdim::Integer,
-        cache_update_kwargs = (;),
-        kwargs...,
-    )
-    ψ_ctm = converged_cache(alg, ψ; maxdim, cache_update_kwargs)
-
-    return expect(alg, ψ_ctm, observable; kwargs...)
+    return expect(alg, converged_cache(alg, ψ; cache_kwargs..., cache_update_kwargs), observable)
 end
 
 function expect(
@@ -141,18 +126,13 @@ function expect(
         ψ::TensorNetworkState,
         observable::Union{Tuple, Vector{<:Tuple}};
         cache_update_kwargs = default_bmps_update_kwargs(ψ),
-        partition_by = boundarymps_partitioning(observable, graph(ψ)),
+        partition_by = boundarymps_partitioning(observable_groups(observable, graph(ψ))),
         mps_bond_dimension::Integer,
         gauge_state = true,
         kwargs...,
     )
-
     ψ_bmps = converged_cache(alg, ψ; mps_bond_dimension, partition_by, gauge_state, cache_update_kwargs)
-
-    obs_vs = observables_vertices(observable, graph(ψ))
-    ψ_bmps = update_partitions(ψ_bmps, obs_vs)
-
-    return expect(alg, ψ_bmps, observable; bmps_messages_up_to_date = true, kwargs...)
+    return expect(alg, ψ_bmps, observable; kwargs...)
 end
 
 #Process an observable into more readable form
@@ -183,21 +163,15 @@ end
 observables_vertices(observable::Tuple, g::NamedGraph) = collect_vertices(observable[2], g)
 observables_vertices(observables::Vector{<:Tuple}, g::NamedGraph) = unique(collect(Iterators.flatten(observables_vertices(obs, g) for obs in observables)))
 
-function boundarymps_partitioning(observable::Union{Tuple, Vector{<:Tuple}}, g::NamedGraph)
-    observables = observable isa Tuple ? [observable] : observable
-    partitioning = nothing
-    for o in observables
-        vs = observables_vertices(o, g)
-        #Single-site observables sit in every row and every column, so they constrain nothing
-        length(vs) < 2 && continue
-        if allequal(first.(vs)) && (partitioning == "row" || isnothing(partitioning))
-            partitioning = "row"
-        elseif allequal(last.(vs)) && (partitioning == "col" || isnothing(partitioning))
-            partitioning = "col"
-        else
-            error("Observables must all be aligned in either the same column or the same row to do BoundaryMPS measurements.")
-        end
-    end
-    #Only single-site observables: any partitioning works, so pick rows
-    return isnothing(partitioning) ? "row" : partitioning
+observable_groups(observable::Tuple, g::NamedGraph) = [observables_vertices(observable, g)]
+observable_groups(observables::Vector{<:Tuple}, g::NamedGraph) = [observables_vertices(o, g) for o in observables]
+
+# The boundary MPS partitioning ("row" or "col") that keeps every group of vertices within one
+# partition. Single vertices sit in every row and column, so they constrain nothing; with no
+# constraint at all, rows are used.
+function boundarymps_partitioning(groups::Vector{<:Vector})
+    groups = filter(vs -> length(vs) > 1, groups)
+    all(vs -> allequal(first.(vs)), groups) && return "row"
+    all(vs -> allequal(last.(vs)), groups) && return "col"
+    return error("Vertices must all be aligned in either the same column or the same row to use boundary MPS.")
 end

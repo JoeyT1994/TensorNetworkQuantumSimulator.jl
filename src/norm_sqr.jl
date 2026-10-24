@@ -1,20 +1,11 @@
-function algorithm_error()
-    error("Algorithm choice not supported. Currently supported: bp, boundarymps, ctmrg, loopcorrections and exact.")
-end
-
 function state_error(expected::String)
     error("Network type inside the cache is not a $expected.")
 end
 
 # Contract a cache down to its (scalar) partition function.
-function cache_partitionfunction(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
-    if alg == Algorithm("bp") || alg == Algorithm("boundarymps") || alg == Algorithm("ctmrg")
-        return partitionfunction(cache)
-    elseif alg == Algorithm("loopcorrections")
-        return loopcorrected_partitionfunction(cache, max_configuration_size)
-    else
-        return algorithm_error()
-    end
+cache_partitionfunction(::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing) = partitionfunction(cache)
+function cache_partitionfunction(::Algorithm"loopcorrections", cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
+    return loopcorrected_partitionfunction(cache, max_configuration_size)
 end
 
 """
@@ -81,23 +72,14 @@ function norm_sqr(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_con
     return state_error("TensorNetworkState")
 end
 
-function norm_sqr(alg::Union{Algorithm"bp", Algorithm"loopcorrections"}, ψ::TensorNetworkState; cache_update_kwargs = default_bp_update_kwargs(ψ), kwargs...)
-    return norm_sqr(alg, converged_cache(alg, ψ; cache_update_kwargs); kwargs...)
-end
-
-function norm_sqr(alg::Algorithm"boundarymps", ψ::TensorNetworkState; mps_bond_dimension::Integer, partition_by = "row", cache_update_kwargs = default_bmps_update_kwargs(ψ), kwargs...)
-    ψ_bmps = converged_cache(alg, ψ; mps_bond_dimension, partition_by, cache_update_kwargs)
-    return norm_sqr(alg, ψ_bmps; kwargs...)
-end
-
-#A norm only needs the free energy converged, not the messages
-function norm_sqr(alg::Algorithm"ctmrg", ψ::TensorNetworkState; maxdim::Integer, cache_update_kwargs = (;))
-    cache_update_kwargs = merge((; convergence = :freenergy), cache_update_kwargs)
-    return norm_sqr(alg, converged_cache(alg, ψ; maxdim, cache_update_kwargs))
-end
-
-function norm_sqr(alg::Algorithm, ψ::TensorNetworkState; kwargs...)
-    return algorithm_error()
+# The cache algorithms: converge a cache over ψ (`cache_kwargs` are the cache's: `mps_bond_dimension`,
+# `maxdim`, ...), then contract it.
+function norm_sqr(
+        alg::Algorithm, ψ::TensorNetworkState;
+        cache_update_kwargs = default_cache_update_kwargs(alg, ψ), max_configuration_size = nothing, cache_kwargs...
+    )
+    cache_update_kwargs = scalar_cache_update_kwargs(alg, cache_update_kwargs)
+    return norm_sqr(alg, converged_cache(alg, ψ; cache_kwargs..., cache_update_kwargs); max_configuration_size)
 end
 
 LinearAlgebra.norm(alg::Algorithm, ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}; kwargs...) = sqrt(norm_sqr(alg, ψ; kwargs...))
