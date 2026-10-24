@@ -24,7 +24,7 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
     for e in es
         if reverse(e) ∉ updated_es
             mer = message(bpc, reverse(e))
-            linds = inds(mer; plev = 0)
+            linds = collect(inds(mer; plev = 0))
             linds_sim = sim.(linds)
             # the message's legs: the virtual legs, and for a state their bra copies too
             row_inds, col_inds = message_legs(network(bpc), linds), message_legs(network(bpc), linds_sim)

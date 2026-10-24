@@ -99,4 +99,11 @@ end
     @test !isnothing(TNQS.norm_scalar_kernel(ψ, [v], TNQS.incoming_messages(bpc, v); op_strings = _ -> "Z"))
 end
 
+@testset "Loop corrections are exact on a single loop" begin
+    # On one cycle the loop series ends after the loop itself: BP times (1 + its weight) is exact.
+    Random.seed!(5)
+    ψ = random_tensornetworkstate(ComplexF64, named_grid((2, 2)); bond_dimension = 2)
+    @test norm_sqr(ψ; alg = "loopcorrections", max_configuration_size = 4) ≈ norm_sqr(ψ; alg = "exact")
+end
+
 end

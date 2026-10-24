@@ -58,7 +58,7 @@ end
 norm_factors(tns::TensorNetworkState, v; kwargs...) = norm_factors(tns, [v]; kwargs...)
 bp_factors(tns::TensorNetworkState, v) = norm_factors(tns, v)
 
-message_legs(::TensorNetworkState, l) = [l; dag.(prime.(l))]
+message_legs(::TensorNetworkState, l) = [collect(l); dag.(prime.(l))]
 
 """
     random_tensornetworkstate(eltype, g::AbstractGraph, siteinds::Dictionary; bond_dimension::Integer = 1)
