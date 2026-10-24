@@ -10,25 +10,43 @@ function positive_network(g; D = 2)
     return map_tensors(t -> abs.(t), tn)
 end
 
-@testset "CTMRG is exact at lossless χ: $label" for (label, g) in [
-        ("square", named_grid((4, 3))),
-        ("honeycomb", named_hexagonal_lattice_graph(2, 2)),
-        ("kagome", kagome_lattice(2, 2)),
-        ("triangular", named_triangular_lattice_graph(3, 4)),
+# Graphs with directional corners (kagome 3×3, Penrose) use regularised pseudo-inverses, whose
+# cutoff (`pinv_rtol`) sets a floor of about 1e-9 on lossless results; the others are exact to roundoff.
+@testset "CTMRG is exact at lossless χ: $label" for (label, g, tol) in [
+        ("square", named_grid((4, 3)), 1.0e-8),
+        ("honeycomb", named_hexagonal_lattice_graph(2, 2), 1.0e-8),
+        ("kagome", kagome_lattice(2, 2), 1.0e-8),
+        ("triangular", named_triangular_lattice_graph(3, 4), 1.0e-8),
+        ("kagome 3×3", kagome_lattice(3, 3), 1.0e-6),
+        ("Penrose", penrose_tiling(2), 1.0e-6),
     ]
     Random.seed!(3)
     tn = positive_network(g)
     lnZ = log(contract(tn; alg = "exact"))
     cache = update(CTMRGCache(tn, 256))
-    @test freenergy(cache) ≈ lnZ atol = 1.0e-8
-    @test contract(tn; alg = "ctmrg", maxdim = 256) ≈ exp(lnZ) rtol = 1.0e-8
+    @test freenergy(cache) ≈ lnZ atol = tol
+    @test contract(tn; alg = "ctmrg", maxdim = 256) ≈ exp(lnZ) rtol = tol
     # a vertex's environment (its messages and corners) is exact and independent of its tensor
     v = first(vertices(g))
     env = incoming_messages(cache, v)
     tn′ = copy(tn)
     setindex_preserve!(tn′, tn[v] .^ 2, v)
     closed(t) = scalar(reduce(*, [t; env]))
-    @test closed(tn′[v]) / closed(tn[v]) ≈ contract(tn′; alg = "exact") / exp(lnZ) rtol = 1.0e-8
+    @test closed(tn′[v]) / closed(tn[v]) ≈ contract(tn′; alg = "exact") / exp(lnZ) rtol = tol
+end
+
+@testset "CTMRG below lossless χ with directional corners: $label" for (label, g, χ, atol) in [
+        ("kagome 3×3", kagome_lattice(3, 3), 4, 1.0e-8),
+        ("Penrose", penrose_tiling(3), 8, 1.0e-7),
+    ]
+    # these graphs need directional corners (zero-holonomy corner rings), updated sequentially
+    rules = TensorNetworkQuantumSimulator.ctmrg_rules(planar_embedding(g))
+    @test !isnothing(rules.order)
+    @test any(!=(:diag), values(rules.modes))
+    Random.seed!(3)
+    tn = positive_network(g)
+    lnZ = log(contract(tn; alg = "exact"))
+    @test freenergy(update(CTMRGCache(tn, χ); convergence = :freenergy, maxiter = 40)) ≈ lnZ atol = atol
 end
 
 @testset "CTMRG Ising free energy" begin
