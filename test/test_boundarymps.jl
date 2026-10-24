@@ -40,6 +40,9 @@ const TNQS = TensorNetworkQuantumSimulator
         @test scalartype(ψ_BMPS) == scalartype(ψ)
 
         ψ_BMPS = update(ψ_BMPS)
+        # contraction orders are memoised only while a cache updates: none are left behind
+        @test isempty(TNQS.contraction_sequences(ψ_BMPS))
+        @test isempty(TNQS.contraction_sequences(TNQS.update_partition(ψ_BMPS, first(TNQS.quotientvertices(ψ_BMPS)))))
         z_bmps = partitionfunction(ψ_BMPS)
         @test z_bmps ≈ norm_sqr(ψ; alg = "exact")
         @test z_bmps ≈ norm_sqr(ψ; alg = "boundarymps", mps_bond_dimension = 4)

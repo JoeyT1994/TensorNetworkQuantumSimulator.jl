@@ -198,19 +198,22 @@ function partition_graph(bmps_cache::BoundaryMPSCache, partition::QuotientVertex
     return g
 end
 
-function update_partition!(bmps_cache::BoundaryMPSCache, partition::QuotientVertex)
+function update_partition!(bmps_cache::BoundaryMPSCache, partition::QuotientVertex; kwargs...)
     g = partition_graph(bmps_cache, partition)
     seq = forest_cover_edge_sequence(g)
-    update_partition!(bmps_cache, seq)
+    update_partition!(bmps_cache, seq; kwargs...)
     return bmps_cache
 end
 
-function update_partition!(bmps_cache::BoundaryMPSCache, seq::Vector)
+# The contraction orders memoised along the way are cleared afterwards, unless `keep_sequences`
+# (the fitting sweep inside `update`, which clears them itself when it is done).
+function update_partition!(bmps_cache::BoundaryMPSCache, seq::Vector; keep_sequences::Bool = false)
     isempty(seq) && return bmps_cache
     alg = set_default_kwargs(Algorithm("contract", normalize = false), bmps_cache)
     for e in seq
         update_message!(alg, bmps_cache, e)
     end
+    keep_sequences || invalidate_contraction_sequences!(bmps_cache)
     return bmps_cache
 end
 
@@ -293,7 +296,7 @@ function updater!(alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache, partiti
 
     gauge_step!(alg, bmps_cache, reverse(prev_e), reverse(update_e))
     update_seq = a_star(partition_graph, src(prev_e), src(update_e))
-    update_partition!(bmps_cache, update_seq)
+    update_partition!(bmps_cache, update_seq; keep_sequences = true)
     return bmps_cache
 end
 
@@ -309,7 +312,7 @@ function update_message!(
     init_gauge_seq = [(reverse(es[i]), reverse(es[i - 1])) for i in length(es):-1:2]
     init_update_seq = post_order_dfs_edges(g, src(first(update_seq)))
     !isempty(init_gauge_seq) && gauge_walk!(alg, bmps_cache, init_gauge_seq)
-    !isempty(init_update_seq) && update_partition!(bmps_cache, init_update_seq)
+    !isempty(init_update_seq) && update_partition!(bmps_cache, init_update_seq; keep_sequences = true)
 
     prev_cf, prev_e = 0, nothing
     for i in 1:alg.kwargs.niters

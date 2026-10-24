@@ -180,6 +180,9 @@ function region_scalar(bp_cache::AbstractBeliefPropagationCache, region, op_stri
     return scalar(contract_region(bp_cache, region, op_strings; incoming_ms))
 end
 
+# The message on `edge` recomputed from the cache. The same list recurs every sweep, so its
+# contraction order is memoised in the cache; `update` and `update_partition!` clear the memo when
+# they are done.
 function updated_message(
         alg::Algorithm"contract", bp_cache::AbstractBeliefPropagationCache, edge::NamedEdge
     )
@@ -187,7 +190,6 @@ function updated_message(
     incoming_ms = incoming_messages(bp_cache, vertex; ignore_edges = (reverse(edge),))
     m = norm_message_kernel(network(bp_cache), vertex, incoming_ms)
     if isnothing(m)
-        # the same list recurs every sweep, so its contraction order is kept in the cache
         ts = Tensor[incoming_ms; bp_factors(bp_cache, vertex)]
         sequence = get!(() -> contraction_sequence(ts; alg = alg.kwargs.sequence_alg), contraction_sequences(bp_cache), vertex => edge)
         m = contract(ts; sequence)
