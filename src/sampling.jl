@@ -17,11 +17,11 @@ function sample(
         alg::Algorithm"bp",
         ψ::TensorNetworkState,
         nsamples::Integer;
-        bp_update_kwargs = default_bp_update_kwargs(ψ),
+        cache_update_kwargs = default_bp_update_kwargs(ψ),
         gauge_state = true,
         kwargs...,
     )
-    bp_cache = converged_cache(alg, ψ; cache_update_kwargs = bp_update_kwargs)
+    bp_cache = converged_cache(alg, ψ; cache_update_kwargs)
     if gauge_state
         bp_cache = symmetrize_and_normalize(bp_cache)
     end
@@ -36,7 +36,7 @@ function sample(
             # the sample itself is 0, …, d - 1
             set!(bit_string, v, k - 1)
             setindex_preserve!(projected_bp_cache, network(projected_bp_cache)[v] * P, v)
-            v != last(vertices(ψ)) && (projected_bp_cache = update(projected_bp_cache; bp_update_kwargs...))
+            v != last(vertices(ψ)) && (projected_bp_cache = update(projected_bp_cache; cache_update_kwargs...))
         end
         push!(probs_and_bitstrings, (bitstring = bit_string,))
     end
@@ -91,7 +91,7 @@ Draw `nsamples` bitstrings from the probability distribution defined by the squa
     - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
     - `gauge_state`: Whether to gauge the state before sampling (default is `true`).
 - For `alg = "bp"`:
-    - `bp_update_kwargs`: Keyword arguments for updating the belief propagation cache.
+    - `cache_update_kwargs`: Keyword arguments for updating the belief propagation cache.
     - `gauge_state`: Whether to gauge the state before sampling (default is `true`).
 
 # Returns

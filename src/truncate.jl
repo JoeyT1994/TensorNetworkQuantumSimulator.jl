@@ -12,7 +12,7 @@ end
 # The identity on the sites of both ends of e, in the storage of `ref`.
 _identity_gate(ref, s, e) = adapt(datatype(ref))(prod(op("I", sv) for sv in [s[src(e)]; s[dst(e)]]))
 
-function truncate(bpc::BeliefPropagationCache; bp_update_kwargs = default_bp_update_kwargs(bpc), maxdim::Integer, cutoff = nothing, edge_color = true, normalize_tensors = true)
+function truncate(bpc::BeliefPropagationCache; cache_update_kwargs = default_bp_update_kwargs(bpc), maxdim::Integer, cutoff = nothing, edge_color = true, normalize_tensors = true)
     bpc = copy(bpc)
     s = siteinds(network(bpc))
     apply_kwargs = (; maxdim, cutoff, normalize_tensors)
@@ -36,7 +36,7 @@ function truncate(bpc::BeliefPropagationCache; bp_update_kwargs = default_bp_upd
         for e in eg
             truncatable_edge(bpc, e) && apply_gate!(_identity_gate(bpc, s, e), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
         end
-        bpc = update(bpc; bp_update_kwargs...)
+        bpc = update(bpc; cache_update_kwargs...)
     end
     return bpc
 end
@@ -73,9 +73,9 @@ function truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff = nothin
     return bmps_cache
 end
 
-function truncate(alg::Algorithm"bp", tns::TensorNetworkState; bp_update_kwargs = default_bp_update_kwargs(tns), kwargs...)
-    bp_cache = converged_cache(alg, tns; cache_update_kwargs = bp_update_kwargs)
-    return network(truncate(bp_cache; bp_update_kwargs, kwargs...))
+function truncate(alg::Algorithm"bp", tns::TensorNetworkState; cache_update_kwargs = default_bp_update_kwargs(tns), kwargs...)
+    bp_cache = converged_cache(alg, tns; cache_update_kwargs)
+    return network(truncate(bp_cache; cache_update_kwargs, kwargs...))
 end
 
 # Truncate the bonds within the rows, then within the columns.

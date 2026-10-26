@@ -52,7 +52,7 @@ apply_kwargs = (; maxdim = 10, cutoff = 1e-10, normalize_tensors = true)
   - `maxdim`: Maximum bond dimension after SVD truncation.
   - `cutoff`: Singular value cutoff for truncation.
   - `normalize_tensors`: Whether to locally normalize tensors after each gate application (recommended for numerical stability).
-- `bp_update_kwargs`: Keyword arguments controlling the BP message update between overlapping gate groups.
+- `cache_update_kwargs`: Keyword arguments controlling the BP message update between overlapping gate groups.
 - `update_cache`: Whether to update BP messages between gate groups (default `true`).
 
 ### Return Values

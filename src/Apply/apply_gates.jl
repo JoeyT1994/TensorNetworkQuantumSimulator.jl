@@ -1,5 +1,5 @@
 """
-    apply_gates(circuit::Vector, ψ::Union{TensorNetworkState, BeliefPropagationCache}; bp_update_kwargs = default_bp_update_kwargs(ψ), kwargs...)
+    apply_gates(circuit::Vector, ψ::Union{TensorNetworkState, BeliefPropagationCache}; cache_update_kwargs = default_bp_update_kwargs(ψ), kwargs...)
 
 Apply a sequence of gates, via simple update, to a `TensorNetworkState` or a `BeliefPropagationCache` wrapping a `TensorNetworkState`, using belief propagation to update the environment.
 
@@ -8,7 +8,7 @@ Apply a sequence of gates, via simple update, to a `TensorNetworkState` or a `Be
 - `ψ::TensorNetworkState`: The tensor network state to which the gates will be applied.
 
 # Keyword Arguments
-- `bp_update_kwargs`: Keyword arguments for updating the belief propagation cache between gates (reasonable defaults are set).
+- `cache_update_kwargs`: Keyword arguments for updating the belief propagation cache between gates (reasonable defaults are set).
 - `apply_kwargs`: Keyword arguments for the gate application, such as `maxdim` and `cutoff` for bond dimension truncation.
 
 # Returns
@@ -17,11 +17,11 @@ Apply a sequence of gates, via simple update, to a `TensorNetworkState` or a `Be
 function apply_gates(
         circuit::Vector,
         ψ::TensorNetworkState;
-        bp_update_kwargs = default_bp_update_kwargs(ψ),
+        cache_update_kwargs = default_bp_update_kwargs(ψ),
         kwargs...,
     )
-    ψ_bpc = converged_cache(Algorithm("bp"), ψ; cache_update_kwargs = bp_update_kwargs)
-    ψ_bpc, truncation_errors = apply_gates(circuit, ψ_bpc; bp_update_kwargs, kwargs...)
+    ψ_bpc = converged_cache(Algorithm("bp"), ψ; cache_update_kwargs)
+    ψ_bpc, truncation_errors = apply_gates(circuit, ψ_bpc; cache_update_kwargs, kwargs...)
     return network(ψ_bpc), truncation_errors
 end
 
@@ -45,7 +45,7 @@ function apply_gates(
         ψ_bpc::BeliefPropagationCache;
         gate_vertices::Vector = vertices.(circuit, (network(ψ_bpc),)),
         apply_kwargs = (;),
-        bp_update_kwargs = default_bp_update_kwargs(ψ_bpc),
+        cache_update_kwargs = default_bp_update_kwargs(ψ_bpc),
         update_cache = true,
         verbose = false,
     )
@@ -57,7 +57,7 @@ function apply_gates(
     for (ii, (gate, vs)) in enumerate(zip(circuit, gate_vertices))
         if update_cache && length(vs) >= 2 && any(in(affected), vs)
             verbose && println("Updating BP cache")
-            t = @elapsed ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
+            t = @elapsed ψ_bpc = update(ψ_bpc; cache_update_kwargs...)
             verbose && println("Done in $t secs")
             empty!(affected)
         end
@@ -66,7 +66,7 @@ function apply_gates(
     end
 
     if update_cache
-        ψ_bpc = update(ψ_bpc; bp_update_kwargs...)
+        ψ_bpc = update(ψ_bpc; cache_update_kwargs...)
     end
 
     return ψ_bpc, truncation_errors

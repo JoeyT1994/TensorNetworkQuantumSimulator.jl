@@ -80,5 +80,5 @@ sampled_sz = sum(r.poverq * (-2 * r.bitstring[v] + 1) for r in results) / sum(r.
 
 | Keyword | Description |
 |---------|-------------|
-| `bp_update_kwargs` | Keyword arguments for updating the BP cache between projections. |
+| `cache_update_kwargs` | Keyword arguments for updating the BP cache between projections. |
 | `gauge_state` | Whether to gauge the state before sampling (default `true`). |

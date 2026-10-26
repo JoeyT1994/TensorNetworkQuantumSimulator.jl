@@ -144,6 +144,6 @@ function loop_correlations(bpc::BeliefPropagationCache, smallest_loop_size::Inte
     return corrs
 end
 
-function loop_correlations(tn::AbstractTensorNetwork, smallest_loop_size::Integer; bp_update_kwargs = default_bp_update_kwargs(tn), kwargs...)
-    return loop_correlations(update(BeliefPropagationCache(tn); bp_update_kwargs...), smallest_loop_size; kwargs...)
+function loop_correlations(tn::AbstractTensorNetwork, smallest_loop_size::Integer; cache_update_kwargs = default_bp_update_kwargs(tn), kwargs...)
+    return loop_correlations(update(BeliefPropagationCache(tn); cache_update_kwargs...), smallest_loop_size; kwargs...)
 end
