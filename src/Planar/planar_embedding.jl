@@ -51,7 +51,7 @@ Errors if the drawing is not planar (crossing edges, a vertex on an edge, or coi
 function planar_embedding(g::AbstractGraph{V}; positions = default_positions(g)) where {V}
     is_connected(g) || throw(ArgumentError("planar_embedding: the graph is not connected"))
     pos = Dict{V, NTuple{2, Float64}}(v => (Float64(positions[v][1]), Float64(positions[v][2])) for v in vertices(g))
-    _check_drawing(g, pos)
+    check_drawing(g, pos)
     rotation = Dict{V, Vector{V}}(v => sort(collect(neighbors(g, v));
         by = u -> atan(pos[u][2] - pos[v][2], pos[u][1] - pos[v][1])) for v in vertices(g))
     if nv(g) == 1
@@ -78,7 +78,7 @@ function planar_embedding(g::AbstractGraph{V}; positions = default_positions(g))
     end
     # The outer walk runs clockwise (negative area; zero for a tree, whose one walk is the outer
     # face); every inner walk runs counterclockwise.
-    areas = [_signed_area(w, pos) for w in walks]
+    areas = [signed_area(w, pos) for w in walks]
     io = argmin(areas)
     all(i -> i == io || areas[i] > 0, eachindex(areas)) ||
         error("planar_embedding: more than one face walk is not counterclockwise")
@@ -88,20 +88,20 @@ function planar_embedding(g::AbstractGraph{V}; positions = default_positions(g))
     return PlanarEmbedding{V, typeof(g)}(g, pos, rotation, inner, walks[io], dart_face)
 end
 
-_signed_area(walk, pos) = sum(
+signed_area(walk, pos) = sum(
     pos[walk[i]][1] * pos[walk[mod1(i + 1, length(walk))]][2] -
         pos[walk[mod1(i + 1, length(walk))]][1] * pos[walk[i]][2] for i in eachindex(walk)
 ) / 2
 
-_orient(p, q, r) = (q[1] - p[1]) * (r[2] - p[2]) - (q[2] - p[2]) * (r[1] - p[1])
+orientation(p, q, r) = (q[1] - p[1]) * (r[2] - p[2]) - (q[2] - p[2]) * (r[1] - p[1])
 
 # r on the closed segment p–q (assumes collinear)
-_on_segment(p, q, r) = min(p[1], q[1]) <= r[1] <= max(p[1], q[1]) && min(p[2], q[2]) <= r[2] <= max(p[2], q[2])
+on_segment(p, q, r) = min(p[1], q[1]) <= r[1] <= max(p[1], q[1]) && min(p[2], q[2]) <= r[2] <= max(p[2], q[2])
 
 # Planarity of the straight-line drawing: distinct points, no vertex inside an edge, no two edges
 # crossing. Edges are bucketed on a uniform grid of cells about one typical edge length wide, so
 # only nearby pairs are tested.
-function _check_drawing(g::AbstractGraph{V}, pos) where {V}
+function check_drawing(g::AbstractGraph{V}, pos) where {V}
     pts = collect(values(pos))
     length(unique(pts)) == length(pts) || throw(ArgumentError("planar_embedding: two vertices share a position"))
     es = [(src(e), dst(e)) for e in edges(g)]
@@ -125,7 +125,7 @@ function _check_drawing(g::AbstractGraph{V}, pos) where {V}
             for v in get(vbucket, c, V[])
                 (v == a || v == b) && continue
                 r = pos[v]
-                iszero(_orient(p, q, r)) && _on_segment(p, q, r) && throw(ArgumentError(
+                iszero(orientation(p, q, r)) && on_segment(p, q, r) && throw(ArgumentError(
                     "planar_embedding: vertex $v lies on the edge $a – $b"))
             end
             for k2 in get(buckets, c, Int[])
@@ -133,7 +133,7 @@ function _check_drawing(g::AbstractGraph{V}, pos) where {V}
                 c2, d2 = es[k2]
                 length(unique((a, b, c2, d2))) == 4 || continue      # edges sharing an endpoint
                 r, s = pos[c2], pos[d2]
-                o1, o2, o3, o4 = _orient(p, q, r), _orient(p, q, s), _orient(r, s, p), _orient(r, s, q)
+                o1, o2, o3, o4 = orientation(p, q, r), orientation(p, q, s), orientation(r, s, p), orientation(r, s, q)
                 if (o1 * o2 < 0) && (o3 * o4 < 0)
                     throw(ArgumentError("planar_embedding: the edges $a – $b and $c2 – $d2 cross"))
                 end

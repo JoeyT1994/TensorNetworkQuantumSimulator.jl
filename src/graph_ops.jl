@@ -24,11 +24,11 @@ Create a Lieb lattice geometry with `nx` columns of decorated squares and `ny` r
 """
 function lieb_lattice(nx::Int64, ny::Int64; periodic = false)
     @assert (!periodic && isodd(nx) && isodd(ny)) || (periodic && iseven(nx) && iseven(ny))
-    return _without_even_even(named_grid((nx, ny); periodic))
+    return without_even_even(named_grid((nx, ny); periodic))
 end
 
 # g less every (even, even) vertex
-_without_even_even(g) = subgraph(g, filter(v -> !all(iseven, v), collect(vertices(g))))
+without_even_even(g) = subgraph(g, filter(v -> !all(iseven, v), collect(vertices(g))))
 
 """
     kagome_lattice(nx::Int64, ny::Int64)
@@ -41,7 +41,7 @@ function kagome_lattice(nx::Int64, ny::Int64)
     for i in 1:(2 * nx), j in 1:(2 * ny)
         g = add_edge(g, NamedEdge((i, j) => (i + 1, j + 1)))
     end
-    return _without_even_even(g)
+    return without_even_even(g)
 end
 
 """

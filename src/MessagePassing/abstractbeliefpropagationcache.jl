@@ -304,7 +304,7 @@ function Adapt.adapt_structure(to, bpc::AbstractBeliefPropagationCache)
 end
 
 # The logarithm, on the principal branch for negative reals.
-_log(z) = real(z) < 0 ? log(complex(z)) : log(z)
+principal_log(z) = real(z) < 0 ? log(complex(z)) : log(z)
 
 """
     freenergy(cache)
@@ -315,7 +315,7 @@ cache estimates it (for BP and boundary MPS, the ratio of its vertex to its edge
 function freenergy(bp_cache::AbstractBeliefPropagationCache)
     numerator_terms, denominator_terms = scalar_factors_quotient(bp_cache)
     any(iszero, denominator_terms) && return -Inf
-    return sum(_log, denominator_terms) - sum(_log, numerator_terms)
+    return sum(principal_log, denominator_terms) - sum(principal_log, numerator_terms)
 end
 
 """

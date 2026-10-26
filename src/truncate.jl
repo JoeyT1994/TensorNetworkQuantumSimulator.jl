@@ -10,7 +10,7 @@ function truncatable_edge(cache::AbstractBeliefPropagationCache, e::NamedEdge)
 end
 
 # The identity on the sites of both ends of e, in the storage of `ref`.
-_identity_gate(ref, s, e) = adapt(datatype(ref))(prod(op("I", sv) for sv in [s[src(e)]; s[dst(e)]]))
+identity_gate(ref, s, e) = adapt(datatype(ref))(prod(op("I", sv) for sv in [s[src(e)]; s[dst(e)]]))
 
 function truncate(bpc::BeliefPropagationCache; cache_update_kwargs = default_bp_update_kwargs(bpc), maxdim::Integer, cutoff = nothing, edge_color = true, normalize_tensors = true)
     bpc = copy(bpc)
@@ -34,7 +34,7 @@ function truncate(bpc::BeliefPropagationCache; cache_update_kwargs = default_bp_
     end
     for eg in edge_groups
         for e in eg
-            truncatable_edge(bpc, e) && apply_gate!(_identity_gate(bpc, s, e), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
+            truncatable_edge(bpc, e) && apply_gate!(identity_gate(bpc, s, e), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
         end
         bpc = update(bpc; cache_update_kwargs...)
     end
@@ -54,7 +54,7 @@ function truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff = nothin
         for e in reverse.(reverse(seq))
             if truncatable_edge(bmps_cache, e)
                 envs = incoming_messages(bmps_cache, [src(e), dst(e)])
-                ρv1, ρv2 = full_update(_identity_gate(bmps_cache, s, e), network(bmps_cache), [src(e), dst(e)]; envs, apply_kwargs...)
+                ρv1, ρv2 = full_update(identity_gate(bmps_cache, s, e), network(bmps_cache), [src(e), dst(e)]; envs, apply_kwargs...)
                 if normalize_tensors
                     ρv1 = normalize(ρv1)
                     ρv2 = normalize(ρv2)

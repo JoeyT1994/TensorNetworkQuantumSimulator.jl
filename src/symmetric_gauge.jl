@@ -1,5 +1,5 @@
 # The square root of a Hermitian message and its inverse, its spectrum shifted by `regularization`.
-function _regularized_roots(m::Tensor, regularization)
+function regularized_roots(m::Tensor, regularization)
     D, U = safe_eigen(m; ishermitian = true, cutoff = nothing)
     D = map_diag(x -> x + regularization, D)
     root(f) = U * map_diag(f, D) * prime(dag(U))
@@ -16,8 +16,8 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         edge_ind = commoninds(ψvsrc, ψvdst)
         edge_ind_sim = sim(edge_ind)
 
-        rootX, inv_rootX = _regularized_roots(message(bp_cache, e), regularization)
-        rootY, inv_rootY = _regularized_roots(message(bp_cache, reverse(e)), regularization)
+        rootX, inv_rootX = regularized_roots(message(bp_cache, e), regularization)
+        rootY, inv_rootY = regularized_roots(message(bp_cache, reverse(e)), regularization)
 
         ψvsrc, ψvdst = noprime(ψvsrc * inv_rootX), noprime(ψvdst * inv_rootY)
 

@@ -97,10 +97,10 @@ const ALIASES = let
 end
 
 # The canonical name of a gate, or `nothing` if it is not registered.
-_canonical_name(name::AbstractString) = haskey(GATES, name) ? name : get(ALIASES, name, nothing)
+canonical_gate_name(name::AbstractString) = haskey(GATES, name) ? name : get(ALIASES, name, nothing)
 
 function _resolve_gate(name::AbstractString)
-    canon = _canonical_name(name)
+    canon = canonical_gate_name(name)
     return isnothing(canon) ? nothing : GATES[canon]
 end
 

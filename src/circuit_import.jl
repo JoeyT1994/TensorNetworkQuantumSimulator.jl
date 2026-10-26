@@ -2,22 +2,22 @@
 # Shared by `circuit_from_qasm` and `circuit_from_qiskit`: instructions on numbered qubits
 # (1, 2, ...) become a gate list.
 
-mutable struct _ImportedCircuit
+mutable struct ImportedCircuit
     nqubits::Int
     measured::Set{Int}
     gates::Vector{Tuple{String, Vector{Int}, Vector{Float64}}}
 end
-_ImportedCircuit(nqubits::Integer = 0) = _ImportedCircuit(nqubits, Set{Int}(), [])
+ImportedCircuit(nqubits::Integer = 0) = ImportedCircuit(nqubits, Set{Int}(), [])
 
-_measure!(circuit::_ImportedCircuit, qubits) = (union!(circuit.measured, qubits); circuit)
+measure!(circuit::ImportedCircuit, qubits) = (union!(circuit.measured, qubits); circuit)
 
 # Add the registry's gate `name` on `qubits`, under its canonical name; false if the registry does
 # not have the gate.
-function _add_gate!(circuit::_ImportedCircuit, name, params, qubits)
+function add_gate!(circuit::ImportedCircuit, name, params, qubits)
     any(in(circuit.measured), qubits) && throw(ArgumentError(
         "gate \"$name\" acts on a qubit after it is measured; mid-circuit measurements are not supported"
     ))
-    canon = _canonical_name(name)
+    canon = canonical_gate_name(name)
     isnothing(canon) && return false
     spec = GATES[canon]
     haskey(get(OPERATORS, (length(qubits), 2), Dict()), spec.opname) ||
@@ -29,7 +29,7 @@ function _add_gate!(circuit::_ImportedCircuit, name, params, qubits)
     return true
 end
 
-function _unsupported_gate(name, qubits)
+function unsupported_gate(name, qubits)
     length(qubits) > 2 && throw(ArgumentError(
         "gate \"$name\" acts on $(length(qubits)) qubits; only one- and two-qubit gates are supported, so decompose it first"
     ))
@@ -37,7 +37,7 @@ function _unsupported_gate(name, qubits)
 end
 
 # The gate list, on the vertices `qubits` (the qubit numbers by default).
-function _gate_list(circuit::_ImportedCircuit; qubits = nothing)
+function gate_list(circuit::ImportedCircuit; qubits = nothing)
     if !isnothing(qubits) && length(qubits) != circuit.nqubits
         throw(ArgumentError("the circuit has $(circuit.nqubits) qubits but `qubits` has $(length(qubits)) vertices"))
     end

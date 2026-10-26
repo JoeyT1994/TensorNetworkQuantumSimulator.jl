@@ -37,14 +37,14 @@ end
 
 # The cache each algorithm works on (or is built from a TensorNetworkState), and the
 # functionality it does not support.
-const _ALGORITHM_CACHES = Dict(
+const ALGORITHM_CACHES = Dict(
     "exact" => Any,
     "bp" => BeliefPropagationCache,
     "loopcorrections" => BeliefPropagationCache,
     "boundarymps" => BoundaryMPSCache,
     "ctmrg" => CTMRGCache,
 )
-const _ALGORITHM_UNSUPPORTED = Dict(
+const ALGORITHM_UNSUPPORTED = Dict(
     "exact" => ("normalize", "sample", "sample_certified", "truncate", "edge_entropy"),
     "bp" => ("sample_certified",),
     "loopcorrections" => ("normalize", "expect", "sample", "sample_certified", "truncate", "rdm", "edge_entropy"),
@@ -54,14 +54,14 @@ const _ALGORITHM_UNSUPPORTED = Dict(
 
 # Check that `alg` can do `f` on `tns`.
 function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetworkState}, f::String, alg)
-    haskey(_ALGORITHM_CACHES, alg) ||
-        error("Unrecognized algorithm $(repr(alg)). Must be one of $(join(repr.(sort(collect(keys(_ALGORITHM_CACHES)))), ", ")).")
-    cache = _ALGORITHM_CACHES[alg]
+    haskey(ALGORITHM_CACHES, alg) ||
+        error("Unrecognized algorithm $(repr(alg)). Must be one of $(join(repr.(sort(collect(keys(ALGORITHM_CACHES)))), ", ")).")
+    cache = ALGORITHM_CACHES[alg]
     tns isa Union{cache, TensorNetworkState} ||
         error("Expected $cache or TensorNetworkState for the $(repr(alg)) algorithm, got $(typeof(tns)).")
     alg == "bp" && f == "sample_certified" &&
         error("Certified sampling needs an estimate of p(x)/q(x), which the 'bp' sampler does not produce. Use alg = 'boundarymps'.")
-    f in _ALGORITHM_UNSUPPORTED[alg] && error("The $(repr(alg)) algorithm does not support $f yet.")
+    f in ALGORITHM_UNSUPPORTED[alg] && error("The $(repr(alg)) algorithm does not support $f yet.")
     return nothing
 end
 

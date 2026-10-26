@@ -2,7 +2,7 @@ using StatsBase
 
 # Sample vertex v of the cache from its marginal. Returns the configuration (1, …, d), its
 # probability, the trace of the unnormalised marginal and the projector onto the configuration.
-function _sample_vertex(cache::AbstractBeliefPropagationCache, v)
+function sample_vertex(cache::AbstractBeliefPropagationCache, v)
     ψv = network(cache)[v]
     ρ = contract_optimal([incoming_messages(cache, v); ψv; dag(prime(ψv))])
     ρ_tr = tr(ρ)
@@ -32,7 +32,7 @@ function sample(
         projected_bp_cache = copy(bp_cache)
         bit_string = Dictionary{keytype(vertices(ψ)), Int}()
         for v in vertices(ψ)
-            k, _, _, P = _sample_vertex(projected_bp_cache, v)
+            k, _, _, P = sample_vertex(projected_bp_cache, v)
             # the sample itself is 0, …, d - 1
             set!(bit_string, v, k - 1)
             setindex_preserve!(projected_bp_cache, network(projected_bp_cache)[v] * P, v)
@@ -226,7 +226,7 @@ function sample_partition!(
     vs = [dst.(reverse(seq)); last(leaves)]
     for (i, v) in enumerate(vs)
         i > 1 && update_partition!(norm_bmps_cache, [NamedEdge(vs[i - 1] => v)])
-        k, q, ρ_tr, P = _sample_vertex(norm_bmps_cache, v)
+        k, q, ρ_tr, P = sample_vertex(norm_bmps_cache, v)
         i == 1 && (first_trace = ρ_tr)
         # the sample itself is 0, …, d - 1
         set!(bit_string, v, k - 1)
