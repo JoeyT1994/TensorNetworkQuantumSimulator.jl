@@ -42,7 +42,13 @@ function gate_list(circuit::ImportedCircuit; qubits = nothing)
         throw(ArgumentError("the circuit has $(circuit.nqubits) qubits but `qubits` has $(length(qubits)) vertices"))
     end
     vertex = isnothing(qubits) ? identity : (k -> qubits[k])
-    return map(circuit.gates) do (name, qs, params)
+    # Identity gates keep idle qubits in the list without changing the state.
+    gates = copy(circuit.gates)
+    used = Set(q for (_, qs, _) in gates for q in qs)
+    for q in 1:circuit.nqubits
+        q in used || push!(gates, ("I", [q], Float64[]))
+    end
+    return map(gates) do (name, qs, params)
         isempty(params) && return (name, vertex.(qs))
         return (name, vertex.(qs), length(params) == 1 ? only(params) : Tuple(params))
     end
@@ -67,6 +73,7 @@ not supported; transpile such circuits to one- and two-qubit basis gates first.
 - `qubits = nothing`: The vertex of each qubit, in order. Defaults to the qubit numbers `1, 2, ...`.
 
 # Returns
-- A `Vector` of gates, `(name, vertices)` or `(name, vertices, parameters)`.
+- A `Vector` of gates, `(name, vertices)` or `(name, vertices, parameters)`, with identity gates
+  on idle qubits to preserve them.
 """
 function circuit_from_qiskit end

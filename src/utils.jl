@@ -94,8 +94,9 @@ function converged_cache(
         ::Algorithm"ctmrg", network;
         maxdim::Integer,
         cache_update_kwargs,
+        cache_kwargs...,
     )
-    return update(CTMRGCache(network, maxdim); cache_update_kwargs...)
+    return update(CTMRGCache(network, maxdim; cache_kwargs...); cache_update_kwargs...)
 end
 
 function converged_cache(

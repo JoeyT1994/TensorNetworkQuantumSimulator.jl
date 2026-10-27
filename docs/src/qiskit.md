@@ -37,7 +37,7 @@ g = build_graph_from_circuit(circuit)
 expect(ψ, [("Z", [1]), ("ZZ", [1, 4])]; alg = "bp")
 ```
 
-Qubit `q[k]` becomes vertex `k + 1` (qiskit numbers qubits from 0), counting across `qreg`s in the order they are declared. Barriers and measurements at the end of the circuit are dropped: the result is the state before measurement, which you can sample with `sample`.
+Qubit `q[k]` becomes vertex `k + 1` (qiskit numbers qubits from 0), counting across `qreg`s in the order they are declared. Barriers and measurements at the end of the circuit are dropped: the result is the state before measurement, which you can sample with `sample`. Idle qubits are retained through identity gates.
 
 ## Choosing the graph
 
@@ -50,6 +50,8 @@ g = named_hexagonal_lattice_graph(2, 2)
 qubits = collect(vertices(g))
 circuit = circuit_from_qasm(read("circuit.qasm", String); qubits)
 ```
+
+If idle qubits or independent groups of gates make the circuit graph disconnected, `build_graph_from_circuit` raises an error. Supply a connected graph containing all the qubits, or simulate the connected components separately. Extra edges start with bond dimension one and do not entangle the initial product state.
 
 Every two-qubit gate must then act on neighbouring vertices. Let qiskit route the circuit onto the graph first, using the graph's edges, numbered the same way, as its coupling map:
 
@@ -93,7 +95,7 @@ Qiskit.jl numbers qubits from 1, and qubit `k` becomes vertex `k`. The `qubits` 
 
 ## What is supported
 
-- Every one- and two-qubit qiskit standard gate (see [Supported Gates](gates.md#Supported-Gates)). In OpenQASM, gates the program defines itself (`gate name(params) args { ... }`) are expanded from their definitions; gates the registry knows are taken from it, so qiskit's own definitions of standard gates are not needed.
+- Every one- and two-qubit qiskit standard gate (see [Supported Gates](gates.md#Supported-Gates)). In OpenQASM, explicit gate definitions (`gate name(params) args { ... }`) take precedence over the registry. Gates without an explicit definition use the registry.
 - Parameters as numbers or expressions (`pi/4`, `-0.5*theta`, `sin(...)`, ...). Parameterised qiskit circuits must be bound to numbers before export.
 - Barriers, delays and the global phase are dropped, as are measurements at the end of the circuit.
 

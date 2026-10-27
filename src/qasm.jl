@@ -4,10 +4,9 @@
     circuit_from_qasm(qasm; qubits = nothing)
 
 The gate list (see `apply_gates`) of an OpenQASM 2 program, e.g. one written by qiskit's
-`qasm2.dumps(circuit)`. Gates are looked up by their qiskit names in the gate registry; gates
-defined in the program (`gate name(params) args { ... }`) that the registry does not know are
-expanded from their definitions. Barriers and measurements at the end of the circuit are
-dropped.
+`qasm2.dumps(circuit)`. Gates defined in the program (`gate name(params) args { ... }`) are
+expanded from their definitions; other gates are looked up by their qiskit names in the gate
+registry. Barriers and measurements at the end of the circuit are dropped.
 
 Build the graph from the circuit with `build_graph_from_circuit`, or simulate on a graph of
 your own by passing the vertex of each qubit as `qubits`; two-qubit gates must then act on
@@ -21,7 +20,8 @@ neighbouring vertices (transpile the circuit onto the graph's connectivity first
   `qreg`s). Defaults to the qubit numbers `1, 2, ...`.
 
 # Returns
-- A `Vector` of gates, `(name, vertices)` or `(name, vertices, parameters)`.
+- A `Vector` of gates, `(name, vertices)` or `(name, vertices, parameters)`, with identity gates
+  on idle qubits to preserve them.
 
 Gates on three or more qubits, resets, classically controlled gates and gates after a
 measurement are not supported; decompose such circuits first (e.g. qiskit's `transpile` with
@@ -178,10 +178,12 @@ end
 
 qubit_list(p::QASMProgram, tokens) = reduce(vcat, [operand(p, a) for a in split_commas(tokens)]; init = Int[])
 
-# Apply `name` to `qubits`: from the registry if it has the gate, otherwise from its definition.
+# Explicit definitions take precedence over the registry, even for familiar gate names.
 function call_gate!(p::QASMProgram, name, params, qubits)
-    add_gate!(p.circuit, name, params, qubits) && return p
-    haskey(p.definitions, name) || unsupported_gate(name, qubits)
+    if !haskey(p.definitions, name)
+        add_gate!(p.circuit, name, params, qubits) || unsupported_gate(name, qubits)
+        return p
+    end
     pnames, args, body = p.definitions[name]
     (length(pnames) == length(params) && length(args) == length(qubits)) ||
         qasm_error("gate \"$name\" called with the wrong number of parameters or qubits")

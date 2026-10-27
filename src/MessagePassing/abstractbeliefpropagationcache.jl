@@ -314,7 +314,7 @@ cache estimates it (for BP and boundary MPS, the ratio of its vertex to its edge
 """
 function freenergy(bp_cache::AbstractBeliefPropagationCache)
     numerator_terms, denominator_terms = scalar_factors_quotient(bp_cache)
-    any(iszero, denominator_terms) && return -Inf
+    any(iszero, denominator_terms) && return Inf
     return sum(principal_log, denominator_terms) - sum(principal_log, numerator_terms)
 end
 
