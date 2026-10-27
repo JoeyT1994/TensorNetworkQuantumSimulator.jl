@@ -99,8 +99,8 @@ end
 
 #Given a circuit of two-site and 1-site gates, build the graph induced by the circuit
 #Entries in the circuit should be Tuple(gate_str, Vector{<:Vertices gate acts on}, optional param)
-function build_graph_from_circuit(circ::Vector{<:Any})
-    g = NamedGraph(unique(reduce(vcat, [gate[2] for gate in circ])))
+function build_graph_from_circuit(circ::Vector; qubits = unique(Iterators.flatten(gate[2] for gate in circ)))
+    g = NamedGraph(collect(qubits))
     for gate in circ
         qubits = gate[2]
         if length(qubits) == 2
@@ -108,9 +108,5 @@ function build_graph_from_circuit(circ::Vector{<:Any})
             !has_edge(g, NamedEdge(v1 => v2)) && add_edge!(g, NamedEdge(v1 => v2))
         end
     end
-
-
-    !is_connected(g) && error("The circuit graph is not connected, meaning the resulting tensor network will be disconnected which we do not support.
-    Considering simulating the connected components separately, as no entanglement will be generated between them.")
     return g
 end

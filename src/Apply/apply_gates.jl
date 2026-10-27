@@ -1,10 +1,10 @@
 """
-    apply_gates(circuit::Vector, ψ::Union{TensorNetworkState, BeliefPropagationCache}; cache_update_kwargs = default_bp_update_kwargs(ψ), kwargs...)
+    apply_gates(circuit, ψ::Union{TensorNetworkState, BeliefPropagationCache}; cache_update_kwargs = default_bp_update_kwargs(ψ), kwargs...)
 
 Apply a sequence of gates, via simple update, to a `TensorNetworkState` or a `BeliefPropagationCache` wrapping a `TensorNetworkState`, using belief propagation to update the environment.
 
 # Arguments
-- `circuit::Vector`: The gates, as tuples `(name, vertices)` or `(name, vertices, parameters)`, or as gate tensors.
+- `circuit`: A [`Circuit`](@ref), or a vector of gates as tuples `(name, vertices)` or `(name, vertices, parameters)`, or as gate tensors.
 - `ψ::TensorNetworkState`: The tensor network state to which the gates will be applied.
 
 # Keyword Arguments

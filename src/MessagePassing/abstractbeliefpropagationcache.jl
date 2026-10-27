@@ -260,6 +260,7 @@ function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
     bpc = copy(bpc)
     invalidate_contraction_sequences!(bpc)
     es = alg.kwargs.edge_sequence
+    isempty(es) && return bpc
     diff = !isnothing(alg.kwargs.tolerance)
     # the change per sweep is the average message change
     step!() = (d = update_iteration!(alg, bpc, es; diff); diff ? d / length(es) : nothing)
@@ -315,7 +316,7 @@ cache estimates it (for BP and boundary MPS, the ratio of its vertex to its edge
 function freenergy(bp_cache::AbstractBeliefPropagationCache)
     numerator_terms, denominator_terms = scalar_factors_quotient(bp_cache)
     any(iszero, denominator_terms) && return Inf
-    return sum(principal_log, denominator_terms) - sum(principal_log, numerator_terms)
+    return sum(principal_log, denominator_terms; init = 0) - sum(principal_log, numerator_terms; init = 0)
 end
 
 """

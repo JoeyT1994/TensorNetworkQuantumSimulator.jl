@@ -1,7 +1,7 @@
 module TensorNetworkQuantumSimulatorQiskitExt
 
 using Qiskit: QuantumCircuit
-using TensorNetworkQuantumSimulator: TensorNetworkQuantumSimulator, ImportedCircuit, add_gate!, gate_list,
+using TensorNetworkQuantumSimulator: TensorNetworkQuantumSimulator, ImportedCircuit, add_gate!, finish_circuit,
     measure!, unsupported_gate
 
 function TensorNetworkQuantumSimulator.circuit_from_qiskit(qc::QuantumCircuit; qubits = nothing)
@@ -19,7 +19,7 @@ function TensorNetworkQuantumSimulator.circuit_from_qiskit(qc::QuantumCircuit; q
             add_gate!(circuit, name, instruction.params, qs) || unsupported_gate(name, qs)
         end
     end
-    return gate_list(circuit; qubits)
+    return finish_circuit(circuit; qubits)
 end
 
 end

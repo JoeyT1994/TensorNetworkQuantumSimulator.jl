@@ -27,6 +27,7 @@ ising_partitionfunction
 apply_gates
 simple_update
 full_update
+Circuit
 circuit_from_qasm
 circuit_from_qiskit
 ```

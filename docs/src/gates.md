@@ -19,7 +19,7 @@ end
 
 ### Circuits from qiskit (OpenQASM)
 
-Circuits written in qiskit or exported as OpenQASM 2 convert to gate lists with `circuit_from_qasm` (or `circuit_from_qiskit` for Qiskit.jl circuits). See [Circuits from Qiskit](qiskit.md).
+Circuits written in qiskit or exported as OpenQASM 2 convert to a `Circuit` containing the declared qubits and gate list with `circuit_from_qasm` (or `circuit_from_qiskit` for Qiskit.jl circuits). See [Circuits from Qiskit](qiskit.md).
 
 ### Edge Coloring
 

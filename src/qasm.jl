@@ -3,7 +3,7 @@
 """
     circuit_from_qasm(qasm; qubits = nothing)
 
-The gate list (see `apply_gates`) of an OpenQASM 2 program, e.g. one written by qiskit's
+Import an OpenQASM 2 program for `apply_gates`, e.g. one written by qiskit's
 `qasm2.dumps(circuit)`. Gates defined in the program (`gate name(params) args { ... }`) are
 expanded from their definitions; other gates are looked up by their qiskit names in the gate
 registry. Barriers and measurements at the end of the circuit are dropped.
@@ -20,8 +20,7 @@ neighbouring vertices (transpile the circuit onto the graph's connectivity first
   `qreg`s). Defaults to the qubit numbers `1, 2, ...`.
 
 # Returns
-- A `Vector` of gates, `(name, vertices)` or `(name, vertices, parameters)`, with identity gates
-  on idle qubits to preserve them.
+- A [`Circuit`](@ref) with all declared `qubits` and the imported `gates`.
 
 Gates on three or more qubits, resets, classically controlled gates and gates after a
 measurement are not supported; decompose such circuits first (e.g. qiskit's `transpile` with
@@ -44,7 +43,7 @@ g = build_graph_from_circuit(circuit)
 function circuit_from_qasm(qasm::AbstractString; qubits = nothing)
     program = QASMProgram(qasm_tokens(qasm))
     parse_program!(program)
-    return gate_list(program.circuit; qubits)
+    return finish_circuit(program.circuit; qubits)
 end
 
 # --- Tokens ---

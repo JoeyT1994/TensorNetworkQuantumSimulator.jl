@@ -1,6 +1,6 @@
 # Circuits from Qiskit
 
-Circuits written in qiskit, or in anything else that exports OpenQASM 2, can be simulated directly. They are converted into a gate list (see [Gate Application](gates.md)) and run with `apply_gates`. The gate registry follows qiskit's names and parameter conventions, so every one- and two-qubit qiskit standard gate converts exactly.
+Circuits written in qiskit, or in anything else that exports OpenQASM 2, can be simulated directly. They are converted into a `Circuit` holding the declared `qubits` and the `gates` (see [Gate Application](gates.md)), and run with `apply_gates`. The gate registry follows qiskit's names and parameter conventions, so every one- and two-qubit qiskit standard gate converts exactly.
 
 There are two routes:
 
@@ -37,7 +37,7 @@ g = build_graph_from_circuit(circuit)
 expect(ψ, [("Z", [1]), ("ZZ", [1, 4])]; alg = "bp")
 ```
 
-Qubit `q[k]` becomes vertex `k + 1` (qiskit numbers qubits from 0), counting across `qreg`s in the order they are declared. Barriers and measurements at the end of the circuit are dropped: the result is the state before measurement, which you can sample with `sample`. Idle qubits are retained through identity gates.
+Qubit `q[k]` becomes vertex `k + 1` (qiskit numbers qubits from 0), counting across `qreg`s in the order they are declared. Barriers and measurements at the end of the circuit are dropped: the result is the state before measurement, which you can sample with `sample`. `circuit.qubits` retains every declared qubit, including idle ones; `circuit.gates` contains only the imported gates.
 
 ## Choosing the graph
 
@@ -51,7 +51,7 @@ qubits = collect(vertices(g))
 circuit = circuit_from_qasm(read("circuit.qasm", String); qubits)
 ```
 
-If idle qubits or independent groups of gates make the circuit graph disconnected, `build_graph_from_circuit` raises an error. Supply a connected graph containing all the qubits, or simulate the connected components separately. Extra edges start with bond dimension one and do not entangle the initial product state.
+Idle qubits become isolated vertices in `build_graph_from_circuit(circuit)`. Independent groups of gates remain separate connected components. These circuits can be applied and sampled with belief propagation; algorithms such as CTMRG still require a connected graph. A supplied graph must contain every declared qubit.
 
 Every two-qubit gate must then act on neighbouring vertices. Let qiskit route the circuit onto the graph first, using the graph's edges, numbered the same way, as its coupling map:
 

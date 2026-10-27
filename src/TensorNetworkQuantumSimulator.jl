@@ -136,6 +136,7 @@ export
     von_neumann_entanglement_entropy,
     second_renyi_entanglement_entropy,
     build_graph_from_circuit,
+    Circuit,
     circuit_from_qasm,
     circuit_from_qiskit,
     reduced_density_matrix,

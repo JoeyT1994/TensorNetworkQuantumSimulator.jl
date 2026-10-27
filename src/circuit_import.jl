@@ -1,6 +1,28 @@
 # --- Circuits from other frameworks ---------------------------------------------
 # Shared by `circuit_from_qasm` and `circuit_from_qiskit`: instructions on numbered qubits
-# (1, 2, ...) become a gate list.
+# (1, 2, ...) become a circuit with declared qubits and a gate list.
+
+"""
+    Circuit(qubits, gates)
+
+A circuit's qubits, in declaration order, and its gates as `(name, vertices)` or
+`(name, vertices, parameters)` tuples. Idle qubits remain in `qubits` without adding gates.
+Pass the circuit directly to `build_graph_from_circuit` or `apply_gates`; access its gate
+list as `circuit.gates`.
+"""
+struct Circuit{V, G}
+    qubits::Vector{V}
+    gates::Vector{G}
+end
+
+build_graph_from_circuit(circuit::Circuit) = build_graph_from_circuit(circuit.gates; qubits = circuit.qubits)
+
+function apply_gates(circuit::Circuit, ψ::Union{TensorNetworkState, BeliefPropagationCache}; kwargs...)
+    all(v -> has_vertex(graph(ψ), v), circuit.qubits) ||
+        throw(ArgumentError("the state must contain every declared qubit of the circuit"))
+    isempty(circuit.gates) && return copy(ψ), Float64[]
+    return apply_gates(circuit.gates, ψ; kwargs...)
+end
 
 mutable struct ImportedCircuit
     nqubits::Int
@@ -36,28 +58,23 @@ function unsupported_gate(name, qubits)
     throw(ArgumentError("unknown gate \"$name\""))
 end
 
-# The gate list, on the vertices `qubits` (the qubit numbers by default).
-function gate_list(circuit::ImportedCircuit; qubits = nothing)
+# The circuit, on the vertices `qubits` (the qubit numbers by default).
+function finish_circuit(circuit::ImportedCircuit; qubits = nothing)
     if !isnothing(qubits) && length(qubits) != circuit.nqubits
         throw(ArgumentError("the circuit has $(circuit.nqubits) qubits but `qubits` has $(length(qubits)) vertices"))
     end
-    vertex = isnothing(qubits) ? identity : (k -> qubits[k])
-    # Identity gates keep idle qubits in the list without changing the state.
-    gates = copy(circuit.gates)
-    used = Set(q for (_, qs, _) in gates for q in qs)
-    for q in 1:circuit.nqubits
-        q in used || push!(gates, ("I", [q], Float64[]))
+    qubits = isnothing(qubits) ? collect(1:circuit.nqubits) : collect(qubits)
+    gates = map(circuit.gates) do (name, qs, params)
+        isempty(params) && return (name, qubits[qs])
+        return (name, qubits[qs], length(params) == 1 ? only(params) : Tuple(params))
     end
-    return map(gates) do (name, qs, params)
-        isempty(params) && return (name, vertex.(qs))
-        return (name, vertex.(qs), length(params) == 1 ? only(params) : Tuple(params))
-    end
+    return Circuit(qubits, gates)
 end
 
 """
     circuit_from_qiskit(qc::Qiskit.QuantumCircuit; qubits = nothing)
 
-The gate list (see `apply_gates`) of a Qiskit.jl circuit. Available once Qiskit.jl is loaded
+Import a Qiskit.jl circuit for `apply_gates`. Available once Qiskit.jl is loaded
 (`using Qiskit`); for circuits built in Python, export them with `qasm2.dumps` and use
 `circuit_from_qasm`.
 
@@ -73,7 +90,6 @@ not supported; transpile such circuits to one- and two-qubit basis gates first.
 - `qubits = nothing`: The vertex of each qubit, in order. Defaults to the qubit numbers `1, 2, ...`.
 
 # Returns
-- A `Vector` of gates, `(name, vertices)` or `(name, vertices, parameters)`, with identity gates
-  on idle qubits to preserve them.
+- A [`Circuit`](@ref) with all declared `qubits` and the imported `gates`.
 """
 function circuit_from_qiskit end
