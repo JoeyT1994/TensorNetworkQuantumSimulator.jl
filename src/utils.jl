@@ -92,21 +92,21 @@ end
 
 function converged_cache(
         ::Algorithm"ctmrg", network;
-        maxdim::Integer,
+        env_maxdim::Integer,
         cache_update_kwargs,
         cache_kwargs...,
     )
-    return update(CTMRGCache(network, maxdim; cache_kwargs...); cache_update_kwargs...)
+    return update(CTMRGCache(network, env_maxdim; cache_kwargs...); cache_update_kwargs...)
 end
 
 function converged_cache(
         ::Algorithm"boundarymps", network;
-        mps_bond_dimension::Integer,
+        env_maxdim::Integer,
         partition_by = "row",
         gauge_state = false,
         cache_update_kwargs,
     )
-    cache = BoundaryMPSCache(network, mps_bond_dimension; partition_by, gauge_state)
+    cache = BoundaryMPSCache(network, env_maxdim; partition_by, gauge_state)
     return update(cache; cache_update_kwargs...)
 end
 

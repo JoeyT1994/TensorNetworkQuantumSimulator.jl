@@ -20,18 +20,18 @@ Compute the squared norm of a `TensorNetworkState` or the state wrapped in an up
 - `alg`: The algorithm to use. Options include:
     - `"exact"`: Exact contraction of the tensor network.
     - `"bp"`: Belief propagation approximation.
-    - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
-    - `"ctmrg"`: CTMRG approximation, on planar graphs (requires `maxdim`).
+    - `"boundarymps"`: Boundary MPS approximation (requires `env_maxdim`).
+    - `"ctmrg"`: CTMRG approximation, on planar graphs (requires `env_maxdim`).
     - `"loopcorrections"`: Loop corrections to belief propagation (requires `max_configuration_size`).
 - For `alg = "boundarymps"`:
-    - `mps_bond_dimension::Integer`: The bond dimension for the boundary MPS approximation.
+    - `env_maxdim::Integer`: The bond dimension for the boundary MPS approximation.
     - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
     - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
 - For `alg = "bp"` or `"loopcorrections"`:
     - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
     - `max_configuration_size`: Maximum configuration size for loop corrections (only for `"loopcorrections"`).
 - For `alg = "ctmrg"`:
-    - `maxdim::Integer`: The bond dimension of the CTMRG environments.
+    - `env_maxdim::Integer`: The bond dimension of the CTMRG environments.
     - `cache_update_kwargs`: Additional keyword arguments for updating the cache (by default only
       the free energy is converged).
 
@@ -47,7 +47,7 @@ nsq_exact = norm_sqr(ψ; alg = "exact")
 # Belief propagation squared norm
 nsq_bp = norm_sqr(ψ; alg = "bp")
 # Boundary MPS squared norm with bond dimension 10
-nsq_bmps = norm_sqr(ψ; alg = "boundarymps", mps_bond_dimension = 10)
+nsq_bmps = norm_sqr(ψ; alg = "boundarymps", env_maxdim = 10)
 ```
 """
 function norm_sqr(tns::Union{TensorNetworkState, AbstractBeliefPropagationCache}; alg, kwargs...)
@@ -72,8 +72,8 @@ function norm_sqr(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_con
     return state_error("TensorNetworkState")
 end
 
-# The cache algorithms: converge a cache over ψ (`cache_kwargs` are the cache's: `mps_bond_dimension`,
-# `maxdim`, ...), then contract it.
+# The cache algorithms: converge a cache over ψ (`cache_kwargs` are the cache's:
+# `env_maxdim`, ...), then contract it.
 function norm_sqr(
         alg::Algorithm, ψ::TensorNetworkState;
         cache_update_kwargs = default_cache_update_kwargs(alg, ψ), max_configuration_size = nothing, cache_kwargs...

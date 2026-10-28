@@ -12,8 +12,8 @@ g = named_grid((8, 8))
 ψ_cpu = random_tensornetworkstate(ComplexF32, g; bond_dimension = 8)
 ψ_gpu = CUDA.cu(ψ_cpu)
 
-@time expect(ψ_cpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
-@time expect(ψ_gpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
+@time expect(ψ_cpu, ("Z", (1, 1)); alg = "boundarymps", env_maxdim = 16)
+@time expect(ψ_gpu, ("Z", (1, 1)); alg = "boundarymps", env_maxdim = 16)
 ```
 
 Caches can also be transferred to the GPU:

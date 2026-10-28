@@ -47,7 +47,7 @@ function main()
     #expectations_boundarymps = [real(expect(ψψ, obs))]
     #expectations_bp = [real(expect(ψ0, obs))]
 
-    mps_bond_dimension = 4
+    env_maxdim = 4
 
     # evolve! (First step takes long due to compilation)
     for l in 1:nl
@@ -61,7 +61,7 @@ function main()
 
         #Boundary MPS expectation
         ψ = network(ψ_bpc)
-        sz_boundarymps = expect(ψ, obs; alg = "boundarymps", mps_bond_dimension)
+        sz_boundarymps = expect(ψ, obs; alg = "boundarymps", env_maxdim)
 
         println("    Took time: $(t1.time) [s]. Max bond dimension: $(maxvirtualdim(ψ_bpc))")
         println("    Maximum Gate error for layer was $(maximum(errors))")

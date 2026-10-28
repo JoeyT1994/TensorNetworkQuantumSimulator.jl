@@ -5,7 +5,7 @@ function contract(alg::Algorithm"exact", tn::AbstractTensorNetwork; contraction_
 end
 
 # bp, boundarymps, ctmrg: the partition function of the converged cache. `cache_kwargs` are those
-# of the cache (`mps_bond_dimension`, `maxdim`, ...).
+# of the cache (`env_maxdim`, ...).
 function contract(alg::Union{Algorithm"bp", Algorithm"boundarymps", Algorithm"ctmrg"}, tn::TensorNetwork; cache_update_kwargs = default_cache_update_kwargs(alg, tn), cache_kwargs...)
     cache_update_kwargs = scalar_cache_update_kwargs(alg, cache_update_kwargs)
     return partitionfunction(converged_cache(alg, tn; cache_kwargs..., cache_update_kwargs))

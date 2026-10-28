@@ -2,17 +2,17 @@ using Random: Xoshiro
 using KrylovKit: Arnoldi, schursolve
 
 """
-    CTMRGCache(network, maxdim::Integer; positions, projector = :svd, pinv_rtol = 1e-3, seed = 1)
+    CTMRGCache(network, env_maxdim::Integer; positions, projector = :svd)
 
 Corner transfer matrix (CTMRG) environments for a tensor network on any planar graph. Every directed
 edge carries a message, as in belief propagation, and every inner face a ring of corners, each the
-contraction of a region of the network, with the cuts between them truncated to `maxdim`. The
+contraction of a region of the network, with the cuts between them truncated to `env_maxdim`. The
 environment of a vertex or edge (`incoming_messages`) is its messages together with the corners
 around it. Call `update` on it before computing free energies or expectation values.
 
 # Arguments
 - `network`: A `TensorNetwork`, a `TensorNetworkState` (its norm network) or a form, on a planar graph.
-- `maxdim::Integer`: The bond dimension each cut is truncated to.
+- `env_maxdim::Integer`: The bond dimension each cut is truncated to.
 
 # Keyword Arguments
 - `positions`: Vertex positions `v => (x, y)` defining the planar embedding (default: the vertex
@@ -21,20 +21,16 @@ around it. Call `update` on it before computing free energies or expectation val
   truncated SVD) of the two enlarged corners on either side of a cut. `:eig` (experimental) truncates
   all the cuts of a face together, keeping the dominant eigenvalues of the ring of its enlarged
   corners; it needs diagonal corners, so it is not available on every planar graph (e.g. kagome).
-- `pinv_rtol::Real = 1e-3`: Relative cutoff regularising the pseudo-inverses some updates use.
-- `seed::Integer = 1`: Seed for the random projectors of the first pass.
 
 # Returns
-- A `CTMRGCache`, whose update rules are fixed and certified exact at lossless `maxdim` (see `ctmrg_rules`).
+- A `CTMRGCache`, whose update rules are fixed and certified exact at lossless `env_maxdim` (see `ctmrg_rules`).
 """
 struct CTMRGCache{V, N} <: AbstractBeliefPropagationCache{V}
     network::N
     embedding::PlanarEmbedding{V}
     rules::CTMRGRules{V}
-    maxdim::Int
+    env_maxdim::Int
     projector::Symbol
-    pinv_rtol::Float64
-    rng::Xoshiro
     bonds::Dict{Tuple{V, V}, Vector{Index}}    # dart → the network's legs on that edge
     sides::Dict{Tuple{V, V}, Index}            # interface → its current truncated leg
     messages::Dictionary{NamedEdge, Tensor}    # u => v → the message from u into v
@@ -50,18 +46,16 @@ contraction_sequences(cache::CTMRGCache) = nothing
 
 function Base.copy(cache::CTMRGCache)
     return CTMRGCache(
-        copy(cache.network), cache.embedding, cache.rules, cache.maxdim, cache.projector, cache.pinv_rtol, copy(cache.rng),
+        copy(cache.network), cache.embedding, cache.rules, cache.env_maxdim, cache.projector,
         copy(cache.bonds), copy(cache.sides), copy(cache.messages), copy(cache.corners), copy(cache.projectors),
         cache.sequences
     )
 end
 
 function CTMRGCache(
-        network, maxdim::Integer;
+        network, env_maxdim::Integer;
         positions = default_positions(graph(network)),
         projector::Symbol = :svd,
-        pinv_rtol::Real = 1.0e-3,
-        seed::Integer = 1,
     )
     projector in (:svd, :eig) || throw(ArgumentError("projector must be :svd or :eig, got $(repr(projector))"))
     g = graph(network)
@@ -75,7 +69,7 @@ function CTMRGCache(
     end
     sides = Dict{Tuple{V, V}, Index}(I => new_index(1; tags = "Link,ctm") for I in rules.interfaces)
     cache = CTMRGCache(
-        network, emb, rules, Int(maxdim), projector, Float64(pinv_rtol), Xoshiro(seed),
+        network, emb, rules, Int(env_maxdim), projector,
         bonds, sides, Dictionary{NamedEdge, Tensor}(), Dict{Tuple{V, Int}, Tensor}(),
         Dict{Tuple{V, V}, Tuple{Tensor, Tensor, Index}}(), Dict{Any, Any}()
     )
@@ -135,7 +129,7 @@ function recipe_tensors(
             push!(ts, isnothing(memo) ? enlarged() : get!(enlarged, memo, part[2]))
         elseif kind === :inverse
             chain = contract_blocks(cache, [cache.corners[k] for k in part[2]])
-            push!(ts, pseudo_inverse(chain, cache.sides[part[3][1]], cache.sides[part[3][2]], cache.pinv_rtol))
+            push!(ts, pseudo_inverse(chain, cache.sides[part[3][1]], cache.sides[part[3][2]], PINV_RTOL))
         else
             P = projectors[part[2]]
             push!(ts, part[3] === :A ? P[1] : P[2])
@@ -158,6 +152,9 @@ function contract_blocks(cache::CTMRGCache, ts::Vector)
     end
     return contract(ts; sequence)
 end
+
+# The relative cutoff regularising the pseudo-inverses some corner updates use.
+const PINV_RTOL = 1.0e-3
 
 # The pseudo-inverse N of a two-leg connector M, so that M N M = M (bilinearly). Singular values
 # below `rtol` (relative) are dropped.
@@ -218,11 +215,11 @@ function projector_pair(left, right, ins, maxdim)
     return PA, replaceind(PB, only(uniqueinds(PB, ins)), dag(w)), w
 end
 
-# A random isometry for the first pass: lossless at lossless maxdim, so that pass is already exact.
-function random_projector(cache::CTMRGCache, ins)
-    k = new_index(min(cache.maxdim, dim(ins)))
+# A random isometry for the first pass: lossless at lossless env_maxdim, so that pass is already exact.
+function random_projector(cache::CTMRGCache, ins, rng)
+    k = new_index(min(cache.env_maxdim, dim(ins)))
     ref = first(cache.messages)
-    Q, _ = qr(adapt_like(ref, random_tensor(cache.rng, real(scalartype(ref)), [ins; k])), ins)
+    Q, _ = qr(adapt_like(ref, random_tensor(rng, real(scalartype(ref)), [ins; k])), ins)
     return Q, dag(Q, ins), only(uniqueinds(Q, ins))
 end
 
@@ -242,8 +239,9 @@ end
 
 function random_projectors!(cache::CTMRGCache)
     new = empty(cache.projectors)
+    rng = Xoshiro(1)    # fixed, so every run of the first pass is the same
     for I in cache.rules.interfaces
-        new[I] = random_projector(cache, interface_legs(cache, I, J -> new[J][3]))
+        new[I] = random_projector(cache, interface_legs(cache, I, J -> new[J][3]), rng)
     end
     return set_projectors!(cache, new)
 end
@@ -282,7 +280,7 @@ function carried_projectors!(cache::CTMRGCache)
                 c == p ? push!(left, block(Ql, :A, parts)) : push!(right, block(Qr, :B, parts))
             end
         end
-        new[I] = projector_pair(left, right, interface_legs(cache, I, J -> new[J][3]), cache.maxdim)
+        new[I] = projector_pair(left, right, interface_legs(cache, I, J -> new[J][3]), cache.env_maxdim)
         old = cache.projectors[I]
         carry[(I, :A)] = contract_blocks(cache, isnothing(J) ? [old[2], new[I][1]] : [old[2], carry[(J, :A)], new[I][1]])
         carry[(I, :B)] = contract_blocks(cache, isnothing(J) ? [old[1], new[I][2]] : [old[1], carry[(J, :B)], new[I][2]])
@@ -293,7 +291,7 @@ end
 # Eigenvalue projectors for the interfaces of face f. They cut the ring of its enlarged corners,
 # Z_f = tr(K_1 ⋯ K_n), and each keeps the dominant invariant subspaces of the ring's transfer matrix
 # at that interface (the eigenvalues all the transfer matrices share). A face whose spectrum fits in
-# maxdim is left to the SVD projector, which is lossless there: these would drop the ring's
+# env_maxdim is left to the SVD projector, which is lossless there: these would drop the ring's
 # kernel, which other faces see. `nothing` also if a block has legs beyond its two interfaces.
 function eig_projectors(cache::CTMRGCache, f, ins_of, memo)
     emb, exits = cache.embedding, cache.rules.exits
@@ -312,7 +310,7 @@ function eig_projectors(cache::CTMRGCache, f, ins_of, memo)
     mats = [Array(reshape(array(K[k], before(k)..., ins[k]...), dim(before(k)), dim(ins[k]))) for k in 1:n]
     # The ring is a product of n blocks, so its eigenvalues are only known to about N ε ∏‖K‖
     noise = maximum(size.(mats, 2)) * eps(real(eltype(first(mats)))) * prod(norm, mats)
-    bases = ring_bases(mats, min(cache.maxdim, minimum(size.(mats, 2))), noise)
+    bases = ring_bases(mats, min(cache.env_maxdim, minimum(size.(mats, 2))), noise)
     isnothing(bases) && return nothing
     projectors = empty(cache.projectors)
     for k in 1:n
@@ -321,7 +319,7 @@ function eig_projectors(cache::CTMRGCache, f, ins_of, memo)
             return from_array(reshape(X, dim.(ins[k])..., size(X, 2)), [ins[k]; c])
         end
         V, W = basis(bases[1][k], "Link,right"), basis(bases[2][k], "Link,left")
-        projectors[I[k]] = projector_pair([adapt_like(K[k], W)], [adapt_like(K[k], V)], ins[k], cache.maxdim)
+        projectors[I[k]] = projector_pair([adapt_like(K[k], W)], [adapt_like(K[k], V)], ins[k], cache.env_maxdim)
     end
     return projectors
 end
@@ -469,7 +467,7 @@ function jacobi_pass!(cache::CTMRGCache)
         Ql, Qr = connectors(emb, rules.exits, p, q)
         Bw = evaluate_recipe(cache, [Ql; (:enlarged, (p, f))]; memo)
         Be = evaluate_recipe(cache, [Qr; (:enlarged, (q, f))]; memo)
-        new[I] = projector_pair([Bw], [Be], ins(I), cache.maxdim)
+        new[I] = projector_pair([Bw], [Be], ins(I), cache.env_maxdim)
     end
     blocks = Dict(b => recompute_block(cache, b; projectors = new, memo) for b in block_keys(emb))
     for (b, t) in blocks

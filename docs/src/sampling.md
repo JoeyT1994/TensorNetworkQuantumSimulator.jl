@@ -6,7 +6,7 @@ Draw bitstring samples from the probability distribution defined by the squared 
 
 ```julia
 # Returns bitstrings only (each bitstring is a Dictionary mapping vertices to 0/1)
-bitstrings = sample(ψ, 100; alg = "boundarymps", norm_mps_bond_dimension = 10)
+bitstrings = sample(ψ, 100; alg = "boundarymps", norm_env_maxdim = 10)
 ```
 
 BP-based sampling is also available and works on non-planar graphs, but scales quadratically with system size per sample rather than linearly:
@@ -22,7 +22,7 @@ Samples are drawn from an approximate distribution ``q(x)`` and for each sample 
 ```julia
 results = sample_directly_certified(ψ, 100;
     alg = "boundarymps",
-    norm_mps_bond_dimension = 10,
+    norm_env_maxdim = 10,
 )
 ```
 
@@ -31,7 +31,7 @@ Each result is a `NamedTuple` with fields:
 - `logq`: Log probability of drawing the bitstring under ``q``.
 - `bitstring`: The sampled bitstring as a `Dictionary` mapping vertices to configurations (0, 1, ..., d-1).
 
-The `projected_mps_bond_dimension` keyword controls the bond dimension used for the projected boundary MPS messages during contraction of `⟨x|ψ⟩`. It defaults to `5 * maxvirtualdim(ψ)`.
+The `projected_env_maxdim` keyword controls the bond dimension used for the projected boundary MPS messages during contraction of `⟨x|ψ⟩`. It defaults to `5 * maxvirtualdim(ψ)`.
 
 ## Certified Sampling
 
@@ -40,8 +40,8 @@ Similar to directly certified sampling, but performs an independent contraction 
 ```julia
 results = sample_certified(ψ, 100;
     alg = "boundarymps",
-    norm_mps_bond_dimension = 10,
-    certification_mps_bond_dimension = 50,
+    norm_env_maxdim = 10,
+    certification_env_maxdim = 50,
 )
 ```
 
@@ -56,7 +56,7 @@ The ``p(x)/q(x)`` ratios from certified sampling can be used for importance-samp
 ```julia
 results = sample_directly_certified(ψ, nsamples;
     alg = "boundarymps",
-    norm_mps_bond_dimension = 10,
+    norm_env_maxdim = 10,
 )
 
 # Estimate ⟨Z⟩ on a vertex using importance sampling
@@ -70,8 +70,8 @@ sampled_sz = sum(r.poverq * (-2 * r.bitstring[v] + 1) for r in results) / sum(r.
 
 | Keyword | Description |
 |---------|-------------|
-| `norm_mps_bond_dimension` | Bond dimension of the boundary MPS messages for contracting ``\langle\psi|\psi\rangle``. |
-| `projected_mps_bond_dimension` | Bond dimension for the projected MPS messages (default: `5 * maxvirtualdim(ψ)`). |
+| `norm_env_maxdim` | Bond dimension of the boundary MPS messages for contracting ``\langle\psi|\psi\rangle``. |
+| `projected_env_maxdim` | Bond dimension for the projected MPS messages (default: `5 * maxvirtualdim(ψ)`). |
 | `norm_cache_message_update_kwargs` | Additional kwargs for the norm cache message update. |
 | `partition_by` | How to partition the graph (`"row"` by default). |
 | `gauge_state` | Whether to gauge the state before sampling (default `true`). |

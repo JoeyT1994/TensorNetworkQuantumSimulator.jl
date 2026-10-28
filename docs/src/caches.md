@@ -99,7 +99,7 @@ A `BoundaryMPSCache` holds:
 2. **Messages** (`messages`): a `Dictionary` mapping directed _partition_ edges to MPS tensors. Unlike BP messages (which are uncorrelated with each other — i.e. they don't share common indices), boundary MPS messages do and the messages along a row / column cut of the network connect together to form an implicit MPS.
 3. **A partitioned graph** (`supergraph`): a `PartitionedGraph` that encodes how the 2D lattice has been partitioned into rows or columns.
 4. **Sorted edges** (`sorted_edges`): for each partition edge, the ordered list of underlying graph edges, which determines the MPS structure and is reused for efficiency.
-5. **MPS bond dimension** (`mps_bond_dimension`): the maximum dimension of the index connecting up the message tensors into an implicit MPS, controlling the accuracy–cost tradeoff.
+5. **MPS bond dimension** (`env_maxdim`): the maximum dimension of the index connecting up the message tensors into an implicit MPS, controlling the accuracy–cost tradeoff.
 6. **A contraction sequence cache** (`contraction_sequences`): same role as in the BP cache.
 
 ### How boundary MPS contraction works
@@ -125,7 +125,7 @@ Because each sweep involves MPS operations (contraction + SVD truncation), the c
 
 ```julia
 # From a TensorNetworkState (constructs cache internally)
-sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 16)
+sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", env_maxdim = 16)
 
 # Or construct the cache explicitly for reuse
 ψ_bmps = BoundaryMPSCache(ψ, 16)
@@ -147,28 +147,28 @@ By default, the partitioning direction is inferred from the observable layout:
 You can also specify the partitioning explicitly:
 
 ```julia
-sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 16, partition_by = "col")
+sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", env_maxdim = 16, partition_by = "col")
 ```
 
 ## CTMRG Cache
 
 ### What it stores
 
-A `CTMRGCache` holds corner transfer matrix (CTMRG) environments for a tensor network on any **planar** graph: square, hexagonal, triangular, kagome, Penrose tilings and so on. Every inner face of the graph carries a ring of _corner_ tensors, one per vertex of the face, and every directed edge carries a _message_ tensor. Each of these is the contraction of a region of the network, and the cuts between regions are truncated to a bond dimension `maxdim`. The environment of a vertex or edge is then its incoming messages together with the corners around it. The vertices need positions in the plane: by default the vertex names are used as coordinates, as for `named_grid` and the other lattice constructors, otherwise pass `positions = Dict(v => (x, y), ...)`.
+A `CTMRGCache` holds corner transfer matrix (CTMRG) environments for a tensor network on any **planar** graph: square, hexagonal, triangular, kagome, Penrose tilings and so on. Every inner face of the graph carries a ring of _corner_ tensors, one per vertex of the face, and every directed edge carries a _message_ tensor. Each of these is the contraction of a region of the network, and the cuts between regions are truncated to a bond dimension `env_maxdim`. The environment of a vertex or edge is then its incoming messages together with the corners around it. The vertices need positions in the plane: by default the vertex names are used as coordinates, as for `named_grid` and the other lattice constructors, otherwise pass `positions = Dict(v => (x, y), ...)`.
 
-The order in which the corners and messages are updated is worked out from the geometry when the cache is built, and is checked to give the exact contraction at large enough `maxdim`.
+The order in which the corners and messages are updated is worked out from the geometry when the cache is built, and is checked to give the exact contraction at large enough `env_maxdim`.
 
 ### When to use it
 
 - **Accurate expectation values on planar graphs that are not grids**, where boundary MPS cannot partition the graph into rows or columns.
-- **Free energies and partition functions** of planar classical models, via `contract(tn; alg = "ctmrg", maxdim)`.
-- Like boundary MPS, results converge to the exact answer as `maxdim` grows.
+- **Free energies and partition functions** of planar classical models, via `contract(tn; alg = "ctmrg", env_maxdim)`.
+- Like boundary MPS, results converge to the exact answer as `env_maxdim` grows.
 
 ### Basic usage
 
 ```julia
 # From a TensorNetworkState (constructs and converges the cache internally)
-sz = expect(ψ, ("Z", [(3, 3)]); alg = "ctmrg", maxdim = 16)
+sz = expect(ψ, ("Z", [(3, 3)]); alg = "ctmrg", env_maxdim = 16)
 
 # Or construct the cache explicitly for reuse
 ψ_ctm = update(CTMRGCache(ψ, 16))
@@ -177,7 +177,7 @@ szz = expect(ψ_ctm, ("ZZ", [(3, 3), (3, 4)]))
 ρ = reduced_density_matrix(ψ_ctm, [(3, 3), (3, 4)])
 
 # Partition function of a single-layer network
-Z = contract(tn; alg = "ctmrg", maxdim = 16)
+Z = contract(tn; alg = "ctmrg", env_maxdim = 16)
 ```
 
 Observables can act on one vertex or on the two ends of an edge.
@@ -197,7 +197,7 @@ Observables can act on one vertex or on the two ends of an edge.
 
 ### Projectors
 
-`CTMRGCache(ψ, maxdim; projector = :svd)` chooses how the cuts are truncated. The default, `:svd`, keeps the best approximation (a truncated SVD) of the two enlarged corners on either side of each cut. `projector = :eig` (experimental) truncates the cuts of a face together, keeping the dominant eigenvalues of the ring of corners around it; it is often more accurate when `maxdim` is small relative to the entanglement of the state, but is not available on graphs that need more general corner updates (such as kagome lattices or large Penrose tilings).
+`CTMRGCache(ψ, env_maxdim; projector = :svd)` chooses how the cuts are truncated. The default, `:svd`, keeps the best approximation (a truncated SVD) of the two enlarged corners on either side of each cut. `projector = :eig` (experimental) truncates the cuts of a face together, keeping the dominant eigenvalues of the ring of corners around it; it is often more accurate when `env_maxdim` is small relative to the entanglement of the state, but is not available on graphs that need more general corner updates (such as kagome lattices or large Penrose tilings).
 
 ## Choosing between BP, Boundary MPS and CTMRG
 
@@ -205,8 +205,8 @@ Observables can act on one vertex or on the two ends of an edge.
 |---|---|---|---|
 | **Graph requirement** | Any | Planar, partitionable into rows or columns | Planar |
 | **Accuracy** | Exact on trees, approximate on loopy graphs | Controllably accurate, converges to exact | Controllably accurate, converges to exact |
-| **Cost** | Low (linear in graph size per iteration) | Moderate (cubic in MPS bond dimension) | Moderate (cubic in `maxdim`) |
-| **Tuning parameter** | Number of iterations | MPS bond dimension | `maxdim` |
+| **Cost** | Low (linear in graph size per iteration) | Moderate (cubic in `env_maxdim`) | Moderate (cubic in `env_maxdim`) |
+| **Tuning parameter** | Number of iterations | `env_maxdim` | `env_maxdim` |
 | **Best for** | Fast approximate results, gate application environments | High-accuracy measurements, sampling | High-accuracy measurements and free energies on any planar graph |
 
 In practice, a common workflow is to use BP for gate application — where speed matters and approximate environments suffice, since any approximation error can be compensated by increasing the bond dimension — and boundary MPS for final measurements, where accuracy is critical:
@@ -218,7 +218,7 @@ In practice, a common workflow is to use BP for gate application — where speed
 
 # Accurate measurement with boundary MPS
 ψ = network(ψ_bpc)
-sz_bmps = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 20)
+sz_bmps = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", env_maxdim = 20)
 
 # Compare to BP
 sz_bp = expect(ψ_bpc, ("Z", (3, 3)))

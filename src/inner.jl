@@ -11,18 +11,18 @@ Compute the inner product ⟨ψ|ϕ⟩ between two `TensorNetworkState`s using th
 - `alg`: The algorithm to use for the inner product calculation. Options include:
     - `"exact"`: Exact contraction of the tensor network.
     - `"bp"`: Belief propagation approximation.
-    - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
-    - `"ctmrg"`: CTMRG approximation, on planar graphs (requires `maxdim`).
+    - `"boundarymps"`: Boundary MPS approximation (requires `env_maxdim`).
+    - `"ctmrg"`: CTMRG approximation, on planar graphs (requires `env_maxdim`).
     - `"loopcorrections"`: Loop corrections to belief propagation.
 - Extra kwargs for `alg = "boundarymps"`:
-    - `mps_bond_dimension::Integer`: The bond dimension for the boundary MPS approximation.
+    - `env_maxdim::Integer`: The bond dimension for the boundary MPS approximation.
     - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
     - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
 - Extra kwargs for `alg = "bp"` or `"loopcorrections"`:
     - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
     - `max_configuration_size`: Maximum configuration size for loop corrections (only for `"loopcorrections"`).
 - Extra kwargs for `alg = "ctmrg"`:
-    - `maxdim::Integer`: The bond dimension of the CTMRG environments.
+    - `env_maxdim::Integer`: The bond dimension of the CTMRG environments.
     - `cache_update_kwargs`: Additional keyword arguments for updating the cache (by default
       only the free energy is converged).
 
@@ -42,7 +42,7 @@ ip_exact = inner(ψ, ϕ; alg = "exact")
 ip_bp = inner(ψ, ϕ; alg = "bp")
 
 # Boundary MPS inner product with bond dimension 10
-ip_bmps = inner(ψ, ϕ; alg = "boundarymps", mps_bond_dimension = 10)
+ip_bmps = inner(ψ, ϕ; alg = "boundarymps", env_maxdim = 10)
 ```
 """
 function inner(ψ::TensorNetworkState, ϕ::TensorNetworkState; alg, kwargs...)
@@ -68,7 +68,7 @@ function inner(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_config
 end
 
 # The cache algorithms: converge a cache over ⟨ψ|ϕ⟩ (`cache_kwargs` are the cache's:
-# `mps_bond_dimension`, `maxdim`, ...), then contract it.
+# `env_maxdim`, ...), then contract it.
 function inner(
         alg::Algorithm, ψ::TensorNetworkState, ϕ::TensorNetworkState;
         cache_update_kwargs = default_cache_update_kwargs(alg, ψ), max_configuration_size = nothing, cache_kwargs...

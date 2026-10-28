@@ -37,7 +37,7 @@ verts = [(2, 2), (2, 3), (3, 2), (3, 3)]
 s = von_neumann_entanglement_entropy(ψ, verts; alg = "bp")
 
 # Via boundary MPS (more accurate on loopy graphs)
-s = von_neumann_entanglement_entropy(ψ, verts; alg = "boundarymps", mps_bond_dimension = 16)
+s = von_neumann_entanglement_entropy(ψ, verts; alg = "boundarymps", env_maxdim = 16)
 ```
 
 ## General Rényi Entropy

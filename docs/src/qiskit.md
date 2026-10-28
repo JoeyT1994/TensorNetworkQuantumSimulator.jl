@@ -41,7 +41,7 @@ Qubit `q[k]` becomes vertex `k + 1` (qiskit numbers qubits from 0), counting acr
 
 ## Choosing the graph
 
-**From the circuit.** `build_graph_from_circuit(circuit)` gives one vertex per qubit and an edge between every pair of qubits that a two-qubit gate couples, so every gate is local. This is the natural choice for circuits compiled for hardware: a circuit transpiled for an IBM device only couples neighbouring qubits, so its graph is a piece of the heavy-hex lattice. Circuits that couple many pairs of qubits (a quantum Fourier transform, say) give a graph with high-degree vertices, whose tensors are large and on which belief propagation is less accurate.
+**From the circuit.** `build_graph_from_circuit(circuit)` gives one vertex per qubit and an edge between every pair of qubits that a two-qubit gate couples, so every gate is local. This is the natural choice for circuits compiled for hardware: a circuit transpiled for an IBM device only couples neighbouring qubits, so its graph is a piece of the heavy-hex lattice. Circuits that couple many pairs of qubits (a quantum Fourier transform, say) give a graph with high-degree vertices, whose tensors are large.
 
 **A graph of your own.** Pass the vertex of each qubit as `qubits`:
 

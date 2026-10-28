@@ -79,10 +79,10 @@ function truncate(alg::Algorithm"bp", tns::TensorNetworkState; cache_update_kwar
 end
 
 # Truncate the bonds within the rows, then within the columns.
-function truncate(alg::Algorithm"boundarymps", tns::TensorNetworkState; mps_bond_dimension::Integer, gauge_state = true, kwargs...)
+function truncate(alg::Algorithm"boundarymps", tns::TensorNetworkState; env_maxdim::Integer, gauge_state = true, kwargs...)
     tns = copy(tns)
     for partition_by in ("row", "col")
-        bmps_cache = BoundaryMPSCache(tns, mps_bond_dimension; partition_by, gauge_state)
+        bmps_cache = BoundaryMPSCache(tns, env_maxdim; partition_by, gauge_state)
         quotient = quotient_graph(supergraph(bmps_cache))
         leaves = leaf_vertices(quotient)
         seq = QuotientEdge.(a_star(quotient, last(leaves), first(leaves)))
@@ -103,7 +103,7 @@ Truncate the virtual indices of tensors in the given `TensorNetworkState` using 
 # Keyword Arguments
 - `alg`: The algorithm to use for truncation. Supported algorithms:
     - `"bp"`: Belief propagation-based truncation (works on any network, cheap but can be less accurate when loop correlations are present).
-    - `"boundarymps"`: Boundary MPS-based truncation (requires `mps_bond_dimension`; works only on planar networks, more expensive but more accurate with large MPS bond dimension).
+    - `"boundarymps"`: Boundary MPS-based truncation (requires `env_maxdim`; works only on planar networks, more expensive but more accurate with large MPS bond dimension).
 - `maxdim::Integer`: The maximum bond dimension to retain after truncation.
 - `cutoff::Number`: The singular value cutoff for truncation (optional).
 

@@ -54,7 +54,7 @@ circuit = reduce(vcat, [layer for _ in 1:50])
 
 # 5. Measure an expectation value
 sz_bp = expect(ψ, ("Z", (3, 3)); alg = "bp")
-sz_bmps = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 10)
+sz_bmps = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", env_maxdim = 10)
 ```
 
 ## Usage Guide
@@ -129,7 +129,7 @@ Compute expectation values with `expect`, choosing from several contraction algo
 sz = expect(ψ, ("Z", (3, 3)); alg = "bp")
 
 # Boundary MPS (planar graphs only, more accurate, adjustable precision)
-sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 16)
+sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", env_maxdim = 16)
 
 # Exact contraction (only feasible for small systems)
 sz = expect(ψ, ("Z", (3, 3)); alg = "exact")
@@ -172,13 +172,13 @@ Draw bitstring samples from the probability distribution defined by the squared 
 
 ```julia
 # Basic sampling (returns bitstrings only)
-bitstrings = sample(ψ, 100; alg = "boundarymps", norm_mps_bond_dimension = 10)
+bitstrings = sample(ψ, 100; alg = "boundarymps", norm_env_maxdim = 10)
 
 # Directly certified sampling (returns bitstrings with p(x)/q(x) estimates)
-results = sample_directly_certified(ψ, 100; alg = "boundarymps", norm_mps_bond_dimension = 10)
+results = sample_directly_certified(ψ, 100; alg = "boundarymps", norm_env_maxdim = 10)
 
 # Certified sampling (independent contraction for certification)
-results = sample_certified(ψ, 100; alg = "boundarymps", norm_mps_bond_dimension = 10)
+results = sample_certified(ψ, 100; alg = "boundarymps", norm_env_maxdim = 10)
 ```
 
 BP-based sampling is also available via `alg = "bp"`.
@@ -229,8 +229,8 @@ g = named_grid((8, 8))
 ψ_cpu = random_tensornetworkstate(ComplexF32, g; bond_dimension = 8)
 ψ_gpu = CUDA.cu(ψ_cpu)
 
-@time expect(ψ_cpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
-@time expect(ψ_gpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
+@time expect(ψ_cpu, ("Z", (1, 1)); alg = "boundarymps", env_maxdim = 16)
+@time expect(ψ_gpu, ("Z", (1, 1)); alg = "boundarymps", env_maxdim = 16)
 ```
 
 Caches can also be transferred: `CUDA.cu(BeliefPropagationCache(ψ))`. Significant speedups are seen on NVIDIA GPUs at moderate to large bond dimensions.
@@ -240,7 +240,7 @@ Caches can also be transferred: `CUDA.cu(BeliefPropagationCache(ψ))`. Significa
 | Algorithm | Keyword | Graph requirement | Cost | Accuracy |
 |-----------|---------|-------------------|------|----------|
 | Belief propagation | `alg = "bp"` | Any | Low | Exact on trees, approximate on loopy graphs |
-| Boundary MPS | `alg = "boundarymps"` | Planar | Moderate (tuneable via `mps_bond_dimension`) | Converges to exact with increasing bond dimension |
+| Boundary MPS | `alg = "boundarymps"` | Planar | Moderate (tuneable via `env_maxdim`) | Converges to exact with increasing bond dimension |
 | Loop corrections | `alg = "loopcorrections"` | Any | Moderate | Systematic corrections to BP |
 | Exact contraction | `alg = "exact"` | Any (small systems) | Exponential | Exact |
 

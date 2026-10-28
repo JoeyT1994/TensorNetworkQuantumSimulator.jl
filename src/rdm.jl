@@ -14,7 +14,7 @@ Compute the reduced density matrix on the vertices `verts` of the tensor network
 - `verts`: The vertices over which to compute the reduced density matrix. Can be a single vertex or a collection of vertices.
 
 # Keyword Arguments
-- `alg::Union{String, Nothing}`: The contraction algorithm to use. If not provided, defaults based on the type of `ψ`. Supported algorithms are `"exact"`, `"bp"`, `"boundarymps"` and `"ctmrg"` (one vertex or the two ends of an edge, requires `maxdim`).
+- `alg::Union{String, Nothing}`: The contraction algorithm to use. If not provided, defaults based on the type of `ψ`. Supported algorithms are `"exact"`, `"bp"`, `"boundarymps"` and `"ctmrg"` (one vertex or the two ends of an edge, requires `env_maxdim`).
 - `normalize::Bool = true`: Whether to normalize the reduced density matrix so that its trace is 1.
 - `kwargs...`: Additional keyword arguments specific to the chosen algorithm.
 
@@ -49,7 +49,7 @@ function reduced_density_matrix(alg::Algorithm"boundarymps", cache::BoundaryMPSC
     return ρ
 end
 
-# bp and ctmrg: converge a cache over ψ (`cache_kwargs` are the cache's, e.g. `maxdim`).
+# bp and ctmrg: converge a cache over ψ (`cache_kwargs` are the cache's, e.g. `env_maxdim`).
 function reduced_density_matrix(
         alg::Union{Algorithm"bp", Algorithm"ctmrg"},
         ψ::TensorNetworkState,
@@ -65,11 +65,11 @@ function reduced_density_matrix(
         ψ::TensorNetworkState,
         verts::Vector;
         cache_update_kwargs = default_bmps_update_kwargs(ψ),
-        mps_bond_dimension::Integer,
+        env_maxdim::Integer,
         partition_by::String = boundarymps_partitioning([verts]),
         kwargs...,
     )
-    ψ_bpc = converged_cache(alg, ψ; mps_bond_dimension, partition_by, cache_update_kwargs)
+    ψ_bpc = converged_cache(alg, ψ; env_maxdim, partition_by, cache_update_kwargs)
     return reduced_density_matrix(alg, ψ_bpc, verts; kwargs...)
 end
 

@@ -9,7 +9,7 @@ struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{V}, M <: Union{Tensor, Vec
     messages::Dictionary{NamedEdge, M}
     supergraph::PartitionedGraph
     sorted_edges::Dictionary{QuotientEdge, Vector{NamedEdge}}
-    mps_bond_dimension::Integer
+    env_maxdim::Integer
     contraction_sequences::Dictionary{Pair, Vector}
 end
 
@@ -72,7 +72,7 @@ network(bmps_cache::BoundaryMPSCache) = bmps_cache.network
 messages(bmps_cache::BoundaryMPSCache) = bmps_cache.messages
 supergraph(bmps_cache::BoundaryMPSCache) = bmps_cache.supergraph
 graph(bmps_cache::BoundaryMPSCache) = unpartitioned_graph(supergraph(bmps_cache))
-mps_bond_dimension(bmps_cache::BoundaryMPSCache) = bmps_cache.mps_bond_dimension
+env_maxdim(bmps_cache::BoundaryMPSCache) = bmps_cache.env_maxdim
 sorted_edges(bmps_cache::BoundaryMPSCache) = bmps_cache.sorted_edges
 function sorted_edges(bmps_cache::BoundaryMPSCache, pe::QuotientEdge)
     return sorted_edges(bmps_cache)[pe]
@@ -98,7 +98,7 @@ function Base.copy(bmps_cache::BoundaryMPSCache)
         copy(messages(bmps_cache)),
         copy(supergraph(bmps_cache)),
         copy(sorted_edges(bmps_cache)),
-        mps_bond_dimension(bmps_cache),
+        env_maxdim(bmps_cache),
         copy(contraction_sequences(bmps_cache)),
     )
 end
@@ -113,12 +113,12 @@ function virtual_index_dimension(
     i, j = minmax(findfirst(==(e1), es), findfirst(==(e2), es))
     # the dimension of the message legs on the edges above, and below, the bond (Float64: it can be huge)
     legs_dim(es) = prod(Float64(dim(l)) for e in es for l in message_inds(network(bmps_cache), e); init = 1.0)
-    return Int(min(legs_dim(es[(i + 1):end]), legs_dim(es[1:(j - 1)]), Float64(mps_bond_dimension(bmps_cache))))
+    return Int(min(legs_dim(es[(i + 1):end]), legs_dim(es[1:(j - 1)]), Float64(env_maxdim(bmps_cache))))
 end
 
 function BoundaryMPSCache(
         tn::Union{TensorNetworkState, TensorNetwork, BilinearForm, QuadraticForm},
-        mps_bond_dimension::Integer;
+        env_maxdim::Integer;
         partition_by = "row",
         gauge_state = false,
         set_messages = true,
@@ -141,7 +141,7 @@ function BoundaryMPSCache(
     sorted_es = Dictionary{QuotientEdge, Vector{NamedEdge}}(pes, Vector{NamedEdge}[sorted_edges(supergraph, pe) for pe in pes])
 
     messages = default_messages()
-    bmps_cache = BoundaryMPSCache(tn, messages, supergraph, sorted_es, mps_bond_dimension, Dictionary{Pair, Vector}())
+    bmps_cache = BoundaryMPSCache(tn, messages, supergraph, sorted_es, env_maxdim, Dictionary{Pair, Vector}())
     is_correct_format(bmps_cache)
     set_messages && set_interpartition_messages!(bmps_cache, pes)
 
@@ -462,7 +462,7 @@ function update_message!(
         alg::Algorithm"zipup",
         bmps_cache::BoundaryMPSCache,
         pe::QuotientEdge;
-        maxdim::Integer = mps_bond_dimension(bmps_cache),
+        maxdim::Integer = env_maxdim(bmps_cache),
     )
     mpo, mps, right_inds = _bmps_apply_inputs(bmps_cache, pe)
     out = generic_apply(

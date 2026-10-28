@@ -39,8 +39,8 @@ Compute the expectation value of one or more observables on a tensor network sta
 - `alg::Union{String, Nothing}`: The algorithm to use. Supported algorithms:
     - `"exact"`: Exact contraction of the tensor network.
     - `"bp"`: Belief propagation approximation.
-    - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
-    - `"ctmrg"`: Corner transfer matrix environments on any planar graph (requires `maxdim`;
+    - `"boundarymps"`: Boundary MPS approximation (requires `env_maxdim`).
+    - `"ctmrg"`: Corner transfer matrix environments on any planar graph (requires `env_maxdim`;
       observables on one vertex or on the two ends of an edge).
 - `cache_update_kwargs...`: Keyword arguments passed to the `update` function when using `"bp"`, `"boundarymps"` or `"ctmrg"`.
 
@@ -110,7 +110,7 @@ function expect(
     return with_kernel_workspace(() -> map(obs -> expect(alg, cache, obs), observables))
 end
 
-# bp and ctmrg: converge a cache over ψ (`cache_kwargs` are the cache's, e.g. `maxdim`), then measure.
+# bp and ctmrg: converge a cache over ψ (`cache_kwargs` are the cache's, e.g. `env_maxdim`), then measure.
 function expect(
         alg::Union{Algorithm"bp", Algorithm"ctmrg"},
         ψ::TensorNetworkState,
@@ -127,11 +127,11 @@ function expect(
         observable::Union{Tuple, Vector{<:Tuple}};
         cache_update_kwargs = default_bmps_update_kwargs(ψ),
         partition_by = boundarymps_partitioning(observable_groups(observable, graph(ψ))),
-        mps_bond_dimension::Integer,
+        env_maxdim::Integer,
         gauge_state = true,
         kwargs...,
     )
-    ψ_bmps = converged_cache(alg, ψ; mps_bond_dimension, partition_by, gauge_state, cache_update_kwargs)
+    ψ_bmps = converged_cache(alg, ψ; env_maxdim, partition_by, gauge_state, cache_update_kwargs)
     return expect(alg, ψ_bmps, observable; kwargs...)
 end
 

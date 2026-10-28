@@ -52,15 +52,15 @@ function main()
     println("BP measured magnetisation on central site is $(only(sz_bp))")
 
     #Use boundary MPS to get same observab;e
-    mps_bond_dimension = 10
+    env_maxdim = 10
     ψ = network(ψ_bpc)
-    sz_bmps = expect(ψ, [("Z", [central_site])]; alg = "boundarymps", mps_bond_dimension)
+    sz_bmps = expect(ψ, [("Z", [central_site])]; alg = "boundarymps", env_maxdim)
 
-    println("Boundary MPS measured magnetisation on central site with MPS rank $(mps_bond_dimension) MPSs is $(only(sz_bmps))")
+    println("Boundary MPS measured magnetisation on central site with MPS rank $(env_maxdim) MPSs is $(only(sz_bmps))")
 
     #Sample from q(x) and get p(x) / q(x) for each sample too
     nsamples = 50
-    bitstrings = sample_directly_certified(ψ, nsamples; alg = "boundarymps", norm_mps_bond_dimension = mps_bond_dimension)
+    bitstrings = sample_directly_certified(ψ, nsamples; alg = "boundarymps", norm_env_maxdim = env_maxdim)
 
     st_dev = Statistics.std(first.(bitstrings))
     println("Standard deviation of p(x) / q(x) is $(st_dev)")

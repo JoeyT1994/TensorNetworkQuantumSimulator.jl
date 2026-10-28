@@ -18,7 +18,7 @@ using TensorNetworkQuantumSimulator: virtualinds, tensors
     ψ = gauge_and_scale(ψ)
 
     ψ_trunc_bp = truncate(ψ; alg = "bp", maxdim = 2, cutoff = 1.0e-10, normalize_tensors = false)
-    ψ_trunc_bmps = truncate(ψ; alg = "boundarymps", maxdim = 2, cutoff = 1.0e-10, normalize_tensors = false, gauge_state = false, mps_bond_dimension = 9)
+    ψ_trunc_bmps = truncate(ψ; alg = "boundarymps", maxdim = 2, cutoff = 1.0e-10, normalize_tensors = false, gauge_state = false, env_maxdim = 9)
 
     f_bp = inner(ψ_trunc_bp, ψ; alg = "exact") / sqrt(norm_sqr(ψ_trunc_bp; alg = "exact") * norm_sqr(ψ; alg = "exact"))
     f_bmps = inner(ψ_trunc_bmps, ψ; alg = "exact") / sqrt(norm_sqr(ψ_trunc_bmps; alg = "exact") * norm_sqr(ψ; alg = "exact"))

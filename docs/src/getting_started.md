@@ -29,7 +29,7 @@ circuit = reduce(vcat, [layer for _ in 1:50])
 
 # 5. Measure an expectation value
 sz_bp = expect(ψ, ("Z", (3, 3)); alg = "bp")
-sz_bmps = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 10)
+sz_bmps = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", env_maxdim = 10)
 ```
 
 ## Step-by-step Walkthrough
@@ -90,7 +90,7 @@ Use `expect` to compute expectation values. Several contraction algorithms are a
 sz_bp = expect(ψ, ("Z", (3, 3)); alg = "bp")
 
 # Boundary MPS (more accurate, planar graphs only)
-sz_bmps = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 10)
+sz_bmps = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", env_maxdim = 10)
 ```
 
 See [Expectation Values](expectation_values.md) for more options including norms, inner products, and reduced density matrices.
@@ -100,7 +100,7 @@ See [Expectation Values](expectation_values.md) for more options including norms
 Draw samples from the Born distribution defined by the state:
 
 ```julia
-bitstrings = sample(ψ, 100; alg = "boundarymps", norm_mps_bond_dimension = 10)
+bitstrings = sample(ψ, 100; alg = "boundarymps", norm_env_maxdim = 10)
 ```
 
 See [Sampling](sampling.md) for certified and directly certified sampling variants.

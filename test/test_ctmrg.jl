@@ -24,7 +24,7 @@ end
     tn = positive_network(g)
     Z = contract(tn; alg = "exact")
     @test freenergy(update(CTMRGCache(tn, 256))) ≈ -log(Z) atol = tol
-    @test contract(tn; alg = "ctmrg", maxdim = 256) ≈ Z rtol = tol
+    @test contract(tn; alg = "ctmrg", env_maxdim = 256) ≈ Z rtol = tol
 end
 
 @testset "CTMRG below lossless χ: the error shrinks with χ" begin
@@ -47,6 +47,6 @@ end
     @test expect(update(CTMRGCache(ψ, 64; projector = :eig)), obs) ≈ exact atol = 1.0e-8
     @test norm_sqr(cache; alg = "ctmrg") ≈ norm_sqr(ψ; alg = "exact") rtol = 1.0e-8
     ϕ = random_tensornetworkstate(ComplexF64, g, siteinds(ψ); bond_dimension = 2)
-    @test inner(ψ, ϕ; alg = "ctmrg", maxdim = 64) ≈ inner(ψ, ϕ; alg = "exact") rtol = 1.0e-8
+    @test inner(ψ, ϕ; alg = "ctmrg", env_maxdim = 64) ≈ inner(ψ, ϕ; alg = "exact") rtol = 1.0e-8
 end
 end

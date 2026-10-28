@@ -21,8 +21,8 @@ using Test: @testset, @test
         ψψ_bpc = update(BeliefPropagationCache(ψψ))
         @test partitionfunction(ψψ_bpc) ≈ norm_sqr(ψ; alg = "bp")
 
-        mps_bond_dimension = 16
-        ψψ_bmps = update(BoundaryMPSCache(ψψ, mps_bond_dimension))
+        env_maxdim = 16
+        ψψ_bmps = update(BoundaryMPSCache(ψψ, env_maxdim))
         @test partitionfunction(ψψ_bmps) ≈ norm_sqr(ψ; alg = "exact")
     end
 

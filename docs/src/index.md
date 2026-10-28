@@ -25,8 +25,8 @@ A Julia package for simulating quantum circuits, quantum dynamics and equilibriu
 | Algorithm | Keyword | Graph Requirement | Cost | Accuracy |
 |-----------|---------|-------------------|------|----------|
 | Belief propagation | `alg = "bp"` | Any | Low | Exact on trees, approximate on loopy graphs |
-| Boundary MPS | `alg = "boundarymps"` | Planar | Variable (scales cubically in `mps_bond_dimension`) | Controllably accurate, converges to exact with increasing MPS bond dimension |
-| CTMRG | `alg = "ctmrg"` | Planar | Variable (scales cubically in `maxdim`) | Controllably accurate, converges to exact with increasing `maxdim` |
+| Boundary MPS | `alg = "boundarymps"` | Planar | Variable (scales cubically in `env_maxdim`) | Controllably accurate, converges to exact with increasing MPS bond dimension |
+| CTMRG | `alg = "ctmrg"` | Planar | Variable (scales cubically in `env_maxdim`) | Controllably accurate, converges to exact with increasing `env_maxdim` |
 | Loop corrections | `alg = "loopcorrections"` | Any | Moderate | Systematic corrections to BP; accurate when correlations decay exponentially |
 | Exact contraction | `alg = "exact"` | Any (small systems only) | Exponential in system size | Exact |
 

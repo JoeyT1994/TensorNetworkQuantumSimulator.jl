@@ -48,14 +48,14 @@ function sample(
         alg::Algorithm"boundarymps",
         ψ::TensorNetworkState,
         nsamples::Integer;
-        projected_mps_bond_dimension::Integer,
-        norm_mps_bond_dimension::Integer,
+        projected_env_maxdim::Integer,
+        norm_env_maxdim::Integer,
         norm_cache_message_update_kwargs = (;),
         partition_by = "row",
         gauge_state = true,
         kwargs...,
     )
-    norm_bmps_cache = BoundaryMPSCache(ψ, norm_mps_bond_dimension; gauge_state, partition_by)
+    norm_bmps_cache = BoundaryMPSCache(ψ, norm_env_maxdim; gauge_state, partition_by)
     leaves = leaf_vertices(quotient_graph(supergraph(norm_bmps_cache)))
     seq = QuotientEdge.(a_star(quotient_graph(supergraph(norm_bmps_cache)), last(leaves), first(leaves)))
     norm_cache_message_update_kwargs = (; norm_cache_message_update_kwargs..., normalize = false)
@@ -65,7 +65,7 @@ function sample(
     probs_and_bitstrings = NamedTuple[]
     for j in 1:nsamples
         p_over_q_approx, logq, bitstring = get_one_sample(
-            norm_bmps_cache, seq; projected_mps_bond_dimension, kwargs...
+            norm_bmps_cache, seq; projected_env_maxdim, kwargs...
         )
         push!(probs_and_bitstrings, (poverq = p_over_q_approx, logq = logq, bitstring = bitstring))
     end
@@ -85,8 +85,8 @@ Draw `nsamples` bitstrings from the probability distribution defined by the squa
 # Keyword Arguments
 - `alg::String`: The algorithm to use for sampling (`"boundarymps"` and `"bp"` currently supported).
 - For `alg = "boundarymps"`:
-    - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state ⟨x|ψ⟩.
-    - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract ⟨ψ|ψ⟩.
+    - `projected_env_maxdim::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state ⟨x|ψ⟩.
+    - `norm_env_maxdim::Int`: Bond dimension of the boundary MPS messages used to contract ⟨ψ|ψ⟩.
     - `norm_cache_message_update_kwargs`: Keyword arguments for updating the norm boundary MPS messages.
     - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
     - `gauge_state`: Whether to gauge the state before sampling (default is `true`).
@@ -116,8 +116,8 @@ Draw `nsamples` bitstrings from a 2D open-boundary tensor network state. Samples
 # Keyword Arguments
 - `alg::String`: The algorithm to use for sampling (`"boundarymps"` currently supported).
 - For `alg = "boundarymps"`:
-    - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state ⟨x|ψ⟩.
-    - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract ⟨ψ|ψ⟩.
+    - `projected_env_maxdim::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state ⟨x|ψ⟩.
+    - `norm_env_maxdim::Int`: Bond dimension of the boundary MPS messages used to contract ⟨ψ|ψ⟩.
     - `norm_cache_message_update_kwargs`: Keyword arguments for updating the norm boundary MPS messages.
     - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
     - `gauge_state`: Whether to gauge the state before sampling (default is `true`).
@@ -128,9 +128,9 @@ Draw `nsamples` bitstrings from a 2D open-boundary tensor network state. Samples
     - `logq`: Log probability of drawing the bitstring.
     - `bitstring`: The sampled bitstring as a dictionary mapping each vertex to a configuration (0...d-1).
 """
-function sample_directly_certified(ψ::TensorNetworkState, nsamples::Integer; projected_mps_bond_dimension = 5 * maxvirtualdim(ψ), alg = nothing, kwargs...)
+function sample_directly_certified(ψ::TensorNetworkState, nsamples::Integer; projected_env_maxdim = 5 * maxvirtualdim(ψ), alg = nothing, kwargs...)
     algorithm_check(ψ, "sample_certified", alg)
-    probs_and_bitstrings, _ = sample(Algorithm(alg), ψ, nsamples; projected_mps_bond_dimension, kwargs...)
+    probs_and_bitstrings, _ = sample(Algorithm(alg), ψ, nsamples; projected_env_maxdim, kwargs...)
     # returns the self-certified p/q, logq and bitstrings
     return probs_and_bitstrings
 end
@@ -147,9 +147,9 @@ Draw `nsamples` bitstrings from a 2D open-boundary tensor network state. Samples
 # Keyword Arguments
 - `alg::String`: The algorithm to use for sampling (`"boundarymps"` currently supported).
 - For `alg = "boundarymps"`:
-    - `projected_mps_bond_dimension::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state ⟨x|ψ⟩.
-    - `norm_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract ⟨ψ|ψ⟩.
-    - `certification_mps_bond_dimension::Int`: Bond dimension of the boundary MPS messages used to contract ⟨x|ψ⟩ for certification.
+    - `projected_env_maxdim::Int`: Bond dimension of the projected boundary MPS messages used during contraction of the projected state ⟨x|ψ⟩.
+    - `norm_env_maxdim::Int`: Bond dimension of the boundary MPS messages used to contract ⟨ψ|ψ⟩.
+    - `certification_env_maxdim::Int`: Bond dimension of the boundary MPS messages used to contract ⟨x|ψ⟩ for certification.
     - `norm_cache_message_update_kwargs`: Keyword arguments for updating the norm boundary MPS messages.
     - `certification_cache_message_update_kwargs`: Keyword arguments for the independent certification contraction.
     - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
@@ -160,21 +160,21 @@ Draw `nsamples` bitstrings from a 2D open-boundary tensor network state. Samples
     - `poverq`: Approximate value of p(x)/q(x) for the sampled bitstring x.
     - `bitstring`: The sampled bitstring as a dictionary mapping each vertex to a configuration (0...d-1).
 """
-function sample_certified(ψ::TensorNetworkState, nsamples::Int; alg = nothing, certification_mps_bond_dimension = 5 * maxvirtualdim(ψ), certification_cache_message_update_kwargs = (;), kwargs...)
+function sample_certified(ψ::TensorNetworkState, nsamples::Int; alg = nothing, certification_env_maxdim = 5 * maxvirtualdim(ψ), certification_cache_message_update_kwargs = (;), kwargs...)
     algorithm_check(ψ, "sample_certified", alg)
     # certify against the state the samples were drawn from, as it was gauged and rescaled for them
     probs_and_bitstrings, ψ_sampled = sample(Algorithm(alg), ψ, nsamples; kwargs...)
-    return certify_samples(ψ_sampled, probs_and_bitstrings; alg, certification_mps_bond_dimension, certification_cache_message_update_kwargs, gauge_state = false)
+    return certify_samples(ψ_sampled, probs_and_bitstrings; alg, certification_env_maxdim, certification_cache_message_update_kwargs, gauge_state = false)
 end
 
 function get_one_sample(
         norm_bmps_cache::BoundaryMPSCache,
         seq::Vector{<:QuotientEdge};
-        projected_mps_bond_dimension::Integer,
+        projected_env_maxdim::Integer,
         kwargs...,
     )
     norm_bmps_cache = copy(norm_bmps_cache)
-    cutoff, maxdim = 1.0e-10, projected_mps_bond_dimension
+    cutoff, maxdim = 1.0e-10, projected_env_maxdim
 
     bit_string = Dictionary{keytype(vertices(network(norm_bmps_cache))), Int}()
     p_over_q_approx = nothing
@@ -242,7 +242,7 @@ end
 function certify_sample(
         alg::Algorithm"boundarymps",
         ψ::TensorNetworkState, bitstring, logq::Number;
-        certification_mps_bond_dimension::Integer,
+        certification_env_maxdim::Integer,
         certification_cache_message_update_kwargs = (;),
         gauge_state = true,
     )
@@ -258,7 +258,7 @@ function certify_sample(
         setindex_preserve!(ψproj, ψproj[v] * P * inv(qv), v)
     end
 
-    certification_mps_cache = BoundaryMPSCache(ψproj, certification_mps_bond_dimension)
+    certification_mps_cache = BoundaryMPSCache(ψproj, certification_env_maxdim)
     certification_cache_message_update_kwargs = (; normalize = false, certification_cache_message_update_kwargs...)
 
     certification_mps_cache = update(certification_mps_cache, message_update_alg = Algorithm("zipup"; certification_cache_message_update_kwargs...))

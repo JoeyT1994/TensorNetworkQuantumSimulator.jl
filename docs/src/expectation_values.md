@@ -64,8 +64,8 @@ sz_all = expect(ψ, observables; alg = "bp")
 # Belief propagation (works on any graph, fast, approximate on loopy graphs)
 sz = expect(ψ, ("Z", (3, 3)); alg = "bp")
 
-# Boundary MPS (planar graphs only, more accurate, adjustable precision with mps_bond_dimension)
-sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 16)
+# Boundary MPS (planar graphs only, more accurate, adjustable precision with env_maxdim)
+sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", env_maxdim = 16)
 
 # Exact contraction of the tensor network (only feasible for small systems)
 sz = expect(ψ, ("Z", (3, 3)); alg = "exact")
