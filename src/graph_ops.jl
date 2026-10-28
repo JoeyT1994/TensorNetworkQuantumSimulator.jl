@@ -102,9 +102,9 @@ end
 function build_graph_from_circuit(circ::Vector; qubits = unique(Iterators.flatten(gate[2] for gate in circ)))
     g = NamedGraph(collect(qubits))
     for gate in circ
-        qubits = gate[2]
-        if length(qubits) == 2
-            v1, v2 = first(qubits), last(qubits)
+        vs = gate[2]
+        if length(vs) == 2
+            v1, v2 = first(vs), last(vs)
             !has_edge(g, NamedEdge(v1 => v2)) && add_edge!(g, NamedEdge(v1 => v2))
         end
     end

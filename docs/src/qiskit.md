@@ -95,7 +95,7 @@ Qiskit.jl numbers qubits from 1, and qubit `k` becomes vertex `k`. The `qubits` 
 
 ## What is supported
 
-- Every one- and two-qubit qiskit standard gate (see [Supported Gates](gates.md#Supported-Gates)). In OpenQASM, explicit gate definitions (`gate name(params) args { ... }`) take precedence over the registry. Gates without an explicit definition use the registry.
+- Every one- and two-qubit qiskit standard gate (see [Supported Gates](gates.md#Supported-Gates)). In OpenQASM, gates the program defines itself (`gate name(params) args { ... }`) are expanded from their definitions; gates the registry knows are taken from it, as one native gate, so qiskit's own definitions of standard gates are not needed.
 - Parameters as numbers or expressions (`pi/4`, `-0.5*theta`, `sin(...)`, ...). Parameterised qiskit circuits must be bound to numbers before export.
 - Barriers, delays and the global phase are dropped, as are measurements at the end of the circuit.
 

@@ -311,7 +311,8 @@ principal_log(z) = real(z) < 0 ? log(complex(z)) : log(z)
     freenergy(cache)
 
 The free energy `-ln Z` of the network the cache was built from, `Z` being its contraction as the
-cache estimates it (for BP and boundary MPS, the ratio of its vertex to its edge scalars).
+cache estimates it (for BP and boundary MPS, the ratio of its vertex to its edge scalars). A zero
+edge scalar (e.g. between orthogonal states) is taken as `Z = 0`, so the free energy is `Inf`.
 """
 function freenergy(bp_cache::AbstractBeliefPropagationCache)
     numerator_terms, denominator_terms = scalar_factors_quotient(bp_cache)
