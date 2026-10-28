@@ -35,14 +35,16 @@ end
     @test errs[2] < 1.0e-6
 end
 
-@testset "CTMRG observables on a state, projector = $projector" for projector in (:svd, :eig)
+@testset "CTMRG observables on a state" begin
     Random.seed!(7)
     g = named_hexagonal_lattice_graph(2, 2)
     ψ = random_tensornetworkstate(ComplexF64, g, "S=1/2"; bond_dimension = 2)
     v, e = first(vertices(g)), first(edges(g))
     obs = [("Z", [v]), ("X", [v]), ("ZZ", [src(e), dst(e)]), ("XY", [src(e), dst(e)])]
-    cache = update(CTMRGCache(ψ, 64; projector))
-    @test expect(cache, obs) ≈ expect(ψ, obs; alg = "exact") atol = 1.0e-8
+    exact = expect(ψ, obs; alg = "exact")
+    cache = update(CTMRGCache(ψ, 64))
+    @test expect(cache, obs) ≈ exact atol = 1.0e-8
+    @test expect(update(CTMRGCache(ψ, 64; projector = :eig)), obs) ≈ exact atol = 1.0e-8
     @test norm_sqr(cache; alg = "ctmrg") ≈ norm_sqr(ψ; alg = "exact") rtol = 1.0e-8
     ϕ = random_tensornetworkstate(ComplexF64, g, siteinds(ψ); bond_dimension = 2)
     @test inner(ψ, ϕ; alg = "ctmrg", maxdim = 64) ≈ inner(ψ, ϕ; alg = "exact") rtol = 1.0e-8
