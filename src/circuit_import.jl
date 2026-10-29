@@ -63,6 +63,7 @@ function finish_circuit(circuit::ImportedCircuit; qubits = nothing)
     if !isnothing(qubits) && length(qubits) != circuit.nqubits
         throw(ArgumentError("the circuit has $(circuit.nqubits) qubits but `qubits` has $(length(qubits)) vertices"))
     end
+    !isnothing(qubits) && !allunique(qubits) && throw(ArgumentError("`qubits` must not repeat a vertex"))
     qubits = isnothing(qubits) ? collect(1:circuit.nqubits) : collect(qubits)
     gates = map(circuit.gates) do (name, qs, params)
         isempty(params) && return (name, qubits[qs])

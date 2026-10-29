@@ -12,7 +12,10 @@ function TensorNetworkQuantumSimulator.circuit_from_qiskit(qc::QuantumCircuit; q
         if name in ("barrier", "delay", "global_phase")
             continue
         elseif name == "measure"
+            # Measurements only end the circuit, so the clbit each one writes to is irrelevant.
             measure!(circuit, qs)
+        elseif !isempty(instruction.clbits)
+            throw(ArgumentError("instruction \"$name\" acts on classical bits; classical control is not supported"))
         elseif name in ("reset", "unitary")
             throw(ArgumentError("$name instructions are not supported"))
         else
