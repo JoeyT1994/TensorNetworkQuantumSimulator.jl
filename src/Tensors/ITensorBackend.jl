@@ -28,7 +28,7 @@ using TensorAlgebra: TensorAlgebra
 using GradedArrays: GradedArrays
 using TensorKitSectors: TensorKitSectors
 using ITensorBase: ITensorBase, ITensor, AbstractITensor, inds, prime, noprime, sim,
-    commoninds, uniqueinds, noncommoninds, unioninds, hascommoninds, replaceinds, aligndims
+    commoninds, uniqueinds, noncommoninds, unioninds, hascommoninds, rename, align
 import ITensorBase: Index
 using VectorInterface: VectorInterface
 using Adapt: Adapt, adapt
@@ -78,7 +78,7 @@ function Index(id::UInt64, sp, plev::Integer, tags::AbstractString, dual::Bool)
     if !(r isa Base.OneTo) && GA.isdual(r) != dual     # `sp` may itself carry an arrow: set it to `dual`
         r = GA.dual(r)
     end
-    return IB.named(r, nm)
+    return IB.NamedUnitRange(r, nm)
 end
 _id(i::Index) = UInt64(UInt128(IB.name(i).uuid) & typemax(UInt64))
 
@@ -151,16 +151,14 @@ function TensorInterface.pad_index(w::Index, ins::AbstractVector{<:Index}, kt::I
 end
 
 # The "charge 1" sector of a sector type, for the fresh-link split above.
-_unit_charge(::Type{S}) where {S <: GA.SectorRange} = _unit_charge_label(S)
-_unit_charge_label(::Type{GA.SectorRange{TKS.U1Irrep}}) = GA.U1(1)
-_unit_charge_label(::Type{GA.SectorRange{TKS.ZNIrrep{N}}}) where {N} = GA.Z{N}(1)
-_unit_charge_label(::Type{GA.SectorRange{TKS.FermionParity}}) = GA.SectorRange(TKS.FermionParity(1))
-function _unit_charge_label(::Type{GA.SectorRange{P}}) where {P <: TKS.ProductSector}
+_unit_charge(::Type{S}) where {S <: GA.Sector} = GA.Sector(_unit_charge_label(_label_type(S)))
+_unit_charge_label(::Type{L}) where {L <: Union{TKS.U1Irrep, TKS.ZNIrrep, TKS.FermionParity}} = L(1)
+function _unit_charge_label(::Type{P}) where {P <: TKS.ProductSector}
     T = fieldtype(P, :sectors)
     parts = map(fieldtypes(T)) do F
         F === TKS.FermionParity ? TKS.FermionParity(1) : F === TKS.U1Irrep ? TKS.U1Irrep(1) : F(1)
     end
-    return GA.SectorRange(P(parts))
+    return P(parts)
 end
 
 # ── Tensor basics ───────────────────────────────────────────────────────────────────────
@@ -187,7 +185,7 @@ _root_array(A::Base.PermutedDimsArray) = _root_array(parent(A))
 TensorInterface.array(t::AbstractTensor) = Array(IB.unnamed(t))
 function TensorInterface.array(t::AbstractTensor, is::Index...)
     length(is) == ndims(t) || error("array: expected $(ndims(t)) indices, got $(length(is))")
-    return Array(IB.unnamed(aligndims(t, is)))
+    return Array(IB.unnamed(align(t, is)))
 end
 # Raw storage as a vector: dense data flat; graded data the stored blocks concatenated.
 function TensorInterface.data(t::AbstractTensor)
@@ -229,11 +227,15 @@ function TensorInterface.scalar(t::AbstractTensor)
     return sum(Array(IB.unnamed(t)))
 end
 
-TensorInterface.prime(t::AbstractTensor, n::Integer = 1) = IB.mapinds(i -> TensorInterface.prime(i, n), t)
+# `rename(f, t)` maps the index NAMES (`IndexName`s); each leg keeps its range and orientation.
+_primename(nm, n) = IB.setplev(nm, IB.plev(nm) + n)
+TensorInterface.prime(t::AbstractTensor, n::Integer = 1) = rename(nm -> _primename(nm, n), t)
 TensorInterface.prime(t::AbstractTensor, is::Index...) = TensorInterface.prime(t, 1, is...)
-TensorInterface.prime(t::AbstractTensor, n::Integer, is::Index...) =
-    IB.mapinds(i -> i ∈ is ? TensorInterface.prime(i, n) : i, t)
-TensorInterface.noprime(t::AbstractTensor) = IB.mapinds(TensorInterface.noprime, t)
+function TensorInterface.prime(t::AbstractTensor, n::Integer, is::Index...)
+    nms = map(IB.name, is)
+    return rename(nm -> nm ∈ nms ? _primename(nm, n) : nm, t)
+end
+TensorInterface.noprime(t::AbstractTensor) = rename(IB.noprime, t)
 TensorInterface.sim(t::AbstractTensor) = sim(t)
 # The bra of a ket tensor. On graded data `conj` dualises every leg and is a homomorphism over
 # contraction, so a bra network built site by site is `conj` of the ket network. The one
@@ -293,7 +295,7 @@ function TensorInterface.replaceinds(t::AbstractTensor, old, new)
         push!(pairs, oc => nn)
     end
     isempty(pairs) && return t
-    return replaceinds(t, pairs...)
+    return rename(t, pairs...)
 end
 TensorInterface.replaceind(t::AbstractTensor, old::Index, new::Index) = TensorInterface.replaceinds(t, [old], [new])
 TensorInterface.replaceinds(t::AbstractTensor, p::Pair) = TensorInterface.replaceinds(t, first(p), last(p))
@@ -387,7 +389,7 @@ function _vector_tensor(data::AbstractVector, i::Index)
     q = TA.tryproject_aux(data, (i,), ())
     q === nothing && error("state: vector has no consistent charge on $(i)")
     aux = last(inds(q))
-    return replaceinds(q, aux => _retag(aux, "Charge"))
+    return rename(q, aux => _retag(aux, "Charge"))
 end
 # A fresh copy of `i`'s range under a new tag (identity changes — only for indices nobody
 # else holds yet).
@@ -446,13 +448,11 @@ function TensorInterface.combiner(is::AbstractVector{<:Index}; tags = "CMB,Link"
         all(isgraded, is) || error("combiner: cannot mix graded and dense indices")
         elt = Float64
         fused = reduce(GA.tensor_product, (space(i) for i in is))
-        c = IB.named(fused, IB.IndexName(; tags = _totags(String(tags))))
+        c = IB.NamedUnitRange(fused, IB.IndexName(; tags = _totags(String(tags))))
         c2 = sim(c)
         I2 = IB.id(elt, (c,), (c2,))                       # (c, dual c2)
-        # `unmatricize` splits a matrix-level fused matrix; `id` returns tensor-level storage on
-        # GradedArrays 0.16, so hand it the stored matricized form.
-        I2 = ITensor(TA.matricize(IB.unnamed(_densify(I2))), Tuple(inds(I2)))
-        return TA.unmatricize(I2, c => (c,), inds(I2)[2] => Tuple(is))
+        # `unmatricize` takes the domain legs codomain-facing and dualises them in the result.
+        return TA.unmatricize(TA.matricize(I2, (c,), (inds(I2)[2],)), (c,), Tuple(is))
     end
     D = prod(TensorInterface.dim.(is))
     c = Index(D, String(tags))
@@ -475,8 +475,8 @@ function TensorInterface.directsum(p1::Pair{<:AbstractTensor}, p2::Pair{<:Abstra
     t2, o2 = first(p2), only(_indvec(last(p2)))
     s, outs = TA.directsum(t1 => (_ascarried(t1, o1),), t2 => (_ascarried(t2, o2),))
     w = only(outs)
-    wt = IB.named(space(w), IB.IndexName(; tags = _totags(tags)))
-    return replaceinds(s, w => wt)
+    wt = IB.NamedUnitRange(space(w), IB.IndexName(; tags = _totags(tags)))
+    return rename(s, w => wt)
 end
 
 # ── Arithmetic, contraction ─────────────────────────────────────────────────────────────
@@ -794,15 +794,15 @@ end
 _diagvals(S::AbstractTensor) = (A = IB.unnamed(S); isgraded(S) ? GA.with_scalar_indexing(() -> [A[k, k] for k in 1:minimum(size(A))]) : A isa Diagonal ? Array(A.diag) : Array(view(A, LinearAlgebra.diagind(A))))
 # Retag the two legs of the central matrix (and the matching bond legs of U / Vh).
 function _relabel_bond(t::AbstractTensor, old::Index, tags::AbstractString)
-    new = IB.named(space(_ascarried(t, old)), IB.IndexName(; tags = _totags(tags), plev = IB.plev(old)))
-    return replaceinds(t, _ascarried(t, old) => new), new
+    new = IB.NamedUnitRange(space(_ascarried(t, old)), IB.IndexName(; tags = _totags(tags), plev = IB.plev(old)))
+    return rename(t, _ascarried(t, old) => new), new
 end
 
 # Orientation-preserving relabel of one leg (the seam's `replaceinds`).
 _rename(t::AbstractTensor, old::Index, new::Index) = TensorInterface.replaceinds(t, [old], [new])
 # A fresh index over `i`'s space under `tags`, with `i`'s prime level.
 _fresh_like(i::Index, tags::AbstractString) =
-    IB.named(space(i), IB.IndexName(; tags = _totags(tags), plev = IB.plev(i)))
+    IB.NamedUnitRange(space(i), IB.IndexName(; tags = _totags(tags), plev = IB.plev(i)))
 
 # Canonical labels for a factorization's central matrix: S on (u, v) tagged "Link,u"/"Link,v",
 # U and Vh relabelled to match (orientations preserved per copy).
@@ -1072,7 +1072,7 @@ function graded_space(symmetry::String, sectors)
     elseif key in ("u1", "u(1)")
         return GA.gradedrange([GA.U1(q) => Int(d) for (q, d) in sectors])
     elseif key in ("fz2", "fermion", "fermionparity")
-        return GA.gradedrange([GA.SectorRange(TKS.FermionParity(q)) => Int(d) for (q, d) in sectors])
+        return GA.gradedrange([GA.Sector(TKS.FermionParity(q)) => Int(d) for (q, d) in sectors])
     end
     return error("graded_space: unknown symmetry \"$symmetry\" (supported: Z2, U1, fZ2, fU1, fU1xU1)")
 end
@@ -1102,22 +1102,24 @@ function _fock_range(i::Index, c)
 end
 
 _sectortype(i::Index) = GA.sectortype(space(i))
-_label_type(::Type{GA.SectorRange{L}}) where {L} = L
+# The TensorKitSectors type behind a GradedArrays sector type (`fU1` → `U1Irrep ⊠ FermionParity`):
+# the state/operator tables and the fresh-link charges are written against these.
+_label_type(S::Type{<:GA.Sector}) = typeof(TKS.Sector(GA.trivial(S)))
 
 # Mode-basis occupation labels: d = 2 → (n,), d = 4 → (n↑, n↓) over (|0⟩, |↑⟩, |↓⟩, |↑↓⟩).
 _mode_occupations(d::Int) = d == 2 ? [(0,), (1,)] : [(0, 0), (1, 0), (0, 1), (1, 1)]
 
 # The sector a mode-basis state carries under the index's grading (factor order as built by
 # `graded_space`: U(1) charge(s) first, FermionParity last).
-function _mode_sector(S::Type{<:GA.SectorRange}, occ::Tuple)
+function _mode_sector(S::Type{<:GA.Sector}, occ::Tuple)
     L = _label_type(S)
-    L === TKS.FermionParity && return GA.SectorRange(TKS.FermionParity(mod(sum(occ), 2)))
+    L === TKS.FermionParity && return GA.Sector(TKS.FermionParity(mod(sum(occ), 2)))
     if L <: TKS.ProductSector
         F = fieldtypes(fieldtype(L, :sectors))
         nu1 = count(==(TKS.U1Irrep), F)
-        nu1 == 1 && return GA.SectorRange(L((TKS.U1Irrep(sum(occ)), TKS.FermionParity(mod(sum(occ), 2)))))
+        nu1 == 1 && return GA.Sector(L((TKS.U1Irrep(sum(occ)), TKS.FermionParity(mod(sum(occ), 2)))))
         (nu1 == 2 && length(occ) == 2) &&
-            return GA.SectorRange(L((TKS.U1Irrep(occ[1]), TKS.U1Irrep(occ[2]), TKS.FermionParity(mod(sum(occ), 2)))))
+            return GA.Sector(L((TKS.U1Irrep(occ[1]), TKS.U1Irrep(occ[2]), TKS.FermionParity(mod(sum(occ), 2)))))
     end
     return error("op/state: unsupported fermionic grading $(S) for a d = $(2^length(occ)) site")
 end
@@ -1137,9 +1139,10 @@ function _mode_perm(i::Index)
 end
 
 fuse_sectors(a, b) = GA.tensor_product(a, b)
-# The dual CHARGE as a plain (non-flagged) sector label: `GA.dual` on a `SectorRange` only sets an
-# arrow flag and does not compare equal to the base label, so it cannot key a spectrum Dict.
-dual_sector(c) = GA.SectorRange(TKS.dual(GA.label(c)))
+# The dual CHARGE as a plain sector label: `GA.dual` on a `Sector` gives an `OrientedSector`
+# (an arrow on the same label), which does not compare equal to the base label, so it cannot
+# key a spectrum Dict.
+dual_sector(c) = GA.Sector(TKS.dual(TKS.Sector(c)))
 trivial_sector(c) = GA.trivial(typeof(c))
 
 # A dim-1 link index carrying charge `q` (used for routing charges through product states).
@@ -1318,7 +1321,7 @@ function psd_gauge(t::AbstractTensor)
     kdim = IB.plev(i1) <= IB.plev(i2) ? 1 : 2
     ket, bra = inds(t)[kdim], inds(t)[3 - kdim]
     u = IB.unnamed(t)
-    m = copy(TA.matricizeperm(u, (kdim,), (3 - kdim,)))   # the map bra → ket; `copy`: it may view `u`
+    m = copy(TA.matricize(u, (kdim,), (3 - kdim,)))   # the map bra → ket; `copy`: it may view `u`
     m isa GA.FusedGradedMatrix || error("psd_gauge: expected matricized fused storage, got $(typeof(m))")
     for b in GA.sectordata(m)                      # per coupled sector, a view into the buffer
         n = min(size(b)...)
@@ -1435,7 +1438,7 @@ function _fused_message_slot(m::AbstractTensor, ψinds::Vector{<:Index})
     (TensorInterface.plev(b) == 0 && TensorInterface.plev(bp) == 1 && TensorInterface.noprime(bp) == b) || return nothing
     k = findfirst(==(b), ψinds)
     k === nothing && return nothing
-    M = IB.unnamed(aligndims(m, (b, bp)))
+    M = IB.unnamed(align(m, (b, bp)))
     M isa StridedArray || return nothing
     return k, M
 end
@@ -1592,7 +1595,7 @@ function fused_norm_scalar(ψ::AbstractTensor, sinds::Vector{<:Index}, incoming:
         k = findfirst(==(s), ψinds)
         (k === nothing || covered[k]) && return nothing
         covered[k] = true
-        push!(slots, (k, IB.unnamed(aligndims(o, (s, sp)))))   # M[s, s′] = O[s′, s]: T[…s′…] = Σ_s ψ[…s…] O[s′, s]
+        push!(slots, (k, IB.unnamed(align(o, (s, sp)))))   # M[s, s′] = O[s′, s]: T[…s′…] = Σ_s ψ[…s…] O[s′, s]
     end
     all(k -> covered[k] || ψinds[k] in sinds, eachindex(ψinds)) || return nothing
     Tm = _fused_chain(A, slots)
@@ -1605,9 +1608,9 @@ end
 # deflation need the Hilbert pairing, so route both through the raw storage, aligned by name.
 function _hdot(a::AbstractTensor, b::AbstractTensor)
     ia = Tuple(inds(a))
-    # `aligndims` copies `b` even when the orders already agree (the common case: two sweeps of the
+    # `align` copies `b` even when the orders already agree (the common case: two sweeps of the
     # same environment); skip it then.
-    bb = all(((x, y),) -> x == y, zip(ia, inds(b))) && ndims(a) == ndims(b) ? b : aligndims(b, ia)
+    bb = all(((x, y),) -> x == y, zip(ia, inds(b))) && ndims(a) == ndims(b) ? b : align(b, ia)
     return LinearAlgebra.dot(IB.unnamed(a), IB.unnamed(bb))
 end
 LinearAlgebra.dot(a::Tensor, b::Tensor) = _hdot(a, b)
