@@ -12,4 +12,5 @@ using Test
     include("test_truncate.jl")
     include("test_contraction_sequences.jl")
     include("test_ctmrg.jl")
+    include("test_circuit_import.jl")
 end
