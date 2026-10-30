@@ -67,7 +67,7 @@ The `update` function accepts several keyword arguments:
 ψ_bpc = update(ψ_bpc)
 
 # Apply gates — the cache is reused and updated between gate groups
-ψ_bpc, errors = apply_gates(circuit, ψ_bpc; maxdim = 10, cutoff = 1e-10)
+ψ_bpc, errors = apply_gates(circuit, ψ_bpc; apply_kwargs = (; maxdim = 10, cutoff = 1e-10))
 
 # Messages are still available for immediate measurements
 sz = expect(ψ_bpc, [("Z", [(3, 3)])])
@@ -214,7 +214,7 @@ In practice, a common workflow is to use BP for gate application — where speed
 ```julia
 # Fast gate application with BP
 ψ_bpc = BeliefPropagationCache(ψ)
-ψ_bpc, errors = apply_gates(circuit, ψ_bpc; maxdim = 10)
+ψ_bpc, errors = apply_gates(circuit, ψ_bpc; apply_kwargs = (; maxdim = 10))
 
 # Accurate measurement with boundary MPS
 ψ = network(ψ_bpc)

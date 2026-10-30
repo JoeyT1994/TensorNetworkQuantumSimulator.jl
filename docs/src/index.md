@@ -42,10 +42,11 @@ julia> using Pkg; Pkg.add("TensorNetworkQuantumSimulator")
 - **[Graphs](graphs.md)**: Defining lattice geometries and graph operations
 - **[Tensor Networks](states.md)**: `TensorNetwork` and `TensorNetworkState` types and their construction
 - **[Gate Application](gates.md)**: Building circuits and applying gates
+- **[Circuits from Qiskit](qiskit.md)**: Importing OpenQASM 2 and Qiskit.jl circuits
 - **[Expectation Values](expectation_values.md)**: Computing observables, norms, and overlaps
 - **[Entanglement Entropy](entanglement.md)**: Von Neumann and Rényi entropies via BP and boundary MPS
 - **[Sampling](sampling.md)**: Drawing bitstring samples from a planar tensor network state with optional certification
-- **[Caches](caches.md)**: How the `BeliefPropagationCache` and `BoundaryMPSCache` work and why they matter
+- **[Caches](caches.md)**: How `BeliefPropagationCache`, `BoundaryMPSCache`, and `CTMRGCache` work and why they matter
 - **[Advanced Topics](advanced.md)**: GPU support, loop corrections, and precision control
 - **[API Reference](api.md)**: Complete list of documented functions
 

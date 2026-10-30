@@ -124,7 +124,6 @@ The built-in `siteinds(sitetype, g)` function supports:
 |-----------|---------|----------------|
 | `"S=1/2"` | `"qubit"`, `"SpinHalf"` | 2 |
 | `"S=1"` | `"qutrit"`, `"Spin1"` | 3 |
-| `"Pauli"` | | 4 |
 
 However, by simply defining your own indices and your own gate types, you can build whatever tensor network you wish.
 

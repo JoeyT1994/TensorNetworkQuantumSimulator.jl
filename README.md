@@ -14,10 +14,11 @@ Full documentation is available at **https://JoeyT1994.github.io/TensorNetworkQu
 - [Graphs](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/graphs/) — lattice constructors and graph utilities
 - [Tensor Networks](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/states/) — `TensorNetwork` and `TensorNetworkState` types
 - [Gate Application](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/gates/) — circuits, simple update, and supported gates
+- [Circuits from Qiskit](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/qiskit/) — importing OpenQASM 2 and Qiskit.jl circuits
 - [Expectation Values](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/expectation_values/) — observables, norms, and reduced density matrices
 - [Entanglement Entropy](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/entanglement/) — von Neumann and Rényi entropies
 - [Sampling](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/sampling/) — bitstring sampling with optional certification
-- [Caches](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/caches/) — `BeliefPropagationCache` and `BoundaryMPSCache` in depth
+- [Caches](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/caches/) — `BeliefPropagationCache`, `BoundaryMPSCache`, and `CTMRGCache` in depth
 - [Advanced Topics](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/advanced/) — GPU support, loop corrections, precision control
 - [API Reference](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/api/) — complete function reference
 
@@ -199,21 +200,30 @@ Gates are specified as tuples of the form `(gate_string, vertices)` or `(gate_st
 
 | Gate | Parameter | Description |
 |------|-----------|-------------|
-| `"X"`, `"Y"`, `"Z"` | -- | Pauli gates |
+| `"I"`, `"X"`, `"Y"`, `"Z"` | -- | Identity and Pauli gates |
 | `"H"` | -- | Hadamard |
-| `"P"` | phase | Phase gate |
+| `"S"`, `"Sdg"`, `"T"`, `"Tdg"` | -- | Phase gates by π/2 and π/4, and their inverses |
+| `"SX"`, `"SXdg"` | -- | Square root of X, and its inverse |
+| `"P"`, `"U1"` | phase | Phase gate |
 | `"Rx"`, `"Ry"`, `"Rz"` | angle | Pauli rotation |
-| `"CRx"`, `"CRy"`, `"CRz"` | angle | Controlled Pauli rotation (single-qubit part) |
+| `"R"` | `(θ, ϕ)` | Rotation by θ about `cos(ϕ) X + sin(ϕ) Y` |
+| `"U"`, `"U3"` | `(θ, ϕ, λ)` | General single-qubit gate |
+| `"U2"` | `(ϕ, λ)` | `U(π/2, ϕ, λ)` |
 
 **Two-qubit gates:**
 
 | Gate | Parameter | Description |
 |------|-----------|-------------|
-| `"CNOT"`, `"CX"`, `"CY"` | -- | Controlled gates |
+| `"CNOT"`, `"CX"`, `"CY"`, `"CZ"`, `"CH"` | -- | Controlled Pauli / Hadamard gates |
+| `"CS"`, `"CSdg"`, `"CSX"` | -- | Controlled S, S†, and √X |
+| `"CRx"`, `"CRy"`, `"CRz"` | angle | Controlled Pauli rotation |
+| `"CPHASE"`, `"CU1"` | phase | Controlled phase |
+| `"CU3"`, `"CU"` | `(θ, ϕ, λ)` / `(θ, ϕ, λ, γ)` | Controlled general rotation |
 | `"SWAP"`, `"iSWAP"`, `"√SWAP"`, `"√iSWAP"` | -- | Swap variants |
-| `"Rxx"`, `"Ryy"`, `"Rzz"` | angle | Pauli-pair rotations |
+| `"DCX"`, `"ECR"` | -- | Double CNOT and echoed cross-resonance |
+| `"Rxx"`, `"Ryy"`, `"Rzz"`, `"Rzx"` | angle | Pauli-pair rotations |
+| `"xx_plus_yy"`, `"xx_minus_yy"` | `(θ, β)` | Qiskit `XXPlusYYGate` and `XXMinusYYGate` |
 | `"Rxxyy"`, `"Rxxyyzz"` | angle | Multi-Pauli rotations |
-| `"CPHASE"` | phase | Controlled phase |
 
 Custom gates can be defined by constructing the corresponding `ITensor` acting on the physical indices of the target qubits.
 
@@ -241,6 +251,7 @@ Caches can also be transferred: `CUDA.cu(BeliefPropagationCache(ψ))`. Significa
 |-----------|---------|-------------------|------|----------|
 | Belief propagation | `alg = "bp"` | Any | Low | Exact on trees, approximate on loopy graphs |
 | Boundary MPS | `alg = "boundarymps"` | Planar | Moderate (tuneable via `env_maxdim`) | Converges to exact with increasing bond dimension |
+| CTMRG | `alg = "ctmrg"` | Planar | Moderate (tuneable via `env_maxdim`) | Converges to exact with increasing `env_maxdim` |
 | Loop corrections | `alg = "loopcorrections"` | Any | Moderate | Systematic corrections to BP |
 | Exact contraction | `alg = "exact"` | Any (small systems) | Exponential | Exact |
 
