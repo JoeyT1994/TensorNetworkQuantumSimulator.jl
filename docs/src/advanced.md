@@ -22,7 +22,7 @@ Caches can also be transferred to the GPU:
 ψ_bpc_gpu = CUDA.cu(BeliefPropagationCache(ψ))
 ```
 
-Significant speedups are seen on NVIDIA GPUs for many operations (BP, BoundaryMPS, Gate Application) at moderate to large bond dimensions. Use `ComplexF32` element types for best GPU performance. We highly recommend CUDA.jl (NVidia GPUs) as speedups are well documented in this case [[Rudolph2025]](index.md#references). Experience using Metal.jl is very limited and so proceed with caution.
+Significant speedups are seen on NVIDIA GPUs for many operations (BP, BoundaryMPS, Gate Application) at moderate to large bond dimensions. Use `ComplexF32` element types for best GPU performance. We highly recommend CUDA.jl (NVidia GPUs) as speedups are well documented in this case [[Rudolph2026]](index.md#references). Experience using Metal.jl is very limited and so proceed with caution.
 
 ## Loop Corrections
 

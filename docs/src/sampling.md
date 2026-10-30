@@ -2,7 +2,7 @@
 
 ![Sequential bitstring sampling and certification](sampling_overview.svg)
 
-Draw bitstring samples from the probability distribution defined by the squared amplitudes of a tensor network state [[Ferris2021]](index.md#references) [[Rudolph2025]](index.md#references).
+Draw bitstring samples from the probability distribution defined by the squared amplitudes of a tensor network state [[Vieijra2021]](index.md#references) [[Rudolph2026]](index.md#references).
 
 ## Basic Sampling
 

@@ -4,7 +4,7 @@
 
 ## Computing Expectation Values
 
-The `expect` function computes expectation values of local observables from a `TensorNetworkState` using belief propagation [[Tindall2023]](index.md#references), boundary MPS [[Rudolph2025]](index.md#references), corner transfer matrix renormalization group (CTMRG), or exact contraction.
+The `expect` function computes expectation values of local observables from a `TensorNetworkState` using belief propagation [[Tindall2023]](index.md#references), boundary MPS [[Rudolph2026]](index.md#references), corner transfer matrix renormalization group (CTMRG), or exact contraction.
 
 ### Observable Format
 

@@ -56,13 +56,14 @@ julia> using Pkg; Pkg.add("TensorNetworkQuantumSimulator")
 - **[Alkabetz2021]** N. Alkabetz and I. Arad, "Tensor networks contraction and the belief propagation algorithm," Physical Review Research **3**, 023073 (2021). [Link](https://journals.aps.org/prresearch/abstract/10.1103/PhysRevResearch.3.023073)
 - **[Tindall2023]** J. Tindall and M. Fishman, "Gauging tensor networks with belief propagation," SciPost Physics **15**, 222 (2023). [Link](https://www.scipost.org/SciPostPhys.15.6.222)
 - **[Tindall2024]** J. Tindall, M. Fishman, E. M. Stoudenmire, and D. Sels, "Efficient Tensor Network Simulation of IBM's Eagle Kicked Ising Experiment," PRX Quantum **5**, 010308 (2024). [Link](https://journals.aps.org/prxquantum/abstract/10.1103/PRXQuantum.5.010308)
-- **[Evenbly2026]** G. Evenbly, N. Pancotti, A. Milsted, J. Gray, and G. K.-L. Chan, "Loop Series Expansions for Tensor Networks," Physical Review Research **8**, 013245 (2026). [Link](https://arxiv.org/abs/2409.03108)
-- **[Tindall2025]** J. Tindall, A. Mello, M. Fishman, M. Stoudenmire, and D. Sels, "Dynamics of disordered quantum systems with two- and three-dimensional tensor networks," arXiv:2503.05693 (2025). [Link](https://arxiv.org/abs/2503.05693)
-- **[Rudolph2025]** M. S. Rudolph and J. Tindall, "Simulating and Sampling from Quantum Circuits with 2D Tensor Networks," arXiv:2507.11424 (2025). [Link](https://arxiv.org/abs/2507.11424)
-- **[Ferris2021]** A. J. Ferris and G. Vidal, "Perfect sampling with unitary tensor networks," Physical Review B **104**, 235141 (2021). [Link](https://journals.aps.org/prb/abstract/10.1103/PhysRevB.104.235141)
+- **[Evenbly2026]** G. Evenbly, N. Pancotti, A. Milsted, J. Gray, and G. K.-L. Chan, "Loop series expansions for tensor networks," Physical Review Research **8**, 013245 (2026). [Link](https://doi.org/10.1103/vqks-cr6x)
+- **[Tindall2026]** J. Tindall, A. F. Mello, M. Fishman, E. M. Stoudenmire, and D. Sels, "Dynamics of disordered quantum systems with two- and three-dimensional tensor networks," Science **392**, 868 (2026). [Link](https://doi.org/10.1126/science.adx2728)
+- **[Rudolph2026]** M. S. Rudolph and J. Tindall, "Simulating and sampling from quantum circuits with 2D tensor networks," npj Quantum Information (2026). [Link](https://doi.org/10.1038/s41534-026-01372-2)
+- **[Woolls2026]** G. Woolls, S. Jahanbani, A. Pashikanti, M. T. Fishman, J. Tindall, and M. P. Zaletel, "Matrix Product Belief Propagation," arXiv:2609.05598 (2026). [Link](https://arxiv.org/abs/2609.05598)
+- **[Vieijra2021]** T. Vieijra, J. Haegeman, F. Verstraete, and L. Vanderstraeten, "Direct sampling of projected entangled-pair states," Physical Review B **104**, 235141 (2021). [Link](https://journals.aps.org/prb/abstract/10.1103/PhysRevB.104.235141)
 
 If you use this library in your research, please cite at minimum either:
-- M. S. Rudolph and J. Tindall, "Simulating and Sampling from Quantum Circuits with 2D Tensor Networks," arXiv:2507.11424 (2025). [Link](https://arxiv.org/abs/2507.11424)
+- M. S. Rudolph and J. Tindall, "Simulating and sampling from quantum circuits with 2D tensor networks," npj Quantum Information (2026). [Link](https://doi.org/10.1038/s41534-026-01372-2)
 
 or
 
