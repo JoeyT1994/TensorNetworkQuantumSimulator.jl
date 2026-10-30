@@ -1,5 +1,7 @@
 # Caches
 
+![Environment caches overview](caches_overview.svg)
+
 The central data structures in TensorNetworkQuantumSimulator.jl are the `BeliefPropagationCache`, the `BoundaryMPSCache` and the `CTMRGCache`, all subtypes of `AbstractBeliefPropagationCache`. Each wraps a tensor network together with auxiliary _message_ tensors that encode approximate environment information — the effective contribution of the rest of the network as seen from each bond. Understanding what these caches store, how they are updated, and when to use each is key to getting the most out of the package.
 
 ## Belief Propagation Cache

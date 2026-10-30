@@ -4,6 +4,8 @@ The starting point of most calculations is a `NamedGraph` from [NamedGraphs.jl](
 
 ## Built-in Lattice Constructors
 
+![Built-in lattice geometries](lattices.svg)
+
 Several common lattice geometries are provided out of the box:
 
 ```julia

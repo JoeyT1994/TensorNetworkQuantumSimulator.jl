@@ -65,6 +65,8 @@ The product `prod(1 .- errors)` gives a lower bound on the fidelity accumulated 
 
 ## Simple Update Algorithm
 
+![Simple update algorithm](simple_update.svg)
+
 Under the hood, each two-site gate is applied via the _simple update_ algorithm [[Jiang2008]](index.md#references) [[Tindall2024]](index.md#references):
 
 1. Gauge the state locally using the square roots of the BP environment messages.

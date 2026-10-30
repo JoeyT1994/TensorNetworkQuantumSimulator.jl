@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 175" width="100%" height="100%">
+<defs>
+  <style>
+    .card { fill: #E6E7E8; }
+    .title { font-family: Georgia, 'Times New Roman', Times, serif; font-size: 14px; font-weight: bold; fill: #111111; text-decoration: underline; text-anchor: middle; }
+    .subtitle { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 11px; fill: #333333; text-anchor: middle; }
+    .code-label { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 10.5px; fill: #222222; text-anchor: middle; }
+    .math-label { font-family: Georgia, 'Times New Roman', Times, serif; font-size: 12px; font-style: italic; fill: #111111; text-anchor: middle; }
+    .small-label { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 10px; fill: #333333; text-anchor: middle; }
+    .bond { stroke: #231F20; stroke-width: 2; stroke-linecap: round; fill: none; }
+    .faint-bond { stroke: #B8BABC; stroke-width: 1.5; stroke-dasharray: 3,3; fill: none; }
+    .phys-leg { stroke: #656565; stroke-width: 1.8; stroke-dasharray: 2.2,2.2; fill: none; }
+    .cut-bond { stroke: #B12225; stroke-width: 2.2; stroke-dasharray: 3,2.5; fill: none; }
+    .site-node { fill: #9696CA; stroke: #231F20; stroke-width: 2; }
+    .active-node { fill: #374A9F; stroke: #231F20; stroke-width: 2; }
+    .msg-node { fill: #C5C5C5; stroke: #231F20; stroke-width: 1.8; }
+    .corner-node { fill: #E8D5B7; stroke: #231F20; stroke-width: 1.8; }
+    .gate-box { fill: #ECF5E8; stroke: #231F20; stroke-width: 1.8; }
+  </style>
+</defs>
+<rect class="card" x="6" y="10" width="172" height="155" rx="12" ry="12"/>
+<text class="title" style="font-size: 12.5px;" x="92.0" y="32">1. Absorb √m</text>
+<text class="small-label" x="92.0" y="160">Gauge local tensors</text>
+<line x1="181" y1="87.5" x2="192" y2="87.5" stroke="#8C8E91" stroke-width="2.5"/>
+<polygon points="192,83.0 198,87.5 192,92.0" fill="#8C8E91"/>
+<rect class="card" x="200" y="10" width="172" height="155" rx="12" ry="12"/>
+<text class="title" style="font-size: 12.5px;" x="286.0" y="32">2. QR &amp; Apply Gate</text>
+<text class="small-label" x="286.0" y="160">Isolate bond core R₁R₂</text>
+<line x1="375" y1="87.5" x2="386" y2="87.5" stroke="#8C8E91" stroke-width="2.5"/>
+<polygon points="386,83.0 392,87.5 386,92.0" fill="#8C8E91"/>
+<rect class="card" x="394" y="10" width="172" height="155" rx="12" ry="12"/>
+<text class="title" style="font-size: 12.5px;" x="480.0" y="32">3. Truncated SVD</text>
+<text class="small-label" x="480.0" y="160">Split into R₁' · S · R₂'</text>
+<line x1="569" y1="87.5" x2="580" y2="87.5" stroke="#8C8E91" stroke-width="2.5"/>
+<polygon points="580,83.0 586,87.5 580,92.0" fill="#8C8E91"/>
+<rect class="card" x="588" y="10" width="166" height="155" rx="12" ry="12"/>
+<text class="title" style="font-size: 12.5px;" x="671.0" y="32">4. Ungauge &amp; Update</text>
+<text class="small-label" x="671.0" y="160">Restore √m⁻¹ and message S</text>
+<line class="bond" x1="36" y1="88" x2="150" y2="88"/>
+<line class="bond" x1="68" y1="58" x2="68" y2="88"/>
+<line class="bond" x1="118" y1="58" x2="118" y2="88"/>
+<line class="phys-leg" x1="68" y1="88" x2="68" y2="120"/>
+<line class="phys-leg" x1="118" y1="88" x2="118" y2="120"/>
+<circle class="msg-node" cx="36" cy="88" r="7.5"/>
+<circle class="msg-node" cx="68" cy="58" r="7.5"/>
+<circle class="msg-node" cx="150" cy="88" r="7.5"/>
+<circle class="msg-node" cx="118" cy="58" r="7.5"/>
+<circle class="site-node" cx="68" cy="88" r="11"/>
+<circle class="site-node" cx="118" cy="88" r="11"/>
+<text class="math-label" style="font-size: 10px;" x="36" y="77">√m</text>
+<line class="bond" x1="211" y1="76" x2="361" y2="76"/>
+<line class="bond" x1="225" y1="54" x2="225" y2="76"/>
+<line class="bond" x1="347" y1="54" x2="347" y2="76"/>
+<line class="phys-leg" x1="265" y1="76" x2="265" y2="128"/>
+<line class="phys-leg" x1="307" y1="76" x2="307" y2="128"/>
+<rect class="gate-box" x="253" y="96" width="66" height="20" rx="3" ry="3"/>
+<text class="math-label" style="font-size: 11px;" x="286.0" y="110">Û</text>
+<circle class="site-node" cx="225" cy="76" r="9.5"/>
+<circle class="site-node" cx="347" cy="76" r="9.5"/>
+<polygon points="256,67 274,76 256,85" fill="#374A9F" stroke="#231F20" stroke-width="1.8"/>
+<polygon points="316,67 298,76 316,85" fill="#374A9F" stroke="#231F20" stroke-width="1.8"/>
+<text class="small-label" x="225" y="97">Q₁</text>
+<text class="small-label" x="265" y="62">R₁</text>
+<text class="small-label" x="307" y="62">R₂</text>
+<text class="small-label" x="347" y="97">Q₂</text>
+<line class="bond" x1="402" y1="88" x2="448" y2="88"/>
+<line class="cut-bond" x1="448" y1="88" x2="512" y2="88"/>
+<line class="bond" x1="512" y1="88" x2="558" y2="88"/>
+<line class="bond" x1="414" y1="64" x2="414" y2="88"/>
+<line class="bond" x1="546" y1="64" x2="546" y2="88"/>
+<line class="phys-leg" x1="448" y1="88" x2="448" y2="118"/>
+<line class="phys-leg" x1="512" y1="88" x2="512" y2="118"/>
+<circle class="site-node" cx="414" cy="88" r="8.5"/>
+<circle class="site-node" cx="546" cy="88" r="8.5"/>
+<circle class="active-node" cx="448" cy="88" r="9"/>
+<circle class="active-node" cx="512" cy="88" r="9"/>
+<polygon points="480,80 488,88 480,96 472,88" fill="#E8D5B7" stroke="#B12225" stroke-width="1.8"/>
+<text class="math-label" style="font-size: 10.5px;" x="480" y="75">S (≤ maxdim)</text>
+<line class="bond" x1="613" y1="88" x2="729" y2="88"/>
+<line class="bond" x1="641" y1="62" x2="641" y2="88"/>
+<line class="bond" x1="701" y1="62" x2="701" y2="88"/>
+<line class="phys-leg" x1="641" y1="88" x2="641" y2="118"/>
+<line class="phys-leg" x1="701" y1="88" x2="701" y2="118"/>
+<circle class="active-node" cx="641" cy="88" r="11"/>
+<circle class="active-node" cx="701" cy="88" r="11"/>
+<circle class="msg-node" cx="671.0" cy="64" r="7.5"/>
+<path d="M 671.0 73 L 671.0 85" stroke="#B12225" stroke-width="1.5" stroke-dasharray="2,2"/>
+<text class="math-label" style="font-size: 10px;" x="687.0" y="67">S</text>
+</svg>
