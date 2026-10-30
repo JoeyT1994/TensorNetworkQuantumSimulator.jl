@@ -41,7 +41,7 @@
   <polygon points="198,92.5 190,88.0 190,97.0" fill="#808285"/>
   <rect class="card" rx="10" ry="10" x="200" y="8" width="172" height="169"/>
   <text class="title" style="font-size: 13.5px;" x="286.0" y="31">2. QR &amp; Apply Gate</text>
-  <text class="subtitle" style="font-size: 10.5px;" x="286.0" y="165">Isolate the bond core <tspan class="math">R</tspan><tspan class="math up sub" dy="3.5">1</tspan><tspan class="math" dy="-3.5">R</tspan><tspan class="math up sub" dy="3.5">2</tspan><tspan dy="-3.5"></tspan></text>
+  <text class="subtitle" style="font-size: 10.5px;" x="286.0" y="165">Isolate the bond core <tspan class="math">R</tspan><tspan class="math up sub" dy="3.5">1</tspan><tspan class="math" dy="-3.5">R</tspan><tspan class="math up sub" dy="3.5">2</tspan><tspan dy="-3.5">​</tspan></text>
   <line x1="375" y1="92.5" x2="386" y2="92.5" stroke="#808285" stroke-width="2.5"/>
   <polygon points="392,92.5 384,88.0 384,97.0" fill="#808285"/>
   <rect class="card" rx="10" ry="10" x="394" y="8" width="172" height="169"/>
@@ -51,7 +51,7 @@
   <polygon points="586,92.5 578,88.0 578,97.0" fill="#808285"/>
   <rect class="card" rx="10" ry="10" x="588" y="8" width="166" height="169"/>
   <text class="title" style="font-size: 13.5px;" x="671.0" y="31">4. Ungauge &amp; Update</text>
-  <text class="subtitle" style="font-size: 10.5px;" x="671.0" y="165">Restore <tspan class="math up">√</tspan><tspan class="math">m</tspan><tspan class="math up sup" dy="-4.5">−1</tspan><tspan dy="4.5"></tspan>, message <tspan class="math">S</tspan></text>
+  <text class="subtitle" style="font-size: 10.5px;" x="671.0" y="165">Restore <tspan class="math up">√</tspan><tspan class="math">m</tspan><tspan class="math up sup" dy="-4.5">−1</tspan><tspan dy="4.5">​</tspan>, message <tspan class="math">S</tspan></text>
   <line class="bond" x1="68" y1="92" x2="116" y2="92"/>
   <line class="bond" x1="40" y1="70" x2="68" y2="92"/>
   <line class="bond" x1="40" y1="114" x2="68" y2="92"/>
@@ -79,10 +79,10 @@
   <circle class="node-state" cx="344" cy="78" r="9"/>
   <polygon points="257,69 275,78 257,87" fill="#374A9F" stroke="#231F20" stroke-width="1.8"/>
   <polygon points="315,69 297,78 315,87" fill="#374A9F" stroke="#231F20" stroke-width="1.8"/>
-  <text class="small-label" x="228" y="101"><tspan class="math">Q</tspan><tspan class="math up sub" dy="3.5">1</tspan><tspan dy="-3.5"></tspan></text>
-  <text class="small-label" x="266" y="65"><tspan class="math">R</tspan><tspan class="math up sub" dy="3.5">1</tspan><tspan dy="-3.5"></tspan></text>
-  <text class="small-label" x="306" y="65"><tspan class="math">R</tspan><tspan class="math up sub" dy="3.5">2</tspan><tspan dy="-3.5"></tspan></text>
-  <text class="small-label" x="344" y="101"><tspan class="math">Q</tspan><tspan class="math up sub" dy="3.5">2</tspan><tspan dy="-3.5"></tspan></text>
+  <text class="small-label" x="228" y="101"><tspan class="math">Q</tspan><tspan class="math up sub" dy="3.5">1</tspan><tspan dy="-3.5">​</tspan></text>
+  <text class="small-label" x="266" y="65"><tspan class="math">R</tspan><tspan class="math up sub" dy="3.5">1</tspan><tspan dy="-3.5">​</tspan></text>
+  <text class="small-label" x="306" y="65"><tspan class="math">R</tspan><tspan class="math up sub" dy="3.5">2</tspan><tspan dy="-3.5">​</tspan></text>
+  <text class="small-label" x="344" y="101"><tspan class="math">Q</tspan><tspan class="math up sub" dy="3.5">2</tspan><tspan dy="-3.5">​</tspan></text>
   <line class="bond" x1="418" y1="92" x2="450" y2="92"/>
   <line class="cut" x1="450" y1="92" x2="510" y2="92"/>
   <line class="bond" x1="510" y1="92" x2="542" y2="92"/>
