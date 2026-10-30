@@ -1,10 +1,12 @@
 # Tensor Networks
 
+![Tensor network types](tensor_network_types.svg)
+
 TensorNetworkQuantumSimulator provides two core types, `TensorNetworkState` and `TensorNetwork`, both subtypes of `AbstractTensorNetwork`. They share the same graph-based interface but differ in that `TensorNetworkState` carries physical (site) indices — representing a quantum wavefunction ``|\psi\rangle`` — while `TensorNetwork` does not, representing a scalar quantity. See [Graphs](graphs.md) for how to define the underlying graph.
 
 ## TensorNetwork
 
-A `TensorNetwork` is the simpler of the two types: a collection of ITensors living on the vertices of a graph, connected by shared (virtual) indices along the edges. Contracting all tensors produces a single scalar value.
+A `TensorNetwork` is the simpler of the two types: a collection of tensors living on the vertices of a graph, connected by shared (virtual) indices along the edges. Contracting all tensors produces a single scalar value.
 
 ```julia
 using TensorNetworkQuantumSimulator
@@ -102,18 +104,25 @@ Each vertex in a `TensorNetworkState` stores a `Vector{Index}` of site indices, 
 
 ### Custom Multi-Index States
 
-To construct a state with custom site indices per vertex, build a `Dictionary` mapping vertices to `Vector{Index}` and pass it directly:
+To construct a state with multiple identical physical indices per vertex (e.g. ket and bra legs for a density matrix or Heisenberg operator), pass `inds_per_site` to `siteinds`:
 
 ```julia
-# Two spin-1/2 indices per vertex (e.g. for a density matrix or bilayer system)
+# Two spin-1/2 indices per vertex (ket and bra)
+s = siteinds("S=1/2", g; inds_per_site = 2)
+ψ = random_tensornetworkstate(ComplexF64, g, s; bond_dimension = 4)
+
+# Access the site indices at a vertex
+siteinds(ψ, (1, 1))  # returns a 2-element Vector{Index}
+```
+
+For heterogeneous site indices across vertices, build a `Dictionary` mapping each vertex to its `Vector{Index}` and pass it directly:
+
+```julia
 s = Dictionary(
     collect(vertices(g)),
     [Index[Index(2, "S=1/2,ket"), Index(2, "S=1/2,bra")] for _ in vertices(g)]
 )
 ψ = random_tensornetworkstate(ComplexF64, g, s; bond_dimension = 4)
-
-# Access the site indices at a vertex
-siteinds(ψ, (1, 1))  # returns [Index(2, "S=1/2,ket"), Index(2, "S=1/2,bra")]
 ```
 
 ### Supported Site Types
@@ -124,7 +133,6 @@ The built-in `siteinds(sitetype, g)` function supports:
 |-----------|---------|----------------|
 | `"S=1/2"` | `"qubit"`, `"SpinHalf"` | 2 |
 | `"S=1"` | `"qutrit"`, `"Spin1"` | 3 |
-| `"Pauli"` | | 4 |
 
 However, by simply defining your own indices and your own gate types, you can build whatever tensor network you wish.
 
@@ -137,7 +145,7 @@ graph(tn)             # underlying NamedGraph
 vertices(tn)          # all vertices
 neighbors(tn, v)      # neighboring vertices of v
 edges(tn)             # all edges
-tn[v]                 # directly access the ITensor at vertex v
+tn[v]                 # directly access the tensor at vertex v
 maxvirtualdim(tn)     # maximum bond dimension across all edges
 scalartype(tn)        # element type of the tensors (e.g. ComplexF64)
 datatype(tn)          # storage type (e.g. Array, CuArray)

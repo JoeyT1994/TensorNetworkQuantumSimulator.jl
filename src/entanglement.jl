@@ -23,33 +23,34 @@ function renyi_entropy(ρ::AbstractMatrix, α::Real; normalize = true)
         ρ = ρ / tr(ρ)
     end
     λs = eigvals(Hermitian(ρ))
-    filter!(λ -> abs(λ) > 10*eps(real(eltype(λs))), λs)
+    # approximate density matrices can have small negative eigenvalues: drop them with the zeros
+    filter!(>(10 * eps(real(eltype(λs)))), λs)
     α == 1 && return -sum(p -> p * log(p), λs)  # von Neumann limit
     return log(sum(λs .^ α)) / (1 - α)
 end
 
-function matricize(a::ITensor, row_inds = filter(i -> plev(i) ==0, inds(a)))
+function matricize(a::Tensor, row_inds = inds(a; plev = 0))
     col_inds = prime.(row_inds)
-    return ITensors.array(a * ITensors.combiner(row_inds) * ITensors.combiner(col_inds))
+    return array(a * combiner(row_inds) * combiner(col_inds))
 end
 
 """
-    renyi_entropy(a::ITensor, row_inds = ...; normalize = true, α = 1)
+    renyi_entropy(a::Tensor, row_inds = ...; normalize = true, α = 1)
 
-Compute the Rényi entropy of order `α` of a density matrix represented as an `ITensor`.
+Compute the Rényi entropy of order `α` of a density matrix represented as a `Tensor`.
 
 The tensor `a` is interpreted as a density matrix where unprimed indices are row indices
 and primed indices are column indices.
 
 # Arguments
-- `a`: Density matrix as an `ITensor`.
+- `a`: Density matrix as a `Tensor`.
 - `row_inds`: The row (ket) indices. Defaults to all unprimed indices of `a`.
 
 # Keyword Arguments
 - `normalize`: If `true` (default), normalise by the trace.
 - `α`: Rényi index (default `1`, i.e. von Neumann entropy).
 """
-function renyi_entropy(a::ITensor, row_inds = filter(i -> plev(i) ==0, inds(a)); normalize = true, α = 1)
+function renyi_entropy(a::Tensor, row_inds = inds(a; plev = 0); normalize = true, α = 1)
     return renyi_entropy(matricize(a, row_inds), α; normalize)
 end
 
@@ -75,13 +76,12 @@ function renyi_entropy(
     e::NamedEdge;
     α::Real
 )
-    ee = 0
     m1, m2 = message(bp_cache, e), message(bp_cache, reverse(e))
     edge_ind = only(virtualinds(bp_cache, e))
     root_m2 = first(pseudo_sqrt_inv_sqrt(m2))
 
-    ρ =(m1 * replaceind(root_m2, edge_ind', edge_ind''))* root_m2
-    ρ= replaceind(ρ, edge_ind'', edge_ind')
+    ρ =(m1 * replaceind(root_m2, prime(edge_ind), prime(edge_ind, 2)))* root_m2
+    ρ= replaceind(ρ, prime(edge_ind, 2), prime(edge_ind))
     return renyi_entropy(ρ; α)
 end
 
@@ -101,16 +101,18 @@ updating the cache explicitly and calling `renyi_entropy(bp_cache, e; α)`.
 # Keyword Arguments
 - `alg`: Contraction algorithm. Currently only `"bp"` is supported.
 - `α`: Rényi index.
+- `cache_update_kwargs`: Keyword arguments for the BP `update` (default `default_bp_update_kwargs(tns)`).
 """
-function renyi_entropy(tns::TensorNetworkState, e::NamedEdge; alg, α::Real)
-    algorithm_check(tns, "rdm", alg)
-    return renyi_entropy(Algorithm(alg), tns, e; α)
+function renyi_entropy(tns::TensorNetworkState, e::NamedEdge; alg, α::Real, kwargs...)
+    algorithm_check(tns, "edge_entropy", alg)
+    return renyi_entropy(Algorithm(alg), tns, e; α, kwargs...)
 end
 
-function renyi_entropy(alg::Algorithm"bp", tns::TensorNetworkState, e::NamedEdge; α::Real)
-    bp_cache = BeliefPropagationCache(tns)
-    bp_cache = update(bp_cache)
-    return renyi_entropy(bp_cache, e; α)
+function renyi_entropy(
+        alg::Algorithm"bp", tns::TensorNetworkState, e::NamedEdge;
+        α::Real, cache_update_kwargs = default_bp_update_kwargs(tns)
+    )
+    return renyi_entropy(converged_cache(alg, tns; cache_update_kwargs), e; α)
 end
 
 """
@@ -119,32 +121,27 @@ end
 Compute the Rényi entropy of order `α` of the reduced density matrix on `verts`.
 
 Constructs the reduced density matrix on the specified vertices and computes its Rényi entropy.
-Supports `BeliefPropagationCache`, `BoundaryMPSCache`, and `TensorNetworkState` inputs.
+Supports `TensorNetworkState` inputs and caches (`BeliefPropagationCache`, `BoundaryMPSCache`, `CTMRGCache`).
 For single-bond entanglement entropy with BP, prefer the edge-based method
 `renyi_entropy(bp_cache, e; α)` which avoids constructing the full RDM.
 
 # Arguments
-- `ψ`: A `TensorNetworkState`, `BeliefPropagationCache`, or `BoundaryMPSCache`.
+- `ψ`: A `TensorNetworkState` or a cache wrapping one.
 - `verts`: Vector of vertices defining the subsystem.
 
 # Keyword Arguments
-- `alg`: Contraction algorithm (`"bp"`, `"boundarymps"`, or `"exact"`).
+- `alg`: Contraction algorithm (`"bp"`, `"boundarymps"`, `"ctmrg"` or `"exact"`).
 - `α`: Rényi index.
 - Additional kwargs are forwarded to `reduced_density_matrix`.
 """
-function renyi_entropy(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, verts::Vector; alg, α::Real, kwargs...)
-    algorithm_check(ψ, "rdm", alg)
+function renyi_entropy(ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}, verts::Vector; alg, α::Real, kwargs...)
     return renyi_entropy(reduced_density_matrix(ψ, verts; alg, normalize = false, kwargs...); normalize = true, α)
 end
 
 """
     second_renyi_entanglement_entropy(args...; kwargs...)
 
-Convenience wrapper for [`renyi_entropy`](@ref) with `α = 2`.
-
-Accepts the same arguments as `renyi_entropy`. The second Rényi entropy is computationally
-cheaper than the von Neumann entropy as it only requires ``\\operatorname{tr}(\\rho^2)``
-rather than a full eigendecomposition.
+Convenience wrapper for [`renyi_entropy`](@ref) with `α = 2`. Accepts the same arguments as `renyi_entropy`.
 """
 second_renyi_entanglement_entropy(args...; kwargs...) = renyi_entropy(args...; kwargs..., α = 2)
 

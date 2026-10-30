@@ -20,37 +20,24 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
     es =
         unique(collect(Iterators.flatten(boundary_edges(bpc, [v]; dir = :out) for v in vs)))
     updated_es = NamedEdge[]
-    antiprojectors = ITensor[]
+    antiprojectors = Tensor[]
     for e in es
         if reverse(e) ∉ updated_es
             mer = message(bpc, reverse(e))
-            linds = filter(i -> plev(i) == 0, inds(mer))
+            linds = collect(inds(mer; plev = 0))
             linds_sim = sim.(linds)
-            mer = replaceinds(mer, linds, linds_sim)
-            if network(bpc) isa TensorNetworkState
-                mer = replaceinds(mer, dag.(prime.(linds)), dag.(prime.(linds_sim)))
-            end
-            ms = messages(bpc)
-            set!(ms, reverse(e), mer)
+            # the message's legs: the virtual legs, and for a state their bra copies too
+            row_inds, col_inds = message_legs(network(bpc), linds), message_legs(network(bpc), linds_sim)
+            mer = replaceinds(mer, row_inds, col_inds)
+            setmessage!(bpc, reverse(e), mer)
             t = network(bpc)[src(e)]
-            t_inds = filter(i -> i ∈ linds, inds(t))
-            if !isempty(t_inds)
-                t_ind = only(t_inds)
-                t_ind_pos = findfirst(x -> x == t_ind, linds)
-                t = replaceind(t, t_ind, linds_sim[t_ind_pos])
-                setindex_preserve!(bpc, t, src(e))
-            end
+            hascommoninds(t, linds) && setindex_preserve!(bpc, replaceinds(t, linds, linds_sim), src(e))
             push!(updated_es, e)
 
             if e ∈ edges(eg) || reverse(e) ∈ edges(eg)
-                row_inds, col_inds = linds, linds_sim
-                if network(bpc) isa TensorNetworkState
-                    row_inds = vcat(row_inds, dag.(prime.(row_inds)))
-                    col_inds = vcat(col_inds, dag.(prime.(col_inds)))
-                end
                 row_combiner, col_combiner = combiner(row_inds), combiner(col_inds)
                 ap =
-                    adapt_like(message(bpc, e), denseblocks(delta(combinedind(col_combiner), dag(combinedind(row_combiner)))))
+                    adapt_like(message(bpc, e), dense(delta(combinedind(col_combiner), dag(combinedind(row_combiner)))))
                 ap = ap * row_combiner * dag(col_combiner)
                 ap = ap - message(bpc, e) * mer
                 push!(antiprojectors, ap)
@@ -60,19 +47,10 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
     return bpc, antiprojectors
 end
 
-#Get the all edges incident to the region specified by the vector of edges passed
-function NamedGraphs.boundary_edges(
-        bpc::BeliefPropagationCache,
-        es::Vector{<:NamedEdge},
-    )
+# The edges into the region spanned by the edges `es`, from outside it.
+function incoming_edges(bpc::BeliefPropagationCache, es::Vector{<:NamedEdge})
     vs = unique(vcat(src.(es), dst.(es)))
-    bpes = NamedEdge[]
-    for v in vs
-        incoming_es = NamedGraphs.boundary_edges(bpc, [v]; dir = :in)
-        incoming_es = filter(e -> e ∉ es && reverse(e) ∉ es, incoming_es)
-        append!(bpes, incoming_es)
-    end
-    return bpes
+    return NamedEdge[e for v in vs for e in boundary_edges(bpc, [v]; dir = :in) if e ∉ es && reverse(e) ∉ es]
 end
 
 #Compute the contraction of the bp configuration specified by the edge induced subgraph eg
@@ -80,11 +58,10 @@ function weight(bpc::BeliefPropagationCache, eg)
     vs = collect(vertices(eg))
     es = collect(edges(eg))
     bpc, antiprojectors = sim_edgeinduced_subgraph(bpc, eg)
-    incoming_ms =
-        ITensor[message(bpc, e) for e in boundary_edges(bpc, es)]
+    incoming_ms = Tensor[message(bpc, e) for e in incoming_edges(bpc, es)]
     local_tensors = collect(Iterators.flatten(bp_factors(bpc, v) for v in vs))
     ts = [incoming_ms; local_tensors; antiprojectors]
-    seq = any(hasqns.(ts)) ? contraction_sequence(ts; alg = "optimal") : contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
+    seq = any(isgraded, ts) ? contraction_sequence(ts; alg = "optimal") : contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
     return scalar(contract(ts; sequence = seq))
 end
 

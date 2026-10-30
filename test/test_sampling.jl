@@ -14,7 +14,7 @@ using Test: @testset, @test
     g = named_hexagonal_lattice_graph(3, 3)
     ψ = tensornetworkstate(ComplexF64, v -> "↑", g)
     ψ = gauge_and_scale(ψ)
-    bmps_sample = only(sample(ψ, 1; alg = "boundarymps", norm_mps_bond_dimension = 1, projected_mps_bond_dimension = 1, gauge_state = false))
+    bmps_sample = only(sample(ψ, 1; alg = "boundarymps", norm_env_maxdim = 1, projected_env_maxdim = 1, gauge_state = false))
     @test all([bmps_sample[v] == 0 for v in vertices(g)])
 
     bp_sample = only(sample(ψ, 1; alg = "bp", gauge_state = false))
@@ -33,7 +33,7 @@ using Test: @testset, @test
     @test bp_samples isa Vector{<:Dictionary{vertextype(g), Int}}
     @test length(bp_samples) == nsamples
     @test all([keys(bp_sample) == vertices(g) for bp_sample in bp_samples])
-    bmps_certified_samples = sample_certified(ψ, nsamples; alg = "boundarymps", norm_mps_bond_dimension = 4, projected_mps_bond_dimension = 4, gauge_state = false)
+    bmps_certified_samples = sample_certified(ψ, nsamples; alg = "boundarymps", norm_env_maxdim = 4, projected_env_maxdim = 4, gauge_state = false)
     p_qs = first.(bmps_certified_samples)
     bitstrings = last.(bmps_certified_samples)
     #GHZ state, so samples should be either all up or all down
@@ -41,7 +41,7 @@ using Test: @testset, @test
 
     #We importance sampled with big enough mps_dimensions. Standard deviation should be small, mean should be norm of network.
     @test Statistics.std(p_qs) < 1.0e-8
-    @test Statistics.mean(p_qs) ≈ norm_sqr(ψ; alg = "boundarymps", mps_bond_dimension = 4)
+    @test Statistics.mean(p_qs) ≈ norm_sqr(ψ; alg = "boundarymps", env_maxdim = 4)
 end
 
 end

@@ -3,50 +3,55 @@
 
 Compute the inner product ⟨ψ|ϕ⟩ between two `TensorNetworkState`s using the specified algorithm. The two states must have the same graph structure and physical indices on each site. For the squared norm of a single state, use `norm_sqr(ψ; alg, kwargs...)` instead.
 
-    # Arguments
-    - `ψ::TensorNetworkState`: The first tensor network state.
-    - `ϕ::TensorNetworkState`: The second tensor network state.
+# Arguments
+- `ψ::TensorNetworkState`: The first tensor network state.
+- `ϕ::TensorNetworkState`: The second tensor network state.
 
-    # Keyword Arguments
-    - `alg`: The algorithm to use for the inner product calculation. Options include:
-        - `"exact"`: Exact contraction of the tensor network.
-        - `"bp"`: Belief propagation approximation.
-        - `"boundarymps"`: Boundary MPS approximation (requires `mps_bond_dimension`).
-        - `"loopcorrections"`: Loop corrections to belief propagation.
-    - Extra kwargs for `alg = "boundarymps"`:
-        - `mps_bond_dimension::Integer`: The bond dimension for the boundary MPS approximation.
-        - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
-        - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
-    - Extra kwargs for `alg = "bp"` or `"loopcorrections"`:
-        - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
-        - `max_configuration_size`: Maximum configuration size for loop corrections (only for `"loopcorrections"`).
+# Keyword Arguments
+- `alg`: The algorithm to use for the inner product calculation. Options include:
+    - `"exact"`: Exact contraction of the tensor network.
+    - `"bp"`: Belief propagation approximation.
+    - `"boundarymps"`: Boundary MPS approximation (requires `env_maxdim`).
+    - `"ctmrg"`: CTMRG approximation, on planar graphs (requires `env_maxdim`).
+    - `"loopcorrections"`: Loop corrections to belief propagation.
+- Extra kwargs for `alg = "boundarymps"`:
+    - `env_maxdim::Integer`: The bond dimension for the boundary MPS approximation.
+    - `partition_by`: How to partition the graph for boundary MPS (default is `"row"`).
+    - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
+- Extra kwargs for `alg = "bp"` or `"loopcorrections"`:
+    - `cache_update_kwargs`: Additional keyword arguments for updating the cache.
+    - `max_configuration_size`: Maximum configuration size for loop corrections (only for `"loopcorrections"`).
+- Extra kwargs for `alg = "ctmrg"`:
+    - `env_maxdim::Integer`: The bond dimension of the CTMRG environments.
+    - `cache_update_kwargs`: Additional keyword arguments for updating the cache (by default
+      only the free energy is converged).
 
-    # Returns
-    - The computed inner product as a scalar value.
+# Returns
+- The computed inner product as a scalar value.
 
-    # Example
-    ```julia
-    s = siteinds("S=1/2", g)
-    ψ = random_tensornetworkstate(ComplexF32, g, s; bond_dimension = 4)
-    ϕ = random_tensornetworkstate(ComplexF32, g, s; bond_dimension = 4)
+# Example
+```julia
+s = siteinds("S=1/2", g)
+ψ = random_tensornetworkstate(ComplexF32, g, s; bond_dimension = 4)
+ϕ = random_tensornetworkstate(ComplexF32, g, s; bond_dimension = 4)
 
-    # Exact inner product
-    ip_exact = ITensors.inner(ψ, ϕ; alg = "exact")
+# Exact inner product
+ip_exact = inner(ψ, ϕ; alg = "exact")
 
-    # Belief propagation inner product
-    ip_bp = ITensors.inner(ψ, ϕ; alg = "bp")
+# Belief propagation inner product
+ip_bp = inner(ψ, ϕ; alg = "bp")
 
-    # Boundary MPS inner product with bond dimension 10
-    ip_bmps = ITensors.inner(ψ, ϕ; alg = "boundarymps", mps_bond_dimension = 10)
-    ```
+# Boundary MPS inner product with bond dimension 10
+ip_bmps = inner(ψ, ϕ; alg = "boundarymps", env_maxdim = 10)
+```
 """
-function ITensors.inner(ψ::TensorNetworkState, ϕ::TensorNetworkState; alg, kwargs...)
+function inner(ψ::TensorNetworkState, ϕ::TensorNetworkState; alg, kwargs...)
     algorithm_check(ψ, "inner", alg)
     algorithm_check(ϕ, "inner", alg)
     return inner(Algorithm(alg), ψ, ϕ; kwargs...)
 end
 
-function ITensors.inner(
+function inner(
         alg::Algorithm"exact", blf::BilinearForm;
         contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod())
     )
@@ -55,23 +60,23 @@ function ITensors.inner(
     return scalar(contract(blf_tensors; sequence = seq))
 end
 
-function ITensors.inner(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
+function inner(alg::Algorithm, cache::AbstractBeliefPropagationCache; max_configuration_size = nothing)
     tn = network(cache)
     z = cache_partitionfunction(alg, cache; max_configuration_size)
     tn isa BilinearForm && return z
     return state_error("BilinearForm")
 end
 
-function ITensors.inner(alg::Union{Algorithm"bp", Algorithm"loopcorrections"}, ψ::TensorNetworkState, ϕ::TensorNetworkState; cache_update_kwargs = default_bp_update_kwargs(ψ), kwargs...)
-    ψϕ_bpc = converged_cache(alg, BilinearForm(ψ, ϕ); cache_update_kwargs)
-    return inner(alg, ψϕ_bpc; kwargs...)
+# The cache algorithms: converge a cache over ⟨ψ|ϕ⟩ (`cache_kwargs` are the cache's:
+# `env_maxdim`, ...), then contract it.
+function inner(
+        alg::Algorithm, ψ::TensorNetworkState, ϕ::TensorNetworkState;
+        cache_update_kwargs = default_cache_update_kwargs(alg, ψ), max_configuration_size = nothing, cache_kwargs...
+    )
+    cache_update_kwargs = scalar_cache_update_kwargs(alg, cache_update_kwargs)
+    return inner(alg, converged_cache(alg, BilinearForm(ψ, ϕ); cache_kwargs..., cache_update_kwargs); max_configuration_size)
 end
 
-function ITensors.inner(alg::Algorithm"boundarymps", ψ::TensorNetworkState, ϕ::TensorNetworkState; mps_bond_dimension::Integer, partition_by = "row", cache_update_kwargs = default_bmps_update_kwargs(ψ), kwargs...)
-    ψϕ_bmps = converged_cache(alg, BilinearForm(ψ, ϕ); mps_bond_dimension, partition_by, cache_update_kwargs)
-    return inner(alg, ψϕ_bmps; kwargs...)
-end
-
-function ITensors.inner(alg::Algorithm"exact", ψ::TensorNetworkState, ϕ::TensorNetworkState)
+function inner(alg::Algorithm"exact", ψ::TensorNetworkState, ϕ::TensorNetworkState)
     return inner(alg, BilinearForm(ψ, ϕ))
 end

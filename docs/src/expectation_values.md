@@ -1,8 +1,10 @@
 # Expectation Values
 
+![Expectation values and reduced density matrices](expectation_and_rdm.svg)
+
 ## Computing Expectation Values
 
-The `expect` function computes expectation values of local observables from a `TensorNetworkState` using belief propagation [[Tindall2023]](index.md#references), boundary MPS [[Rudolph2025]](index.md#references), or exact contraction.
+The `expect` function computes expectation values of local observables from a `TensorNetworkState` using belief propagation [[Tindall2023]](index.md#references), boundary MPS [[Rudolph2025]](index.md#references), corner transfer matrix renormalization group (CTMRG), or exact contraction.
 
 ### Observable Format
 
@@ -64,8 +66,11 @@ sz_all = expect(ψ, observables; alg = "bp")
 # Belief propagation (works on any graph, fast, approximate on loopy graphs)
 sz = expect(ψ, ("Z", (3, 3)); alg = "bp")
 
-# Boundary MPS (planar graphs only, more accurate, adjustable precision with mps_bond_dimension)
-sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 16)
+# Boundary MPS (planar grid-like graphs, more accurate, adjustable precision with env_maxdim)
+sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", env_maxdim = 16)
+
+# CTMRG (any planar graph, single-site or nearest-neighbor observables, adjustable via env_maxdim)
+sz = expect(ψ, ("Z", (3, 3)); alg = "ctmrg", env_maxdim = 16)
 
 # Exact contraction of the tensor network (only feasible for small systems)
 sz = expect(ψ, ("Z", (3, 3)); alg = "exact")
@@ -73,10 +78,34 @@ sz = expect(ψ, ("Z", (3, 3)); alg = "exact")
 
 ### Using Caches Directly
 
-If you already have an updated `BeliefPropagationCache` (e.g. from `apply_gates`) or `BoundaryMPSCache`, pass it directly to avoid redundant cache construction:
+If you already have an updated `BeliefPropagationCache` (e.g. from `apply_gates`), `BoundaryMPSCache`, or `CTMRGCache`, pass it directly to avoid redundant cache construction:
 
 ```julia
 ψ_bpc = BeliefPropagationCache(ψ)
 ψ_bpc = update(ψ_bpc)
 sz = expect(ψ_bpc, [("Z", [(3, 3)])])
+```
+
+## Norms, Inner Products, and Reduced Density Matrices
+
+The same contraction backends (`"exact"`, `"bp"`, `"boundarymps"`, `"ctmrg"`, and `"loopcorrections"` for norms and overlaps) are supported for norms, inner products, and reduced density matrices:
+
+```julia
+using LinearAlgebra
+
+# Squared norm and norm
+nsq = norm_sqr(ψ; alg = "bp")
+n = norm(ψ; alg = "bp")
+
+# Loop-corrected norm estimate on loopy graphs
+nsq_lc = norm_sqr(ψ; alg = "loopcorrections", max_configuration_size = 4)
+
+# Normalize the state (currently supported with alg = "bp")
+ψ = normalize(ψ; alg = "bp")
+
+# Inner product ⟨ψ|ϕ⟩ between two states on the same graph and site indices
+ip = inner(ψ, ϕ; alg = "boundarymps", env_maxdim = 16)
+
+# Reduced density matrix on a subset of vertices (normalized to unit trace by default)
+ρ = reduced_density_matrix(ψ, [(3, 3), (3, 4)]; alg = "bp")
 ```

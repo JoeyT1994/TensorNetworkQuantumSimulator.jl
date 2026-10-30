@@ -27,7 +27,7 @@ function main()
                 ψ,
                 ("Z", v_centre);
                 alg = "boundarymps",
-                mps_bond_dimension = Rmps,
+                env_maxdim = Rmps,
             )
             println("Boundary MPS Value for Z at Rank $Rmps is $sz_boundarymps")
         end
@@ -48,7 +48,7 @@ function main()
                     ψ,
                     ("ZZ", [v_centre, v_centre_neighbor]);
                     alg = "boundarymps",
-                    mps_bond_dimension = Rmps,
+                    env_maxdim = Rmps,
                 )
                 println("Boundary MPS Value for ZZ at Rank $Rmps is $sz_boundarymps")
             end

@@ -27,6 +27,9 @@ ising_partitionfunction
 apply_gates
 simple_update
 full_update
+Circuit
+circuit_from_qasm
+circuit_from_qiskit
 ```
 
 ## Custom Gate Registration
@@ -42,6 +45,7 @@ unregister_gate!
 ```@docs
 expect
 inner
+norm_sqr
 reduced_density_matrix
 ```
 
@@ -73,13 +77,26 @@ sample_certified
 ```@docs
 heavy_hexagonal_lattice
 lieb_lattice
+kagome_lattice
+penrose_tiling
+```
+
+## Planar Embeddings
+
+```@docs
+PlanarEmbedding
+planar_embedding
+vertex_polygon
 ```
 
 ## Message Passing
 
 ```@docs
+CTMRGCache
 update
 update_iteration!
+partitionfunction
+freenergy
 ```
 
 ## Utilities
@@ -89,14 +106,19 @@ safe_eigen
 add
 fidelity
 optimise_p_q
+TensorNetworkQuantumSimulator.TensorInterface.Algorithm
 ```
 
-## Custom Gate Definitions
+## Operators and States
+
+The package's own operator and state library, for S=1/2 and S=1 sites. Parameterised operators
+follow qiskit's conventions (e.g. `op("Rzz", s1, s2; θ)` is `exp(-iθ/2 Z⊗Z)`); multi-site matrices
+take the first site as the most significant. Add your own with `register_op!`.
 
 ```@docs
-ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"Rxxyy", ::ITensors.SiteTypes.SiteType"S=1/2", ::ITensors.Index, ::ITensors.Index)
-ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"Rxxyyzz", ::ITensors.SiteTypes.SiteType"S=1/2", ::ITensors.Index, ::ITensors.Index)
-ITensors.SiteTypes.op(::ITensors.SiteTypes.OpName"xx_plus_yy", ::ITensors.SiteTypes.SiteType"S=1/2")
+register_op!
+op
+state
 ```
 
 ## Index

@@ -25,7 +25,7 @@ const TNQS = TensorNetworkQuantumSimulator
         @test isempty(TNQS.contraction_sequences(ψ_BMPS))
         z_bmps = partitionfunction(ψ_BMPS)
         @test z_bmps ≈ contract(ψ; alg = "exact")
-        @test z_bmps ≈ contract(ψ; alg = "boundarymps", mps_bond_dimension = 4)
+        @test z_bmps ≈ contract(ψ; alg = "boundarymps", env_maxdim = 4)
     end
 
     #BMPS Cache
@@ -40,19 +40,22 @@ const TNQS = TensorNetworkQuantumSimulator
         @test scalartype(ψ_BMPS) == scalartype(ψ)
 
         ψ_BMPS = update(ψ_BMPS)
+        # contraction orders are memoised only while a cache updates: none are left behind
+        @test isempty(TNQS.contraction_sequences(ψ_BMPS))
+        @test isempty(TNQS.contraction_sequences(TNQS.update_partition(ψ_BMPS, first(TNQS.quotientvertices(ψ_BMPS)))))
         z_bmps = partitionfunction(ψ_BMPS)
         @test z_bmps ≈ norm_sqr(ψ; alg = "exact")
-        @test z_bmps ≈ norm_sqr(ψ; alg = "boundarymps", mps_bond_dimension = 4)
+        @test z_bmps ≈ norm_sqr(ψ; alg = "boundarymps", env_maxdim = 4)
 
         vs = [(2, 1), (2, 3)]
         ρ_bmps_1 = rdm(ψ_BMPS, vs)
-        ρ_bmps_2 = reduced_density_matrix(ψ, vs; alg = "boundarymps", mps_bond_dimension = 4)
+        ρ_bmps_2 = reduced_density_matrix(ψ, vs; alg = "boundarymps", env_maxdim = 4)
         ρ_exact = reduced_density_matrix(ψ, vs; alg = "exact")
         @test norm(ρ_bmps_1 - ρ_bmps_2) <= 10 * eps(real(eltype))
         @test norm(ρ_bmps_1 - ρ_exact) <= 10 * eps(real(eltype))
 
         s_exact = von_neumann_entanglement_entropy(ψ, vs; alg = "exact")
-        s_bmps_1 = von_neumann_entanglement_entropy(ψ, vs; alg = "boundarymps", mps_bond_dimension = 4)
+        s_bmps_1 = von_neumann_entanglement_entropy(ψ, vs; alg = "boundarymps", env_maxdim = 4)
         s_bmps_2 = TNQS.renyi_entropy(ρ_bmps_2; α = 1)
         @test abs(s_bmps_1 - s_exact) <= 10 * eps(real(eltype))
         @test abs(s_bmps_1 - s_bmps_2) <= 10 * eps(real(eltype))

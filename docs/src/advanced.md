@@ -12,8 +12,8 @@ g = named_grid((8, 8))
 ψ_cpu = random_tensornetworkstate(ComplexF32, g; bond_dimension = 8)
 ψ_gpu = CUDA.cu(ψ_cpu)
 
-@time expect(ψ_cpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
-@time expect(ψ_gpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
+@time expect(ψ_cpu, ("Z", (1, 1)); alg = "boundarymps", env_maxdim = 16)
+@time expect(ψ_gpu, ("Z", (1, 1)); alg = "boundarymps", env_maxdim = 16)
 ```
 
 Caches can also be transferred to the GPU:
@@ -25,6 +25,8 @@ Caches can also be transferred to the GPU:
 Significant speedups are seen on NVIDIA GPUs for many operations (BP, BoundaryMPS, Gate Application) at moderate to large bond dimensions. Use `ComplexF32` element types for best GPU performance. We highly recommend CUDA.jl (NVidia GPUs) as speedups are well documented in this case [[Rudolph2025]](index.md#references). Experience using Metal.jl is very limited and so proceed with caution.
 
 ## Loop Corrections
+
+![Loop corrections cluster expansion](loop_corrections.svg)
 
 On loopy graphs, belief propagation provides approximate results. Loop corrections can be used to systematically improve the BP estimate of the norm by accounting for the loops up to size `max_configuration_size` in the graph [[Evenbly2026]](index.md#references):
 

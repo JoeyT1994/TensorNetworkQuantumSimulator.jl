@@ -10,10 +10,10 @@ A Julia package for simulating quantum circuits, quantum dynamics and equilibriu
 
 ## Features
 
-- **Tensor Networks of Arbitrary Geometry**: 2D and 3D lattices (square, hexagonal, heavy-hex, Lieb, cubic), trees, and custom graphs via [NamedGraphs.jl](https://github.com/ITensor/NamedGraphs.jl).
+- **Tensor Networks of Arbitrary Geometry**: 2D and 3D lattices (square, hexagonal, heavy-hex, Lieb, triangular, kagome, Penrose tilings, cubic), trees, and custom graphs via [NamedGraphs.jl](https://github.com/ITensor/NamedGraphs.jl).
 - **Custom Site Types**: Multiple spin and bosonic modes per tensor, with complete flexibility over where physical degrees of freedom live in the network.
-- **Gate Application**: Apply large circuits with full control over SVD truncation via the simple update algorithm with BP-computed environments. Fast, simple, and robust. Full update with boundary MPS environments is also supported for planar graphs. Both real-time and imaginary-time evolution are supported.
-- **Expectation Values**: Belief propagation, boundary MPS, and exact contraction backends for computing expectation values of multi-point observables.
+- **Gate Application & Circuit Import**: Apply large circuits with full control over SVD truncation via the simple update algorithm with BP-computed environments, or full update with boundary MPS environments on planar graphs. Import circuits directly from OpenQASM 2 (`circuit_from_qasm`) or [Qiskit.jl](https://github.com/Qiskit/Qiskit.jl) (`circuit_from_qiskit`). Both real-time and imaginary-time evolution are supported.
+- **Expectation Values & Partition Functions**: Belief propagation, boundary MPS, corner transfer matrix (CTMRG), loop series expansion, and exact contraction backends for observables, norms, overlaps, and classical partition functions.
 - **Entanglement Entropy**: Von Neumann and Rényi entropies from BP messages (per bond) or from reduced density matrices (per subsystem).
 - **Sampling**: Sample from planar tensor network states using boundary MPS, with the MPS bond dimension controlling sample quality. Options to compute the importance-sampling ratio ``p(x)/q(x)`` for direct sample quality certification.
 - **Operators**: Operator evolution in the Heisenberg picture and density matrix representation.
@@ -25,7 +25,8 @@ A Julia package for simulating quantum circuits, quantum dynamics and equilibriu
 | Algorithm | Keyword | Graph Requirement | Cost | Accuracy |
 |-----------|---------|-------------------|------|----------|
 | Belief propagation | `alg = "bp"` | Any | Low | Exact on trees, approximate on loopy graphs |
-| Boundary MPS | `alg = "boundarymps"` | Planar | Variable (scales cubically in `mps_bond_dimension`) | Controllably accurate, converges to exact with increasing MPS bond dimension |
+| Boundary MPS | `alg = "boundarymps"` | Planar | Variable (scales cubically in `env_maxdim`) | Controllably accurate, converges to exact with increasing MPS bond dimension |
+| CTMRG | `alg = "ctmrg"` | Planar | Variable (scales cubically in `env_maxdim`) | Controllably accurate, converges to exact with increasing `env_maxdim` |
 | Loop corrections | `alg = "loopcorrections"` | Any | Moderate | Systematic corrections to BP; accurate when correlations decay exponentially |
 | Exact contraction | `alg = "exact"` | Any (small systems only) | Exponential in system size | Exact |
 
@@ -41,10 +42,11 @@ julia> using Pkg; Pkg.add("TensorNetworkQuantumSimulator")
 - **[Graphs](graphs.md)**: Defining lattice geometries and graph operations
 - **[Tensor Networks](states.md)**: `TensorNetwork` and `TensorNetworkState` types and their construction
 - **[Gate Application](gates.md)**: Building circuits and applying gates
+- **[Circuits from Qiskit](qiskit.md)**: Importing OpenQASM 2 and Qiskit.jl circuits
 - **[Expectation Values](expectation_values.md)**: Computing observables, norms, and overlaps
 - **[Entanglement Entropy](entanglement.md)**: Von Neumann and Rényi entropies via BP and boundary MPS
 - **[Sampling](sampling.md)**: Drawing bitstring samples from a planar tensor network state with optional certification
-- **[Caches](caches.md)**: How the `BeliefPropagationCache` and `BoundaryMPSCache` work and why they matter
+- **[Caches](caches.md)**: How `BeliefPropagationCache`, `BoundaryMPSCache`, and `CTMRGCache` work and why they matter
 - **[Advanced Topics](advanced.md)**: GPU support, loop corrections, and precision control
 - **[API Reference](api.md)**: Complete list of documented functions
 

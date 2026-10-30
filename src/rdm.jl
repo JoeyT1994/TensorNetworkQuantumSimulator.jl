@@ -1,33 +1,33 @@
-function normalize_rdm(ρ::ITensor)
-    dtype = datatype(ρ)
-    tr_ρ = copy(ρ)
-    for i in inds(ρ; plev = 0)
-        tr_ρ *= adapt(dtype)(delta(i, prime(i)))
-    end
-    return ρ / scalar(tr_ρ)
+# ρ / tr(ρ), the trace taken with deltas in ρ's storage
+function normalize_rdm(ρ::Tensor)
+    δ = reduce(*, (adapt(datatype(ρ))(delta(i, prime(i))) for i in inds(ρ; plev = 0)))
+    return ρ / scalar(ρ * δ)
 end
 
 """
-    reduced_density_matrix(ψ, verts; alg = nothing, kwargs...)
+    reduced_density_matrix(ψ, verts; alg = nothing, normalize = true, kwargs...)
 
 Compute the reduced density matrix on the vertices `verts` of the tensor network state `ψ`.
 
 # Arguments
-- `ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}`: The tensor network state or its associated cache.
+- `ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}`: The tensor network state or its associated cache.
 - `verts`: The vertices over which to compute the reduced density matrix. Can be a single vertex or a collection of vertices.
 
 # Keyword Arguments
-- `alg::Union{String, Nothing}`: The contraction algorithm to use. If not provided, defaults based on the type of `ψ`. Supported algorithms are `"exact"`, `"bp"`, and `"boundarymps"`.
+- `alg::Union{String, Nothing}`: The contraction algorithm to use. If not provided, defaults based on the type of `ψ`. Supported algorithms are `"exact"`, `"bp"`, `"boundarymps"` and `"ctmrg"` (one vertex or the two ends of an edge, requires `env_maxdim`).
 - `normalize::Bool = true`: Whether to normalize the reduced density matrix so that its trace is 1.
 - `kwargs...`: Additional keyword arguments specific to the chosen algorithm.
 
 # Returns
-- An `ITensor` representing the reduced density matrix on the specified vertices.
+- A `Tensor` representing the reduced density matrix on the specified vertices.
 """
-function reduced_density_matrix(ψ::Union{TensorNetworkState, BeliefPropagationCache, BoundaryMPSCache}, verts; alg::Union{String, Nothing} = default_alg(ψ), kwargs...)
+function reduced_density_matrix(
+        ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}, verts;
+        alg::Union{String, Nothing} = default_alg(ψ), normalize::Bool = true, kwargs...
+    )
     algorithm_check(ψ, "rdm", alg)
-    verts = collect_vertices(verts, graph(ψ))
-    return reduced_density_matrix(Algorithm(alg), ψ, verts; kwargs...)
+    ρ = reduced_density_matrix(Algorithm(alg), ψ, collect_vertices(verts, graph(ψ)); kwargs...)
+    return normalize ? normalize_rdm(ρ) : ρ
 end
 
 function reduced_density_matrix(
@@ -35,70 +35,29 @@ function reduced_density_matrix(
         ψ::TensorNetworkState,
         verts::Vector;
         contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod()),
-        normalize = true
     )
-    ITensors.disable_warn_order()
-    op_string_f = v -> v ∈ verts ? "ρ" : "I"
-    ρ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
-    seq = contraction_sequence(ρ_tensors; contraction_sequence_kwargs...)
-    ρ = contract(ρ_tensors; sequence = seq)
-    if normalize
-        ρ = normalize_rdm(ρ)
-    end
+    ρ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = v -> v ∈ verts ? "ρ" : "I")
+    return contract(ρ_tensors; sequence = contraction_sequence(ρ_tensors; contraction_sequence_kwargs...))
+end
+
+function reduced_density_matrix(alg::Union{Algorithm"bp", Algorithm"ctmrg"}, cache::AbstractBeliefPropagationCache, vs::Vector)
+    return contract_region(cache, observable_region(cache, vs), v -> v ∈ vs ? "ρ" : "I")
+end
+
+function reduced_density_matrix(alg::Algorithm"boundarymps", cache::BoundaryMPSCache, vs::Vector; bmps_messages_up_to_date = false)
+    ρ, _ = path_contract(cache, vs, v -> v ∈ vs ? "ρ" : "I"; bmps_messages_up_to_date, calculate_denom = false)
     return ρ
 end
 
-
+# bp and ctmrg: converge a cache over ψ (`cache_kwargs` are the cache's, e.g. `env_maxdim`).
 function reduced_density_matrix(
-        alg::Algorithm"bp",
-        cache::BeliefPropagationCache,
-        vs::Vector;
-        normalize = true
-    )
-    steiner_vs = length(vs) == 1 ? vs : collect(vertices(steiner_tree(network(cache), vs)))
-    incoming_ms = incoming_messages(cache, steiner_vs)
-
-    op_string_f = v -> v ∈ vs ? "ρ" : "I"
-
-    #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
-    ρ_tensors = norm_factors(network(cache), steiner_vs; op_strings = op_string_f)
-    append!(ρ_tensors, incoming_ms)
-    seq = contraction_sequence(ρ_tensors; alg = "optimal")
-    ρ = contract(ρ_tensors; sequence = seq)
-
-    if normalize
-        ρ = normalize_rdm(ρ)
-    end
-    return ρ
-end
-
-function reduced_density_matrix(
-        alg::Algorithm"boundarymps",
-        cache::BoundaryMPSCache,
-        vs::Vector;
-        normalize = true,
-        bmps_messages_up_to_date = false,
-    )
-
-    op_string_f = v -> v ∈ vs ? "ρ" : "I"
-    ρ, _ = path_contract(cache, vs, op_string_f; bmps_messages_up_to_date)
-
-    if normalize
-        ρ = normalize_rdm(ρ)
-    end
-    return ρ
-end
-
-function reduced_density_matrix(
-        alg::Algorithm"bp",
+        alg::Union{Algorithm"bp", Algorithm"ctmrg"},
         ψ::TensorNetworkState,
         verts::Vector;
-        cache_update_kwargs = default_bp_update_kwargs(ψ),
-        kwargs...,
+        cache_update_kwargs = default_cache_update_kwargs(alg, ψ),
+        cache_kwargs...,
     )
-    ψ_bpc = converged_cache(alg, ψ; cache_update_kwargs)
-
-    return reduced_density_matrix(alg, ψ_bpc, verts; kwargs...)
+    return reduced_density_matrix(alg, converged_cache(alg, ψ; cache_kwargs..., cache_update_kwargs), verts)
 end
 
 function reduced_density_matrix(
@@ -106,19 +65,12 @@ function reduced_density_matrix(
         ψ::TensorNetworkState,
         verts::Vector;
         cache_update_kwargs = default_bmps_update_kwargs(ψ),
-        mps_bond_dimension::Integer,
-        partition_by::String = boundarymps_partitioning(verts),
+        env_maxdim::Integer,
+        partition_by::String = boundarymps_partitioning([verts]),
         kwargs...,
     )
-    ψ_bpc = converged_cache(alg, ψ; mps_bond_dimension, partition_by, cache_update_kwargs)
-
+    ψ_bpc = converged_cache(alg, ψ; env_maxdim, partition_by, cache_update_kwargs)
     return reduced_density_matrix(alg, ψ_bpc, verts; kwargs...)
-end
-
-function boundarymps_partitioning(vs::Vector)
-    allequal(first.(vs)) && return "row"
-    allequal(last.(vs)) && return "col"
-    error("Vertices must be aligned in either the same column or the same row to do BoundaryMPS.")
 end
 
 const rdm = reduced_density_matrix

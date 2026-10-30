@@ -30,14 +30,14 @@ using Test: @testset, @test
         end
 
         Rmps = 16
-        sz_boundarymps = expect(ψ, ("Z", v_centre); alg = "boundarymps", mps_bond_dimension = Rmps)
+        sz_boundarymps = expect(ψ, ("Z", v_centre); alg = "boundarymps", env_maxdim = Rmps)
 
         @test sz_boundarymps ≈ sz_exact atol = 10*eps(Float32)
 
         if !is_tree(g)
             v_centre_neighbor = first(neighbors(g, v_centre))
             sz_exact = expect(ψ, ("ZZ", [v_centre, v_centre_neighbor]); alg = "exact")
-            sz_boundarymps = expect(ψ, ("ZZ", [v_centre, v_centre_neighbor]); alg = "boundarymps", mps_bond_dimension = Rmps)
+            sz_boundarymps = expect(ψ, ("ZZ", [v_centre, v_centre_neighbor]); alg = "boundarymps", env_maxdim = Rmps)
 
             @test sz_boundarymps ≈ sz_exact
         end

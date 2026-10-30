@@ -1,8 +1,10 @@
 module TensorNetworkQuantumSimulator
 
-
+include("tensor_interface.jl")
+include("Backends/Backends.jl")
 include("imports.jl")
 
+include("operators.jl")
 include("siteinds.jl")
 include("TensorNetworks/abstracttensornetwork.jl")
 include("TensorNetworks/tensornetwork.jl")
@@ -18,12 +20,18 @@ include("MessagePassing/beliefpropagationcache.jl")
 include("MessagePassing/boundarympscache.jl")
 include("MessagePassing/loopcorrection.jl")
 include("graph_ops.jl")
+include("Planar/planar_embedding.jl")
+include("MessagePassing/ctmrg_rules.jl")
+include("MessagePassing/ctmrg.jl")
 include("utils.jl")
+include("kernel_hooks.jl")
 
 include("Apply/apply_gates.jl")
 include("Apply/simple_update.jl")
 include("Apply/full_update.jl")
 include("Apply/gate_definitions.jl")
+include("circuit_import.jl")
+include("qasm.jl")
 include("expect.jl")
 include("norm_sqr.jl")
 include("inner.jl")
@@ -33,6 +41,9 @@ include("symmetric_gauge.jl")
 include("entanglement.jl")
 include("truncate.jl")
 include("rdm.jl")
+
+# extends the backend library's own functions for package types, so it comes last
+include("Backends/ITensorsCompat.jl")
 
 
 export
@@ -81,9 +92,14 @@ export
     datatype,
     scalartype,
     BoundaryMPSCache,
+    CTMRGCache,
+    register_op!,
+    op,
+    state,
     TensorNetwork,
     AbstractTensorNetwork,
     partitionfunction,
+    freenergy,
     contract,
     TreeSA,
     GreedyMethod,
@@ -110,12 +126,21 @@ export
     virtualinds,
     nv,
     heavy_hexagonal_lattice,
+    named_triangular_lattice_graph,
+    kagome_lattice,
+    penrose_tiling,
+    PlanarEmbedding,
+    planar_embedding,
+    vertex_polygon,
     lieb_lattice,
     rescale,
     renyi_entropy,
     von_neumann_entanglement_entropy,
     second_renyi_entanglement_entropy,
     build_graph_from_circuit,
+    Circuit,
+    circuit_from_qasm,
+    circuit_from_qiskit,
     reduced_density_matrix,
     rdm,
     norm_factors,

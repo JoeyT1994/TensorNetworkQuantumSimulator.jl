@@ -17,6 +17,10 @@ for colored_edges in ec
 end
 ```
 
+### Circuits from qiskit (OpenQASM)
+
+Circuits written in qiskit or exported as OpenQASM 2 convert to a `Circuit` containing the declared qubits and gate list with `circuit_from_qasm` (or `circuit_from_qiskit` for Qiskit.jl circuits). See [Circuits from Qiskit](qiskit.md).
+
 ### Edge Coloring
 
 The `edge_color` function partitions edges into groups of non-overlapping edges. Non-overlapping gates within a group are applied without requiring intermediate BP cache updates, which is significantly more efficient. An edge coloring into `k` groups is always possible on a bipartite graph of degree `k` so in that case the second argument should be the coordination number (maximum vertex degree) of the graph:
@@ -48,7 +52,7 @@ apply_kwargs = (; maxdim = 10, cutoff = 1e-10, normalize_tensors = true)
   - `maxdim`: Maximum bond dimension after SVD truncation.
   - `cutoff`: Singular value cutoff for truncation.
   - `normalize_tensors`: Whether to locally normalize tensors after each gate application (recommended for numerical stability).
-- `bp_update_kwargs`: Keyword arguments controlling the BP message update between overlapping gate groups.
+- `cache_update_kwargs`: Keyword arguments controlling the BP message update between overlapping gate groups.
 - `update_cache`: Whether to update BP messages between gate groups (default `true`).
 
 ### Return Values
@@ -60,6 +64,8 @@ apply_kwargs = (; maxdim = 10, cutoff = 1e-10, normalize_tensors = true)
 The product `prod(1 .- errors)` gives a lower bound on the fidelity accumulated across all gate applications.
 
 ## Simple Update Algorithm
+
+![Simple update algorithm](simple_update.svg)
 
 Under the hood, each two-site gate is applied via the _simple update_ algorithm [[Jiang2008]](index.md#references) [[Tindall2024]](index.md#references):
 
@@ -81,60 +87,73 @@ equivalent are marked `—`.
 
 ### One-qubit Gates
 
-| Gate | Alias | Parameter | Description |
-|------|-------|-----------|-------------|
+| Gate | Alias | Parameters | Description |
+|------|-------|------------|-------------|
+| `"I"` | `"i"`, `"id"` | -- | Identity |
 | `"X"`, `"Y"`, `"Z"` | `"x"`, `"y"`, `"z"` | -- | Pauli gates |
 | `"H"` | `"h"` | -- | Hadamard |
-| `"P"` | `"p"` | phase | Phase gate |
-| `"Rx"`, `"Ry"`, `"Rz"` | `"rx"`, `"ry"`, `"rz"` | angle | Pauli rotation |
-| `"CRx"`, `"CRy"`, `"CRz"` | `"crx"`, `"cry"`, `"crz"` | angle | Controlled Pauli rotation (single-qubit part) |
+| `"S"`, `"Sdg"`, `"T"`, `"Tdg"` | `"s"`, `"sdg"`, `"t"`, `"tdg"` | -- | Phase gates by π/2 and π/4, and their inverses |
+| `"SX"`, `"SXdg"` | `"sx"`, `"sxdg"` | -- | Square root of X, and its inverse |
+| `"P"`, `"U1"` | `"p"`, `"u1"` | θ | Phase gate |
+| `"Rx"`, `"Ry"`, `"Rz"` | `"rx"`, `"ry"`, `"rz"` | θ | Pauli rotation |
+| `"R"` | `"r"` | (θ, ϕ) | Rotation by θ about the axis cos(ϕ) X + sin(ϕ) Y |
+| `"U"`, `"U3"` | `"u"`, `"u3"` | (θ, ϕ, λ) | General single-qubit gate |
+| `"U2"` | `"u2"` | (ϕ, λ) | `U(π/2, ϕ, λ)` |
 
 ### Two-qubit Gates
 
-| Gate | Alias | Parameter | Description |
-|------|-------|-----------|-------------|
+The first vertex of a controlled gate is the control.
+
+| Gate | Alias | Parameters | Description |
+|------|-------|------------|-------------|
 | `"CNOT"`, `"CX"` | `"cnot"`, `"cx"` | -- | Controlled-X (qiskit name is `"cx"`; `"cnot"` is a convenience alias) |
-| `"CY"`, `"CZ"` | `"cy"`, `"cz"` | -- | Controlled-Y / Z |
+| `"CY"`, `"CZ"`, `"CH"` | `"cy"`, `"cz"`, `"ch"` | -- | Controlled-Y / Z / H |
+| `"CS"`, `"CSdg"`, `"CSX"` | `"cs"`, `"csdg"`, `"csx"` | -- | Controlled-S / S† / √X |
+| `"CRx"`, `"CRy"`, `"CRz"` | `"crx"`, `"cry"`, `"crz"` | θ | Controlled Pauli rotation |
+| `"CPHASE"`, `"CU1"` | `"cp"`, `"cu1"` | θ | Controlled phase (qiskit name is `"cp"`) |
+| `"CU3"` | `"cu3"` | (θ, ϕ, λ) | Controlled `U(θ, ϕ, λ)` |
+| `"CU"` | `"cu"` | (θ, ϕ, λ, γ) | Controlled `e^{iγ} U(θ, ϕ, λ)` |
 | `"SWAP"`, `"iSWAP"` | `"swap"`, `"iswap"` | -- | SWAP / iSWAP |
-| `"√SWAP"`, `"√iSWAP"` | — | -- | Square-root SWAP variants (no qiskit equivalent) |
-| `"Rxx"`, `"Ryy"`, `"Rzz"` | `"rxx"`, `"ryy"`, `"rzz"` | angle | Pauli-pair rotations |
-| `"Rxxyy"`, `"Rxxyyzz"` | — | angle | XX+YY and XX+YY+ZZ rotations (no qiskit equivalent) |
-| `"xx_plus_yy"` | (canonical) | (angle, phase) | XX+YY interaction with relative phase (qiskit `XXPlusYYGate`) |
-| `"CPHASE"` | `"cp"` | phase | Controlled phase (qiskit name is `"cp"`) |
+| `"DCX"` | `"dcx"` | -- | Double CNOT: CX from the first vertex, then from the second |
+| `"ECR"` | `"ecr"` | -- | Echoed cross-resonance |
+| `"√SWAP"`, `"√iSWAP"` | `"√swap"`, `"√iswap"` | -- | Square-root SWAP variants (no qiskit equivalent) |
+| `"Rxx"`, `"Ryy"`, `"Rzz"` | `"rxx"`, `"ryy"`, `"rzz"` | θ | Pauli-pair rotations |
+| `"Rzx"` | `"rzx"` | θ | `exp(-iθ/2 Z⊗X)`, Z on the first vertex |
+| `"xx_plus_yy"`, `"xx_minus_yy"` | `"xx_plus_yy"`, `"xx_minus_yy"` | (θ, β) | qiskit's `XXPlusYYGate` and `XXMinusYYGate` |
+| `"Rxxyy"`, `"Rxxyyzz"` | — | θ | XX+YY and XX+YY+ZZ rotations (no qiskit equivalent) |
+
+Gates on three or more qubits are not supported: decompose them into one- and two-qubit gates first.
 
 ### Custom Gates
 
 There are two paths for using a gate that isn't in the built-in registry, depending on whether the gate is one-off or reusable.
 
-#### Path 1: Pass an `ITensor` directly
+#### Path 1: Pass gate tensors directly
 
-For a one-off gate, build the `ITensor` yourself from the physical site indices and pass it to `apply_gates`. No registration needed:
+For a one-off gate, register its matrix with [`register_op!`](@ref) (first site most significant), build the gate tensor with [`op`](@ref) on the site indices, and pass the tensors to `apply_gates`:
 
 ```julia
-using ITensors: ITensor
-
 s = siteinds(ψ)
-# Custom gates
-gate1 = ITensor(my_local_matrix, s[v1], s[v1]')
-gate2 = ITensor(my_nn_gate, s[v1], s[v2], s[v1]', s[v2]')
-ψ, errors = apply_gates([gate1, gate2], ψ; apply_kwargs)
+register_op!("MyGate", my_nn_gate; nsites = 2)
+gate = op("MyGate", only(s[v1]), only(s[v2]))
+ψ, errors = apply_gates([gate], ψ; apply_kwargs)
 ```
 
 #### Path 2: Register a named gate
 
 For a gate you'll reuse repeatedly, register it once and then use the tuple form like any built-in. Two steps:
 
-1. Define the matrix as an `ITensors.op` method.
-2. Call [`register_gate!`](@ref) to tell the dispatcher which keyword arguments your `op` accepts.
+1. Register the matrix with [`register_op!`](@ref): a function of the gate's keyword arguments returning the `4 × 4` (two-site) or `2 × 2` (one-site) matrix, in the basis where the first site is the most significant (`kron(A, B)` is `A` on the first site, `B` on the second).
+2. Call [`register_gate!`](@ref) to tell the dispatcher which keyword arguments your operator accepts.
 
 ```julia
-using ITensors: op, OpName, SiteType, Index
-
 # 1. Define the matrix (the "physics" part)
-function ITensors.op(::OpName"FSim", ::SiteType"S=1/2", s1::Index, s2::Index;
-                     θ::Number, ϕ::Number)
-    # ... return a 4-leg ITensor ...
-end
+register_op!("FSim", (; θ, ϕ) -> [
+    1 0 0 0
+    0 cos(θ) -im*sin(θ) 0
+    0 -im*sin(θ) cos(θ) 0
+    0 0 0 exp(-im * ϕ)
+]; nsites = 2)
 
 # 2. Register the dispatch info (the "name → kwargs" part)
 register_gate!("FSim"; paramkeys = (:θ, :ϕ))
@@ -146,9 +165,10 @@ circuit = [("FSim", [v1, v2], (π/4, π/8))]
 
 The keyword arguments map as:
 
-- `paramkeys = (:θ, :ϕ)` — names of the kwargs your `op` expects, in the order they appear in the circuit-tuple parameter. For a single-parameter gate, use a 1-tuple like `(:θ,)`.
-- `opname = "FSim"` — defaults to the gate name; override if your circuit-level name should differ from the `OpName` your `op` uses.
-- `rescale = identity` — applied to the parameter(s) before forwarding to `op`. Useful when your `op` follows a different convention (e.g., the built-in `"Rxx"` uses `rescale = θ -> θ/2` to bridge our qiskit convention to ITensors').
+- `paramkeys = (:θ, :ϕ)` — names of the kwargs your operator expects, in the order they appear in the circuit-tuple parameter. For a single-parameter gate, use a 1-tuple like `(:θ,)`.
+- `opname = "FSim"` — defaults to the gate name; override if your circuit-level name should differ from the name the operator is registered under.
+
+Parameters are forwarded to the operator unchanged.
 
 To add a qiskit-style alias for your gate (so e.g. `"fsim"` resolves to `"FSim"`), call [`register_alias!`](@ref):
 

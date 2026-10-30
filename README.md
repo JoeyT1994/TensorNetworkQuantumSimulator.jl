@@ -2,9 +2,11 @@
 
 [![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/)
 
+![Overview of TensorNetworkQuantumSimulator.jl](docs/src/mainfig.svg)
+
 A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks (TNs) of near-arbitrary geometry. Built on top of [ITensors](https://github.com/ITensor/ITensors.jl) and [NamedGraphs](https://github.com/ITensor/NamedGraphs.jl).
 
-The main workhorses of the simulation are _belief propagation_ (BP) and the _singular value decomposition_ for applying gates, and _BP_ or _boundary MPS_ for estimating expectation values and sampling.
+The main workhorses of the simulation are _belief propagation_ (BP) and the _singular value decomposition_ for applying gates, and _BP_, _boundary MPS_, or _CTMRG_ for estimating expectation values, partition functions, and sampling. Circuits can be built directly in Julia or imported from OpenQASM 2 and [Qiskit.jl](https://github.com/Qiskit/Qiskit.jl).
 
 ## Documentation
 
@@ -14,10 +16,11 @@ Full documentation is available at **https://JoeyT1994.github.io/TensorNetworkQu
 - [Graphs](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/graphs/) — lattice constructors and graph utilities
 - [Tensor Networks](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/states/) — `TensorNetwork` and `TensorNetworkState` types
 - [Gate Application](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/gates/) — circuits, simple update, and supported gates
+- [Circuits from Qiskit](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/qiskit/) — importing OpenQASM 2 and Qiskit.jl circuits
 - [Expectation Values](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/expectation_values/) — observables, norms, and reduced density matrices
 - [Entanglement Entropy](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/entanglement/) — von Neumann and Rényi entropies
 - [Sampling](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/sampling/) — bitstring sampling with optional certification
-- [Caches](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/caches/) — `BeliefPropagationCache` and `BoundaryMPSCache` in depth
+- [Caches](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/caches/) — `BeliefPropagationCache`, `BoundaryMPSCache`, and `CTMRGCache` in depth
 - [Advanced Topics](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/advanced/) — GPU support, loop corrections, precision control
 - [API Reference](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/api/) — complete function reference
 
@@ -54,33 +57,57 @@ circuit = reduce(vcat, [layer for _ in 1:50])
 
 # 5. Measure an expectation value
 sz_bp = expect(ψ, ("Z", (3, 3)); alg = "bp")
-sz_bmps = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 10)
+sz_bmps = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", env_maxdim = 10)
 ```
 
 ## Usage Guide
 
 ### Defining the Geometry
 
+![Built-in lattice geometries](docs/src/lattices.svg)
+
 The starting point of most calculations is a `NamedGraph` that encodes the geometry of your tensor network. Vertices correspond to qubits (or qutrits, bosonic sites, etc.) and edges correspond to pairs of sites that directly interact. Built-in constructors are provided for common lattices:
 
 ```julia
-g = named_grid((5, 5))                         # 2D square lattice
+g = named_grid((5, 5))                          # 2D square lattice
 g = named_grid((3, 3, 3); periodic = true)      # 3D periodic cubic lattice
 g = named_hexagonal_lattice_graph(4, 4)         # hexagonal lattice
-g = heavy_hexagonal_lattice(5, 5)               # heavy-hexagonal lattice
+g = heavy_hexagonal_lattice(5, 5)               # heavy-hexagonal lattice (IBM topology)
 g = lieb_lattice(5, 5)                          # Lieb lattice
+g = named_triangular_lattice_graph(5, 5)        # triangular lattice
+g = kagome_lattice(3, 3)                        # kagome lattice
+g = penrose_tiling(3)                           # Penrose rhombus tiling
+g = named_path_graph(10)                        # 1D chain (MPS)
+g = named_comb_tree(4, 4)                       # comb tree
 ```
 
-### Constructing a Tensor Network State
+Custom graphs can also be built directly with [NamedGraphs.jl](https://github.com/ITensor/NamedGraphs.jl) or inferred from imported quantum circuits with `build_graph_from_circuit(circuit)`.
 
-A `TensorNetworkState` (TNS) is a tensor network representation of your wavefunction, with the structure specified by the graph `g`. Product states can be constructed using string labels or numerical vectors:
+### Constructing Tensor Networks and States
+
+![Tensor network types](docs/src/tensor_network_types.svg)
+
+The library provides two core tensor network types:
+- **`TensorNetwork`**: A network of tensors connected by virtual bond indices only, contracting to a scalar (e.g. classical partition functions).
+- **`TensorNetworkState`**: Extends `TensorNetwork` with physical site indices per vertex, representing quantum states ``|\psi\rangle`` (1 index per site) or density matrices / Heisenberg operators (2 indices per site).
 
 ```julia
-# All spins up (bond dimension 1)
+# Scalar TensorNetwork (e.g. classical Ising partition function Z(β))
+Z_tn = ising_partitionfunction(g, 0.4)
+Z = contract(Z_tn; alg = "bp")
+
+# Product TensorNetworkState (all spins up, bond dimension 1)
 ψ = tensornetworkstate(v -> "↑", g, "S=1/2")
 
-# Random state with bond dimension 4 and ComplexF32 elements
+# Random TensorNetworkState with bond dimension 4 and ComplexF32 elements
 ψ = random_tensornetworkstate(ComplexF32, g, "S=1/2"; bond_dimension = 4)
+
+# Exact bond-dimension-2 Toric Code ground state on a 4×4 periodic torus
+ψ_tc = toriccode_groundstate(4)
+
+# Multi-index TensorNetworkState (ket & bra legs per site for density matrices / operators)
+s = siteinds("S=1/2", g; inds_per_site = 2)
+ρ = identity_tensornetworkstate(ComplexF64, g, s)
 ```
 
 The optional first argument sets the element type (`Float64` by default). Use `ComplexF32` or `ComplexF64` for complex-valued states.
@@ -103,6 +130,8 @@ end
 ```
 
 The `edge_color` function identifies groups of non-overlapping edges. Non-overlapping gates within a group are applied in parallel during the simulation. The second argument should be the coordination number (maximum vertex degree) of the graph.
+
+Circuits exported as OpenQASM 2 (e.g. via Python Qiskit's `qasm2.dumps`) or built with Qiskit.jl can also be imported directly with `circuit_from_qasm` and `circuit_from_qiskit`; see [Circuits from Qiskit](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/qiskit/).
 
 ### Applying Gates
 
@@ -128,8 +157,11 @@ Compute expectation values with `expect`, choosing from several contraction algo
 # Belief propagation (works on any graph, fast, approximate)
 sz = expect(ψ, ("Z", (3, 3)); alg = "bp")
 
-# Boundary MPS (planar graphs only, more accurate, adjustable precision)
-sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", mps_bond_dimension = 16)
+# Boundary MPS (planar grid-like graphs, more accurate, adjustable precision)
+sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", env_maxdim = 16)
+
+# CTMRG (any planar graph, single-site or nearest-neighbor observables)
+sz = expect(ψ, ("Z", (3, 3)); alg = "ctmrg", env_maxdim = 16)
 
 # Exact contraction (only feasible for small systems)
 sz = expect(ψ, ("Z", (3, 3)); alg = "exact")
@@ -142,7 +174,7 @@ observables = [("Z", [v]) for v in vertices(g)]
 sz_all = expect(ψ, observables; alg = "bp")
 ```
 
-If you already have an updated `BeliefPropagationCache` or `BoundaryMPSCache`, pass it directly to avoid redundant cache construction.
+If you already have an updated `BeliefPropagationCache`, `BoundaryMPSCache`, or `CTMRGCache`, pass it directly to avoid redundant cache construction.
 
 ### Norms, Inner Products and Reduced Density Matrices
 
@@ -158,13 +190,13 @@ n = norm(ψ; alg = "bp")
 ψ = normalize(ψ; alg = "bp")
 
 # Inner product between two states
-ip = ITensors.inner(ψ, ϕ; alg = "bp")
+ip = inner(ψ, ϕ; alg = "bp")
 
 # Reduced density matrix on a set of vertices
 ρ = reduced_density_matrix(ψ, [(3, 3)]; alg = "bp")
 ```
 
-All of these support the same algorithm options as `expect`: `"exact"`, `"bp"`, `"boundarymps"`, and (for norms) `"loopcorrections"`.
+All of these support the same algorithm options as `expect`: `"exact"`, `"bp"`, `"boundarymps"`, `"ctmrg"` (all but `normalize`), and (for norms) `"loopcorrections"`.
 
 ### Sampling
 
@@ -172,13 +204,13 @@ Draw bitstring samples from the probability distribution defined by the squared 
 
 ```julia
 # Basic sampling (returns bitstrings only)
-bitstrings = sample(ψ, 100; alg = "boundarymps", norm_mps_bond_dimension = 10)
+bitstrings = sample(ψ, 100; alg = "boundarymps", norm_env_maxdim = 10)
 
 # Directly certified sampling (returns bitstrings with p(x)/q(x) estimates)
-results = sample_directly_certified(ψ, 100; alg = "boundarymps", norm_mps_bond_dimension = 10)
+results = sample_directly_certified(ψ, 100; alg = "boundarymps", norm_env_maxdim = 10)
 
 # Certified sampling (independent contraction for certification)
-results = sample_certified(ψ, 100; alg = "boundarymps", norm_mps_bond_dimension = 10)
+results = sample_certified(ψ, 100; alg = "boundarymps", norm_env_maxdim = 10)
 ```
 
 BP-based sampling is also available via `alg = "bp"`.
@@ -199,23 +231,32 @@ Gates are specified as tuples of the form `(gate_string, vertices)` or `(gate_st
 
 | Gate | Parameter | Description |
 |------|-----------|-------------|
-| `"X"`, `"Y"`, `"Z"` | -- | Pauli gates |
+| `"I"`, `"X"`, `"Y"`, `"Z"` | -- | Identity and Pauli gates |
 | `"H"` | -- | Hadamard |
-| `"P"` | phase | Phase gate |
+| `"S"`, `"Sdg"`, `"T"`, `"Tdg"` | -- | Phase gates by π/2 and π/4, and their inverses |
+| `"SX"`, `"SXdg"` | -- | Square root of X, and its inverse |
+| `"P"`, `"U1"` | phase | Phase gate |
 | `"Rx"`, `"Ry"`, `"Rz"` | angle | Pauli rotation |
-| `"CRx"`, `"CRy"`, `"CRz"` | angle | Controlled Pauli rotation (single-qubit part) |
+| `"R"` | `(θ, ϕ)` | Rotation by θ about `cos(ϕ) X + sin(ϕ) Y` |
+| `"U"`, `"U3"` | `(θ, ϕ, λ)` | General single-qubit gate |
+| `"U2"` | `(ϕ, λ)` | `U(π/2, ϕ, λ)` |
 
 **Two-qubit gates:**
 
 | Gate | Parameter | Description |
 |------|-----------|-------------|
-| `"CNOT"`, `"CX"`, `"CY"` | -- | Controlled gates |
+| `"CNOT"`, `"CX"`, `"CY"`, `"CZ"`, `"CH"` | -- | Controlled Pauli / Hadamard gates |
+| `"CS"`, `"CSdg"`, `"CSX"` | -- | Controlled S, S†, and √X |
+| `"CRx"`, `"CRy"`, `"CRz"` | angle | Controlled Pauli rotation |
+| `"CPHASE"`, `"CU1"` | phase | Controlled phase |
+| `"CU3"`, `"CU"` | `(θ, ϕ, λ)` / `(θ, ϕ, λ, γ)` | Controlled general rotation |
 | `"SWAP"`, `"iSWAP"`, `"√SWAP"`, `"√iSWAP"` | -- | Swap variants |
-| `"Rxx"`, `"Ryy"`, `"Rzz"` | angle | Pauli-pair rotations |
+| `"DCX"`, `"ECR"` | -- | Double CNOT and echoed cross-resonance |
+| `"Rxx"`, `"Ryy"`, `"Rzz"`, `"Rzx"` | angle | Pauli-pair rotations |
+| `"xx_plus_yy"`, `"xx_minus_yy"` | `(θ, β)` | Qiskit `XXPlusYYGate` and `XXMinusYYGate` |
 | `"Rxxyy"`, `"Rxxyyzz"` | angle | Multi-Pauli rotations |
-| `"CPHASE"` | phase | Controlled phase |
 
-Custom gates can be defined by constructing the corresponding `ITensor` acting on the physical indices of the target qubits.
+Custom gates can be registered for the session with `register_op!` and `register_gate!`, or built as tensors with `op` acting on the physical indices of the target qubits.
 
 ## GPU Support
 
@@ -229,18 +270,21 @@ g = named_grid((8, 8))
 ψ_cpu = random_tensornetworkstate(ComplexF32, g; bond_dimension = 8)
 ψ_gpu = CUDA.cu(ψ_cpu)
 
-@time expect(ψ_cpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
-@time expect(ψ_gpu, ("Z", (1, 1)); alg = "boundarymps", mps_bond_dimension = 16)
+@time expect(ψ_cpu, ("Z", (1, 1)); alg = "boundarymps", env_maxdim = 16)
+@time expect(ψ_gpu, ("Z", (1, 1)); alg = "boundarymps", env_maxdim = 16)
 ```
 
 Caches can also be transferred: `CUDA.cu(BeliefPropagationCache(ψ))`. Significant speedups are seen on NVIDIA GPUs at moderate to large bond dimensions.
 
 ## Algorithm Guide
 
+![Environment caches overview](docs/src/caches_overview.svg)
+
 | Algorithm | Keyword | Graph requirement | Cost | Accuracy |
 |-----------|---------|-------------------|------|----------|
 | Belief propagation | `alg = "bp"` | Any | Low | Exact on trees, approximate on loopy graphs |
-| Boundary MPS | `alg = "boundarymps"` | Planar | Moderate (tuneable via `mps_bond_dimension`) | Converges to exact with increasing bond dimension |
+| Boundary MPS | `alg = "boundarymps"` | Planar | Moderate (tuneable via `env_maxdim`) | Converges to exact with increasing bond dimension |
+| CTMRG | `alg = "ctmrg"` | Planar | Moderate (tuneable via `env_maxdim`) | Converges to exact with increasing `env_maxdim` |
 | Loop corrections | `alg = "loopcorrections"` | Any | Moderate | Systematic corrections to BP |
 | Exact contraction | `alg = "exact"` | Any (small systems) | Exponential | Exact |
 
@@ -253,6 +297,7 @@ See the [examples/](examples/) directory for complete worked examples:
 - **Heisenberg picture** (`2dIsing_dynamics_Heisenbergpicture.jl`) -- operator evolution in the Pauli basis
 - **Boundary MPS** (`boundarymps.jl`) -- comparing BP, boundary MPS and exact expectation values
 - **Loop corrections** (`loopcorrections.jl`) -- improving BP norm estimates with loop corrections
+- **Hexagonal Heisenberg thermal state** (`hexagonal_heisenbergmodel_thermalstate.jl`) -- finite-temperature imaginary-time evolution and free energy density
 
 We encourage users to read the literature listed below and explore the [tests](test/) and [source code](src/) to learn how the package works in detail.
 
@@ -261,8 +306,7 @@ We encourage users to read the literature listed below and explore the [tests](t
 You can also work directly in the Heisenberg picture, representing a many-body operator as a TNS with two indices per site.
 
 ```julia
-using ITensors: noprime, op
-using TensorNetworkQuantumSimulator: setindex_preserve!
+using TensorNetworkQuantumSimulator: noprime, setindex_preserve!
 
 # Start with the Z operator on a single site vz, identity elsewhere
 s = siteinds("S=1/2", g; inds_per_site = 2)
@@ -297,3 +341,21 @@ or
 The package was developed by Joseph Tindall ([JoeyT1994](https://github.com/JoeyT1994)), an Associate Research Scientist at the Center for Computational Quantum Physics, Flatiron Institute NYC, and Manuel S. Rudolph ([MSRudolph](https://github.com/MSRudolph)), a PhD Candidate at EPFL, Switzerland, during a research stay at the Center for Computational Quantum Physics, Flatiron Institute NYC.
 
 The package was strongly influenced by [ITensorNetworks](https://github.com/ITensor/ITensorNetworks.jl), a general tensor network package developed by Matt Fishman ([mtfishman](https://github.com/mtfishman)), Joseph Tindall ([JoeyT1994](https://github.com/JoeyT1994)) and others. The next generation of ITensorNetworks is currently being developed [here](https://github.com/ITensor/ITensorNetworksNext.jl). A quantum simulation package such as this will hopefully then be able to utilize many of its general features for working with tensor networks.
+
+## Breaking changes in v0.5
+
+Coming from v0.4, these need changes in user code:
+
+| v0.4 | v0.5 |
+|---|---|
+| `mps_bond_dimension` (boundary MPS) | `env_maxdim` — the bond dimension of any environment; CTMRG uses the same name |
+| `norm_mps_bond_dimension`, `projected_mps_bond_dimension`, `certification_mps_bond_dimension` (sampling) | `norm_env_maxdim`, `projected_env_maxdim`, `certification_env_maxdim` |
+| `bp_update_kwargs` (`apply_gates`, `truncate`, `sample`, `contract`, `loop_correlations`), `bmps_update_kwargs` (`contract`) | `cache_update_kwargs`, everywhere |
+| `freenergy(cache)` returned ln *Z* | returns the free energy −ln *Z*; `partitionfunction(cache) = exp(-freenergy(cache))` |
+| Operators and states from ITensors' `op` / `state` system | the package's own registry (`op`, `state`, `register_op!`), in qiskit's parameter conventions; names outside it need `register_op!` |
+| `contract` and `inner` were methods of `ITensors.contract` / `ITensors.inner` | the package's own functions; with `using ITensors` as well, an unqualified `contract` or `inner` is ambiguous, so write `ITensors.contract(ψ)` (still forwarded) or `TensorNetworkQuantumSimulator.contract(ψ)` |
+| Pauli-string gates in either case (`"xz"`) | upper case only (`"XZ"`), one letter per vertex |
+| `build_graph_from_gates` (and its alias `build_graph_from_circuit`) | `build_graph_from_circuit` only; it also takes a `Circuit`, and idle qubits give isolated vertices instead of an error |
+| `topologytograph` | removed: build the graph with `NamedGraph` |
+
+Results also change where v0.4 was wrong: the `xx_plus_yy` gate now follows qiskit's sign of β, and `sample_certified` certifies samples against the state they were drawn from (the gauged one).

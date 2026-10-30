@@ -1,6 +1,14 @@
+# The square root of a Hermitian message and its inverse, its spectrum shifted by `regularization`.
+function regularized_roots(m::Tensor, regularization)
+    D, U = safe_eigen(m; ishermitian = true, cutoff = nothing)
+    D = map_diag(x -> x + regularization, D)
+    root(f) = U * map_diag(f, D) * prime(dag(U))
+    return root(sqrt), root(inv ∘ sqrt)
+end
+
 function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 * eps(real(scalartype(bp_cache))), kwargs...)
     tn = network(bp_cache)
-    !(tn isa TensorNetworkState) && error("Can only transform TensorNetworkStates to the symmetric gauge")
+    tn isa TensorNetworkState || error("Can only transform TensorNetworkStates to the symmetric gauge")
     for e in edges(tn)
         vsrc, vdst = src(e), dst(e)
         ψvsrc, ψvdst = tn[vsrc], tn[vdst]
@@ -8,27 +16,16 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         edge_ind = commoninds(ψvsrc, ψvdst)
         edge_ind_sim = sim(edge_ind)
 
-        X_D, X_U = safe_eigen(message(bp_cache, e); ishermitian = true, cutoff = nothing)
-        Y_D, Y_U = safe_eigen(message(bp_cache, reverse(e)); ishermitian = true, cutoff = nothing)
-        X_D, Y_D = ITensors.map_diag(x -> x + regularization, X_D),
-            ITensors.map_diag(x -> x + regularization, Y_D)
-
-        rootX_D, rootY_D = ITensors.map_diag(x -> sqrt(x), X_D), ITensors.map_diag(x -> sqrt(x), Y_D)
-        inv_rootX_D, inv_rootY_D = ITensors.map_diag(x -> inv(sqrt(x)), X_D),
-            ITensors.map_diag(x -> inv(sqrt(x)), Y_D)
-        rootX = X_U * rootX_D * prime(dag(X_U))
-        rootY = Y_U * rootY_D * prime(dag(Y_U))
-        inv_rootX = X_U * inv_rootX_D * prime(dag(X_U))
-        inv_rootY = Y_U * inv_rootY_D * prime(dag(Y_U))
+        rootX, inv_rootX = regularized_roots(message(bp_cache, e), regularization)
+        rootY, inv_rootY = regularized_roots(message(bp_cache, reverse(e)), regularization)
 
         ψvsrc, ψvdst = noprime(ψvsrc * inv_rootX), noprime(ψvdst * inv_rootY)
 
-        Ce = rootX
-        Ce = Ce * replaceinds(rootY, edge_ind, edge_ind_sim)
+        Ce = rootX * replaceinds(rootY, edge_ind, edge_ind_sim)
 
         U, S, V = svd(Ce, edge_ind; kwargs...)
 
-        new_edge_ind = Index[Index(dim(commoninds(S, U)), tags(first(edge_ind)))]
+        new_edge_ind = Index[new_index(dim(commoninds(S, U)); tags = tags(first(edge_ind)))]
 
         ψvsrc = replaceinds(ψvsrc * U, commoninds(S, U), new_edge_ind)
         ψvdst = replaceinds(ψvdst, edge_ind, edge_ind_sim)
@@ -41,7 +38,7 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
                 [new_edge_ind..., prime(new_edge_ind)...],
         )
 
-        sqrtS = ITensors.map_diag(sqrt, S)
+        sqrtS = map_diag(sqrt, S)
         ψvsrc = noprime(ψvsrc * sqrtS)
         ψvdst = noprime(ψvdst * sqrtS)
         setindex_preserve!(bp_cache, ψvsrc, vsrc)
@@ -60,23 +57,13 @@ function symmetric_gauge(bp_cache::BeliefPropagationCache; kwargs...)
 end
 
 function symmetric_gauge(tns::TensorNetworkState; cache_update_kwargs = (; maxiter = 40), kwargs...)
-    bp_cache = BeliefPropagationCache(tns)
-    bp_cache = update(bp_cache; cache_update_kwargs...)
-    bp_cache = symmetric_gauge(bp_cache; kwargs...)
-    return network(bp_cache)
+    return network(symmetric_gauge(converged_cache(Algorithm("bp"), tns; cache_update_kwargs); kwargs...))
 end
 
-function symmetrize_and_normalize(bp_cache::BeliefPropagationCache; kwargs...)
-    bp_cache = rescale(bp_cache)
-    bp_cache = symmetric_gauge(bp_cache; kwargs...)
-    return bp_cache
-end
+symmetrize_and_normalize(bp_cache::BeliefPropagationCache; kwargs...) = symmetric_gauge(rescale(bp_cache); kwargs...)
 
 function symmetrize_and_bpnormalize(tns::TensorNetworkState; cache_update_kwargs = (; maxiter = 40), kwargs...)
-    bp_cache = BeliefPropagationCache(tns)
-    bp_cache = update(bp_cache; cache_update_kwargs...)
-    bp_cache = symmetrize_and_normalize(bp_cache; kwargs...)
-    return network(bp_cache)
+    return network(symmetrize_and_normalize(converged_cache(Algorithm("bp"), tns; cache_update_kwargs); kwargs...))
 end
 
 gauge_and_scale(tns::TensorNetworkState; kwargs...) = symmetrize_and_bpnormalize(tns::TensorNetworkState; kwargs...)

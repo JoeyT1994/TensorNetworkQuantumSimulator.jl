@@ -7,6 +7,7 @@ makedocs(;
     modules = [TensorNetworkQuantumSimulator],
     authors = "JoeyT1994 <jtindall@flatironinstitute.org>, MSRudolph <manuel.rudolph@web.de>, Xuanzhao Gao <xgao@flatironinstitute.org>, and contributors",
     sitename = "TensorNetworkQuantumSimulator.jl",
+    checkdocs = :exports,
     format = Documenter.HTML(;
         canonical = "https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl",
         edit_link = "main",
@@ -18,6 +19,7 @@ makedocs(;
         "Graphs" => "graphs.md",
         "Tensor Networks" => "states.md",
         "Gate Application" => "gates.md",
+        "Circuits from Qiskit" => "qiskit.md",
         "Expectation Values" => "expectation_values.md",
         "Entanglement Entropy" => "entanglement.md",
         "Sampling" => "sampling.md",
