@@ -1,5 +1,7 @@
 # Tensor Networks
 
+![Tensor network types](tensor_network_types.svg)
+
 TensorNetworkQuantumSimulator provides two core types, `TensorNetworkState` and `TensorNetwork`, both subtypes of `AbstractTensorNetwork`. They share the same graph-based interface but differ in that `TensorNetworkState` carries physical (site) indices — representing a quantum wavefunction ``|\psi\rangle`` — while `TensorNetwork` does not, representing a scalar quantity. See [Graphs](graphs.md) for how to define the underlying graph.
 
 ## TensorNetwork

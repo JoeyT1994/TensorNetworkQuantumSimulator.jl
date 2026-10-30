@@ -64,29 +64,50 @@ sz_bmps = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", env_maxdim = 10)
 
 ### Defining the Geometry
 
+![Built-in lattice geometries](docs/src/lattices.svg)
+
 The starting point of most calculations is a `NamedGraph` that encodes the geometry of your tensor network. Vertices correspond to qubits (or qutrits, bosonic sites, etc.) and edges correspond to pairs of sites that directly interact. Built-in constructors are provided for common lattices:
 
 ```julia
-g = named_grid((5, 5))                         # 2D square lattice
+g = named_grid((5, 5))                          # 2D square lattice
 g = named_grid((3, 3, 3); periodic = true)      # 3D periodic cubic lattice
 g = named_hexagonal_lattice_graph(4, 4)         # hexagonal lattice
-g = heavy_hexagonal_lattice(5, 5)               # heavy-hexagonal lattice
+g = heavy_hexagonal_lattice(5, 5)               # heavy-hexagonal lattice (IBM topology)
 g = lieb_lattice(5, 5)                          # Lieb lattice
 g = named_triangular_lattice_graph(5, 5)        # triangular lattice
 g = kagome_lattice(3, 3)                        # kagome lattice
 g = penrose_tiling(3)                           # Penrose rhombus tiling
+g = named_path_graph(10)                        # 1D chain (MPS)
+g = named_comb_tree(4, 4)                       # comb tree
 ```
 
-### Constructing a Tensor Network State
+Custom graphs can also be built directly with [NamedGraphs.jl](https://github.com/ITensor/NamedGraphs.jl) or inferred from imported quantum circuits with `build_graph_from_circuit(circuit)`.
 
-A `TensorNetworkState` (TNS) is a tensor network representation of your wavefunction, with the structure specified by the graph `g`. Product states can be constructed using string labels or numerical vectors:
+### Constructing Tensor Networks and States
+
+![Tensor network types](docs/src/tensor_network_types.svg)
+
+The library provides two core tensor network types:
+- **`TensorNetwork`**: A network of tensors connected by virtual bond indices only, contracting to a scalar (e.g. classical partition functions).
+- **`TensorNetworkState`**: Extends `TensorNetwork` with physical site indices per vertex, representing quantum states ``|\psi\rangle`` (1 index per site) or density matrices / Heisenberg operators (2 indices per site).
 
 ```julia
-# All spins up (bond dimension 1)
+# Scalar TensorNetwork (e.g. classical Ising partition function Z(β))
+Z_tn = ising_partitionfunction(g, 0.4)
+Z = contract(Z_tn; alg = "bp")
+
+# Product TensorNetworkState (all spins up, bond dimension 1)
 ψ = tensornetworkstate(v -> "↑", g, "S=1/2")
 
-# Random state with bond dimension 4 and ComplexF32 elements
+# Random TensorNetworkState with bond dimension 4 and ComplexF32 elements
 ψ = random_tensornetworkstate(ComplexF32, g, "S=1/2"; bond_dimension = 4)
+
+# Exact bond-dimension-2 Toric Code ground state on a 4×4 periodic torus
+ψ_tc = toriccode_groundstate(4)
+
+# Multi-index TensorNetworkState (ket & bra legs per site for density matrices / operators)
+s = siteinds("S=1/2", g; inds_per_site = 2)
+ρ = identity_tensornetworkstate(ComplexF64, g, s)
 ```
 
 The optional first argument sets the element type (`Float64` by default). Use `ComplexF32` or `ComplexF64` for complex-valued states.
@@ -256,6 +277,8 @@ g = named_grid((8, 8))
 Caches can also be transferred: `CUDA.cu(BeliefPropagationCache(ψ))`. Significant speedups are seen on NVIDIA GPUs at moderate to large bond dimensions.
 
 ## Algorithm Guide
+
+![Environment caches overview](docs/src/caches_overview.svg)
 
 | Algorithm | Keyword | Graph requirement | Cost | Accuracy |
 |-----------|---------|-------------------|------|----------|

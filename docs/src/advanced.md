@@ -26,6 +26,8 @@ Significant speedups are seen on NVIDIA GPUs for many operations (BP, BoundaryMP
 
 ## Loop Corrections
 
+![Loop corrections cluster expansion](loop_corrections.svg)
+
 On loopy graphs, belief propagation provides approximate results. Loop corrections can be used to systematically improve the BP estimate of the norm by accounting for the loops up to size `max_configuration_size` in the graph [[Evenbly2026]](index.md#references):
 
 ```julia

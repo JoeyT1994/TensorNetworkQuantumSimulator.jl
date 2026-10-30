@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 225" width="100%">
+  <defs>
+    <style>
+      .card { fill: #E6E7E8; rx: 12px; ry: 12px; }
+      .title { font-family: Georgia, 'Times New Roman', serif; font-size: 15px; fill: #111111; text-anchor: middle; }
+      .subtitle { font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; font-size: 11.5px; fill: #333333; text-anchor: middle; }
+      .code { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 11px; fill: #231F20; text-anchor: middle; }
+      .label { font-family: Georgia, 'Times New Roman', serif; font-size: 12px; fill: #111111; text-anchor: middle; }
+      .small-label { font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; font-size: 10px; fill: #231F20; text-anchor: middle; }
+      .bond { stroke: #231F20; stroke-width: 2.2; stroke-linecap: round; fill: none; }
+      .bond-back { stroke: #4A4A4A; stroke-width: 1.9; stroke-linecap: round; fill: none; }
+      .bond-light { stroke: #999999; stroke-width: 1.5; stroke-dasharray: 3,3; fill: none; }
+      .phys { stroke: #6E6E6E; stroke-width: 1.8; stroke-dasharray: 2.5,2.5; fill: none; }
+      .phys-open { stroke: #B12225; stroke-width: 2.0; stroke-dasharray: 2.5,2.5; fill: none; }
+      .cut { stroke: #B12225; stroke-width: 2.2; stroke-dasharray: 3.5,3; fill: none; }
+      .loop-bond { stroke: #B12225; stroke-width: 3.0; stroke-linecap: round; fill: none; }
+      .node-state { fill: #9696CA; stroke: #231F20; stroke-width: 2; }
+      .node-active { fill: #374A9F; stroke: #231F20; stroke-width: 2; }
+      .node-msg { fill: #C5C5C5; stroke: #231F20; stroke-width: 1.8; }
+      .node-corner { fill: #E8D4B4; stroke: #231F20; stroke-width: 1.8; }
+      .gate-box { fill: #ECF5E8; stroke: #231F20; stroke-width: 1.8; rx: 4px; ry: 4px; }
+    </style>
+  </defs>
+  <rect class="card" x="10" y="8" width="362" height="209"/>
+  <text class="title" x="191.0" y="31">Bond Entanglement Entropy</text>
+  <text class="code" x="191.0" y="48">von_neumann_entanglement_entropy(ψ, e)</text>
+  <line class="bond" x1="149.0" y1="112" x2="233.0" y2="112"/>
+  <line class="bond" x1="113.0" y1="86" x2="149.0" y2="112"/>
+  <line class="bond" x1="113.0" y1="138" x2="149.0" y2="112"/>
+  <line class="bond" x1="269.0" y1="86" x2="233.0" y2="112"/>
+  <line class="bond" x1="269.0" y1="138" x2="233.0" y2="112"/>
+  <line class="phys" x1="149.0" y1="112" x2="149.0" y2="142"/>
+  <line class="phys" x1="233.0" y1="112" x2="233.0" y2="142"/>
+  <line class="cut" x1="191.0" y1="70" x2="191.0" y2="154"/>
+  <polygon class="node-corner" points="191.0,102 201.0,112 191.0,122 181.0,112"/>
+  <text class="small-label" x="213.0" y="82" style="fill:#B12225;">cut e</text>
+  <circle class="node-active" cx="149.0" cy="112" r="11.5"/>
+  <circle class="node-active" cx="233.0" cy="112" r="11.5"/>
+  <circle class="node-msg" cx="113.0" cy="86" r="8.5"/>
+  <circle class="node-msg" cx="113.0" cy="138" r="8.5"/>
+  <circle class="node-msg" cx="269.0" cy="86" r="8.5"/>
+  <circle class="node-msg" cx="269.0" cy="138" r="8.5"/>
+  <text class="subtitle" x="191.0" y="182">Single-bond spectrum from BP messages</text>
+  <text class="subtitle" x="191.0" y="198" style="font-size:10.5px; fill:#555555;">(O(1) per bond once BP cache is converged)</text>
+  <rect class="card" x="388" y="8" width="362" height="209"/>
+  <text class="title" x="569.0" y="31">Subsystem Entanglement Entropy</text>
+  <text class="code" x="569.0" y="48">von_neumann_entanglement_entropy(ψ, verts)</text>
+  <line class="bond" x1="599.0" y1="112.0" x2="584.0" y2="138.0"/>
+  <line class="bond" x1="584.0" y1="138.0" x2="554.0" y2="138.0"/>
+  <line class="bond" x1="554.0" y1="138.0" x2="539.0" y2="112.0"/>
+  <line class="bond" x1="539.0" y1="112.0" x2="554.0" y2="86.0"/>
+  <line class="bond" x1="554.0" y1="86.0" x2="584.0" y2="86.0"/>
+  <line class="bond" x1="584.0" y1="86.0" x2="599.0" y2="112.0"/>
+  <line class="bond" x1="599.0" y1="112.0" x2="623.0" y2="112.0"/>
+  <line class="bond" x1="584.0" y1="138.0" x2="596.0" y2="158.8"/>
+  <line class="bond" x1="554.0" y1="138.0" x2="542.0" y2="158.8"/>
+  <line class="bond" x1="539.0" y1="112.0" x2="515.0" y2="112.0"/>
+  <line class="bond" x1="554.0" y1="86.0" x2="542.0" y2="65.2"/>
+  <line class="bond" x1="584.0" y1="86.0" x2="596.0" y2="65.2"/>
+  <circle class="cut" cx="569.0" cy="112" r="41"/>
+  <text class="small-label" x="635.0" y="78" style="fill:#B12225;">subsystem A</text>
+  <line class="phys-open" x1="599.0" y1="112.0" x2="608.0" y2="123.0"/>
+  <circle class="node-active" cx="599.0" cy="112.0" r="8.5"/>
+  <circle class="node-msg" cx="623.0" cy="112.0" r="7.5"/>
+  <line class="phys-open" x1="584.0" y1="138.0" x2="593.0" y2="149.0"/>
+  <circle class="node-active" cx="584.0" cy="138.0" r="8.5"/>
+  <circle class="node-msg" cx="596.0" cy="158.8" r="7.5"/>
+  <line class="phys-open" x1="554.0" y1="138.0" x2="563.0" y2="149.0"/>
+  <circle class="node-active" cx="554.0" cy="138.0" r="8.5"/>
+  <circle class="node-msg" cx="542.0" cy="158.8" r="7.5"/>
+  <line class="phys-open" x1="539.0" y1="112.0" x2="548.0" y2="123.0"/>
+  <circle class="node-active" cx="539.0" cy="112.0" r="8.5"/>
+  <circle class="node-msg" cx="515.0" cy="112.0" r="7.5"/>
+  <line class="phys-open" x1="554.0" y1="86.0" x2="563.0" y2="97.0"/>
+  <circle class="node-active" cx="554.0" cy="86.0" r="8.5"/>
+  <circle class="node-msg" cx="542.0" cy="65.2" r="7.5"/>
+  <line class="phys-open" x1="584.0" y1="86.0" x2="593.0" y2="97.0"/>
+  <circle class="node-active" cx="584.0" cy="86.0" r="8.5"/>
+  <circle class="node-msg" cx="596.0" cy="65.2" r="7.5"/>
+  <text class="subtitle" x="569.0" y="182">Multi-vertex region A via ρ → −tr(ρ log ρ)</text>
+  <text class="subtitle" x="569.0" y="198" style="font-size:10.5px; fill:#555555;">(supports "bp", "boundarymps", "ctmrg", and "exact")</text>
+</svg>

@@ -1,124 +1,111 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 235" width="100%" height="100%">
-<defs>
-  <style>
-    .card { fill: #E6E7E8; }
-    .title { font-family: Georgia, 'Times New Roman', Times, serif; font-size: 14px; font-weight: bold; fill: #111111; text-decoration: underline; text-anchor: middle; }
-    .subtitle { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 11px; fill: #333333; text-anchor: middle; }
-    .code-label { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 10.5px; fill: #222222; text-anchor: middle; }
-    .math-label { font-family: Georgia, 'Times New Roman', Times, serif; font-size: 12px; font-style: italic; fill: #111111; text-anchor: middle; }
-    .small-label { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 10px; fill: #333333; text-anchor: middle; }
-    .bond { stroke: #231F20; stroke-width: 2; stroke-linecap: round; fill: none; }
-    .faint-bond { stroke: #B8BABC; stroke-width: 1.5; stroke-dasharray: 3,3; fill: none; }
-    .phys-leg { stroke: #656565; stroke-width: 1.8; stroke-dasharray: 2.2,2.2; fill: none; }
-    .cut-bond { stroke: #B12225; stroke-width: 2.2; stroke-dasharray: 3,2.5; fill: none; }
-    .site-node { fill: #9696CA; stroke: #231F20; stroke-width: 2; }
-    .active-node { fill: #374A9F; stroke: #231F20; stroke-width: 2; }
-    .msg-node { fill: #C5C5C5; stroke: #231F20; stroke-width: 1.8; }
-    .corner-node { fill: #E8D5B7; stroke: #231F20; stroke-width: 1.8; }
-    .gate-box { fill: #ECF5E8; stroke: #231F20; stroke-width: 1.8; }
-  </style>
-</defs>
-<rect class="card" x="10" y="10" width="235" height="215" rx="14" ry="14"/>
-<text class="title" x="127.5" y="34">Belief Propagation</text>
-<text class="code-label" x="127.5" y="51">alg = "bp"</text>
-<rect class="card" x="262.5" y="10" width="235" height="215" rx="14" ry="14"/>
-<text class="title" x="380.0" y="34">Boundary MPS</text>
-<text class="code-label" x="380.0" y="51">alg = "boundarymps"</text>
-<rect class="card" x="515" y="10" width="235" height="215" rx="14" ry="14"/>
-<text class="title" x="632.5" y="34">CTMRG</text>
-<text class="code-label" x="632.5" y="51">alg = "ctmrg"</text>
-<line class="faint-bond" x1="60" y1="82" x2="102" y2="82"/>
-<line class="faint-bond" x1="60" y1="82" x2="60" y2="122"/>
-<line class="faint-bond" x1="102" y1="82" x2="153" y2="82"/>
-<line class="faint-bond" x1="102" y1="162" x2="153" y2="162"/>
-<line class="faint-bond" x1="153" y1="82" x2="195" y2="82"/>
-<line class="faint-bond" x1="195" y1="82" x2="195" y2="122"/>
-<line class="bond" x1="102" y1="122" x2="153" y2="122"/>
-<line class="bond" x1="60" y1="122" x2="102" y2="122"/>
-<circle class="msg-node" cx="60" cy="122" r="8.5"/>
-<line class="bond" x1="102" y1="82" x2="102" y2="122"/>
-<circle class="msg-node" cx="102" cy="82" r="8.5"/>
-<line class="bond" x1="102" y1="162" x2="102" y2="122"/>
-<circle class="msg-node" cx="102" cy="162" r="8.5"/>
-<line class="bond" x1="195" y1="122" x2="153" y2="122"/>
-<circle class="msg-node" cx="195" cy="122" r="8.5"/>
-<line class="bond" x1="153" y1="82" x2="153" y2="122"/>
-<circle class="msg-node" cx="153" cy="82" r="8.5"/>
-<line class="bond" x1="153" y1="162" x2="153" y2="122"/>
-<circle class="msg-node" cx="153" cy="162" r="8.5"/>
-<line class="phys-leg" x1="94" y1="132" x2="87" y2="146"/>
-<line class="phys-leg" x1="161" y1="132" x2="168" y2="146"/>
-<circle class="active-node" cx="102" cy="122" r="11.5"/>
-<circle class="active-node" cx="153" cy="122" r="11.5"/>
-<text class="math-label" x="60" y="109">m</text>
-<text class="subtitle" x="127.5" y="195">Independent edge messages</text>
-<text class="small-label" x="127.5" y="211">(exact on trees, fast on any graph)</text>
-<line class="cut-bond" x1="312" y1="82" x2="357" y2="82"/>
-<line class="cut-bond" x1="312" y1="162" x2="357" y2="162"/>
-<line class="bond" x1="312" y1="122" x2="357" y2="122"/>
-<line class="cut-bond" x1="357" y1="82" x2="402" y2="82"/>
-<line class="cut-bond" x1="357" y1="162" x2="402" y2="162"/>
-<line class="bond" x1="357" y1="122" x2="402" y2="122"/>
-<line class="cut-bond" x1="402" y1="82" x2="447" y2="82"/>
-<line class="cut-bond" x1="402" y1="162" x2="447" y2="162"/>
-<line class="bond" x1="402" y1="122" x2="447" y2="122"/>
-<line class="bond" x1="312" y1="82" x2="312" y2="122"/>
-<line class="bond" x1="312" y1="122" x2="312" y2="162"/>
-<circle class="msg-node" cx="312" cy="82" r="8.5"/>
-<circle class="msg-node" cx="312" cy="162" r="8.5"/>
-<line class="phys-leg" x1="318" y1="130" x2="324" y2="142"/>
-<circle class="site-node" cx="312" cy="122" r="10.5"/>
-<line class="bond" x1="357" y1="82" x2="357" y2="122"/>
-<line class="bond" x1="357" y1="122" x2="357" y2="162"/>
-<circle class="msg-node" cx="357" cy="82" r="8.5"/>
-<circle class="msg-node" cx="357" cy="162" r="8.5"/>
-<line class="phys-leg" x1="363" y1="130" x2="369" y2="142"/>
-<circle class="active-node" cx="357" cy="122" r="10.5"/>
-<line class="bond" x1="402" y1="82" x2="402" y2="122"/>
-<line class="bond" x1="402" y1="122" x2="402" y2="162"/>
-<circle class="msg-node" cx="402" cy="82" r="8.5"/>
-<circle class="msg-node" cx="402" cy="162" r="8.5"/>
-<line class="phys-leg" x1="408" y1="130" x2="414" y2="142"/>
-<circle class="active-node" cx="402" cy="122" r="10.5"/>
-<line class="bond" x1="447" y1="82" x2="447" y2="122"/>
-<line class="bond" x1="447" y1="122" x2="447" y2="162"/>
-<circle class="msg-node" cx="447" cy="82" r="8.5"/>
-<circle class="msg-node" cx="447" cy="162" r="8.5"/>
-<line class="phys-leg" x1="453" y1="130" x2="459" y2="142"/>
-<circle class="site-node" cx="447" cy="122" r="10.5"/>
-<text class="small-label" fill="#B12225" x="380" y="68">MPS bond (env_maxdim)</text>
-<text class="subtitle" x="380" y="195">Correlated row/column MPS cuts</text>
-<text class="small-label" x="380" y="211">(planar row/column-partitionable graphs)</text>
-<line class="cut-bond" x1="632.5" y1="79.0" x2="659.5" y2="84.8"/>
-<line class="cut-bond" x1="659.5" y1="84.8" x2="673.4" y2="108.7"/>
-<line class="cut-bond" x1="673.4" y1="108.7" x2="676.2" y2="136.2"/>
-<line class="cut-bond" x1="676.2" y1="136.2" x2="657.8" y2="156.8"/>
-<line class="cut-bond" x1="657.8" y1="156.8" x2="632.5" y2="168.0"/>
-<line class="cut-bond" x1="632.5" y1="168.0" x2="607.2" y2="156.8"/>
-<line class="cut-bond" x1="607.2" y1="156.8" x2="588.8" y2="136.2"/>
-<line class="cut-bond" x1="588.8" y1="136.2" x2="591.6" y2="108.7"/>
-<line class="cut-bond" x1="591.6" y1="108.7" x2="605.5" y2="84.8"/>
-<line class="cut-bond" x1="605.5" y1="84.8" x2="632.5" y2="79.0"/>
-<line class="bond" x1="632.5" y1="122" x2="632.5" y2="79.0"/>
-<line class="bond" x1="632.5" y1="122" x2="673.4" y2="108.7"/>
-<line class="bond" x1="632.5" y1="122" x2="657.8" y2="156.8"/>
-<line class="bond" x1="632.5" y1="122" x2="607.2" y2="156.8"/>
-<line class="bond" x1="632.5" y1="122" x2="591.6" y2="108.7"/>
-<circle class="msg-node" cx="632.5" cy="79.0" r="8"/>
-<circle class="msg-node" cx="673.4" cy="108.7" r="8"/>
-<circle class="msg-node" cx="657.8" cy="156.8" r="8"/>
-<circle class="msg-node" cx="607.2" cy="156.8" r="8"/>
-<circle class="msg-node" cx="591.6" cy="108.7" r="8"/>
-<rect class="corner-node" x="653.0" y="78.3" width="13" height="13" rx="3" ry="3"/>
-<rect class="corner-node" x="669.7" y="129.7" width="13" height="13" rx="3" ry="3"/>
-<rect class="corner-node" x="626.0" y="161.5" width="13" height="13" rx="3" ry="3"/>
-<rect class="corner-node" x="582.3" y="129.7" width="13" height="13" rx="3" ry="3"/>
-<rect class="corner-node" x="599.0" y="78.3" width="13" height="13" rx="3" ry="3"/>
-<line class="phys-leg" x1="632.5" y1="133" x2="632.5" y2="150"/>
-<circle class="active-node" cx="632.5" cy="122" r="11.5"/>
-<text class="math-label" x="576.6" y="112.7">T</text>
-<text class="math-label" x="674.5" y="88.8">C</text>
-<text class="subtitle" x="632.5" y="195">Edge messages T + face corners C</text>
-<text class="small-label" x="632.5" y="211">(any planar graph, e.g. kagome, Penrose)</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 235" width="100%">
+  <defs>
+    <style>
+      .card { fill: #E6E7E8; rx: 12px; ry: 12px; }
+      .title { font-family: Georgia, 'Times New Roman', serif; font-size: 15px; fill: #111111; text-anchor: middle; }
+      .subtitle { font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; font-size: 11.5px; fill: #333333; text-anchor: middle; }
+      .code { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 11px; fill: #231F20; text-anchor: middle; }
+      .label { font-family: Georgia, 'Times New Roman', serif; font-size: 12px; fill: #111111; text-anchor: middle; }
+      .small-label { font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; font-size: 10px; fill: #231F20; text-anchor: middle; }
+      .bond { stroke: #231F20; stroke-width: 2.2; stroke-linecap: round; fill: none; }
+      .bond-back { stroke: #4A4A4A; stroke-width: 1.9; stroke-linecap: round; fill: none; }
+      .bond-light { stroke: #999999; stroke-width: 1.5; stroke-dasharray: 3,3; fill: none; }
+      .phys { stroke: #6E6E6E; stroke-width: 1.8; stroke-dasharray: 2.5,2.5; fill: none; }
+      .phys-open { stroke: #B12225; stroke-width: 2.0; stroke-dasharray: 2.5,2.5; fill: none; }
+      .cut { stroke: #B12225; stroke-width: 2.2; stroke-dasharray: 3.5,3; fill: none; }
+      .loop-bond { stroke: #B12225; stroke-width: 3.0; stroke-linecap: round; fill: none; }
+      .node-state { fill: #9696CA; stroke: #231F20; stroke-width: 2; }
+      .node-active { fill: #374A9F; stroke: #231F20; stroke-width: 2; }
+      .node-msg { fill: #C5C5C5; stroke: #231F20; stroke-width: 1.8; }
+      .node-corner { fill: #E8D4B4; stroke: #231F20; stroke-width: 1.8; }
+      .gate-box { fill: #ECF5E8; stroke: #231F20; stroke-width: 1.8; rx: 4px; ry: 4px; }
+    </style>
+  </defs>
+  <rect class="card" x="10" y="10" width="235" height="215"/>
+  <text class="title" x="127.5" y="34">Belief Propagation</text>
+  <text class="code" x="127.5" y="51">alg = "bp"</text>
+  <rect class="card" x="262.5" y="10" width="235" height="215"/>
+  <text class="title" x="380.0" y="34">Boundary MPS</text>
+  <text class="code" x="380.0" y="51">alg = "boundarymps"</text>
+  <rect class="card" x="515" y="10" width="235" height="215"/>
+  <text class="title" x="632.5" y="34">CTMRG</text>
+  <text class="code" x="632.5" y="51">alg = "ctmrg"</text>
+  <line class="bond-light" x1="67" y1="94" x2="127.5" y2="76"/>
+  <line class="bond-light" x1="127.5" y1="76" x2="188" y2="94"/>
+  <line class="bond-light" x1="67" y1="150" x2="127.5" y2="168"/>
+  <line class="bond-light" x1="127.5" y1="168" x2="188" y2="150"/>
+  <line class="bond" x1="101" y1="122" x2="154" y2="122"/>
+  <line class="bond" x1="67" y1="94" x2="101" y2="122"/>
+  <line class="bond" x1="67" y1="150" x2="101" y2="122"/>
+  <line class="bond" x1="188" y1="94" x2="154" y2="122"/>
+  <line class="bond" x1="188" y1="150" x2="154" y2="122"/>
+  <line class="phys" x1="101" y1="122" x2="101" y2="150"/>
+  <line class="phys" x1="154" y1="122" x2="154" y2="150"/>
+  <circle class="node-msg" cx="67" cy="94" r="8.5"/>
+  <circle class="node-msg" cx="67" cy="150" r="8.5"/>
+  <circle class="node-msg" cx="188" cy="94" r="8.5"/>
+  <circle class="node-msg" cx="188" cy="150" r="8.5"/>
+  <circle class="node-active" cx="101" cy="122" r="11.5"/>
+  <circle class="node-active" cx="154" cy="122" r="11.5"/>
+  <text class="label" x="49" y="98">m</text>
+  <text class="subtitle" x="127.5" y="195">Independent edge messages</text>
+  <text class="small-label" x="127.5" y="211">(exact on trees, fast on any graph)</text>
+  <line class="cut" x1="312" y1="82" x2="357" y2="82"/>
+  <line class="cut" x1="312" y1="162" x2="357" y2="162"/>
+  <line class="bond" x1="312" y1="122" x2="357" y2="122"/>
+  <line class="cut" x1="357" y1="82" x2="402" y2="82"/>
+  <line class="cut" x1="357" y1="162" x2="402" y2="162"/>
+  <line class="bond" x1="357" y1="122" x2="402" y2="122"/>
+  <line class="cut" x1="402" y1="82" x2="447" y2="82"/>
+  <line class="cut" x1="402" y1="162" x2="447" y2="162"/>
+  <line class="bond" x1="402" y1="122" x2="447" y2="122"/>
+  <line class="bond" x1="312" y1="82" x2="312" y2="122"/>
+  <line class="bond" x1="312" y1="122" x2="312" y2="162"/>
+  <circle class="node-msg" cx="312" cy="82" r="8.5"/>
+  <circle class="node-msg" cx="312" cy="162" r="8.5"/>
+  <line class="phys" x1="318" y1="130" x2="324" y2="142"/>
+  <circle class="node-state" cx="312" cy="122" r="10.5"/>
+  <line class="bond" x1="357" y1="82" x2="357" y2="122"/>
+  <line class="bond" x1="357" y1="122" x2="357" y2="162"/>
+  <circle class="node-msg" cx="357" cy="82" r="8.5"/>
+  <circle class="node-msg" cx="357" cy="162" r="8.5"/>
+  <line class="phys" x1="363" y1="130" x2="369" y2="142"/>
+  <circle class="node-active" cx="357" cy="122" r="10.5"/>
+  <line class="bond" x1="402" y1="82" x2="402" y2="122"/>
+  <line class="bond" x1="402" y1="122" x2="402" y2="162"/>
+  <circle class="node-msg" cx="402" cy="82" r="8.5"/>
+  <circle class="node-msg" cx="402" cy="162" r="8.5"/>
+  <line class="phys" x1="408" y1="130" x2="414" y2="142"/>
+  <circle class="node-active" cx="402" cy="122" r="10.5"/>
+  <line class="bond" x1="447" y1="82" x2="447" y2="122"/>
+  <line class="bond" x1="447" y1="122" x2="447" y2="162"/>
+  <circle class="node-msg" cx="447" cy="82" r="8.5"/>
+  <circle class="node-msg" cx="447" cy="162" r="8.5"/>
+  <line class="phys" x1="453" y1="130" x2="459" y2="142"/>
+  <circle class="node-state" cx="447" cy="122" r="10.5"/>
+  <text class="small-label" style="fill:#B12225;" x="380" y="68">MPS bond (env_maxdim)</text>
+  <text class="subtitle" x="380" y="195">Correlated row/column MPS cuts</text>
+  <text class="small-label" x="380" y="211">(planar row/column-partitionable graphs)</text>
+  <circle class="cut" cx="632.5" cy="122" r="42"/>
+  <line class="bond" x1="632.5" y1="122" x2="632.5" y2="80.0"/>
+  <circle class="node-msg" cx="632.5" cy="80.0" r="8"/>
+  <line class="bond" x1="632.5" y1="122" x2="672.4" y2="109.0"/>
+  <circle class="node-msg" cx="672.4" cy="109.0" r="8"/>
+  <line class="bond" x1="632.5" y1="122" x2="657.2" y2="156.0"/>
+  <circle class="node-msg" cx="657.2" cy="156.0" r="8"/>
+  <line class="bond" x1="632.5" y1="122" x2="607.8" y2="156.0"/>
+  <circle class="node-msg" cx="607.8" cy="156.0" r="8"/>
+  <line class="bond" x1="632.5" y1="122" x2="592.6" y2="109.0"/>
+  <circle class="node-msg" cx="592.6" cy="109.0" r="8"/>
+  <rect class="node-corner" x="650.7" y="81.5" width="13" height="13" rx="3" ry="3"/>
+  <rect class="node-corner" x="665.9" y="128.5" width="13" height="13" rx="3" ry="3"/>
+  <rect class="node-corner" x="626.0" y="157.5" width="13" height="13" rx="3" ry="3"/>
+  <rect class="node-corner" x="586.1" y="128.5" width="13" height="13" rx="3" ry="3"/>
+  <rect class="node-corner" x="601.3" y="81.5" width="13" height="13" rx="3" ry="3"/>
+  <line class="phys" x1="632.5" y1="134" x2="632.5" y2="149"/>
+  <circle class="node-active" cx="632.5" cy="122" r="11.5"/>
+  <text class="label" x="576.6" y="113.0">T</text>
+  <text class="label" x="673.2" y="92.0">C</text>
+  <text class="subtitle" x="632.5" y="195">Edge messages T + face corners C</text>
+  <text class="small-label" x="632.5" y="211">(any planar graph, e.g. kagome, Penrose)</text>
 </svg>

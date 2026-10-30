@@ -1,5 +1,7 @@
 # Entanglement Entropy
 
+![Bond and subsystem entanglement entropy](entanglement_overview.svg)
+
 The von Neumann and Rényi entanglement entropies can be computed via several backends.
 
 ## Bond Entanglement Entropy (BP, fast)

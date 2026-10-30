@@ -1,5 +1,7 @@
 # Expectation Values
 
+![Expectation values and reduced density matrices](expectation_and_rdm.svg)
+
 ## Computing Expectation Values
 
 The `expect` function computes expectation values of local observables from a `TensorNetworkState` using belief propagation [[Tindall2023]](index.md#references), boundary MPS [[Rudolph2025]](index.md#references), corner transfer matrix renormalization group (CTMRG), or exact contraction.

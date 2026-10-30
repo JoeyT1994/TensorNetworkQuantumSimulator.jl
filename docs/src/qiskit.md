@@ -1,5 +1,7 @@
 # Circuits from Qiskit
 
+![Qiskit and OpenQASM 2 workflow](qiskit_workflow.svg)
+
 Circuits written in qiskit, or in anything else that exports OpenQASM 2, can be simulated directly. They are converted into a `Circuit` holding the declared `qubits` and the `gates` (see [Gate Application](gates.md)), and run with `apply_gates`. The gate registry follows qiskit's names and parameter conventions, so every one- and two-qubit qiskit standard gate converts exactly.
 
 There are two routes:
