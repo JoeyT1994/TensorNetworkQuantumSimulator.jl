@@ -182,9 +182,9 @@ function get_one_sample(
     partitions = [dst.(reverse(seq)); src(first(seq))]
     incoming_mps = nothing
     for (i, partition) in enumerate(partitions)
-        p_over_q_approx, _logq, bit_string, =
+        p_over_q_approx, partition_logq, bit_string, =
             sample_partition!(norm_bmps_cache, partition, bit_string; kwargs...)
-        logq += _logq
+        logq += partition_logq
 
         if i < length(partitions)
             next_partition = partitions[i + 1]
@@ -192,7 +192,7 @@ function get_one_sample(
 
             # Apply the (already projected) ket row to the running single-layer boundary MPS. The
             # cache messages are doubled ket/bra, so we feed the ket-only `incoming_mps` explicitly.
-            mpo, mps, right_inds = _bmps_apply_inputs(norm_bmps_cache, pe; incoming_mps)
+            mpo, mps, right_inds = bmps_apply_inputs(norm_bmps_cache, pe; incoming_mps)
             outgoing_mps = generic_apply(mpo, mps, right_inds; cutoff, maxdim, normalize = false)
 
             es = sorted_edges(norm_bmps_cache, pe)

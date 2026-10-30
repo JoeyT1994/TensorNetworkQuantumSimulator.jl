@@ -99,14 +99,14 @@ end
 # The canonical name of a gate, or `nothing` if it is not registered.
 canonical_gate_name(name::AbstractString) = haskey(GATES, name) ? name : get(ALIASES, name, nothing)
 
-function _resolve_gate(name::AbstractString)
+function resolve_gate(name::AbstractString)
     canon = canonical_gate_name(name)
     return isnothing(canon) ? nothing : GATES[canon]
 end
 
 # Suggest canonical gate names close to `name` (case-insensitive edit distance).
 # Returns up to `topk` keys ranked by distance, only those within `maxdist`.
-function _gate_suggestions(name::AbstractString; topk::Int = 3, maxdist::Int = 2)
+function gate_suggestions(name::AbstractString; topk::Int = 3, maxdist::Int = 2)
     lname = lowercase(name)
     scored = [(g, levenshtein(lname, lowercase(g))) for g in keys(GATES)]
     filter!(p -> last(p) <= maxdist, scored)
@@ -136,9 +136,9 @@ function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
         return prod(op(string(c), sind) for (c, sind) in zip(name, s_inds)), verts
     end
 
-    spec = _resolve_gate(name)
+    spec = resolve_gate(name)
     if spec === nothing
-        suggestions = _gate_suggestions(name)
+        suggestions = gate_suggestions(name)
         msg = "Unknown gate \"$name\"."
         if !isempty(suggestions)
             msg *= " Did you mean: " * join(("\"$s\"" for s in suggestions), ", ") * "?"

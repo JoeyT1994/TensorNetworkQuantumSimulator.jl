@@ -341,3 +341,21 @@ or
 The package was developed by Joseph Tindall ([JoeyT1994](https://github.com/JoeyT1994)), an Associate Research Scientist at the Center for Computational Quantum Physics, Flatiron Institute NYC, and Manuel S. Rudolph ([MSRudolph](https://github.com/MSRudolph)), a PhD Candidate at EPFL, Switzerland, during a research stay at the Center for Computational Quantum Physics, Flatiron Institute NYC.
 
 The package was strongly influenced by [ITensorNetworks](https://github.com/ITensor/ITensorNetworks.jl), a general tensor network package developed by Matt Fishman ([mtfishman](https://github.com/mtfishman)), Joseph Tindall ([JoeyT1994](https://github.com/JoeyT1994)) and others. The next generation of ITensorNetworks is currently being developed [here](https://github.com/ITensor/ITensorNetworksNext.jl). A quantum simulation package such as this will hopefully then be able to utilize many of its general features for working with tensor networks.
+
+## Breaking changes in v0.5
+
+Coming from v0.4, these need changes in user code:
+
+| v0.4 | v0.5 |
+|---|---|
+| `mps_bond_dimension` (boundary MPS) | `env_maxdim` — the bond dimension of any environment; CTMRG uses the same name |
+| `norm_mps_bond_dimension`, `projected_mps_bond_dimension`, `certification_mps_bond_dimension` (sampling) | `norm_env_maxdim`, `projected_env_maxdim`, `certification_env_maxdim` |
+| `bp_update_kwargs` (`apply_gates`, `truncate`, `sample`, `contract`, `loop_correlations`), `bmps_update_kwargs` (`contract`) | `cache_update_kwargs`, everywhere |
+| `freenergy(cache)` returned ln *Z* | returns the free energy −ln *Z*; `partitionfunction(cache) = exp(-freenergy(cache))` |
+| Operators and states from ITensors' `op` / `state` system | the package's own registry (`op`, `state`, `register_op!`), in qiskit's parameter conventions; names outside it need `register_op!` |
+| `contract` and `inner` were methods of `ITensors.contract` / `ITensors.inner` | the package's own functions; with `using ITensors` as well, an unqualified `contract` or `inner` is ambiguous, so write `ITensors.contract(ψ)` (still forwarded) or `TensorNetworkQuantumSimulator.contract(ψ)` |
+| Pauli-string gates in either case (`"xz"`) | upper case only (`"XZ"`), one letter per vertex |
+| `build_graph_from_gates` (and its alias `build_graph_from_circuit`) | `build_graph_from_circuit` only; it also takes a `Circuit`, and idle qubits give isolated vertices instead of an error |
+| `topologytograph` | removed: build the graph with `NamedGraph` |
+
+Results also change where v0.4 was wrong: the `xx_plus_yy` gate now follows qiskit's sign of β, and `sample_certified` certifies samples against the state they were drawn from (the gauged one).

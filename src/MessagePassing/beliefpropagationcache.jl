@@ -34,7 +34,7 @@ function Base.copy(bp_cache::BeliefPropagationCache)
     return BeliefPropagationCache(copy(network(bp_cache)), copy(messages(bp_cache)), copy(contraction_sequences(bp_cache)), copy(edge_sequence(bp_cache)))
 end
 
-default_bp_maxiter(g::AbstractGraph) = is_tree(g) ? 1 : _default_bp_update_maxiter
+default_bp_maxiter(g::AbstractGraph) = is_tree(g) ? 1 : DEFAULT_BP_MAXITER
 
 edge_sequence(bp_cache::BeliefPropagationCache) = bp_cache.edge_sequence
 
@@ -76,7 +76,7 @@ function rescale_vertices!(
     return bpc
 end
 
-const _default_bp_update_maxiter = 25
+const DEFAULT_BP_MAXITER = 25
 function default_tolerance(type)
     (type == Float32 || type == ComplexF32) && return 1.0e-5
     (type == Float64 || type == ComplexF64) && return 1.0e-8

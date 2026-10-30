@@ -41,9 +41,9 @@ end
 default_message_update_alg(bmps_cache::BoundaryMPSCache) = default_bmps_message_update_alg(network(bmps_cache))
 
 default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(scalartype(bmps_cache))
-const _default_boundarymps_update_niters = 50
+const DEFAULT_BMPS_NITERS = 50
 function set_default_kwargs(alg::Algorithm"fitting", bmps_cache::BoundaryMPSCache)
-    defaults = (; tolerance = default_tolerance(bmps_cache), niters = _default_boundarymps_update_niters, normalize = true)
+    defaults = (; tolerance = default_tolerance(bmps_cache), niters = DEFAULT_BMPS_NITERS, normalize = true)
     return Algorithm("fitting"; merge(defaults, alg.kwargs)...)
 end
 
@@ -429,7 +429,7 @@ end
 # doubled ket/bra but only the ket layer is applied). When the source partition is a line endpoint
 # there is no previous interpartition, so `mps` comes back empty and the call reduces to compressing
 # the MPO chain.
-function _bmps_apply_inputs(bmps_cache::BoundaryMPSCache, pe::QuotientEdge; incoming_mps = nothing)
+function bmps_apply_inputs(bmps_cache::BoundaryMPSCache, pe::QuotientEdge; incoming_mps = nothing)
     net = network(bmps_cache)
     sorted_vs = sort(vertices(supergraph(bmps_cache), src(pe)))
     pos = Dict(v => i for (i, v) in enumerate(sorted_vs))
@@ -464,7 +464,7 @@ function update_message!(
         pe::QuotientEdge;
         maxdim::Integer = env_maxdim(bmps_cache),
     )
-    mpo, mps, right_inds = _bmps_apply_inputs(bmps_cache, pe)
+    mpo, mps, right_inds = bmps_apply_inputs(bmps_cache, pe)
     out = generic_apply(
         mpo, mps, right_inds;
         cutoff = alg.kwargs.cutoff, maxdim, normalize = alg.kwargs.normalize,
