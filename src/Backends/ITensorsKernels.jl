@@ -3,16 +3,20 @@
 # buffers of ψ's size. On the CPU ψ's data is viewed as (pre, D, post) and middle bonds are absorbed
 # slice by slice, with no permutations. On other devices (GPUs) the many small GEMMs are slow, so the
 # bond is instead permuted to the front and absorbed by one GEMM (the "rotated" chain). Structures
-# not recognised return `nothing`.
+# not recognised return `nothing`. Data is passed flat, with its dimensions alongside, so the kernels
+# compile once per element type rather than once per element type and tensor rank.
 
-# ψ's data as a strided array in the order of `inds(ψ)` (aliasing its storage), or nothing.
+# ψ's data, flat in the order of `inds(ψ)` (aliasing its storage), and its dimensions; or nothing.
 function fused_data(ψ::ITensor)
     ITensors.hasqns(ψ) && return nothing
     ITensors.storage(ψ) isa NDTensors.Dense || return nothing
-    A = reshape(ITensors.data(ψ), ITensors.dims(ψ))
-    A isa StridedArray || return nothing
-    return A
+    a = ITensors.data(ψ)
+    a isa StridedVector || return nothing
+    return a, collect(Int, ITensors.dims(ψ))
 end
+
+# The sizes (pre, D, post) of the legs before, at and after position k.
+split_dims(dims, k) = (prod(dims[1:(k - 1)]; init = 1), dims[k], prod(dims[(k + 1):end]; init = 1))
 
 # The legs (x, x′) of a dense two-leg tensor on x and x′ = prime(x), or nothing.
 function primed_pair(t::ITensor)
@@ -51,11 +55,10 @@ function fused_buffers(ref::AbstractArray, ::Type{T}, n::Integer) where {T}
     return bufs
 end
 
-# out[a, b′, c] = Σ_b cur[a, b, c] · M[b, b′] along dimension k, on the CPU. For small `pre` a
+# out[a, b′, c] = Σ_b cur[a, b, c] · M[b, b′] along leg k of `dims`, on the CPU. For small `pre` a
 # single GEMM with kron(Mᵀ, 𝟙_pre) beats `post` tiny per-slice GEMMs despite the extra flops.
-function absorb_dim!(out::AbstractArray, cur::AbstractArray, M::AbstractMatrix, k::Integer)
-    dims = size(cur)
-    pre = prod(dims[1:(k - 1)]; init = 1); D = dims[k]; post = prod(dims[(k + 1):end]; init = 1)
+function absorb_dim!(out::AbstractVector, cur::AbstractVector, M::AbstractMatrix, dims, k::Integer)
+    pre, D, post = split_dims(dims, k)
     C = reshape(cur, pre, D, post); O = reshape(out, pre, D, post)
     if pre == 1
         LinearAlgebra.mul!(reshape(O, D, post), transpose(M), reshape(C, D, post))
@@ -72,17 +75,18 @@ function absorb_dim!(out::AbstractArray, cur::AbstractArray, M::AbstractMatrix, 
     return out
 end
 
-# Absorb the (k, M) `slots` into ψ's data (never written). Returns a pooled buffer, or ψ's data
-# itself when there is nothing to absorb.
-function fused_chain(A::StridedArray, slots::Vector)
-    T = promote_type(eltype(A), (eltype(M) for (_, M) in slots)...)
-    cur = T == eltype(A) ? A : T.(A)
+# Absorb the (k, M) `slots` into ψ's flat data `a` (never written). Returns a pooled buffer, or the
+# data itself when there is nothing to absorb.
+function fused_chain(a::AbstractVector, dims, slots::Vector)
+    T = promote_type(eltype(a), (eltype(M) for (_, M) in slots)...)
+    cur = T == eltype(a) ? a : T.(a)
     isempty(slots) && return cur
-    b1, b2 = fused_buffers(A, T, length(A))
-    buf1 = reshape(view(b1, 1:length(A)), size(A)); buf2 = reshape(view(b2, 1:length(A)), size(A))
+    n = length(a)
+    b1, b2 = fused_buffers(a, T, n)
+    buf1, buf2 = view(b1, 1:n), view(b2, 1:n)
     out = buf1
     for (k, M) in slots
-        absorb_dim!(out, cur, M, k)
+        absorb_dim!(out, cur, M, dims, k)
         cur, out = out, (out === buf1 ? buf2 : buf1)
     end
     return cur
@@ -98,14 +102,14 @@ end
 # As `fused_chain`, with every absorption a single GEMM out[b′, rest] = Mᵀ C[b, rest] on a bond
 # first permuted to the front. The leg `kout` (if any) is kept last throughout. Returns the chain
 # and ψ's data, both flat with their legs in the same order (ψ permuted into the free buffer).
-function rotated_chain(A::StridedArray, slots::Vector, kout)
-    T = promote_type(eltype(A), (eltype(M) for (_, M) in slots)...)
-    A = T == eltype(A) ? A : T.(A)
-    n = length(A); dims = size(A)
-    b1, b2 = fused_buffers(A, T, n)
+function rotated_chain(a::AbstractVector, dims, slots::Vector, kout)
+    T = promote_type(eltype(a), (eltype(M) for (_, M) in slots)...)
+    a = T == eltype(a) ? a : T.(a)
+    n = length(a)
+    b1, b2 = fused_buffers(a, T, n)
     bufs = (view(b1, 1:n), view(b2, 1:n))
-    cur = vec(A)
-    order = collect(1:ndims(A))
+    cur = a
+    order = collect(1:length(dims))
     free() = cur === bufs[1] ? bufs[2] : bufs[1]
     function reorder!(neworder)
         cur = permute_into!(free(), cur, dims, order, neworder)
@@ -123,7 +127,7 @@ function rotated_chain(A::StridedArray, slots::Vector, kout)
         LinearAlgebra.mul!(reshape(out, D, n ÷ D), Mt, reshape(cur, D, n ÷ D))
         cur = out
     end
-    Ψ = order == 1:ndims(A) ? vec(A) : permute_into!(free(), vec(A), dims, collect(1:ndims(A)), order)
+    Ψ = order == 1:length(dims) ? a : permute_into!(free(), a, dims, collect(1:length(dims)), order)
     return cur, Ψ
 end
 
@@ -167,32 +171,33 @@ function fused_slots(ψinds::Vector{<:Index}, incoming::Vector)
     return slots, covered
 end
 
-# ψ's data, its legs, and the slots and covered legs of `incoming`; nothing if either is unsupported.
+# ψ's flat data and dimensions, its legs, and the slots and covered legs of `incoming`; nothing if
+# either is unsupported.
 function fused_setup(ψ::ITensor, incoming::Vector)
-    A = fused_data(ψ)
-    A === nothing && return nothing
+    data = fused_data(ψ)
+    data === nothing && return nothing
     ψinds = collect(Index, ITensors.inds(ψ))
     sc = fused_slots(ψinds, incoming)
     sc === nothing && return nothing
-    return A, ψinds, sc...
+    return data..., ψinds, sc...
 end
 
 function TI.fused_norm_message(ψ::ITensor, sinds, incoming::Vector)
     setup = fused_setup(ψ, incoming)
     isnothing(setup) && return nothing
-    A, ψinds, slots, covered = setup
+    a, dims, ψinds, slots, covered = setup
     outgoing = [k for k in eachindex(ψinds) if !covered[k] && !(ψinds[k] in sinds)]
     length(outgoing) == 1 || return nothing
     kout = only(outgoing)
-    D = size(A, kout)
-    if A isa Array
-        Tm, Ψ = fused_chain(A, slots), A
-        pre, post = prod(size(A)[1:(kout - 1)]; init = 1), prod(size(A)[(kout + 1):end]; init = 1)
+    D = dims[kout]
+    if a isa Array
+        Tm, Ψ = fused_chain(a, dims, slots), a
+        pre, _, post = split_dims(dims, kout)
     else
-        Tm, Ψ = rotated_chain(A, slots, kout)   # with the outgoing bond last
-        pre, post = length(A) ÷ D, 1
+        Tm, Ψ = rotated_chain(a, dims, slots, kout)   # with the outgoing bond last
+        pre, post = length(a) ÷ D, 1
     end
-    R = close_bond!(similar(A, eltype(Tm), D, D), reshape(Ψ, pre, D, post), reshape(Tm, pre, D, post))
+    R = close_bond!(similar(a, eltype(Tm), D, D), reshape(Ψ, pre, D, post), reshape(Tm, pre, D, post))
     bout = ψinds[kout]
     return ITensors.itensor(R, ITensors.prime(bout), bout)
 end
@@ -201,7 +206,7 @@ end
 function TI.fused_norm_scalar(ψ::ITensor, sinds, incoming::Vector, ops::Vector)
     setup = fused_setup(ψ, incoming)
     isnothing(setup) && return nothing
-    A, ψinds, slots, covered = setup
+    a, dims, ψinds, slots, covered = setup
     for o in ops
         legs = o isa ITensor ? primed_pair(o) : nothing
         isnothing(legs) && return nothing
@@ -212,6 +217,6 @@ function TI.fused_norm_scalar(ψ::ITensor, sinds, incoming::Vector, ops::Vector)
         push!(slots, (k, ITensors.array(o, s, sp)))   # M[s, s′] = O[s′, s]
     end
     all(k -> covered[k] || ψinds[k] in sinds, eachindex(ψinds)) || return nothing
-    Tm, Ψ = A isa Array ? (fused_chain(A, slots), A) : rotated_chain(A, slots, nothing)
-    return LinearAlgebra.dot(vec(Ψ), vec(Tm))   # Σ conj(ψ) T
+    Tm, Ψ = a isa Array ? (fused_chain(a, dims, slots), a) : rotated_chain(a, dims, slots, nothing)
+    return LinearAlgebra.dot(Ψ, Tm)   # Σ conj(ψ) T
 end
