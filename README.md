@@ -4,7 +4,7 @@
 
 A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks (TNs) of near-arbitrary geometry. Built on top of [ITensors](https://github.com/ITensor/ITensors.jl) and [NamedGraphs](https://github.com/ITensor/NamedGraphs.jl).
 
-The main workhorses of the simulation are _belief propagation_ (BP) and the _singular value decomposition_ for applying gates, and _BP_ or _boundary MPS_ for estimating expectation values and sampling.
+The main workhorses of the simulation are _belief propagation_ (BP) and the _singular value decomposition_ for applying gates, and _BP_, _boundary MPS_, or _CTMRG_ for estimating expectation values, partition functions, and sampling. Circuits can be built directly in Julia or imported from OpenQASM 2 and [Qiskit.jl](https://github.com/Qiskit/Qiskit.jl).
 
 ## Documentation
 
@@ -70,6 +70,9 @@ g = named_grid((3, 3, 3); periodic = true)      # 3D periodic cubic lattice
 g = named_hexagonal_lattice_graph(4, 4)         # hexagonal lattice
 g = heavy_hexagonal_lattice(5, 5)               # heavy-hexagonal lattice
 g = lieb_lattice(5, 5)                          # Lieb lattice
+g = named_triangular_lattice_graph(5, 5)        # triangular lattice
+g = kagome_lattice(3, 3)                        # kagome lattice
+g = penrose_tiling(3)                           # Penrose rhombus tiling
 ```
 
 ### Constructing a Tensor Network State
@@ -105,6 +108,8 @@ end
 
 The `edge_color` function identifies groups of non-overlapping edges. Non-overlapping gates within a group are applied in parallel during the simulation. The second argument should be the coordination number (maximum vertex degree) of the graph.
 
+Circuits exported as OpenQASM 2 (e.g. via Python Qiskit's `qasm2.dumps`) or built with Qiskit.jl can also be imported directly with `circuit_from_qasm` and `circuit_from_qiskit`; see [Circuits from Qiskit](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/qiskit/).
+
 ### Applying Gates
 
 Apply gates to the TNS using `apply_gates`. The `apply_kwargs` control bond dimension truncation during the SVD:
@@ -129,8 +134,11 @@ Compute expectation values with `expect`, choosing from several contraction algo
 # Belief propagation (works on any graph, fast, approximate)
 sz = expect(ψ, ("Z", (3, 3)); alg = "bp")
 
-# Boundary MPS (planar graphs only, more accurate, adjustable precision)
+# Boundary MPS (planar grid-like graphs, more accurate, adjustable precision)
 sz = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", env_maxdim = 16)
+
+# CTMRG (any planar graph, single-site or nearest-neighbor observables)
+sz = expect(ψ, ("Z", (3, 3)); alg = "ctmrg", env_maxdim = 16)
 
 # Exact contraction (only feasible for small systems)
 sz = expect(ψ, ("Z", (3, 3)); alg = "exact")
@@ -143,7 +151,7 @@ observables = [("Z", [v]) for v in vertices(g)]
 sz_all = expect(ψ, observables; alg = "bp")
 ```
 
-If you already have an updated `BeliefPropagationCache` or `BoundaryMPSCache`, pass it directly to avoid redundant cache construction.
+If you already have an updated `BeliefPropagationCache`, `BoundaryMPSCache`, or `CTMRGCache`, pass it directly to avoid redundant cache construction.
 
 ### Norms, Inner Products and Reduced Density Matrices
 
@@ -225,7 +233,7 @@ Gates are specified as tuples of the form `(gate_string, vertices)` or `(gate_st
 | `"xx_plus_yy"`, `"xx_minus_yy"` | `(θ, β)` | Qiskit `XXPlusYYGate` and `XXMinusYYGate` |
 | `"Rxxyy"`, `"Rxxyyzz"` | angle | Multi-Pauli rotations |
 
-Custom gates can be defined by constructing the corresponding `ITensor` acting on the physical indices of the target qubits.
+Custom gates can be registered for the session with `register_op!` and `register_gate!`, or built as tensors with `op` acting on the physical indices of the target qubits.
 
 ## GPU Support
 
@@ -264,6 +272,7 @@ See the [examples/](examples/) directory for complete worked examples:
 - **Heisenberg picture** (`2dIsing_dynamics_Heisenbergpicture.jl`) -- operator evolution in the Pauli basis
 - **Boundary MPS** (`boundarymps.jl`) -- comparing BP, boundary MPS and exact expectation values
 - **Loop corrections** (`loopcorrections.jl`) -- improving BP norm estimates with loop corrections
+- **Hexagonal Heisenberg thermal state** (`hexagonal_heisenbergmodel_thermalstate.jl`) -- finite-temperature imaginary-time evolution and free energy density
 
 We encourage users to read the literature listed below and explore the [tests](test/) and [source code](src/) to learn how the package works in detail.
 

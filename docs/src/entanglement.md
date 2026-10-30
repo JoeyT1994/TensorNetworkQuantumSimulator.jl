@@ -28,7 +28,7 @@ s_all = [von_neumann_entanglement_entropy(ψ_bpc, e) for e in edges(ψ_bpc)]
 
 ## Subsystem Entanglement Entropy (via RDM)
 
-For a subsystem of multiple vertices, the entropy is computed from the reduced density matrix. This supports `"bp"`, `"boundarymps"`, and `"exact"` backends:
+For a subsystem of multiple vertices, the entropy is computed from the reduced density matrix. This supports `"bp"`, `"boundarymps"`, `"ctmrg"` (on a single vertex or the two endpoints of an edge), and `"exact"` backends:
 
 ```julia
 verts = [(2, 2), (2, 3), (3, 2), (3, 3)]
@@ -38,6 +38,9 @@ s = von_neumann_entanglement_entropy(ψ, verts; alg = "bp")
 
 # Via boundary MPS (more accurate on loopy graphs)
 s = von_neumann_entanglement_entropy(ψ, verts; alg = "boundarymps", env_maxdim = 16)
+
+# Via CTMRG on an edge subsystem
+s_edge = von_neumann_entanglement_entropy(ψ, [(2, 2), (2, 3)]; alg = "ctmrg", env_maxdim = 16)
 ```
 
 ## General Rényi Entropy

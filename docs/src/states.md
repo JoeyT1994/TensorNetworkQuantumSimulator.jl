@@ -102,18 +102,25 @@ Each vertex in a `TensorNetworkState` stores a `Vector{Index}` of site indices, 
 
 ### Custom Multi-Index States
 
-To construct a state with custom site indices per vertex, build a `Dictionary` mapping vertices to `Vector{Index}` and pass it directly:
+To construct a state with multiple identical physical indices per vertex (e.g. ket and bra legs for a density matrix or Heisenberg operator), pass `inds_per_site` to `siteinds`:
 
 ```julia
-# Two spin-1/2 indices per vertex (e.g. for a density matrix or bilayer system)
+# Two spin-1/2 indices per vertex (ket and bra)
+s = siteinds("S=1/2", g; inds_per_site = 2)
+ψ = random_tensornetworkstate(ComplexF64, g, s; bond_dimension = 4)
+
+# Access the site indices at a vertex
+siteinds(ψ, (1, 1))  # returns a 2-element Vector{Index}
+```
+
+For heterogeneous site indices across vertices, build a `Dictionary` mapping each vertex to its `Vector{Index}` and pass it directly:
+
+```julia
 s = Dictionary(
     collect(vertices(g)),
     [Index[Index(2, "S=1/2,ket"), Index(2, "S=1/2,bra")] for _ in vertices(g)]
 )
 ψ = random_tensornetworkstate(ComplexF64, g, s; bond_dimension = 4)
-
-# Access the site indices at a vertex
-siteinds(ψ, (1, 1))  # returns [Index(2, "S=1/2,ket"), Index(2, "S=1/2,bra")]
 ```
 
 ### Supported Site Types

@@ -113,7 +113,7 @@ The key steps are:
 3. **Sweep** across columns / rows, updating each boundary MPS by contracting it with the local column tensors and compressing back to the target bond dimension.
 4. **Extract** expectation values by sandwiching the observable between left and right boundary MPS messages.
 
-Because each sweep involves MPS operations (contraction + SVD truncation), the cost typically scales as ``O(R^3)`` in the MPS bond dimension ``R``, and results converge to the exact answer as ``R \to \infty``.  By default the state is partitioned by its columns, use `partition_by = "row"` when constructing the cache or calling `expect` to change it.
+Because each sweep involves MPS operations (contraction + SVD truncation), the cost typically scales as ``O(R^3)`` in the MPS bond dimension ``R``, and results converge to the exact answer as ``R \to \infty``. By default the state is partitioned by its rows; use `partition_by = "col"` when constructing the cache or calling `expect` to partition by columns instead.
 
 ### When to use it
 

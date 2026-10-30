@@ -89,8 +89,11 @@ Use `expect` to compute expectation values. Several contraction algorithms are a
 # Belief propagation (fast, works on any graph)
 sz_bp = expect(ψ, ("Z", (3, 3)); alg = "bp")
 
-# Boundary MPS (more accurate, planar graphs only)
+# Boundary MPS (more accurate, planar grid-like graphs)
 sz_bmps = expect(ψ, ("Z", (3, 3)); alg = "boundarymps", env_maxdim = 10)
+
+# CTMRG (accurate on any planar graph)
+sz_ctm = expect(ψ, ("Z", (3, 3)); alg = "ctmrg", env_maxdim = 10)
 ```
 
 See [Expectation Values](expectation_values.md) for more options including norms, inner products, and reduced density matrices.
@@ -130,3 +133,4 @@ See the [examples/](https://github.com/JoeyT1994/TensorNetworkQuantumSimulator.j
 - **Heisenberg picture** (`2dIsing_dynamics_Heisenbergpicture.jl`) — operator evolution in the Pauli basis
 - **Boundary MPS** (`boundarymps.jl`) — comparing BP, boundary MPS, and exact contraction
 - **Loop corrections** (`loopcorrections.jl`) — improving BP norm estimates
+- **Hexagonal Heisenberg thermal state** (`hexagonal_heisenbergmodel_thermalstate.jl`) — finite-temperature imaginary-time evolution and free energy density
