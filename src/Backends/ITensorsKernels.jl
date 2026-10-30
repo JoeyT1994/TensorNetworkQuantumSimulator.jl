@@ -100,6 +100,7 @@ end
 # and ψ's data, both flat with their legs in the same order (ψ permuted into the free buffer).
 function rotated_chain(A::StridedArray, slots::Vector, kout)
     T = promote_type(eltype(A), (eltype(M) for (_, M) in slots)...)
+    A = T == eltype(A) ? A : T.(A)
     n = length(A); dims = size(A)
     b1, b2 = fused_buffers(A, T, n)
     bufs = (view(b1, 1:n), view(b2, 1:n))
@@ -118,7 +119,8 @@ function rotated_chain(A::StridedArray, slots::Vector, kout)
         first(order) == k || reorder!([k; filter(!=(k), order)])
         D = dims[k]
         out = free()
-        LinearAlgebra.mul!(reshape(out, D, n ÷ D), transpose(M), reshape(cur, D, n ÷ D))
+        Mt = eltype(M) == T ? transpose(M) : transpose(T.(M))
+        LinearAlgebra.mul!(reshape(out, D, n ÷ D), Mt, reshape(cur, D, n ÷ D))
         cur = out
     end
     Ψ = order == 1:ndims(A) ? vec(A) : permute_into!(free(), vec(A), dims, collect(1:ndims(A)), order)

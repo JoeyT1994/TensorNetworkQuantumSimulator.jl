@@ -584,7 +584,9 @@ region_scalar(cache::CTMRGCache, region, op_strings::Function) = scalar(contract
 # Messages and factors as for any cache, and the corners and projectors with them.
 function Adapt.adapt_structure(to, cache::CTMRGCache)
     cache = adapt_factors(to, adapt_messages(to, cache))
-    map!(adapt(to), values(cache.corners))
+    for (k, c) in cache.corners
+        cache.corners[k] = adapt(to)(c)
+    end
     for (I, (PA, PB, k)) in cache.projectors
         cache.projectors[I] = (adapt(to)(PA), adapt(to)(PB), k)
     end
