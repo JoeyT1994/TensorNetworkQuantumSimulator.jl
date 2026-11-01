@@ -1,6 +1,6 @@
 # TensorNetworkQuantumSimulator
 
-[![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/)
+[![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23861352.svg)](https://doi.org/10.5281/zenodo.23861352)
 
 ![Overview of TensorNetworkQuantumSimulator.jl](docs/src/mainfig.svg)
 
@@ -17,13 +17,13 @@ Full documentation is available at **https://JoeyT1994.github.io/TensorNetworkQu
 - [Tensor Networks](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/states/) — `TensorNetwork` and `TensorNetworkState` types
 - [Gate Application](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/gates/) — circuits, simple update, and supported gates
 - [Circuits from Qiskit](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/qiskit/) — importing OpenQASM 2 and Qiskit.jl circuits
-- [Using from Python](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/dev/python/) — calling the package from Python with juliacall
+- [Using from Python](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/python/) — calling the package from Python with juliacall
 - [Expectation Values](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/expectation_values/) — observables, norms, and reduced density matrices
 - [Entanglement Entropy](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/entanglement/) — von Neumann and Rényi entropies
 - [Sampling](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/sampling/) — bitstring sampling with optional certification
 - [Caches](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/caches/) — `BeliefPropagationCache`, `BoundaryMPSCache`, and `CTMRGCache` in depth
 - [Advanced Topics](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/advanced/) — GPU support, loop corrections, precision control
-- [IBM's Kicked Ising Experiment](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/dev/kicked_ising/) — reproducing the 127-qubit Eagle experiment on a laptop
+- [IBM's Kicked Ising Experiment](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/kicked_ising/) — reproducing the 127-qubit Eagle experiment on a laptop
 - [API Reference](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/api/) — complete function reference
 
 ## Installation

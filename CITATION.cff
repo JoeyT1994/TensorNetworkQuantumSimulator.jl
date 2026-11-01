@@ -12,6 +12,7 @@ repository-code: "https://github.com/JoeyT1994/TensorNetworkQuantumSimulator.jl"
 url: "https://joeyt1994.github.io/TensorNetworkQuantumSimulator.jl/"
 license: MIT
 version: 0.5.0
+doi: 10.5281/zenodo.23861352
 keywords:
   - tensor-networks
   - quantum-computing
