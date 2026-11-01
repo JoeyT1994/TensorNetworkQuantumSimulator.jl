@@ -1,0 +1,42 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the paper below, or Tindall and Fishman, SciPost Physics 15, 222 (2023)."
+title: TensorNetworkQuantumSimulator.jl
+abstract: "A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks of near-arbitrary geometry."
+type: software
+authors:
+  - family-names: Tindall
+    given-names: Joseph
+  - family-names: Rudolph
+    given-names: Manuel S.
+repository-code: "https://github.com/JoeyT1994/TensorNetworkQuantumSimulator.jl"
+url: "https://joeyt1994.github.io/TensorNetworkQuantumSimulator.jl/"
+license: MIT
+version: 0.5.0
+keywords:
+  - tensor-networks
+  - quantum-computing
+  - quantum-simulation
+preferred-citation:
+  type: article
+  title: "Simulating and sampling from quantum circuits with 2D tensor networks"
+  authors:
+    - family-names: Rudolph
+      given-names: Manuel S.
+    - family-names: Tindall
+      given-names: Joseph
+  journal: npj Quantum Information
+  year: 2026
+  doi: 10.1038/s41534-026-01372-2
+references:
+  - type: article
+    title: "Gauging tensor networks with belief propagation"
+    authors:
+      - family-names: Tindall
+        given-names: Joseph
+      - family-names: Fishman
+        given-names: Matthew
+    journal: SciPost Physics
+    volume: 15
+    start: 222
+    year: 2023
+    doi: 10.21468/SciPostPhys.15.6.222
