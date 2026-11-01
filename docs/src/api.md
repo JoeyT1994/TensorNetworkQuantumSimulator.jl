@@ -105,7 +105,6 @@ freenergy
 safe_eigen
 add
 fidelity
-optimise_p_q
 TensorNetworkQuantumSimulator.TensorInterface.Algorithm
 ```
 

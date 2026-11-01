@@ -175,3 +175,5 @@ Reduce the bond dimension of a `TensorNetworkState` via belief propagation guide
 ```julia
 ψ_truncated = truncate(ψ; alg = "bp", maxdim = 4, cutoff = 1e-10)
 ```
+
+On planar graphs, `alg = "ctmrg"` (with `env_maxdim`) truncates each bond by a full update in its CTMRG environment instead, which is more accurate when the state has loop correlations.

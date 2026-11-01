@@ -48,8 +48,8 @@ const ALGORITHM_UNSUPPORTED = Dict(
     "exact" => ("normalize", "sample", "sample_certified", "truncate", "edge_entropy"),
     "bp" => ("sample_certified",),
     "loopcorrections" => ("normalize", "expect", "sample", "sample_certified", "truncate", "rdm", "edge_entropy"),
-    "boundarymps" => ("normalize", "edge_entropy"),
-    "ctmrg" => ("normalize", "sample", "sample_certified", "truncate", "edge_entropy"),
+    "boundarymps" => ("normalize", "truncate", "edge_entropy"),
+    "ctmrg" => ("normalize", "sample", "sample_certified", "edge_entropy"),
 )
 
 # Check that `alg` can do `f` on `tns`.
