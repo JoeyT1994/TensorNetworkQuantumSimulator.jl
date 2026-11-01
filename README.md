@@ -12,18 +12,18 @@ The main workhorses of the simulation are _belief propagation_ (BP) and the _sin
 
 Full documentation is available at **https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/**, covering:
 
-- [Getting Started](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/getting_started/) — complete tutorial from lattice definition to measurement
-- [Graphs](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/graphs/) — lattice constructors and graph utilities
-- [Tensor Networks](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/states/) — `TensorNetwork` and `TensorNetworkState` types
-- [Gate Application](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/gates/) — circuits, simple update, and supported gates
-- [Circuits from Qiskit](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/qiskit/) — importing OpenQASM 2 and Qiskit.jl circuits
-- [Expectation Values](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/expectation_values/) — observables, norms, and reduced density matrices
-- [Entanglement Entropy](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/entanglement/) — von Neumann and Rényi entropies
-- [Sampling](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/sampling/) — bitstring sampling with optional certification
-- [Caches](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/caches/) — `BeliefPropagationCache`, `BoundaryMPSCache`, and `CTMRGCache` in depth
-- [Advanced Topics](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/advanced/) — GPU support, loop corrections, precision control
-- [IBM's Kicked Ising Experiment](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/kicked_ising/) — reproducing the 127-qubit Eagle experiment on a laptop
-- [API Reference](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/api/) — complete function reference
+- [Getting Started](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/getting_started/) — complete tutorial from lattice definition to measurement
+- [Graphs](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/graphs/) — lattice constructors and graph utilities
+- [Tensor Networks](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/states/) — `TensorNetwork` and `TensorNetworkState` types
+- [Gate Application](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/gates/) — circuits, simple update, and supported gates
+- [Circuits from Qiskit](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/qiskit/) — importing OpenQASM 2 and Qiskit.jl circuits
+- [Expectation Values](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/expectation_values/) — observables, norms, and reduced density matrices
+- [Entanglement Entropy](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/entanglement/) — von Neumann and Rényi entropies
+- [Sampling](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/sampling/) — bitstring sampling with optional certification
+- [Caches](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/caches/) — `BeliefPropagationCache`, `BoundaryMPSCache`, and `CTMRGCache` in depth
+- [Advanced Topics](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/advanced/) — GPU support, loop corrections, precision control
+- [IBM's Kicked Ising Experiment](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/dev/kicked_ising/) — reproducing the 127-qubit Eagle experiment on a laptop
+- [API Reference](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/api/) — complete function reference
 
 ## Installation
 
@@ -132,7 +132,7 @@ end
 
 The `edge_color` function identifies groups of non-overlapping edges. Non-overlapping gates within a group are applied in parallel during the simulation. The second argument should be the coordination number (maximum vertex degree) of the graph.
 
-Circuits exported as OpenQASM 2 (e.g. via Python Qiskit's `qasm2.dumps`) or built with Qiskit.jl can also be imported directly with `circuit_from_qasm` and `circuit_from_qiskit`; see [Circuits from Qiskit](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/qiskit/).
+Circuits exported as OpenQASM 2 (e.g. via Python Qiskit's `qasm2.dumps`) or built with Qiskit.jl can also be imported directly with `circuit_from_qasm` and `circuit_from_qiskit`; see [Circuits from Qiskit](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/qiskit/).
 
 ### Applying Gates
 
