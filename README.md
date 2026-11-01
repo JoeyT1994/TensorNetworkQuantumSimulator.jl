@@ -22,6 +22,7 @@ Full documentation is available at **https://JoeyT1994.github.io/TensorNetworkQu
 - [Sampling](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/sampling/) — bitstring sampling with optional certification
 - [Caches](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/caches/) — `BeliefPropagationCache`, `BoundaryMPSCache`, and `CTMRGCache` in depth
 - [Advanced Topics](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/advanced/) — GPU support, loop corrections, precision control
+- [IBM's Kicked Ising Experiment](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/kicked_ising/) — reproducing the 127-qubit Eagle experiment on a laptop
 - [API Reference](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/api/) — complete function reference
 
 ## Installation

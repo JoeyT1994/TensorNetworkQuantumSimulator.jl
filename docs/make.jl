@@ -25,6 +25,7 @@ makedocs(;
         "Sampling" => "sampling.md",
         "Caches" => "caches.md",
         "Advanced Topics" => "advanced.md",
+        "IBM's Kicked Ising Experiment" => "kicked_ising.md",
         "API Reference" => "api.md",
     ],
 )
