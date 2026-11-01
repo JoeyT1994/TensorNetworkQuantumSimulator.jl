@@ -20,6 +20,7 @@ makedocs(;
         "Tensor Networks" => "states.md",
         "Gate Application" => "gates.md",
         "Circuits from Qiskit" => "qiskit.md",
+        "Using from Python" => "python.md",
         "Expectation Values" => "expectation_values.md",
         "Entanglement Entropy" => "entanglement.md",
         "Sampling" => "sampling.md",

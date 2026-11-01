@@ -17,6 +17,7 @@ Full documentation is available at **https://JoeyT1994.github.io/TensorNetworkQu
 - [Tensor Networks](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/states/) — `TensorNetwork` and `TensorNetworkState` types
 - [Gate Application](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/gates/) — circuits, simple update, and supported gates
 - [Circuits from Qiskit](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/qiskit/) — importing OpenQASM 2 and Qiskit.jl circuits
+- [Using from Python](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/dev/python/) — calling the package from Python with juliacall
 - [Expectation Values](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/expectation_values/) — observables, norms, and reduced density matrices
 - [Entanglement Entropy](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/entanglement/) — von Neumann and Rényi entropies
 - [Sampling](https://JoeyT1994.github.io/TensorNetworkQuantumSimulator.jl/stable/sampling/) — bitstring sampling with optional certification

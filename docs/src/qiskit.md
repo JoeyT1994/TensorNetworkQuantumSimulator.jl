@@ -9,6 +9,8 @@ There are two routes:
 - **OpenQASM 2**, with `circuit_from_qasm`. This works for circuits built in Python qiskit, Cirq, PennyLane or by hand, and needs nothing beyond TensorNetworkQuantumSimulator.jl.
 - **Qiskit.jl**, with `circuit_from_qiskit`, for circuits built in Julia with [Qiskit.jl](https://github.com/Qiskit/Qiskit.jl). It is available once Qiskit.jl is loaded.
 
+To run the simulation from Python as well, see [Using from Python](python.md).
+
 ## From Python qiskit, via OpenQASM
 
 Write the circuit out with `qasm2`:
