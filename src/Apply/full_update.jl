@@ -13,9 +13,8 @@ in an environment of the bond. For a gate `o` on the bond (v₁, v₂):
   5. Re-split with an SVD to balance the bond, undo the gauge, and multiply back the Qs. The bond
      keeps its index if its dimension is unchanged, so a cache built on the state stays valid.
 
-`apply_gates_full_update` draws the environments from a cluster around each bond with BP messages
-on its boundary, or from CTMRG. The linear algebra is on dense arrays, so this is for dense
-(non-graded) backends.
+`apply_gates_full_update` draws the environments from CTMRG. The linear algebra is on dense arrays,
+so this is for dense (non-graded) backends.
 =#
 
 # ψᵥ = Qᵥ Rᵥ with Rᵥ on `keep` (the site and the bond) and a new leg rᵥ. A tensor with no other
@@ -51,8 +50,7 @@ function apply_to_leg(M::AbstractMatrix, t::Tensor, r)
     return replaceinds(t * Mt, [prime(r)], [r])
 end
 
-# Contract an environment: in an optimal order for short lists, greedily for the longer ones of
-# clusters.
+# Contract an environment: in an optimal order for short lists, greedily for longer ones.
 function contract_environment(ts::Vector{<:Tensor})
     length(ts) <= 12 && return contract_optimal(ts)
     return contract(ts; sequence = contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod()))
@@ -182,83 +180,40 @@ function full_update(
     return ψ₁′, ψ₂′, diagnostics
 end
 
-"""
-    cluster_environment(bp_cache, emb, u, v)
-
-The environment of the bond (u, v) for `full_update` from a cluster around it: the bond and the
-inner faces of the planar embedding `emb` next to it, contracted exactly, with the BP messages into
-the cluster on its boundary. Positive semi-definite by construction.
-"""
-function cluster_environment(bp_cache::BeliefPropagationCache, emb::PlanarEmbedding, u, v)
-    tn = network(bp_cache)
-    fs = filter(isinner, unique([face_of_dart(emb, u, v), face_of_dart(emb, v, u)]))
-    R = unique(vcat([u, v], [w for f in fs for w in face_vertices(emb, f)]))
-    return vcat(incoming_messages(bp_cache, R), Tensor[t for w in R if w ∉ (u, v) for t in bp_factors(tn, w)])
-end
-
-# The environment of the bond (u, v) for `full_update`, from a cache.
-bond_environment(::Algorithm"cluster", cache, emb, u, v) = cluster_environment(cache, emb, u, v)
-bond_environment(::Algorithm"ctmrg", cache, emb, u, v) = incoming_messages(cache, [u, v])
-
-# The cache a full update draws its environments from, converged, and the planar embedding.
-function full_update_cache(::Algorithm"cluster", ψ; positions, cache_update_kwargs, env_maxdim)
-    return update(BeliefPropagationCache(ψ); cache_update_kwargs...), planar_embedding(graph(ψ); positions)
-end
-function full_update_cache(::Algorithm"ctmrg", ψ; positions, cache_update_kwargs, env_maxdim)
-    isnothing(env_maxdim) && throw(ArgumentError("env = \"ctmrg\" needs `env_maxdim`"))
-    return update(CTMRGCache(ψ, env_maxdim; positions); cache_update_kwargs...), nothing
-end
-function full_update_cache(alg::Algorithm, ψ; kwargs...)
-    throw(ArgumentError("env must be \"cluster\" or \"ctmrg\", got $(repr(String(typeof(alg).parameters[1])))"))
-end
-
-default_full_update_cache_kwargs(::Algorithm"cluster", ψ) = default_bp_update_kwargs(ψ)
-default_full_update_cache_kwargs(::Algorithm"ctmrg", ψ) = (; tolerance = 1.0e-6)
-default_full_update_cache_kwargs(::Algorithm, ψ) = (;)
-
-# A bond whose index changed invalidates the cache's messages on it: drop them for BP (they
-# reinitialise), or rebuild a CTMRG cache.
-function reset_bond!(cache::BeliefPropagationCache, u, v)
-    for e in (NamedEdge(u => v), NamedEdge(v => u))
-        haskey(messages(cache), e) && delete!(messages(cache), e)
-    end
-    return cache
+# A converged CTMRG cache of ψ.
+function full_update_cache(ψ; env_maxdim, positions, cache_update_kwargs)
+    return update(CTMRGCache(ψ, env_maxdim; positions); cache_update_kwargs...)
 end
 
 """
-    apply_gates_full_update(circuit, ψ::TensorNetworkState; env = "cluster", maxdim, cutoff = nothing,
-                            env_maxdim = nothing, normalize_tensors = true, positions,
-                            cache_update_kwargs)
+    apply_gates_full_update(circuit, ψ::TensorNetworkState; maxdim, env_maxdim, cutoff = nothing,
+                            normalize_tensors = true, positions, cache_update_kwargs = (; tolerance = 1e-6))
 
-Apply a sequence of one- and two-site gates to `ψ`, two-site gates by `full_update`, with
-environments from `env`:
-- `"cluster"` (default): the bond and the faces next to it as one cluster, with BP messages on its
-  boundary (`cluster_environment`). Cheap, and positive semi-definite by construction.
-- `"ctmrg"`: the CTMRG environment of the bond, with corners truncated to `env_maxdim`. More
-  accurate once correlations extend beyond a face, and much more expensive.
-The environment cache is updated, from its previous state, before any two-site gate on a vertex
-changed since the last update; so gates on disjoint bonds (one colour of an edge colouring) share
-an environment. `circuit` is as for `apply_gates`. The graph must be planar, with an embedding from
-`positions` (default: the vertex names, when they are coordinates).
+Apply a sequence of one- and two-site gates to `ψ`, two-site gates by `full_update` in the CTMRG
+environment of their bond, with the corners truncated to `env_maxdim`. The CTMRG cache is updated,
+from its previous state, before any two-site gate on a vertex changed since the last update; so
+gates on disjoint bonds (one colour of an edge colouring) share an environment. `circuit` is as for
+`apply_gates`. The graph must be planar, with an embedding from `positions` (default: the vertex
+names, when they are coordinates).
 
 Returns the new state and the diagnostics of each two-site gate (see `full_update`).
 """
-function apply_gates_full_update(circuit::Vector, ψ::TensorNetworkState; env = "cluster", kwargs...)
+function apply_gates_full_update(circuit::Vector, ψ::TensorNetworkState; kwargs...)
     gates = eltype(circuit) <: Tensor ? [(o, vertices(o, ψ)) for o in circuit] : toitensor(circuit, graph(ψ), siteinds(ψ))
-    return full_update_sequence(gates, ψ, Algorithm(env); kwargs...)
+    return full_update_sequence(gates, ψ; kwargs...)
 end
 
-# Apply the `(gate, vertices)` in `gates` to `ψ` in order, two-site gates by `full_update` with
-# environments from `alg`; see `apply_gates_full_update`.
+# Apply the `(gate, vertices)` in `gates` to `ψ` in order, two-site gates by `full_update`; see
+# `apply_gates_full_update`.
 function full_update_sequence(
-        gates::Vector, ψ::TensorNetworkState, alg::Algorithm;
-        maxdim::Integer, cutoff = nothing, env_maxdim = nothing, normalize_tensors = true,
-        positions = default_positions(graph(ψ)), cache_update_kwargs = default_full_update_cache_kwargs(alg, ψ),
+        gates::Vector, ψ::TensorNetworkState;
+        maxdim::Integer, env_maxdim::Integer, cutoff = nothing, normalize_tensors = true,
+        positions = default_positions(graph(ψ)), cache_update_kwargs = (; tolerance = 1.0e-6),
     )
     g = graph(ψ)
-    cache, emb = full_update_cache(alg, ψ; positions, cache_update_kwargs, env_maxdim)
+    cache = full_update_cache(ψ; env_maxdim, positions, cache_update_kwargs)
     ψ = network(cache)
-    stale = false                 # whether the cache must be rebuilt, not just updated
+    stale = false                 # whether a bond changed dimension, so the cache must be rebuilt
     affected = Set{eltype(vertices(ψ))}()
     diagnostics = NamedTuple[]
     for (o, vs) in gates
@@ -273,7 +228,7 @@ function full_update_sequence(
         length(vs) == 2 && has_edge(g, NamedEdge(vs[1] => vs[2])) ||
             error("full update: two-site gates must act on neighbouring vertices; got $vs.")
         if stale
-            cache, _ = full_update_cache(alg, network(cache); positions, cache_update_kwargs, env_maxdim)
+            cache = full_update_cache(network(cache); env_maxdim, positions, cache_update_kwargs)
             stale = false
             empty!(affected)
         elseif any(in(affected), vs)
@@ -283,13 +238,11 @@ function full_update_sequence(
         ψ = network(cache)
         u, v = vs
         bond = commonind(ψ[u], ψ[v])
-        a, b, d = full_update(o, ψ[u], ψ[v], bond_environment(alg, cache, emb, u, v); maxdim, cutoff)
+        a, b, d = full_update(o, ψ[u], ψ[v], incoming_messages(cache, [u, v]); maxdim, cutoff)
         push!(diagnostics, d)
         setindex_preserve!(cache, normalize_tensors ? normalize(a) : a, u)
         setindex_preserve!(cache, normalize_tensors ? normalize(b) : b, v)
-        if commonind(a, b) != bond
-            cache isa BeliefPropagationCache ? reset_bond!(cache, u, v) : (stale = true)
-        end
+        stale |= commonind(a, b) != bond
         union!(affected, vs)
     end
     return copy(network(cache)), diagnostics

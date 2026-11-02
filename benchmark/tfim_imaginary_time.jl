@@ -7,8 +7,7 @@ comparing simple update with BP environments against full update at the same bon
 All methods use second-order Trotter steps: half steps of exp(τ h X / 2) around the 4 edge colours
 swept forward and back (see `trotter_sequence`). Full update (`apply_gates_full_update`) updates its
 environment cache before each colour of the sweep, from its previous state; edges of one colour are
-disjoint, so their gates commute and share the environment. Its environments are a cluster of the
-bond and its plaquettes with BP messages on the boundary (`env = "cluster"`) or CTMRG (`"ctmrg"`).
+disjoint, so their gates commute and share the environment. Its environments come from CTMRG.
 
 Energies are exact (full contraction) on lattices with at most 20 sites, else from CTMRG at each of
 `measure_maxdims` (to check the measurement has converged).
@@ -97,16 +96,14 @@ end
 
 su_evolve(ψ, gates, D) = first(apply_gates(gates, ψ; apply_kwargs = (; maxdim = D, cutoff = 1.0e-14, normalize_tensors = true)))
 
-# Full update with environments from `env` ("cluster" or "ctmrg"); the cache is updated from its
-# previous state before each colour of the sweep. Returns the state and the largest negativity of
-# an environment.
-function fu_evolve(ψ, gates, D; env, env_maxdim = 16)
-    ψ, diagnostics = apply_gates_full_update(gates, ψ; env, maxdim = D, env_maxdim)
+# Full update in CTMRG environments; the cache is updated from its previous state before each
+# colour of the sweep. Returns the state and the largest negativity of an environment.
+function fu_evolve(ψ, gates, D; env_maxdim = 16)
+    ψ, diagnostics = apply_gates_full_update(gates, ψ; maxdim = D, env_maxdim)
     return ψ, maximum(d -> d.negativity, diagnostics)
 end
 
 function run(; nx = 4, ny = 4, J = 1.0, h = 3.04, Ds = (2, 3, 4), χ = 16, measure_maxdims = (32, 48),
-        envs = ("cluster", "ctmrg"),
         schedule = vcat(fill(0.1, 20), fill(0.05, 20), fill(0.02, 30), fill(0.01, 30), fill(0.005, 40)))
     g = named_grid((nx, ny))
     colours = edge_color(g, 4)
@@ -123,11 +120,9 @@ function run(; nx = 4, ny = 4, J = 1.0, h = 3.04, Ds = (2, 3, 4), χ = 16, measu
         t = @elapsed ψ = su_evolve(ψ0, gates, D)
         push!(states, "SU+BP" => ψ)
         @printf("D = %d  SU+BP %.0fs", D, t)
-        for env in envs
-            t = @elapsed (ψ, neg) = fu_evolve(ψ0, gates, D; env, env_maxdim = χ)
-            push!(states, "FU+$env" => ψ)
-            @printf(" | FU+%s %.0fs (max env negativity %.1e)", env, t, neg)
-        end
+        t = @elapsed (ψ, neg) = fu_evolve(ψ0, gates, D; env_maxdim = χ)
+        push!(states, "FU+CTMRG" => ψ)
+        @printf(" | FU+CTMRG %.0fs (max env negativity %.1e)", t, neg)
         println()
         for m in (exact_energy ? (0,) : measure_maxdims)
             @printf("       %-9s", exact_energy ? "exact" : "CTMRG $m")

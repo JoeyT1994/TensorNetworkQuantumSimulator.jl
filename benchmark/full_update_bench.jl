@@ -10,8 +10,6 @@ fidelity in E, so no full state is ever rebuilt.
 Methods:
   su_bp        simple update in the BP environment (what `apply_gates` does)
   fu_exact     `full_update` in the exact environment: the bound for any environment
-  fu_cluster   `full_update` in the bond's cluster environment (`cluster_environment`): the bond
-               and its faces, with BP messages on the boundary
   fu_ctmrg     `full_update` in the CTMRG environment, with corners truncated to `env_maxdim`
 
 Gates are Haar-random two-qubit unitaries (`haar`) or exp(-i 0.1 H) for a random Hermitian H
@@ -20,7 +18,7 @@ Gates are Haar-random two-qubit unitaries (`haar`) or exp(-i 0.1 H) for a random
 Run with: julia --project=<env with TensorNetworkQuantumSimulator> benchmark/full_update_bench.jl
 =#
 using TensorNetworkQuantumSimulator
-using TensorNetworkQuantumSimulator: Tensor, simple_update, full_update, cluster_environment,
+using TensorNetworkQuantumSimulator: Tensor, simple_update, full_update,
     planar_embedding, incoming_messages, contraction_sequence, contract_optimal, GreedyMethod,
     from_array, prime, dag, replaceinds, apply, scalar, contract, inds, update
 using LinearAlgebra: qr, Hermitian
@@ -88,8 +86,7 @@ function run_case(ψ, e, o, maxdim, emb, ctm)
     t = @elapsed u = first(simple_update(o, [ψ₁, ψ₂]; envs = incoming_messages(bpc, [v₁, v₂]), maxdim))
     results["su_bp"] = (; infidelity = score(u), time = t)
     for (name, envs) in (
-            ("fu_exact", [E]), ("fu_cluster", cluster_environment(bpc, emb, v₁, v₂)),
-            ("fu_ctmrg", incoming_messages(ctm, [v₁, v₂])),
+            ("fu_exact", [E]), ("fu_ctmrg", incoming_messages(ctm, [v₁, v₂])),
         )
         t = @elapsed (a, b, diag) = full_update(o, ψ₁, ψ₂, envs; maxdim)
         results[name] = (; infidelity = score((a, b)), time = t, diag.sweeps, diag.negativity, diag.condition)
@@ -97,7 +94,7 @@ function run_case(ψ, e, o, maxdim, emb, ctm)
     return results
 end
 
-const METHODS = ["su_bp", "fu_cluster", "fu_ctmrg", "fu_exact"]
+const METHODS = ["su_bp", "fu_ctmrg", "fu_exact"]
 
 function bench(; nx = 4, ny = 4, Ds = (2, 3), ngates = 3, seed = 1234, gates = (:haar, :weak), env_maxdim = 16)
     rng = Random.MersenneTwister(seed)
@@ -125,7 +122,7 @@ function bench(; nx = 4, ny = 4, Ds = (2, 3), ngates = 3, seed = 1234, gates = (
             @printf("%-15s %12.3e %12.3e %10.2f   gap closed %3.0f%%\n", m, mean(inf), median(inf),
                 1000 * mean(getfield.(all[m], :time)), 100 * (su_mean - mean(inf)) / (su_mean - ex_mean))
         end
-        for m in ("fu_cluster", "fu_ctmrg", "fu_exact")
+        for m in ("fu_ctmrg", "fu_exact")
             rs = all[m]
             @printf("%-15s sweeps mean %.1f max %d | negativity max %.1e | condition max %.1e\n",
                 m, mean(getfield.(rs, :sweeps)), maximum(getfield.(rs, :sweeps)),

@@ -5,7 +5,7 @@ from all spins up, on an open nx × ny lattice small enough (≤ 20 sites) to ke
 
 Each second-order Trotter step (half X steps around the 4 edge colours swept forward and back) is
 applied to the exact state and, at bond dimension D, by simple update with BP environments
-(`apply_gates`) and by full update (`apply_gates_full_update`) with each environment in `envs`.
+(`apply_gates`) and by full update in CTMRG environments (`apply_gates_full_update`).
 At every checkpoint the exact fidelity |⟨ψ|ψ_exact⟩|² of each state is printed.
 
 Run with: julia --project=<env with TensorNetworkQuantumSimulator> benchmark/tfim_quench.jl
@@ -48,13 +48,13 @@ end
 fidelity(a, b) = abs2(scalar(dag(a) * b)) / (real(scalar(dag(a) * a)) * real(scalar(dag(b) * b)))
 
 function run(; nx = 4, ny = 5, J = 1.0, h = 3.04, dt = 0.05, nsteps = 40, every = 5, Ds = (3, 4),
-        envs = ("cluster", "ctmrg"), env_maxdim = 16)
+        env_maxdim = 16)
     g = named_grid((nx, ny))
     colours = edge_color(g, 4)
     ψ0 = tensornetworkstate(ComplexF64, v -> "↑", g, "S=1/2")
     s = siteinds(ψ0)
     step = trotter_step(s, g, colours, dt, J, h)
-    labels = vcat(["SU+BP"], ["FU+$e" for e in envs])
+    labels = ["SU+BP", "FU+CTMRG"]
     @printf("TFIM quench %dx%d from all up, J = %.2f, h = %.2f, dt = %.3f, %d steps\n", nx, ny, J, h, dt, nsteps)
     for D in Ds
         println("D = $D: exact fidelity at each checkpoint")
@@ -70,9 +70,7 @@ function run(; nx = 4, ny = 5, J = 1.0, h = 3.04, dt = 0.05, nsteps = 40, every 
                 exact = noprime(contract([o, exact]))
             end
             times[1] += @elapsed states[1] = first(apply_gates(gates, states[1]; apply_kwargs = (; maxdim = D, cutoff = 1.0e-14, normalize_tensors = true)))
-            for (k, env) in enumerate(envs)
-                times[k + 1] += @elapsed states[k + 1] = first(apply_gates_full_update(gates, states[k + 1]; env, maxdim = D, env_maxdim))
-            end
+            times[2] += @elapsed states[2] = first(apply_gates_full_update(gates, states[2]; maxdim = D, env_maxdim))
             @printf("%6.2f", chunk * every * dt)
             foreach(ψ -> @printf("%16.6f", fidelity(dense(ψ), exact)), states)
             println()

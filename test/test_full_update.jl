@@ -2,7 +2,7 @@
 using LinearAlgebra: qr
 using Random: Random
 using TensorNetworkQuantumSimulator
-using TensorNetworkQuantumSimulator: Tensor, full_update, apply_gates_full_update, cluster_environment, planar_embedding,
+using TensorNetworkQuantumSimulator: Tensor, full_update, apply_gates_full_update,
     simple_update, incoming_messages, contract_optimal, contraction_sequence, GreedyMethod, contract, from_array,
     prime, dag, replaceinds, apply, scalar, update
 using Test: @testset, @test
@@ -47,8 +47,6 @@ end
 
     a, b, d_exact = full_update(o, ψ[u], ψ[v], [E]; maxdim)
     exact = infidelity((a, b))
-    cluster_envs = cluster_environment(bp, planar_embedding(g), u, v)
-    cluster = infidelity(full_update(o, ψ[u], ψ[v], cluster_envs; maxdim)[1:2])
     ctmrg = infidelity(full_update(o, ψ[u], ψ[v], incoming_messages(ctm, [u, v]); maxdim)[1:2])
     bond_only = infidelity(full_update(o, ψ[u], ψ[v], incoming_messages(bp, [u, v]); maxdim)[1:2])
 
@@ -57,13 +55,12 @@ end
     @test d_exact.negativity < 1.0e-10
     # the bond alone in its BP environment is simple update
     @test bond_only ≈ su rtol = 1.0e-6
-    # the exact environment is the best; both approximate environments beat simple update
-    @test exact <= min(cluster, ctmrg) + 1.0e-10
-    @test cluster < su
+    # the exact environment is the best, and CTMRG's beats simple update
+    @test exact <= ctmrg + 1.0e-10
     @test ctmrg < su
 
     # without truncation the update is exact
-    a, b, _ = full_update(o, ψ[u], ψ[v], cluster_envs; maxdim = 16)
+    a, b, _ = full_update(o, ψ[u], ψ[v], incoming_messages(ctm, [u, v]); maxdim = 16)
     @test infidelity((a, b)) < 1.0e-10
 end
 
@@ -76,8 +73,8 @@ end
     )
     circuit = reduce(vcat, fill(layer, 2))
     ψ_exact, _ = apply_gates(circuit, ψ0; apply_kwargs = (; maxdim = 64))
-    for (env, kwargs) in (("cluster", (;)), ("ctmrg", (; env_maxdim = 16)))
-        ψ, diagnostics = apply_gates_full_update(circuit, ψ0; env, maxdim = 2, kwargs...)
+    for env_maxdim in (4, 16)
+        ψ, diagnostics = apply_gates_full_update(circuit, ψ0; maxdim = 2, env_maxdim)
         @test maxvirtualdim(ψ) <= 2
         @test length(diagnostics) == 2 * length(edges(g))
         f = abs2(inner(ψ, ψ_exact; alg = "exact")) / real(norm_sqr(ψ; alg = "exact") * norm_sqr(ψ_exact; alg = "exact"))

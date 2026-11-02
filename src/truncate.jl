@@ -55,7 +55,7 @@ function truncate(alg::Algorithm"ctmrg", tns::TensorNetworkState; env_maxdim::In
         (identity_gate(tns, s, e), [src(e), dst(e)])
             for eg in truncation_edge_groups(graph(tns); edge_color) for e in eg if any(i -> dim(i) > 1, virtualinds(tns, e))
     ]
-    return first(full_update_sequence(gates, tns, alg; env_maxdim, kwargs...))
+    return first(full_update_sequence(gates, tns; env_maxdim, kwargs...))
 end
 
 """
