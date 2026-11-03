@@ -181,16 +181,19 @@ function full_update(
 end
 
 # A converged CTMRG cache of ψ.
-function full_update_cache(ψ; env_maxdim, positions, cache_update_kwargs)
-    return update(CTMRGCache(ψ, env_maxdim; positions); cache_update_kwargs...)
+function full_update_cache(ψ; env_maxdim, positions, projector, cache_update_kwargs)
+    return update(CTMRGCache(ψ, env_maxdim; positions, projector); cache_update_kwargs...)
 end
 
 """
     apply_gates_full_update(circuit, ψ::TensorNetworkState; maxdim, env_maxdim, cutoff = nothing,
-                            normalize_tensors = true, positions, cache_update_kwargs = (; tolerance = 1e-6))
+                            projector = :svd, normalize_tensors = true, positions,
+                            cache_update_kwargs = (; tolerance = 1e-6))
 
 Apply a sequence of one- and two-site gates to `ψ`, two-site gates by `full_update` in the CTMRG
-environment of their bond, with the corners truncated to `env_maxdim`. The CTMRG cache is updated,
+environment of their bond, with the corners truncated to `env_maxdim` by `projector` (see
+`CTMRGCache`; `:eig` gives the matrix product belief propagation fixed point, which is belief
+propagation at `env_maxdim = 1`). The CTMRG cache is updated,
 from its previous state, before any two-site gate on a vertex changed since the last update; so
 gates on disjoint bonds (one colour of an edge colouring) share an environment. `circuit` is as for
 `apply_gates`. The graph must be planar, with an embedding from `positions` (default: the vertex
@@ -207,11 +210,11 @@ end
 # `apply_gates_full_update`.
 function full_update_sequence(
         gates::Vector, ψ::TensorNetworkState;
-        maxdim::Integer, env_maxdim::Integer, cutoff = nothing, normalize_tensors = true,
+        maxdim::Integer, env_maxdim::Integer, cutoff = nothing, projector::Symbol = :svd, normalize_tensors = true,
         positions = default_positions(graph(ψ)), cache_update_kwargs = (; tolerance = 1.0e-6),
     )
     g = graph(ψ)
-    cache = full_update_cache(ψ; env_maxdim, positions, cache_update_kwargs)
+    cache = full_update_cache(ψ; env_maxdim, positions, projector, cache_update_kwargs)
     ψ = network(cache)
     stale = false                 # whether a bond changed dimension, so the cache must be rebuilt
     affected = Set{eltype(vertices(ψ))}()
@@ -228,7 +231,7 @@ function full_update_sequence(
         length(vs) == 2 && has_edge(g, NamedEdge(vs[1] => vs[2])) ||
             error("full update: two-site gates must act on neighbouring vertices; got $vs.")
         if stale
-            cache = full_update_cache(network(cache); env_maxdim, positions, cache_update_kwargs)
+            cache = full_update_cache(network(cache); env_maxdim, positions, projector, cache_update_kwargs)
             stale = false
             empty!(affected)
         elseif any(in(affected), vs)
