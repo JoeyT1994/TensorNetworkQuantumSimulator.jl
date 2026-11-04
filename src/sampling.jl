@@ -1,14 +1,15 @@
-using StatsBase
-
 # Sample vertex v of the cache from its marginal. Returns the configuration (1, …, d), its
 # probability, the trace of the unnormalised marginal and the projector onto the configuration.
+# Graded marginals carry a per-sector parity gauge and are fixed to their positive semidefinite
+# representative first (a no-op on dense data).
 function sample_vertex(cache::AbstractBeliefPropagationCache, v)
     ψv = network(cache)[v]
-    ρ = contract_optimal([incoming_messages(cache, v); ψv; dag(prime(ψv))])
+    ρ = contract_optimal([incoming_messages(cache, v); ψv; unprime_charge_legs(dag(prime(ψv)), ψv)])
+    ρ = parity_message_gauge(ρ)
     ρ_tr = tr(ρ)
     p = collect(real.(diag(array(ρ / ρ_tr))))
     k = StatsBase.sample(eachindex(p), Weights(p))
-    return k, p[k], ρ_tr, adapt_like(ρ, onehot(only(inds(ρ; plev = 0)) => k))
+    return k, p[k], ρ_tr, adapt_like(ρ, projector(scalartype(ρ), only(inds(ρ; plev = 0)) => k))
 end
 
 # Each sampler also returns the state it sampled from (gauged and rescaled, if `gauge_state`), which
@@ -198,7 +199,8 @@ function get_one_sample(
             es = sorted_edges(norm_bmps_cache, pe)
 
             for (k, e) in enumerate(es)
-                setmessage!(norm_bmps_cache, e, Tensor[outgoing_mps[k], prime(dag(outgoing_mps[k]))])
+                bra = unprime_charge_legs(prime(dag(outgoing_mps[k])), outgoing_mps[k])
+                setmessage!(norm_bmps_cache, e, [outgoing_mps[k], bra])
             end
 
             incoming_mps = outgoing_mps
@@ -254,7 +256,7 @@ function certify_sample(
     s = siteinds(ψ)
     qv = sqrt(exp(inv(oftype(logq, length(vertices(ψ)))) * logq))
     for v in vertices(ψ)
-        P = adapt_like(ψproj[v], onehot(only(s[v]) => bitstring[v] + 1))
+        P = adapt_like(ψproj[v], projector(scalartype(ψproj[v]), only(s[v]) => bitstring[v] + 1))
         setindex_preserve!(ψproj, ψproj[v] * P * inv(qv), v)
     end
 

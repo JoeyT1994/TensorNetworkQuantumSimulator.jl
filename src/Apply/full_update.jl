@@ -1,12 +1,12 @@
 using KrylovKit: linsolve
 
 """
-    full_update(o::Tensor, ψ::TensorNetworkState, v⃗; envs, kwargs...)
+    full_update(o, ψ::TensorNetworkState, v⃗; envs, kwargs...)
 
 Full update of two tensors in the presence of environments under the action of a two-site gate. More general than `simple_update` (allows for more accurate non-BP environments), but at a higher computational cost depending on the dimensions of the environment tensors involved.
 """
 function full_update(
-        o::Tensor,
+        o,
         ψ::TensorNetworkState,
         v⃗;
         envs,
@@ -37,7 +37,7 @@ function full_update(
         apply_kwargs...,
     )
     if symmetrize
-        singular_values! = Ref{Tensor}()
+        singular_values! = Ref{Any}(nothing)
         Rᵥ₁, Rᵥ₂, spec = factorize_svd(
             Rᵥ₁ * Rᵥ₂,
             inds(Rᵥ₁);
@@ -49,22 +49,22 @@ function full_update(
     end
     ψᵥ₁ = Qᵥ₁ * Rᵥ₁
     ψᵥ₂ = Qᵥ₂ * Rᵥ₂
-    return Tensor[ψᵥ₁, ψᵥ₂]
+    return [ψᵥ₁, ψᵥ₂]
 end
 
 """Calculate the overlap of the gate acting on the previous p and q versus the new p and q in the presence of environments. This is the cost function that optimise_p_q will minimise"""
 function fidelity(
-        envs::Vector{Tensor},
-        p_cur::Tensor,
-        q_cur::Tensor,
-        p_prev::Tensor,
-        q_prev::Tensor,
-        gate::Tensor,
+        envs::Vector,
+        p_cur,
+        q_cur,
+        p_prev,
+        q_prev,
+        gate,
     )
     p_sind, q_sind = commonind(p_cur, gate), commonind(q_cur, gate)
     p_sind_sim, q_sind_sim = sim(p_sind), sim(q_sind)
     gate_sq =
-        gate * replaceinds(dag(gate), Index[p_sind, q_sind], Index[p_sind_sim, q_sind_sim])
+        gate * replaceinds(dag(gate), [p_sind, q_sind], [p_sind_sim, q_sind_sim])
     term1_tns = vcat(
         [
             p_prev,
@@ -96,13 +96,13 @@ end
 """Do Full Update Sweeping, Optimising the tensors p and q in the presence of the environments envs,
 Specifically this functions find the p_cur and q_cur which optimise envs*gate*p*q*dag(prime(p_cur))*dag(prime(q_cur))"""
 function optimise_p_q(
-        p::Tensor,
-        q::Tensor,
-        envs::Vector{Tensor},
-        o::Tensor;
+        p,
+        q,
+        envs::Vector,
+        o;
         nfullupdatesweeps = 10,
         print_fidelity_loss = false,
-        envisposdef = true,
+        envisposdef = false,
         apply_kwargs...,
     )
     p_cur, q_cur = factorize(

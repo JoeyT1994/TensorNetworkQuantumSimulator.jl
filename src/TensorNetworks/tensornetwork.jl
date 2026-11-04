@@ -4,8 +4,8 @@ using NamedGraphs: NamedGraphs, add_edge!, incident_edges, rem_edges!
 using Adapt
 
 #TODO: Make this show() nicely.
-struct TensorNetwork{V} <: AbstractTensorNetwork{V}
-    tensors::Dictionary{V, Tensor}
+struct TensorNetwork{V, T} <: AbstractTensorNetwork{V}
+    tensors::Dictionary{V, T}
     graph::NamedGraph{V}
 end
 
@@ -29,7 +29,7 @@ end
 
 Base.copy(tn::TensorNetwork) = TensorNetwork(copy(tensors(tn)), copy(graph(tn)))
 
-function TensorNetwork(tensors::Vector{<:Tensor})
+function TensorNetwork(tensors::Vector)
     return TensorNetwork(Dictionary([i for i in 1:length(tensors)], tensors))
 end
 
@@ -39,7 +39,7 @@ function NamedGraphs.rem_vertex!(tn::TensorNetwork, v)
     return tn
 end
 
-function add_tensor!(tn::TensorNetwork, tensor::Tensor, v)
+function add_tensor!(tn::TensorNetwork, tensor, v)
     vs = collect(vertices(tn))
     g = graph(tn)
     if !has_vertex(g, v)
@@ -58,31 +58,31 @@ function add_tensor!(tn::TensorNetwork, tensor::Tensor, v)
 end
 
 function bp_factors(tn::TensorNetwork, vertex)
-    return Tensor[tn[vertex]]
+    return [tn[vertex]]
 end
 
 function bp_factors(tn::TensorNetwork, vertices::Vector)
-    return Tensor[tn[v] for v in vertices]
+    return [tn[v] for v in vertices]
 end
 
 function random_tensornetwork(eltype, g::AbstractGraph; bond_dimension::Integer = 1)
     vs = collect(vertices(g))
     l = edge_indices(g, bond_dimension)
-    tensors = Dictionary{vertextype(g), Tensor}()
+    tensors = Dictionary{vertextype(g), Any}()
     for v in vs
         is = [l[NamedEdge(v => vn)] for vn in neighbors(g, v)]
         set!(tensors, v, random_tensor(eltype, is))
     end
+    tensors = Dictionary(vs, narrow_tensors(collect(tensors)))
     return TensorNetwork(tensors, g)
 end
 
 random_tensornetwork(g::AbstractGraph; kwargs...) = random_tensornetwork(Float64, g; kwargs...)
 
 function siteinds(tn::TensorNetwork)
-    s = Dictionary{vertextype(tn), Vector{Index}}()
+    s = Dictionary{vertextype(tn), Vector}()
     for v in vertices(tn)
-        is = uniqueinds(tn, v)
-        isempty(is) ? set!(s, v, Index[]) : set!(s, v, is)
+        set!(s, v, uniqueinds(tn, v))
     end
     return s
 end

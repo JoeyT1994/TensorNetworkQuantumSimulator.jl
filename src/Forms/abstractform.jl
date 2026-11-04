@@ -4,11 +4,17 @@
 # `bra` is optional: `QuadraticForm` derives its bra lazily and does not provide one.
 abstract type AbstractForm{V} <: AbstractTensorNetwork{V} end
 
+ket(form::AbstractForm) = not_implemented()
+operator(form::AbstractForm) = not_implemented()
+bra_tensor(form::AbstractForm, v) = not_implemented()
+bra_virtualinds(form::AbstractForm, edge) = not_implemented()
+
 #Forward onto the ket
 for f in [
         :(graph),
         :datatype,
-        :scalartype,
+        :(scalartype),
+        :tensortype,
         :(NamedGraphs.leafless_edge_induced_subgraphs),
     ]
     @eval begin
@@ -19,7 +25,7 @@ for f in [
 end
 
 function virtualinds(form::AbstractForm, edge::NamedEdge)
-    return Index[virtualinds(ket(form), edge); virtualinds(operator(form), edge); bra_virtualinds(form, edge)]
+    return vcat(virtualinds(ket(form), edge), virtualinds(operator(form), edge), bra_virtualinds(form, edge))
 end
 
 function bp_factors(form::AbstractForm, verts::Vector)

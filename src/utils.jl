@@ -15,24 +15,66 @@ function is_ring_graph(g::AbstractGraph)
     return is_line_graph(g_mod)
 end
 
-# The square root and pseudo-inverse square root of a Hermitian two-leg tensor, with eigenvalues
-# at or below `cutoff` in magnitude dropped.
-function pseudo_sqrt_inv_sqrt(M::Tensor; cutoff = 10 * eps(real(scalartype(M))))
+#Fermionic messages carry a per-message parity gauge (odd-sector sign); square roots
+#need the PSD representative. Identity for non-fermionic backends; see psd_gauge in
+#ftensor.jl.
+parity_message_gauge(M) = isgraded(M) ? ITensorBaseBackend.psd_gauge(M) : M
+
+function _psd_root_eigenvalue(x, cutoff, inverse::Bool)
+    λ = real(x)
+    λ > cutoff || return zero(x)
+    root = sqrt(λ)
+    return oftype(x, inverse ? inv(root) : root)
+end
+
+function pseudo_sqrt_inv_sqrt(M; cutoff::Real = defaulttol(M))
     @assert length(inds(M)) == 2
-    l, r = inds(M)
-    D, U = safe_eigen(M, l, r; ishermitian = true)
-    Ul = replaceinds(U, [r, commonind(D, U)], [l, noncommonind(D, U)])
-    root(f) = Ul * map_diag(x -> abs(x) <= cutoff ? zero(x) : f(x), D) * dag(U)
-    return root(sqrt), root(inv ∘ sqrt)
+    cutoff >= zero(cutoff) || throw(ArgumentError("PSD pseudoinverse cutoff must be nonnegative"))
+    M = parity_message_gauge(M)
+    Q, D, Qdag = eigendecomp(M, inds(M)[1], inds(M)[2]; ishermitian = true)
+    #After the per-sector gauge above, the environments are positive semidefinite in
+    #exact arithmetic (a structural NSD fermionic block has already been sign-flipped,
+    #not discarded). Eigensolvers can nevertheless return small negative modes, which
+    #must be projected out rather than passed to sqrt, especially when cutoff == 0.
+    #Keep the result in the eigenvalue scalar type for complex CUDA storage.
+    D_sqrt = map_diag(x -> _psd_root_eigenvalue(x, cutoff, false), D)
+    D_inv_sqrt = map_diag(x -> _psd_root_eigenvalue(x, cutoff, true), D)
+    M_sqrt = Q * D_sqrt * Qdag
+    M_inv_sqrt = Q * D_inv_sqrt * Qdag
+    return M_sqrt, M_inv_sqrt
+end
+
+#TODO: Make this work for non-hermitian A
+function eigendecomp(A, linds, rinds; ishermitian = false, kwargs...)
+    @assert ishermitian
+    D, U = eigen(A, linds, rinds; ishermitian, kwargs...)
+    ul, ur = noncommonind(D, U), commonind(D, U)
+    # Array literals, not `vcat`: an Index is itself a range, so `vcat(i, j)` would splice their elements.
+    Ul = replaceinds(U, Index[rinds, ur], Index[linds, ul])
+    return Ul, D, dag(U)
 end
 
 # Adapt `t` to the storage datatype (eltype + device) of `ref`.
 adapt_like(ref, t) = adapt(datatype(ref))(t)
 
-function identity_tensor(eltype, row_inds::Vector{<:Index}, col_inds::Vector{<:Index})
-    c_row, c_col = combiner(row_inds), combiner(col_inds)
-    t = dense(delta(eltype, combinedind(c_row), combinedind(c_col)))
-    return (t * c_row) * c_col
+#Collect tensors narrowed to their backend type with the type PARAMETERS stripped:
+#narrowing to a fully concrete eltype (what a plain `identity.(...)` does on
+#rank-uniform networks, e.g. a 2×2 grid or a periodic lattice) freezes the tensor
+#Dictionary's rank and rejects later rank-changing setindex! (sampling projections,
+#charge legs). Same convention as `tensortype` and the message vectors.
+narrow_tensors(ts) = collect(unspecify_type_parameters(mapreduce(typeof, typejoin, ts)), ts)
+
+#Dangling "Charge" legs (charged graded states and projectors) pair bra-ket directly,
+#like site legs with no operator: unprime them on a bra built as dag(prime(ket)).
+function unprime_charge_legs(bra, ket)
+    cinds = filter(i -> occursin("Charge", tags(i)), collect(inds(ket)))
+    return isempty(cinds) ? bra : replaceinds(bra, prime.(cinds), cinds)
+end
+
+function identity_tensor(eltype, row_inds::Vector, col_inds::Vector)
+    c_row, c_col = combiner(row_inds),combiner(col_inds)
+    t = delta(eltype, combinedind(c_row), combinedind(c_col))
+    return (t * c_row)*c_col
 end
 
 # The cache each algorithm works on (or is built from a TensorNetworkState), and the
@@ -64,6 +106,27 @@ function algorithm_check(tns::Union{AbstractBeliefPropagationCache, TensorNetwor
     f in ALGORITHM_UNSUPPORTED[alg] && error("The $(repr(alg)) algorithm does not support $f yet.")
     return nothing
 end
+
+#Steiner region for a set of vertices and its incoming BP messages (shared by expect
+#and reduced_density_matrix).
+function bp_region(cache::BeliefPropagationCache, vs::Vector)
+    steiner_vs = length(vs) == 1 ? vs : collect(vertices(steiner_tree(network(cache), vs)))
+    return steiner_vs, incoming_messages(cache, steiner_vs)
+end
+
+#Contraction of a region closure [norm factors; incoming messages] with an optimal
+#sequence. TODO: for large regions (≳100 tensors) the "optimal" search may become the
+#bottleneck and a custom sequence is warranted.
+function contract_bp_region(cache::BeliefPropagationCache, steiner_vs, incoming_ms; op_strings, joint_op = nothing)
+    tensors = norm_factors(network(cache), steiner_vs; op_strings, joint_op)
+    append!(tensors, incoming_ms)
+    seq = contraction_sequence(tensors; alg = "optimal")
+    return contract(tensors; sequence = seq)
+end
+
+#Default sequence-search settings for exact contractions (shared by expect, norm_sqr,
+#inner, rdm and contract).
+default_contraction_sequence_kwargs() = (; alg = "omeinsum", optimizer = GreedyMethod())
 
 default_alg(bp_cache::BeliefPropagationCache) = "bp"
 default_alg(bmps_cache::BoundaryMPSCache) = "boundarymps"
@@ -108,19 +171,6 @@ function converged_cache(
     )
     cache = BoundaryMPSCache(network, env_maxdim; partition_by, gauge_state)
     return update(cache; cache_update_kwargs...)
-end
-
-"""
-    safe_eigen(m::Tensor, args...; kwargs...)
-
-The eigendecomposition of `m` (the backend's `eigen`) in at least double precision, for numerical
-stability. Lower-precision data is promoted on the host and the factors are returned in `m`'s storage.
-"""
-function safe_eigen(m::Tensor, args...; kwargs...)
-    T = promote_type(eltype(m), Float64)
-    T == eltype(m) && return eigen(m, args...; kwargs...)
-    D, U = eigen(adapt(Vector{T}, m), args...; kwargs...)
-    return adapt_like(m, D), adapt_like(m, U)
 end
 
 collect_vertices(e::NamedEdge, g::NamedGraph) = collect_vertices([src(e), dst(e)], g)

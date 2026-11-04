@@ -1,6 +1,11 @@
 # The square root of a Hermitian message and its inverse, its spectrum shifted by `regularization`.
-function regularized_roots(m::Tensor, regularization)
-    D, U = safe_eigen(m; ishermitian = true, cutoff = nothing)
+# Graded messages carry a per-sector parity gauge, fixed to the positive semidefinite representative
+# first. Graded orientations (no-ops on dense data): `eigen` labels D (lk′, lk) with the slot
+# orientations of U from the left, and the U·D·U† sandwich pairs U's bond with D's first slot, so D's
+# labels are swapped.
+function regularized_roots(m, regularization)
+    D, U = eigen(parity_message_gauge(m); ishermitian = true, cutoff = nothing)
+    D = replaceinds(D, collect(inds(D)), reverse(collect(inds(D))))
     D = map_diag(x -> x + regularization, D)
     root(f) = U * map_diag(f, D) * prime(dag(U))
     return root(sqrt), root(inv ∘ sqrt)
@@ -19,17 +24,19 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         rootX, inv_rootX = regularized_roots(message(bp_cache, e), regularization)
         rootY, inv_rootY = regularized_roots(message(bp_cache, reverse(e)), regularization)
 
-        ψvsrc, ψvdst = noprime(ψvsrc * inv_rootX), noprime(ψvdst * inv_rootY)
+        ψvsrc, ψvdst = noprime(ψvsrc * dag(inv_rootX)), noprime(ψvdst * dag(inv_rootY))
 
         Ce = rootX * replaceinds(rootY, edge_ind, edge_ind_sim)
 
         U, S, V = svd(Ce, edge_ind; kwargs...)
 
-        new_edge_ind = Index[new_index(dim(commoninds(S, U)); tags = tags(first(edge_ind)))]
+        #a fresh index with the SAME space as the SVD bond (graded spaces must match for the
+        #replaceinds below); sim keeps the space and mints a new identity
+        new_edge_ind = [sim(only(commoninds(S, U)))]
 
-        ψvsrc = replaceinds(ψvsrc * U, commoninds(S, U), new_edge_ind)
+        ψvsrc = replaceinds(ψvsrc * dag(U), commoninds(S, U), new_edge_ind)
         ψvdst = replaceinds(ψvdst, edge_ind, edge_ind_sim)
-        ψvdst = replaceinds(ψvdst * V, commoninds(V, S), new_edge_ind)
+        ψvdst = replaceinds(ψvdst * dag(V), commoninds(V, S), new_edge_ind)
 
 
         S = replaceinds(
@@ -39,7 +46,7 @@ function symmetric_gauge!(bp_cache::BeliefPropagationCache; regularization = 10 
         )
 
         sqrtS = map_diag(sqrt, S)
-        ψvsrc = noprime(ψvsrc * sqrtS)
+        ψvsrc = noprime(ψvsrc * dag(sqrtS))
         ψvdst = noprime(ψvdst * sqrtS)
         setindex_preserve!(bp_cache, ψvsrc, vsrc)
         setindex_preserve!(bp_cache, ψvdst, vdst)

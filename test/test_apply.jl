@@ -1,7 +1,7 @@
 @eval module $(gensym())
 using Random
 using TensorNetworkQuantumSimulator
-using TensorNetworkQuantumSimulator: GATES, OPERATORS, state, toitensor
+using TensorNetworkQuantumSimulator: GATES, OPERATORS, state, totensor
 using TensorNetworkQuantumSimulator.TensorInterface: apply, array
 using Test: @testset, @test, @test_throws
 
@@ -12,12 +12,13 @@ using Test: @testset, @test, @test_throws
     # the first site is the most significant: CNOT, controlled on s1, flips s2
     ψ = apply(op("CNOT", s1, s2), state("1", s1) * state("0", s2))
     @test array(ψ, s1, s2) ≈ array(state("1", s1) * state("1", s2), s1, s2)
-    # parameters are forwarded unchanged
+    # parameters are forwarded unchanged (the fermionic gates act on fermionic sites)
     for (name, spec) in GATES
+        startswith(name, "F_") && continue
         nsites = haskey(OPERATORS[(1, 2)], spec.opname) ? 1 : 2
         params = (0.37, -0.81, 0.59, 0.23)[1:length(spec.paramkeys)]
         gate = isempty(params) ? (name, collect(1:nsites)) : (name, collect(1:nsites), length(params) == 1 ? only(params) : params)
-        @test first(toitensor(gate, g, s)) ≈ op(spec.opname, [s1, s2][1:nsites]...; NamedTuple{spec.paramkeys}(params)...)
+        @test first(totensor(gate, g, s)) ≈ op(spec.opname, [s1, s2][1:nsites]...; NamedTuple{spec.paramkeys}(params)...)
     end
 end
 
@@ -120,5 +121,6 @@ end
     ψ_check, _ = apply_gates([("Rxx", [v, (1, 2)], 0.3)], ψ_check; apply_kwargs)
     @test ψ_check isa TensorNetworkState
 end
+
 
 end

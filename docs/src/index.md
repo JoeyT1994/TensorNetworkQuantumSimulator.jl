@@ -4,7 +4,7 @@ CurrentModule = TensorNetworkQuantumSimulator
 
 # TensorNetworkQuantumSimulator.jl
 
-A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks of near-arbitrary geometry. Built on top of [ITensors.jl](https://github.com/ITensor/ITensors.jl) and [NamedGraphs.jl](https://github.com/ITensor/NamedGraphs.jl).
+A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks of near-arbitrary geometry. Built on [ITensorBase.jl](https://github.com/ITensor/ITensorBase.jl) (dense and [GradedArrays.jl](https://github.com/ITensor/GradedArrays.jl) symmetric/fermionic tensors) and [NamedGraphs.jl](https://github.com/ITensor/NamedGraphs.jl).
 
 ![Overview of TensorNetworkQuantumSimulator.jl](mainfig.svg)
 
@@ -16,6 +16,7 @@ A Julia package for simulating quantum circuits, quantum dynamics and equilibriu
 - **Expectation Values & Partition Functions**: Belief propagation, boundary MPS, corner transfer matrix (CTMRG), loop series expansion, and exact contraction backends for observables, norms, overlaps, and classical partition functions.
 - **Entanglement Entropy**: Von Neumann and Rényi entropies from BP messages (per bond) or from reduced density matrices (per subsystem).
 - **Sampling**: Sample from planar tensor network states using boundary MPS, with the MPS bond dimension controlling sample quality. Options to compute the importance-sampling ratio ``p(x)/q(x)`` for direct sample quality certification.
+- **Symmetries and Fermions**: Abelian symmetries (`Z2`, `U1`) and fermionic sites (`fZ2`, `fU1`, `fU1xU1`), enforced structurally in block-sparse tensors.
 - **Operators**: Operator evolution in the Heisenberg picture and density matrix representation.
 - **GPU Support**: GPU acceleration via CUDA.jl or Metal.jl. CUDA.jl is highly recommended for large bond dimension simulations, where it can provide dramatic speedups.
 - **Arbitrary Precision**: `Float32`, `Float64`, `ComplexF32`, `ComplexF64`, and other numeric types.

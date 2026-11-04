@@ -2,11 +2,11 @@ using OMEinsumContractionOrders: OMEinsumContractionOrders, optimize_code, EinCo
 
 # The exact "optimal" contraction order (Pfeifer 2014 netcon), from OMEinsumContractionOrders'
 # `ExhaustiveSearch` optimizer.
-function contraction_sequence(::Algorithm"optimal", tensors::Vector{<:Tensor})
+function contraction_sequence(::Algorithm"optimal", tensors::Vector)
     return contraction_sequence(Algorithm("omeinsum"), tensors; optimizer = ExhaustiveSearch())
 end
 
-function contraction_sequence(::Algorithm"omeinsum", tensors::Vector{<:Tensor}; optimizer = TreeSA())
+function contraction_sequence(::Algorithm"omeinsum", tensors::Vector; optimizer = TreeSA())
     code, size_dict = to_eincode(tensors)
     optcode = optimize_code(code, size_dict, optimizer)
     seq = to_contraction_sequence(optcode)
@@ -14,7 +14,7 @@ function contraction_sequence(::Algorithm"omeinsum", tensors::Vector{<:Tensor}; 
     return seq isa Integer ? [seq] : seq
 end
 
-function contraction_sequence(tensors::Vector{<:Tensor}; alg = "optimal", kwargs...)
+function contraction_sequence(tensors::Vector; alg = "optimal", kwargs...)
     return contraction_sequence(Algorithm(alg), tensors; kwargs...)
 end
 
@@ -22,9 +22,12 @@ end
 contract_optimal(tensors::Vector{<:Tensor}) = contract(tensors; sequence = contraction_sequence(tensors))
 
 #OMEinsumContractionOrders helpers
-function to_eincode(tensors::Vector{<:Tensor})
-    ixs = map(t -> collect(inds(t)), tensors)
-    LT = eltype(eltype(ixs))
+function to_eincode(tensors::Vector)
+    #the omeinsum machinery needs a concrete, consistent label type, but index vectors are
+    #often abstractly typed — compute the concrete index type from the elements themselves
+    all_inds = [i for t in tensors for i in inds(t)]
+    LT = isempty(all_inds) ? Any : mapreduce(typeof, promote_type, all_inds)
+    ixs = Vector{LT}[collect(LT, inds(t)) for t in tensors]
     #`reduce` over a single tensor returns the tensor itself, not its indices; a one-tensor
     #network is trivial and its open indices are all of that tensor's indices.
     iy = length(tensors) == 1 ? collect(LT, inds(only(tensors))) : collect(LT, reduce(noncommoninds, tensors))

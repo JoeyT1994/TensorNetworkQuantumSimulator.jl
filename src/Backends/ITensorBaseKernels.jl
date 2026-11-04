@@ -7,35 +7,34 @@
 # compile once per element type rather than once per element type and tensor rank.
 
 # ψ's data, flat in the order of `inds(ψ)` (aliasing its storage), and its dimensions; or nothing.
-function fused_data(ψ::ITensor)
-    ITensors.hasqns(ψ) && return nothing
-    ITensors.storage(ψ) isa NDTensors.Dense || return nothing
-    a = ITensors.data(ψ)
-    a isa StridedVector || return nothing
-    return a, collect(Int, ITensors.dims(ψ))
+function fused_data(ψ::AbstractTensor)
+    isgraded(ψ) && return nothing
+    A = IB.unnamed(ψ)
+    A isa StridedArray || return nothing
+    return vec(A), collect(Int, size(A))
 end
 
 # The sizes (pre, D, post) of the legs before, at and after position k.
 split_dims(dims, k) = (prod(dims[1:(k - 1)]; init = 1), dims[k], prod(dims[(k + 1):end]; init = 1))
 
 # The legs (x, x′) of a dense two-leg tensor on x and x′ = prime(x), or nothing.
-function primed_pair(t::ITensor)
-    (ndims(t) == 2 && !ITensors.hasqns(t)) || return nothing
-    i1, i2 = ITensors.inds(t)
-    x, xp = ITensors.plev(i1) == 0 ? (i1, i2) : (i2, i1)
-    (ITensors.plev(x) == 0 && xp == ITensors.prime(x)) || return nothing
+function primed_pair(t::AbstractTensor)
+    (ndims(t) == 2 && !isgraded(t)) || return nothing
+    i1, i2 = inds(t)
+    x, xp = IB.plev(i1) == 0 ? (i1, i2) : (i2, i1)
+    (IB.plev(x) == 0 && xp == TI.prime(x)) || return nothing
     return x, xp
 end
 
 # For a doubled message on bond `b` of ψ (legs (b, b′)), the position of `b` among ψ's legs and the
 # message matrix M[b, b′]; nothing otherwise.
-function fused_message_slot(m::ITensor, ψinds::Vector{<:Index})
+function fused_message_slot(m::AbstractTensor, ψinds::Vector{<:Index})
     legs = primed_pair(m)
     isnothing(legs) && return nothing
     b, bp = legs
     k = findfirst(==(b), ψinds)
     k === nothing && return nothing
-    M = ITensors.array(m, b, bp)
+    M = IB.unnamed(align(m, (b, bp)))
     M isa StridedArray || return nothing
     return k, M
 end
@@ -161,7 +160,7 @@ function fused_slots(ψinds::Vector{<:Index}, incoming::Vector)
     slots = Tuple{Int, StridedArray}[]
     covered = falses(length(ψinds))
     for m in incoming
-        m isa ITensor || return nothing
+        m isa AbstractTensor || return nothing
         sl = fused_message_slot(m, ψinds)
         sl === nothing && return nothing
         covered[sl[1]] && return nothing
@@ -173,16 +172,16 @@ end
 
 # ψ's flat data and dimensions, its legs, and the slots and covered legs of `incoming`; nothing if
 # either is unsupported.
-function fused_setup(ψ::ITensor, incoming::Vector)
+function fused_setup(ψ::AbstractTensor, incoming::Vector)
     data = fused_data(ψ)
     data === nothing && return nothing
-    ψinds = collect(Index, ITensors.inds(ψ))
+    ψinds = collect(Index, inds(ψ))
     sc = fused_slots(ψinds, incoming)
     sc === nothing && return nothing
     return data..., ψinds, sc...
 end
 
-function TI.fused_norm_message(ψ::ITensor, sinds, incoming::Vector)
+function TI.fused_norm_message(ψ::AbstractTensor, sinds, incoming::Vector)
     setup = fused_setup(ψ, incoming)
     isnothing(setup) && return nothing
     a, dims, ψinds, slots, covered = setup
@@ -199,22 +198,22 @@ function TI.fused_norm_message(ψ::ITensor, sinds, incoming::Vector)
     end
     R = close_bond!(similar(a, eltype(Tm), D, D), reshape(Ψ, pre, D, post), reshape(Tm, pre, D, post))
     bout = ψinds[kout]
-    return ITensors.itensor(R, ITensors.prime(bout), bout)
+    return ITensor(R, (TI.prime(bout), bout))
 end
 
 # Single-vertex closure ψ·Πm·(ops)·ψ̄ → scalar; `ops` are (s′, s) operator tensors on site legs.
-function TI.fused_norm_scalar(ψ::ITensor, sinds, incoming::Vector, ops::Vector)
+function TI.fused_norm_scalar(ψ::AbstractTensor, sinds, incoming::Vector, ops::Vector)
     setup = fused_setup(ψ, incoming)
     isnothing(setup) && return nothing
     a, dims, ψinds, slots, covered = setup
     for o in ops
-        legs = o isa ITensor ? primed_pair(o) : nothing
+        legs = o isa AbstractTensor ? primed_pair(o) : nothing
         isnothing(legs) && return nothing
         s, sp = legs
         k = findfirst(==(s), ψinds)
         (s in sinds && !isnothing(k) && !covered[k]) || return nothing
         covered[k] = true
-        push!(slots, (k, ITensors.array(o, s, sp)))   # M[s, s′] = O[s′, s]
+        push!(slots, (k, IB.unnamed(align(o, (s, sp)))))   # M[s, s′] = O[s′, s]
     end
     all(k -> covered[k] || ψinds[k] in sinds, eachindex(ψinds)) || return nothing
     Tm, Ψ = a isa Array ? (fused_chain(a, dims, slots), a) : rotated_chain(a, dims, slots, nothing)

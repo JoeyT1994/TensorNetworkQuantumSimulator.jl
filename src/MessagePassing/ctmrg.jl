@@ -11,7 +11,8 @@ environment of a vertex or edge (`incoming_messages`) is its messages together w
 around it. Call `update` on it before computing free energies or expectation values.
 
 # Arguments
-- `network`: A `TensorNetwork`, a `TensorNetworkState` (its norm network) or a form, on a planar graph.
+- `network`: A `TensorNetwork`, a `TensorNetworkState` (its norm network) or a form, on a planar graph;
+  dense or graded (symmetric or fermionic).
 - `env_maxdim::Integer`: The bond dimension each cut is truncated to.
 
 # Keyword Arguments
@@ -21,6 +22,7 @@ around it. Call `update` on it before computing free energies or expectation val
   truncated SVD) of the two enlarged corners on either side of a cut. `:eig` (experimental) truncates
   all the cuts of a face together, keeping the dominant eigenvalues of the ring of its enlarged
   corners; it needs diagonal corners, so it is not available on every planar graph (e.g. kagome).
+  On graded (symmetric or fermionic) networks every face falls back to the SVD projector.
 
 # Returns
 - A `CTMRGCache`, whose update rules are fixed and certified exact at lossless `env_maxdim` (see `ctmrg_rules`).
@@ -65,9 +67,11 @@ function CTMRGCache(
     bonds = Dict{Tuple{V, V}, Vector{Index}}()
     for e in edges(g)
         u, v = src(e), dst(e)
-        bonds[(u, v)] = bonds[(v, u)] = shared_legs(network, u, v)
+        bonds[(u, v)], bonds[(v, u)] = shared_legs(network, u, v), shared_legs(network, v, u)
     end
-    sides = Dict{Tuple{V, V}, Index}(I => new_index(1; tags = "Link,ctm") for I in rules.interfaces)
+    # graded like the network's legs: one trivial sector
+    ref = first(bonds[first(rules.interfaces)])
+    sides = Dict{Tuple{V, V}, Index}(I => new_index(ref, 1; tags = "Link,ctm") for I in rules.interfaces)
     cache = CTMRGCache(
         network, emb, rules, Int(env_maxdim), projector,
         bonds, sides, Dictionary{NamedEdge, Tensor}(), Dict{Tuple{V, Int}, Tensor}(),
@@ -84,27 +88,38 @@ function set_block!(cache::CTMRGCache, (kind, key), t)
     return cache
 end
 
+# The legs u shares with v, as u's tensors carry them (graded legs have an orientation, which
+# index equality ignores).
 function shared_legs(network, u, v)
     legs(x) = unique(Iterators.flatten(inds(t) for t in bp_factors(network, x)))
     lv = legs(v)
     return Index[i for i in legs(u) if i in lv]
 end
 
-# Every block starts as a tensor of ones on its legs: the bonds it cuts and its interfaces.
+# The leg of interface I as a block on x's side carries it: P_A's leg on p's side (I = (p, q)), its
+# dual on q's.
+side_leg(cache::CTMRGCache, I, x) = x == first(I) ? cache.sides[I] : dag(cache.sides[I])
+
+# Every block starts as a tensor of ones on its legs (the bonds it cuts and its interfaces); on graded
+# legs, where ones are not symmetric, as a random symmetric tensor (seeded, so every run is the same).
 function initialize_blocks!(cache::CTMRGCache)
     emb = cache.embedding
     ref = first(bp_factors(network(cache), first(vertices(graph(cache)))))
-    ones_on(legs) = adapt_like(ref, from_array(ones(scalartype(ref), dim.(legs)...), legs))
+    rng = Xoshiro(2)
+    function ones_on(legs)
+        any(isgraded, legs) && return adapt_like(ref, random_tensor(rng, scalartype(ref), legs))
+        return adapt_like(ref, from_array(ones(scalartype(ref), dim.(legs)...), legs))
+    end
     for (u, v) in darts(emb)
         legs = copy(cache.bonds[(u, v)])
         for h in (face_of_dart(emb, u, v), face_of_dart(emb, v, u))
-            isinner(h) && push!(legs, cache.sides[interface_dart(emb, h, u, other_neighbor(emb, h, u, v))])
+            isinner(h) && push!(legs, side_leg(cache, interface_dart(emb, h, u, other_neighbor(emb, h, u, v)), u))
         end
         set!(cache.messages, NamedEdge(u => v), ones_on(legs))
     end
     for (p, f) in corner_keys(emb)
         w = face_walk(emb, f, p)
-        cache.corners[(p, f)] = ones_on([cache.sides[interface_dart(emb, f, w[end], p)], cache.sides[interface_dart(emb, f, p, w[2])]])
+        cache.corners[(p, f)] = ones_on([side_leg(cache, interface_dart(emb, f, w[end], p), p), side_leg(cache, interface_dart(emb, f, p, w[2]), p)])
     end
     return cache
 end
@@ -156,17 +171,17 @@ end
 # The relative cutoff regularising the pseudo-inverses some corner updates use.
 const PINV_RTOL = 1.0e-3
 
-# The pseudo-inverse N of a two-leg connector M, so that M N M = M (bilinearly). Singular values
-# below `rtol` (relative) are dropped.
+# The pseudo-inverse N of a two-leg connector M, so that M N M = M (bilinearly): the map adjoint of
+# U S⁻¹ V, for M = U S V. Singular values below `rtol` (relative) are dropped.
 function pseudo_inverse(M, l1, l2, rtol)
     U, S, V = svd(M, [l1])
     cut = rtol * maximum(abs, array(S))
-    return conj(U * map_diag(s -> abs(s) > cut ? inv(s) : zero(s), S) * V)
+    return dag(U * map_diag(s -> abs(s) > cut ? inv(s) : zero(s), S) * V, [l1])
 end
 
 # B with a new leg of dimension one, and that leg.
 function with_trivial_leg(B, tags)
-    c = new_index(1; tags)
+    c = new_index(collect(inds(B)), 1; tags)
     return B * adapt_like(B, onehot(scalartype(B), c => 1)), c
 end
 
@@ -215,11 +230,14 @@ function projector_pair(left, right, ins, maxdim)
     return PA, replaceind(PB, only(uniqueinds(PB, ins)), dag(w)), w
 end
 
-# A random isometry for the first pass: lossless at lossless env_maxdim, so that pass is already exact.
+# A random isometry for the first pass: lossless at lossless env_maxdim, so that pass is already
+# exact. It is the left factor of a random square map on `ins` (graded: block diagonal over the
+# sectors `ins` fuse to, so every sector is kept), truncated to env_maxdim. `ins` are the legs as
+# P_A carries them.
 function random_projector(cache::CTMRGCache, ins, rng)
-    k = new_index(min(cache.env_maxdim, dim(ins)))
     ref = first(cache.messages)
-    Q, _ = qr(adapt_like(ref, random_tensor(rng, real(scalartype(ref)), [ins; k])), ins)
+    R = adapt_like(ref, random_tensor(rng, real(scalartype(ref)), [ins; dag(sim(ins))]))
+    Q, _ = truncated_svd(R, ins; trunc = truncation_strategy(; maxdim = cache.env_maxdim))
     return Q, dag(Q, ins), only(uniqueinds(Q, ins))
 end
 
@@ -231,10 +249,12 @@ function set_projectors!(cache::CTMRGCache, projectors)
     return cache
 end
 
-# The legs of interface I: its bonds, and the leg of the interface its ray continues into.
+# The legs of interface I = (p, q) as P_A carries them, i.e. as the blocks on q's side do: its bonds,
+# and the leg of the interface J its ray continues into (whose P_A is on p's side too).
 function interface_legs(cache::CTMRGCache, I, side_of)
     J = cache.rules.next[I]
-    return isnothing(J) ? cache.bonds[I] : Index[cache.bonds[I]; side_of(J)]
+    bonds = cache.bonds[reverse(I)]
+    return isnothing(J) ? bonds : Index[bonds; [dag(side_of(J))]]
 end
 
 function random_projectors!(cache::CTMRGCache)
@@ -306,6 +326,8 @@ function eig_projectors(cache::CTMRGCache, f, ins_of, memo)
         return evaluate_recipe(cache, [Qr; (:enlarged, (w[k], f)); Ql]; memo)
     end
     all(k -> issetequal(inds(K[k]), [before(k); ins[k]]), 1:n) || return nothing
+    # the dense eigenbases would mix sectors: graded faces are left to the SVD projector
+    any(isgraded, K) && return nothing
     # the ring's eigenproblem is small and runs on the host
     mats = [Array(reshape(array(K[k], before(k)..., ins[k]...), dim(before(k)), dim(ins[k]))) for k in 1:n]
     # The ring is a product of n blocks, so its eigenvalues are only known to about N ε ∏‖K‖
@@ -316,7 +338,7 @@ function eig_projectors(cache::CTMRGCache, f, ins_of, memo)
     for k in 1:n
         function basis(X, tags)
             c = new_index(size(X, 2); tags)
-            return from_array(reshape(X, dim.(ins[k])..., size(X, 2)), [ins[k]; c])
+            return from_array(reshape(X, dim.(ins[k])..., size(X, 2)), [ins[k]; [c]])
         end
         V, W = basis(bases[1][k], "Link,right"), basis(bases[2][k], "Link,left")
         projectors[I[k]] = projector_pair([adapt_like(K[k], W)], [adapt_like(K[k], V)], ins[k], cache.env_maxdim)
@@ -573,13 +595,25 @@ function region_recipe(cache::CTMRGCache, region)
 end
 
 # The region's sites, with operators from `op_strings`, contracted against its environment. The
-# closed region's recipe orders the contraction through enlarged corners.
-function contract_region(cache::CTMRGCache, region, op_strings::Function)
-    site = v -> norm_factors(network(cache), [v]; op_strings)
-    return evaluate_recipe(cache, region_recipe(cache, region); site)
+# closed region's recipe orders the contraction through enlarged corners. A joint operator
+# `(name, vertices)` keeps the site legs of its vertices primed through the recipe (inside their
+# enlarged corners) and bridges them with one operator tensor at the end.
+function contract_region(cache::CTMRGCache, region, op_strings::Function; joint_op = nothing)
+    tn = network(cache)
+    isnothing(joint_op) && return evaluate_recipe(cache, region_recipe(cache, region); site = v -> norm_factors(tn, [v]; op_strings))
+    jverts = last(joint_op)
+    site = v -> norm_factors(tn, [v]; op_strings = w -> w ∈ jverts ? "ρ" : op_strings(w))
+    ts = recipe_tensors(cache, region_recipe(cache, region); site)
+    jinds = [only(siteinds(tn, v)) for v in jverts]
+    push!(ts, adapt_like(tn[first(jverts)], op(first(joint_op), jinds...)))
+    return contract_blocks(cache, ts)
 end
 
-region_scalar(cache::CTMRGCache, region, op_strings::Function) = scalar(contract_region(cache, region, op_strings))
+function region_scalar(cache::CTMRGCache, region, op_strings::Function; joint_op = nothing)
+    isnothing(joint_op) || issubset(last(joint_op), region) ||
+        error("alg = \"ctmrg\": the joint operator's vertices $(last(joint_op)) must lie in the region $region.")
+    return scalar(contract_region(cache, region, op_strings; joint_op))
+end
 
 # Messages and factors as for any cache, and the corners and projectors with them.
 function Adapt.adapt_structure(to, cache::CTMRGCache)

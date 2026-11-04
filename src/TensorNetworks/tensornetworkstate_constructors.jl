@@ -19,12 +19,13 @@ first half being the "ket" indices and the second half the "bra" indices; index 
 index `n/2 + i`.
 """
 function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2))
+    isgraded(first(Iterators.flatten(s))) && return graded_identity_tensornetworkstate(eltype, g, s)
     links = edge_indices(g, 1; tags = e -> "e$(src(e))_$(dst(e))")
-    ts = Dictionary{vertextype(g), Tensor}()
+    ts = Dictionary{vertextype(g), Any}()
     for v in vertices(g)
         es = incident_edges(g, v; dir = :in)
         ninds = length(s[v])
-        ninds % 2 != 0 && error("Odd number of siteinds on vertex $v - don't know how to partition into rows and column")
+        ninds % 2 != 0 && error("identity state: odd number of siteinds on vertex $v — cannot pair kets with bras")
         t = delta(eltype, [links[e] for e in es])
         if ninds > 0
             row_inds, col_inds = s[v][1:(ninds÷2)], s[v][((ninds÷2)+1):ninds]
@@ -33,13 +34,14 @@ function identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary = site
         end
         set!(ts, v, t)
     end
+    ts = Dictionary(collect(keys(ts)), narrow_tensors(collect(ts)))
     return TensorNetworkState(TensorNetwork(ts, g), s)
 end
 
 identity_tensornetworkstate(g::NamedGraph, s::Dictionary = siteinds("S=1/2", g; inds_per_site = 2)) = identity_tensornetworkstate(Float64, g, s)
 
 """
-    toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n, n); periodic = true)))
+    toriccode_groundstate([eltype], n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n, n); periodic = true)))
 
 Construct an exact bond-dimension-2 tensor network state for the ground state of
 Kitaev's toric code on an `n × n` torus. The state lives on a periodic `n × n`
@@ -55,12 +57,12 @@ of a periodic `n × n` named grid.
 
 Returns a [`TensorNetworkState`](@ref) of bond dimension 2.
 """
-function toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n,n); periodic = true)))
+function toriccode_groundstate(eltype::Type, n::Int, s::Dictionary = siteinds("S=1/2", named_grid((n, n); periodic = true)))
     g = named_grid((n, n); periodic = true)
     l = edge_indices(g, 2)
     # |11⟩ ± |22⟩ on a pair of legs
-    bell(a, b, sign) = onehot(ComplexF64, a => 1) * onehot(ComplexF64, b => 1) + sign * onehot(ComplexF64, a => 2) * onehot(ComplexF64, b => 2)
-    tensors = Dictionary{vertextype(g), Tensor}()
+    bell(a, b, sign) = onehot(eltype, a => 1) * onehot(eltype, b => 1) + sign * onehot(eltype, a => 2) * onehot(eltype, b => 2)
+    tensors = Dictionary{vertextype(g), Any}()
     for v in vertices(g)
         north = l[NamedEdge((mod1(v[1] + 1, n), v[2]) => v)]
         east = l[NamedEdge((v[1], mod1(v[2] + 1, n)) => v)]
@@ -69,10 +71,13 @@ function toriccode_groundstate(n::Int, s::Dictionary = siteinds("S=1/2", named_g
         # north pairs with east on even sites and with west on odd ones; south with the other
         a, b = iseven(sum(v)) ? (east, west) : (west, east)
         sv = only(s[v])
-        set!(tensors, v, bell(north, a, 1) * bell(south, b, 1) * onehot(sv => 1) + bell(north, a, -1) * bell(south, b, -1) * onehot(sv => 2))
+        set!(tensors, v, bell(north, a, 1) * bell(south, b, 1) * onehot(eltype, sv => 1) + bell(north, a, -1) * bell(south, b, -1) * onehot(eltype, sv => 2))
     end
+    tensors = Dictionary(collect(keys(tensors)), narrow_tensors(collect(tensors)))
     return TensorNetworkState(TensorNetwork(tensors, g), s)
 end
+
+toriccode_groundstate(n::Int, args...) = toriccode_groundstate(ComplexF64, n, args...)
 
 """
     ising_partitionfunction(g::NamedGraph, β::Real; Js::Dictionary = Dictionary(edges(g), [1.0 for e in edges(g)]))
@@ -111,7 +116,7 @@ function ising_partitionfunction(g::NamedGraph, β::Real; Js::Dictionary = Dicti
         set!(sqrt_Ws, reverse(e), sqrt_W)
     end
 
-    ts = Dictionary{vertextype(g), Tensor}()
+    ts = Dictionary{vertextype(g), Any}()
     for v in vertices(g)
         es = incident_edges(g, v; dir = :in)
         t = delta([links[e] for e in es])
@@ -120,5 +125,6 @@ function ising_partitionfunction(g::NamedGraph, β::Real; Js::Dictionary = Dicti
         end
         set!(ts, v, t)
     end
+    ts = Dictionary(collect(keys(ts)), narrow_tensors(collect(ts)))
     return TensorNetwork(ts, g)
 end

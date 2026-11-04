@@ -2,14 +2,15 @@ function expect(
         alg::Algorithm"exact",
         ψ::TensorNetworkState,
         observables::Vector{<:Tuple};
-        contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod())
+        contraction_sequence_kwargs = default_contraction_sequence_kwargs()
     )
     denom = norm_sqr(alg, ψ; contraction_sequence_kwargs)
     out = map(observables) do obs
         op_strings, vs, coeff = collectobservable(obs, graph(ψ))
         iszero(coeff) && return coeff * zero(denom)
-        op_string_f = op_string_function(op_strings, vs)
-        ψOψ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f)
+        joint_op = joint_operator(op_strings, vs)
+        op_string_f = isnothing(joint_op) ? op_string_function(op_strings, vs) : (v -> "I")
+        ψOψ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = op_string_f, joint_op)
         numer_seq = contraction_sequence(ψOψ_tensors; contraction_sequence_kwargs...)
         numer = scalar(contract(ψOψ_tensors; sequence = numer_seq))
         return coeff * (numer / denom)
@@ -34,6 +35,8 @@ Compute the expectation value of one or more observables on a tensor network sta
 # Arguments
 - `ψ::Union{TensorNetworkState, AbstractBeliefPropagationCache}`: The tensor network state or cache wrapping the state to measure the observable(s) on.
 - `observable::Union{Tuple, Vector{<:Tuple}}`: The observable(s) to measure. Should be a tuple or vector of tuples of the form `(ops, vertices, coeff=1)`.
+  On two vertices, an operator name that is not a Pauli string (e.g. the fermionic `"hopping"` or
+  `"CdagC"`) is one joint operator on both sites.
 
 # Keyword Arguments
 - `alg::Union{String, Nothing}`: The algorithm to use. Supported algorithms:
@@ -65,8 +68,10 @@ function expect(
     iszero(coeff) && return zero(coeff)
     region = observable_region(cache, obs_vs)
 
+    joint_op = joint_operator(op_strings, obs_vs)
+    op_string_f = isnothing(joint_op) ? op_string_function(op_strings, obs_vs) : (v -> "I")
     numer, denom = with_kernel_workspace() do
-        region_scalar(cache, region, op_string_function(op_strings, obs_vs)), region_scalar(cache, region, v -> "I")
+        region_scalar(cache, region, op_string_f; joint_op), region_scalar(cache, region, v -> "I")
     end
 
     return coeff * numer / denom
@@ -81,9 +86,11 @@ function expect(
     op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
     iszero(coeff) && return zero(coeff)
 
-    op_string_f = op_string_function(op_strings, obs_vs)
+    # a joint operator keeps the site legs of its vertices primed ("ρ") and bridges them
+    joint_op = joint_operator(op_strings, obs_vs)
+    op_string_f = isnothing(joint_op) ? op_string_function(op_strings, obs_vs) : (v -> v ∈ obs_vs ? "ρ" : "I")
 
-    numer, denom = path_contract(cache, obs_vs, op_string_f; bmps_messages_up_to_date)
+    numer, denom = path_contract(cache, obs_vs, op_string_f; bmps_messages_up_to_date, joint_op)
     return coeff * scalar(numer) / denom
 end
 
@@ -142,6 +149,15 @@ function collectobservable(obs::Tuple, g::NamedGraph)
     verts = observables_vertices(obs, g)
     op = obs[1]
 
+    # A name that is not a Pauli string on two vertices is one joint operator on both (e.g. the
+    # fermionic ("hopping", (v, w))), returned as a bare String.
+    if op isa String && length(verts) > 1 && (length(op) != length(verts) || !all(in("XYZI"), op))
+        length(verts) == 2 || error("Joint operator observables are supported on two vertices, got $(length(verts)).")
+        return op, verts, coeff
+    end
+    # a single vertex takes one operator name of any length (e.g. "Nup")
+    op isa String && length(verts) == 1 && return [op], verts, coeff
+
     length(op) != length(verts) && error("Invalid observable: need as many operators as vertices passed.")
     if op isa String
         op_strings = [string(o) for o in op]
@@ -153,6 +169,9 @@ function collectobservable(obs::Tuple, g::NamedGraph)
 
     return op_strings, verts, coeff
 end
+
+# A joint operator (`collectobservable` returns its name as a String) as (name, vertices), or nothing.
+joint_operator(op_strings, vs) = op_strings isa String ? (op_strings, vs) : nothing
 
 # Map each vertex to its operator string, defaulting to the identity "I" off the observable's support.
 function op_string_function(op_strings, vs)

@@ -29,28 +29,28 @@ function renyi_entropy(ρ::AbstractMatrix, α::Real; normalize = true)
     return log(sum(λs .^ α)) / (1 - α)
 end
 
-function matricize(a::Tensor, row_inds = inds(a; plev = 0))
+function matricize(a, row_inds = filter(i -> plev(i) ==0, inds(a)))
     col_inds = prime.(row_inds)
     return array(a * combiner(row_inds) * combiner(col_inds))
 end
 
 """
-    renyi_entropy(a::Tensor, row_inds = ...; normalize = true, α = 1)
+    renyi_entropy(a, row_inds = ...; normalize = true, α = 1)
 
-Compute the Rényi entropy of order `α` of a density matrix represented as a `Tensor`.
+Compute the Rényi entropy of order `α` of a density matrix represented as a tensor.
 
 The tensor `a` is interpreted as a density matrix where unprimed indices are row indices
 and primed indices are column indices.
 
 # Arguments
-- `a`: Density matrix as a `Tensor`.
+- `a`: Density matrix as a tensor.
 - `row_inds`: The row (ket) indices. Defaults to all unprimed indices of `a`.
 
 # Keyword Arguments
 - `normalize`: If `true` (default), normalise by the trace.
 - `α`: Rényi index (default `1`, i.e. von Neumann entropy).
 """
-function renyi_entropy(a::Tensor, row_inds = inds(a; plev = 0); normalize = true, α = 1)
+function renyi_entropy(a, row_inds = filter(i -> plev(i) ==0, inds(a)); normalize = true, α = 1)
     return renyi_entropy(matricize(a, row_inds), α; normalize)
 end
 

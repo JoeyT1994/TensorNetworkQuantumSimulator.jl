@@ -42,9 +42,6 @@ include("entanglement.jl")
 include("truncate.jl")
 include("rdm.jl")
 
-# extends the backend library's own functions for package types, so it comes last
-include("Backends/ITensorsCompat.jl")
-
 
 export
     vertices,
@@ -52,6 +49,7 @@ export
     add_edge,
     degree,
     apply_gates,
+    apply_gates!,
     apply_circuit,
     register_gate!,
     register_alias!,
@@ -146,4 +144,7 @@ export
     norm_factors,
     toriccode_groundstate,
     ising_partitionfunction
+
+include("precompile.jl")
+
 end
