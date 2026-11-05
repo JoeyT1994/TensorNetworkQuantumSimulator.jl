@@ -13,4 +13,6 @@ using Test
     include("test_contraction_sequences.jl")
     include("test_ctmrg.jl")
     include("test_circuit_import.jl")
+    include("test_tensors.jl")
+    include("test_gpu_paths.jl")
 end

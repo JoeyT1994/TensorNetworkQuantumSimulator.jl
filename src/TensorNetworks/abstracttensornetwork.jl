@@ -7,7 +7,12 @@ abstract type AbstractTensorNetwork{V} <: AbstractNamedGraph{V} end
 graph(tn::AbstractTensorNetwork) = not_implemented()
 tensors(tn::AbstractTensorNetwork) = not_implemented()
 NamedGraphs.rem_vertex!(tn::AbstractTensorNetwork, v) = not_implemented()
-add_tensor!(tn::AbstractTensorNetwork, tensor::Tensor, v) = not_implemented()
+add_tensor!(tn::AbstractTensorNetwork, tensor, v) = not_implemented()
+
+#The tensor type this network holds (e.g. Tensor), stripped of type parameters
+#since derived tensors (e.g. real singular-value messages in a complex network) may differ in
+#eltype or rank.
+tensortype(tn::AbstractTensorNetwork) = unspecify_type_parameters(eltype(tensors(tn)))
 
 Graphs.is_directed(::Type{<:AbstractTensorNetwork}) = false
 
@@ -37,14 +42,14 @@ default_message(tn::AbstractTensorNetwork, e::AbstractEdge) = adapt_like(tn, den
 
 maxvirtualdim(tn::AbstractTensorNetwork) = maximum(e -> maximum(dim, virtualinds(tn, e)), edges(tn))
 
-uniqueinds(tn::AbstractTensorNetwork, v) = setdiff(inds(tn[v]), (i for vn in neighbors(tn, v) for i in inds(tn[vn])))
+uniqueinds(tn::AbstractTensorNetwork, v) = Index[i for i in setdiff(inds(tn[v]), (i for vn in neighbors(tn, v) for i in inds(tn[vn])))]
 
-function setindex_preserve!(tn::AbstractTensorNetwork, value::Tensor, vertex)
+function setindex_preserve!(tn::AbstractTensorNetwork, value, vertex)
     tensors(tn)[vertex] = value
     return tn
 end
 
-function Base.setindex!(tn::AbstractTensorNetwork, value::Tensor, vertex)
+function Base.setindex!(tn::AbstractTensorNetwork, value, vertex)
     !has_vertex(graph(tn), vertex) && error("Vertex not in tensor network")
     add_tensor!(tn, value, vertex)
     return tn
@@ -128,12 +133,12 @@ end
 
 """Add two tensornetworks together. The network structures need to be have the same graph structure"""
 function add(tn1::AbstractTensorNetwork, tn2::AbstractTensorNetwork)
-    @assert graph(tn1) == graph(tn2)
-
+    graph(tn1) == graph(tn2) || error("add: the two networks must share the same graph")
     if tn1 isa TensorNetworkState && tn2 isa TensorNetworkState
-        @assert siteinds(tn1) == siteinds(tn2)
+        siteinds(tn1) == siteinds(tn2) || error("add: the two states must share the same site indices")
     else
-        @assert tn1 isa TensorNetwork && tn2 isa TensorNetwork
+        tn1 isa TensorNetwork && tn2 isa TensorNetwork ||
+            error("add: expected two TensorNetworks or two TensorNetworkStates")
     end
 
     es = collect(edges(tn1))
@@ -153,9 +158,9 @@ function add(tn1::AbstractTensorNetwork, tn2::AbstractTensorNetwork)
     for v in vertices(tn1)
         es_v = filter(x -> src(x) == v || dst(x) == v, es)
 
-        tn1v_linkinds = Index[only(virtualinds(tn1, e)) for e in es_v]
-        tn2v_linkinds = Index[only(virtualinds(tn2, e)) for e in es_v]
-        tn12v_linkinds = Index[new_edge_indices[e] for e in es_v]
+        tn1v_linkinds = [only(virtualinds(tn1, e)) for e in es_v]
+        tn2v_linkinds = [only(virtualinds(tn2, e)) for e in es_v]
+        tn12v_linkinds = [new_edge_indices[e] for e in es_v]
 
         setindex_preserve!(
             tn12, directsum(

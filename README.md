@@ -4,7 +4,7 @@
 
 ![Overview of TensorNetworkQuantumSimulator.jl](docs/src/mainfig.svg)
 
-A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks (TNs) of near-arbitrary geometry. Built on top of [ITensors](https://github.com/ITensor/ITensors.jl) and [NamedGraphs](https://github.com/ITensor/NamedGraphs.jl).
+A Julia package for simulating quantum circuits, quantum dynamics and equilibrium physics with tensor networks (TNs) of near-arbitrary geometry. Built on [ITensorBase](https://github.com/ITensor/ITensorBase.jl) (dense and [GradedArrays](https://github.com/ITensor/GradedArrays.jl) symmetric/fermionic tensors) and [NamedGraphs](https://github.com/ITensor/NamedGraphs.jl).
 
 The main workhorses of the simulation are _belief propagation_ (BP) and the _singular value decomposition_ for applying gates, and _BP_, _boundary MPS_, or _CTMRG_ for estimating expectation values, partition functions, and sampling. Circuits can be built directly in Julia or imported from OpenQASM 2 and [Qiskit.jl](https://github.com/Qiskit/Qiskit.jl).
 
@@ -116,7 +116,7 @@ The optional first argument sets the element type (`Float64` by default). Use `C
 
 ### Building Circuits
 
-A circuit is a `Vector` of gates to be applied sequentially. Each gate is specified as a tuple `(gate_string, vertices, parameter)` or as a raw `ITensor`:
+A circuit is a `Vector` of gates to be applied sequentially. Each gate is specified as a tuple `(gate_string, vertices, parameter)` or as a raw tensor built with `op`:
 
 ```julia
 layer = []
@@ -224,6 +224,49 @@ Reduce the bond dimension of an existing TNS:
 ```julia
 ψ_truncated = truncate(ψ; alg = "bp", maxdim = 4, cutoff = 1e-10)
 ```
+
+### Symmetries
+
+Abelian symmetries are enforced structurally at the tensor level: pass `symmetry` when
+building site indices and every tensor is stored block-sparse over the conserved sectors,
+with symmetry-violating gates raising an error. Supported symmetries are `"Z2"`, `"U1"`,
+and the fermionic gradings below.
+
+```julia
+# A U(1)-symmetric spin state (conserved magnetization)
+s = siteinds("S=1/2", g; symmetry = "U1")
+ψ = tensornetworkstate(ComplexF64, v -> iseven(sum(v)) ? "↑" : "↓", g, s)
+```
+
+Everything downstream — gate application, BP, boundary MPS, loop corrections, sampling,
+entanglement — works unchanged on symmetric states. Charged states (e.g. nonzero total
+magnetization or particle number) are handled automatically: site charges are routed
+through auxiliary dimension-1 link components, and any nonzero total charge rides a
+dangling dimension-1 "Charge" leg.
+
+### Fermions
+
+Fermionic sites are first-class: statistics live in the tensor backend (Jordan-Wigner
+strings emerge from the graded algebra, on any lattice), so gates and observables are
+just local operators.
+
+```julia
+# Spinless fermions with conserved particle number; "fZ2" (parity only) is the default
+s = siteinds("Fermion", g; symmetry = "fU1")
+ψ = tensornetworkstate(ComplexF64, v -> v ∈ occupied ? "Occ" : "Emp", g, s)
+
+# Trotterized hopping evolution exp(-i θ (c†ᵢcⱼ + c†ⱼcᵢ))
+circuit = [("F_hop", pair, θ) for pair in edge_pairs]
+ψ, errors = apply_gates(circuit, ψ; apply_kwargs)
+
+# Occupations and two-point functions (any pair of vertices, strings handled internally)
+n = expect(ψ, ("N", [v]); alg = "bp")
+c = expect(ψ, ("CdagC", (v1, v2)); alg = "boundarymps")
+```
+
+Spinful (d = 4) sites are available via `siteinds("SpinfulFermion", g)` with `"fU1xU1"`
+(separately conserved N↑, N↓). See `examples/fermionic_dynamics.jl` for a complete
+quench benchmarked against the exact free-fermion solution.
 
 ## Supported Gates
 
@@ -336,7 +379,6 @@ or
 - J. Tindall and M. Fishman, "Gauging tensor networks with belief propagation," SciPost Physics **15**, 222 (2023). [Link](https://www.scipost.org/SciPostPhys.15.6.222)
 
 ## Upcoming Features
-- Fermions
 - Infinite tensor network states 
 
 ## Authors and Acknowledgements
@@ -356,7 +398,7 @@ Coming from v0.4, these need changes in user code:
 | `bp_update_kwargs` (`apply_gates`, `truncate`, `sample`, `contract`, `loop_correlations`), `bmps_update_kwargs` (`contract`) | `cache_update_kwargs`, everywhere |
 | `freenergy(cache)` returned ln *Z* | returns the free energy −ln *Z*; `partitionfunction(cache) = exp(-freenergy(cache))` |
 | Operators and states from ITensors' `op` / `state` system | the package's own registry (`op`, `state`, `register_op!`), in qiskit's parameter conventions; names outside it need `register_op!` |
-| `contract` and `inner` were methods of `ITensors.contract` / `ITensors.inner` | the package's own functions; with `using ITensors` as well, an unqualified `contract` or `inner` is ambiguous, so write `ITensors.contract(ψ)` (still forwarded) or `TensorNetworkQuantumSimulator.contract(ψ)` |
+| Tensors were ITensors.jl `ITensor`s; `contract` and `inner` were methods of `ITensors.contract` / `ITensors.inner` | tensors are ITensorBase tensors, built with the package's functions (`op`, `state`, …); `contract` and `inner` are the package's own functions |
 | Pauli-string gates in either case (`"xz"`) | upper case only (`"XZ"`), one letter per vertex |
 | `build_graph_from_gates` (and its alias `build_graph_from_circuit`) | `build_graph_from_circuit` only; it also takes a `Circuit`, and idle qubits give isolated vertices instead of an error |
 | `topologytograph` | removed: build the graph with `NamedGraph` |

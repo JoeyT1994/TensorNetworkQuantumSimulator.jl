@@ -1,7 +1,8 @@
 #=
 TensorInterface: the seam between the package and its tensor backend. Every tensor verb is a
 generic function owned here; a backend (src/Backends/) adds methods for its own types, and
-src/Backends/Backends.jl selects it (currently ITensorsBackend, dense storage).
+src/Backends/Backends.jl selects it (currently ITensorBaseBackend: ITensorBase named tensors over
+dense arrays or GradedArrays block-sparse arrays, i.e. abelian symmetries and fermions).
 
 Rules:
   1. Nothing outside src/Backends/ references a tensor library.
@@ -17,11 +18,12 @@ Rules:
      `dag(t, cod)` is the adjoint of `t` as a map with codomain legs `cod`, so that
      `dag(U, cod) * U` is the identity for an isometry `U`; passing `cod` or its complement gives
      the same tensor. They agree on dense and bosonic data but differ by parity twists for
-     fermions, so use the right one.
+     fermions, so use the right one. `gram(a, b, legs) = dag(a, legs) * b`.
   6. `Tensor` and `Index` (bound in Backends.jl) are used only in annotations; new indices come
      from `new_index`, new tensors from the construction verbs.
-  7. Verbs have no fallbacks. Hooks (`fused_norm_message`, `fused_norm_scalar`)
-     are optional: their fallback returns `nothing` and the caller takes the generic path. Their
+  7. Verbs have no fallbacks. Hooks (`fused_norm_message`, `fused_norm_scalar`, `site_op`,
+     `site_state`) are optional: their fallback returns `nothing` and the caller takes the generic
+     path. Their
      scratch memory lives in `kernel_workspace()`, scoped by `with_kernel_workspace`.
 =#
 module TensorInterface
@@ -63,6 +65,17 @@ end
 #   `noprime(o * t)`.
 # - `factorize_svd(t, linds; ...)`: truncated SVD split (L, R, spec); `truncated_svd(t, linds;
 #   trunc)`: U, S, V truncated by a `TruncationStrategy`.
+# Graded data needs a few verbs that are trivial on dense data:
+# - `projector(elt, i => v)`: ⟨v| on site `i` (dense: `onehot`; graded: on the dual copy, with a
+#   dim-1 "Charge" leg carrying the state's charge).
+# - `charge_sectors(is)`: the dim-1 legs completing a tensor on `is` to a flux-zero one (dense: one
+#   trivial leg; graded: one per reachable sector).
+# - `pad_index(w, ins, t)`: a zero-padding index with the sector structure the interface fixes, or
+#   `nothing` when none is needed.
+# - `gram(a, b, legs)`: `dag(a, legs) * b`, the partial Hilbert inner product over `legs`.
+# - `data(t)`: raw storage as a vector (a copy on block-sparse data); `scale!(t, x)` scales in place.
+# - `has_closure_gauge(T)`: whether multi-vertex closures can carry a parity-gauge sign (fermions),
+#   so that additive quantities from closures must be normalised by a baseline closure.
 for f in [
         # index queries
         :inds, :commonind, :commoninds, :uniqueinds, :unioninds, :noncommonind,
@@ -71,15 +84,17 @@ for f in [
         :dag, :prime, :noprime, :sim, :replaceind, :replaceinds,
         # construction
         :new_index, :from_array, :random_tensor, :onehot, :delta, :dense,
-        :combiner, :combinedind, :directsum,
+        :combiner, :combinedind, :directsum, :projector, :charge_sectors, :pad_index,
         # contraction / evaluation
         :contract, :scalar, :apply, :inner,
         # diagonal ops
-        :map_diag,
+        :map_diag, :map_diag!,
+        # sesquilinear partial inner product
+        :gram,
         # factorizations (beyond the LinearAlgebra generics)
         :factorize_svd, :truncated_svd,
         # storage / type queries
-        :datatype, :array,
+        :datatype, :array, :data, :scale!,
     ]
     @eval function $f end
 end
@@ -96,6 +111,13 @@ datatype(A::AbstractArray) = typeof(A)
 
 # Some backends return full contractions as raw numbers.
 scalar(x::Number) = x
+
+# Dense data: the projector onto a basis state is the unit vector.
+projector(p::Pair) = projector(Float64, p)
+projector(elt::Type, p::Pair) = onehot(elt, p)
+
+has_closure_gauge(::Type) = false
+has_closure_gauge(x) = has_closure_gauge(typeof(x))
 
 # Truncation strategies
 """
@@ -148,6 +170,21 @@ Optional fused single-vertex closure: the scalar `contract([incoming; ψ; ops; �
 are (s′, s) operators on site legs `s ∈ sinds` (empty for the norm).
 """
 fused_norm_scalar(ψ, sinds, incoming, ops) = nothing
+
+"""
+    site_op(name, sites...; kwargs...)
+
+Optional backend operator library, consulted by `op` before the package's own: the operator `name`
+on `sites` (e.g. fermionic operators on fermionic sites), or `nothing`.
+"""
+site_op(name, sites...; kwargs...) = nothing
+
+"""
+    site_state(name, site)
+
+Optional backend state library, consulted by `state` before the package's own, or `nothing`.
+"""
+site_state(name, site) = nothing
 
 """
     with_kernel_workspace(f)

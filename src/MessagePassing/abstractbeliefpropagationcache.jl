@@ -6,7 +6,8 @@ abstract type AbstractBeliefPropagationCache{V} <: AbstractNamedGraph{V} end
 #Interface
 messages(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 contraction_sequences(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
-default_messages() = Dictionary{NamedEdge, Union{Tensor, Vector{Tensor}}}()
+default_messages() = Dictionary{NamedEdge, Any}()
+tensortype(bp_cache::AbstractBeliefPropagationCache) = tensortype(network(bp_cache))
 
 function rescale_messages!(
         bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge}; kwargs...
@@ -59,7 +60,7 @@ function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCa
     return bp_cache
 end
 
-function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value::Tensor, vertex)
+function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value, vertex)
     setindex_preserve!(network(bp_cache), value, vertex)
     return bp_cache
 end
@@ -90,7 +91,7 @@ function deletemessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdg
     return bp_cache
 end
 
-function setmessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdge, message::Union{Tensor, Vector{<:Tensor}})
+function setmessage!(bp_cache::AbstractBeliefPropagationCache, e::AbstractEdge, message)
     ms = messages(bp_cache)
     set!(ms, e, message)
     return bp_cache
@@ -105,10 +106,10 @@ function messages(bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:Abst
     ms = Tensor[]
     for e in edges
         m = message(bp_cache, e)
-        if m isa Tensor
-            push!(ms, m)
-        else
+        if m isa Vector
             append!(ms, m)
+        else
+            push!(ms, m)
         end
     end
     return ms
@@ -131,16 +132,19 @@ function deletemessages!(
 end
 
 function vertex_scalars(
-        bp_cache::AbstractBeliefPropagationCache, vertices = collect(Graphs.vertices(bp_cache)); kwargs...
+        bp_cache::AbstractBeliefPropagationCache, vertices = default_scalar_vertices(bp_cache); kwargs...
     )
     return map(v -> vertex_scalar(bp_cache, v; kwargs...), vertices)
 end
 
 function edge_scalars(
-        bp_cache::AbstractBeliefPropagationCache, edges = Graphs.edges(bp_cache); kwargs...
+        bp_cache::AbstractBeliefPropagationCache, edges = default_scalar_edges(bp_cache); kwargs...
     )
     return map(e -> edge_scalar(bp_cache, e; kwargs...), edges)
 end
+
+default_scalar_vertices(bp_cache::AbstractBeliefPropagationCache) = collect(Graphs.vertices(bp_cache))
+default_scalar_edges(bp_cache::AbstractBeliefPropagationCache) = Graphs.edges(bp_cache)
 
 function scalar_factors_quotient(bp_cache::AbstractBeliefPropagationCache)
     return vertex_scalars(bp_cache), edge_scalars(bp_cache)
@@ -158,26 +162,40 @@ function incoming_messages(bp_cache::AbstractBeliefPropagationCache, vertex; kwa
     return incoming_messages(bp_cache, [vertex]; kwargs...)
 end
 
+# Swap a tensor's (unique) index from `inds_list` for its counterpart in `inds_sim`; a tensor
+# carrying none of them is returned unchanged.
+function replace_matching_ind(t, inds_list, inds_sim)
+    t_inds = filter(i -> i ∈ inds_list, inds(t))
+    isempty(t_inds) && return t
+    pos = findfirst(==(only(t_inds)), inds_list)
+    return replaceind(t, inds_list[pos], inds_sim[pos])
+end
+
 # The vertices an observable on `vs` is closed on: `vs` joined by a Steiner tree.
 function observable_region(bp_cache::AbstractBeliefPropagationCache, vs)
     return length(vs) == 1 ? vs : collect(vertices(steiner_tree(network(bp_cache), vs)))
 end
 
 # The norm network on `region`, with operators from `op_strings`, contracted against its environment.
+# `joint_op = (name, vertices)` inserts one operator across several vertices of the region.
 function contract_region(
         bp_cache::AbstractBeliefPropagationCache, region, op_strings::Function;
-        incoming_ms = incoming_messages(bp_cache, region)
+        incoming_ms = incoming_messages(bp_cache, region), joint_op = nothing
     )
     #TODO: If there are a lot of tensors here, (more than 100 say), we need to think about defining a custom sequence as optimal may be too slow
-    return contract_optimal([norm_factors(network(bp_cache), region; op_strings); incoming_ms])
+    factors = isnothing(joint_op) ? norm_factors(network(bp_cache), region; op_strings) :
+        norm_factors(network(bp_cache), region; op_strings, joint_op)
+    return contract_optimal([factors; incoming_ms])
 end
 
 # `contract_region` as a scalar, through the backend's fused kernel where it has one.
-function region_scalar(bp_cache::AbstractBeliefPropagationCache, region, op_strings::Function)
+function region_scalar(bp_cache::AbstractBeliefPropagationCache, region, op_strings::Function; joint_op = nothing)
     incoming_ms = incoming_messages(bp_cache, region)
-    fast = norm_scalar_kernel(network(bp_cache), region, incoming_ms; op_strings)
-    fast !== nothing && return fast
-    return scalar(contract_region(bp_cache, region, op_strings; incoming_ms))
+    if isnothing(joint_op)
+        fast = norm_scalar_kernel(network(bp_cache), region, incoming_ms; op_strings)
+        fast !== nothing && return fast
+    end
+    return scalar(contract_region(bp_cache, region, op_strings; incoming_ms, joint_op))
 end
 
 # The message on `edge` recomputed from the cache. The same list recurs every sweep, so its
@@ -206,7 +224,8 @@ end
 function normalize_message(m)
     n = norm(m)
     iszero(n) && return m
-    s = sum(m)
+    # over the stored entries: graded storage does not define a whole-array `sum`
+    s = sum(data(m))
     phase = abs(s) > sqrt(eps(real(typeof(s)))) * n ? s / abs(s) : one(s)
     return m / (n * phase)
 end

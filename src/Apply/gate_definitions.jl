@@ -73,6 +73,20 @@ const GATES = Dict{String, GateSpec}(
     "Rz+z+"   => GateSpec("Rz+z+";   paramkeys = (:θ,)),
     "Rxxyy"   => GateSpec("Rxxyy";   paramkeys = (:θ,)),
     "Rxxyyzz" => GateSpec("Rxxyyzz"; paramkeys = (:θ,)),
+
+    # Fermionic gates, on fermionic sites (see `siteinds("Fermion", g)`):
+    # F_hop(θ) = exp(-iθ (c†ᵢcⱼ + c†ⱼcᵢ)), F_nn(θ) = exp(-iθ nᵢnⱼ),
+    # F_hop_nn(θ, ϕ) = exp(-i (θ (c†ᵢcⱼ + c†ⱼcᵢ) + ϕ nᵢnⱼ)), F_phase(θ) = exp(-iθ nᵢ),
+    # F_pair(θ) = exp(-iθ (c†ᵢc†ⱼ + cⱼcᵢ)); on spinful (d = 4) sites F_hop_up/F_hop_dn(θ) hop one
+    # spin species and F_int(θ) = exp(-iθ n↑n↓).
+    "F_hop"    => GateSpec("F_hop";    paramkeys = (:θ,)),
+    "F_nn"     => GateSpec("F_nn";     paramkeys = (:θ,)),
+    "F_hop_nn" => GateSpec("F_hop_nn"; paramkeys = (:θ, :ϕ)),
+    "F_pair"   => GateSpec("F_pair";   paramkeys = (:θ,)),
+    "F_phase"  => GateSpec("F_phase";  paramkeys = (:θ,)),
+    "F_hop_up" => GateSpec("F_hop_up"; paramkeys = (:θ,)),
+    "F_hop_dn" => GateSpec("F_hop_dn"; paramkeys = (:θ,)),
+    "F_int"    => GateSpec("F_int";    paramkeys = (:θ,)),
 )
 
 # Snapshot of built-in canonical names taken at module load. Used to prevent
@@ -117,12 +131,12 @@ end
 # --- Circuit-tuple → Tensor -------------------------------------------------
 
 # Vector of gates → vector of (Tensor, vertices)
-function toitensor(circuit::Vector, g::NamedGraph, sinds::Dictionary)
-    return [toitensor(gate, g, sinds) for gate in circuit]
+function totensor(circuit::Vector, g::NamedGraph, sinds::Dictionary)
+    return [totensor(gate, g, sinds) for gate in circuit]
 end
 
 # Single circuit tuple → (Tensor, vertices)
-function toitensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
+function totensor(gate::Tuple, g::NamedGraph, siteinds::Dictionary)
     name = gate[1]
     verts = collect_vertices(gate[2], g)
     s_inds = [only(siteinds[v]) for v in verts]

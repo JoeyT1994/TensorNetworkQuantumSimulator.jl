@@ -1,5 +1,5 @@
 # ρ / tr(ρ), the trace taken with deltas in ρ's storage
-function normalize_rdm(ρ::Tensor)
+function normalize_rdm(ρ)
     δ = reduce(*, (adapt(datatype(ρ))(delta(i, prime(i))) for i in inds(ρ; plev = 0)))
     return ρ / scalar(ρ * δ)
 end
@@ -34,7 +34,7 @@ function reduced_density_matrix(
         alg::Algorithm"exact",
         ψ::TensorNetworkState,
         verts::Vector;
-        contraction_sequence_kwargs = (; alg = "omeinsum", optimizer = GreedyMethod()),
+        contraction_sequence_kwargs = default_contraction_sequence_kwargs(),
     )
     ρ_tensors = norm_factors(ψ, collect(vertices(ψ)); op_strings = v -> v ∈ verts ? "ρ" : "I")
     return contract(ρ_tensors; sequence = contraction_sequence(ρ_tensors; contraction_sequence_kwargs...))

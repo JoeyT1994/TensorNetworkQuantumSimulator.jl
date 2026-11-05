@@ -2,6 +2,14 @@ using SimpleGraphAlgorithms: SimpleGraphAlgorithms
 
 default_truncate_alg(tns::TensorNetworkState) = nothing
 
+#Identity two-site gate on edge e (identity truncation: applying it with truncating
+#apply_kwargs compresses the bond)
+function _identity_gate(s::Dictionary, e::NamedEdge, dtype)
+    g1 = reduce(*, [op("I", sv) for sv in s[src(e)]])
+    g2 = reduce(*, [op("I", sv) for sv in s[dst(e)]])
+    return adapt(dtype)(g1 * g2)
+end
+
 function truncatable_edge(cache::AbstractBeliefPropagationCache, e::NamedEdge)
     vinds = virtualinds(cache, e)
     isempty(vinds) && return false

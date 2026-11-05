@@ -235,6 +235,8 @@ Build the operator `name` on `sites` from the package's operator registry.
 - A tensor with legs (sites′..., sites...).
 """
 function op(name::AbstractString, sites...; kwargs...)
+    t = site_op(name, sites...; kwargs...)
+    isnothing(t) || return t
     d = dim(first(sites))
     m = all(s -> dim(s) == d, sites) ? operator_matrix(name, length(sites), d; kwargs...) : nothing
     isnothing(m) || return operator_tensor(m, collect(sites))
@@ -275,7 +277,15 @@ Build the single-site state `name` (e.g. `"0"`, `"+"`, `"Up"`) on the index `sit
 - A one-leg tensor on `site`.
 """
 function state(name::AbstractString, site)
+    t = site_state(name, site)
+    isnothing(t) || return t
+    v = state_vector(name, site)
+    return from_array(v, [site])
+end
+
+# The vector of the library state `name` on a site of the dimension of `site`.
+function state_vector(name::AbstractString, site)
     v = get(get(STATES, dim(site), Dict{String, Vector}()), name, nothing)
     isnothing(v) && throw(ArgumentError("state: no state \"$name\" on a site of dimension $(dim(site))."))
-    return from_array(v, [site])
+    return v
 end

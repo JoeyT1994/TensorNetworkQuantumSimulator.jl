@@ -1,6 +1,7 @@
 @eval module $(gensym())
 using Dictionaries: Dictionary
-using ITensors: ITensors, Index, dag, inds, prime
+using TensorNetworkQuantumSimulator: dag, inds, prime, random_tensor, new_index
+using TensorNetworkQuantumSimulator.ITensorBaseBackend: Index
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test, @test_throws
@@ -10,8 +11,8 @@ using Test: @testset, @test, @test_throws
     Random.seed!(123)
 
     #TensorNetwork construction from tensors
-    i, j, k, l = Index(2), Index(2), Index(2), Index(2)
-    A, B, C, D = ITensors.random_itensor(i, j), ITensors.random_itensor(j, k), ITensors.random_itensor(k, l), ITensors.random_itensor(l, i)
+    i, j, k, l = new_index(2), new_index(2), new_index(2), new_index(2)
+    A, B, C, D = random_tensor(Float64, i, j), random_tensor(Float64, j, k), random_tensor(Float64, k, l), random_tensor(Float64, l, i)
     t = TensorNetwork([A, B, C, D])
     @test t isa TensorNetwork
     @test scalartype(t) == eltype(A)
@@ -32,7 +33,7 @@ using Test: @testset, @test, @test_throws
 
         ψdag = map_virtualinds(prime, map_tensors(dag, ψ))
         @test ψdag isa TensorNetwork
-        @test ITensors.contract(ψdag; alg = "exact") ≈ conj(ITensors.contract(ψ; alg = "exact"))
+        @test contract(ψdag; alg = "exact") ≈ conj(contract(ψ; alg = "exact"))
 
         v = first(vertices(g))
         rem_vertex!(ψ, v)

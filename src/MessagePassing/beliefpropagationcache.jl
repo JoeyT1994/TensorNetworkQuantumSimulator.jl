@@ -4,7 +4,7 @@ using NamedGraphs: post_order_dfs_edges, forest_cover_edge_sequence, boundary_ed
 using LinearAlgebra: normalize
 
 #TODO: Make this show() nicely.
-struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{Tensor, Vector{Tensor}}} <:
+struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M} <:
     AbstractBeliefPropagationCache{V}
     network::N
     messages::Dictionary{NamedEdge, M}
@@ -12,7 +12,7 @@ struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{Tenso
     edge_sequence::Vector
 end
 
-function message_diff(message_a::Tensor, message_b::Tensor)
+function message_diff(message_a, message_b)
     n_a, n_b = norm(message_a), norm(message_b)
     f = abs2(dot(message_a, message_b) / (n_a * n_b))
     return 1 - f
@@ -118,7 +118,7 @@ function loop_correlation(bpc::BeliefPropagationCache, loop::Vector{<:NamedEdge}
     e_virtualinds = inds(message(bpc, target_e))
     e_virtualinds_sim = sim.(e_virtualinds)
 
-    local_tensors = Tensor[replaceinds(t, e_virtualinds, e_virtualinds_sim) for t in bp_factors(bpc, src_vertex)]
+    local_tensors = Tensor[replace_matching_ind(t, e_virtualinds, e_virtualinds_sim) for t in bp_factors(bpc, src_vertex)]
 
     tensors = Tensor[local_tensors; reduce(vcat, [bp_factors(bpc, v) for v in setdiff(vs, [src_vertex])]); incoming_messages]
     seq = contraction_sequence(tensors; alg = "omeinsum", optimizer = GreedyMethod())
@@ -134,12 +134,12 @@ function loop_correlation(bpc::BeliefPropagationCache, loop::Vector{<:NamedEdge}
 end
 
 #Calculate the correlations flowing around each of the primitive loops of the BP cache
-function loop_correlations(bpc::BeliefPropagationCache, smallest_loop_size::Integer; kwargs...)
+function loop_correlations(bpc::BeliefPropagationCache, smallest_loop_size::Integer)
     g = graph(bpc)
     cycles = NamedGraphs.cycle_to_path.(NamedGraphs.unique_simplecycles_limited_length(g, smallest_loop_size))
     corrs = []
     for loop in cycles
-        corrs = append!(corrs, loop_correlation(bpc, loop[1:(length(loop) - 1)], reverse(last(loop)); kwargs...))
+        corrs = append!(corrs, loop_correlation(bpc, loop[1:(length(loop) - 1)], reverse(last(loop))))
     end
     return corrs
 end
