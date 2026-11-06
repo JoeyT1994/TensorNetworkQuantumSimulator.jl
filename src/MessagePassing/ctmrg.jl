@@ -1,5 +1,4 @@
 using Random: Xoshiro
-using KrylovKit: Arnoldi, schursolve
 
 """
     CTMRGCache(network, env_maxdim::Integer; positions, projector = :svd)
@@ -272,7 +271,7 @@ function carried_projectors!(cache::CTMRGCache)
             a == (c == p ? q : p) && push!(directional, (c, parts))
         end
         if !isempty(directional)
-            # the messages into p and q from their other neighbours on f (f's walk from p is p, q, …)
+            # the messages out of p and q to their other neighbours on f (f's walk from p is p, q, …)
             w = face_walk(emb, f, p)
             push!(left, block(Ql, :A, first(message_core(emb, p, w[end]))))
             push!(right, block(Qr, :B, first(message_core(emb, q, w[3]))))
@@ -325,22 +324,16 @@ function eig_projectors(cache::CTMRGCache, f, ins_of, memo)
 end
 
 # Right and left bases of the kept invariant subspace at every interface of a ring, or `nothing` if
-# the face is left to the SVD projector. They are found at the last interface, matrix-free (densely
-# only if the two Krylov solves disagree), and carried around the ring by the blocks.
+# the face is left to the SVD projector. They are found at the last interface and carried around the
+# ring by the blocks.
 function ring_bases(mats, r, noise)
     n = length(mats)
-    N = size(mats[n], 2)
-    ring(x) = foldr(*, mats; init = x)
-    ringᵀ(y) = foldl((y, K) -> transpose(K) * y, mats; init = y)
-    found = krylov_spectral_bases(ring, ringᵀ, N, eltype(first(mats)), r, noise)
-    if isnothing(found)
-        found = spectral_bases(ring(Matrix{eltype(first(mats))}(LinearAlgebra.I, N, N)), r, noise)
-    end
-    (isnothing(found) || !found[3]) && return nothing
+    found = two_sided_bases(mats, r, noise)
+    isnothing(found) && return nothing
     orthonormal(X) = Matrix(qr(X).Q)[:, 1:size(X, 2)]
     Vs = Vector{Matrix}(undef, n)
     Ws = Vector{Matrix}(undef, n)
-    Vs[n], Ws[n] = found[1], found[2]
+    Vs[n], Ws[n] = found
     for k in n:-1:2
         Vs[k - 1] = orthonormal(mats[k] * Vs[k])
     end
@@ -350,87 +343,89 @@ function ring_bases(mats, r, noise)
     return Vs, Ws
 end
 
-# Relative distance below which two eigenvalues count as one cluster.
-const EIGENVALUE_GAP = 1.0e-8
+# Rings up to this size are solved on the whole space.
+const DENSE_RING = 400
 
-# Which eigenvalues to keep: at most r of the largest, none within the `noise`, and never splitting a
-# conjugate pair or a cluster (where the subspace is ill-defined). Returns the kept mask and whether
-# anything above the noise was left out, or `nothing` if nothing is kept.
-function kept_eigenvalues(λ, r, noise, isreal_matrix)
-    order = sortperm(abs.(λ); rev = true)
-    scale = abs(λ[first(order)])
-    nonzero = filter(i -> abs(λ[i]) > noise, order)
-    groups = Vector{Int}[]
-    taken = falses(length(λ))
-    for i in nonzero
-        taken[i] && continue
-        group = [i]
-        if isreal_matrix && !isreal(λ[i])
-            partner = findfirst(j -> j != i && !taken[j] && λ[j] ≈ conj(λ[i]), eachindex(λ))
-            isnothing(partner) && break  # its partner lies beyond what was computed
-            push!(group, partner)
-        end
-        taken[group] .= true
-        push!(groups, group)
-    end
-    keep = falses(length(λ))
-    for group in groups
-        count(keep) + length(group) > r && break
-        keep[group] .= true
-    end
-    separated(keep) = all(abs(λ[i] - λ[j]) > EIGENVALUE_GAP * scale for i in findall(keep), j in nonzero if !keep[j])
-    while any(keep) && !separated(keep)
-        keep[groups[findlast(g -> all(keep[g]), groups)]] .= false
-    end
-    any(keep) || return nothing
-    return keep, count(keep) < length(nonzero)
-end
-
-# Dense right and left bases (Wᵀ V = 1) of the kept invariant subspace of M, both from one Schur
-# decomposition so that they belong to the same eigenvalues; the left one from a Sylvester solve.
-function spectral_bases(M::AbstractMatrix, r::Integer, noise::Real)
-    F = schur(M)
-    kept = kept_eigenvalues(F.values, r, noise, eltype(M) <: Real)
-    isnothing(kept) && return nothing
-    keep, truncated = kept
-    ordschur!(F, keep)
-    k = count(keep)
-    T, Z = F.T, F.Z
-    k == size(M, 1) && return Z, transpose(inv(Z)), truncated
-    X = sylvester(T[1:k, 1:k], -T[(k + 1):end, (k + 1):end], -T[1:k, (k + 1):end])
-    Wt = [Matrix{eltype(T)}(LinearAlgebra.I, k, k) X] / Z
-    return Z[:, 1:k], transpose(Wt), truncated
-end
-
-# The same, matrix-free, from Krylov-Schur solves for the ring and its transpose; `nothing` (so the
-# dense route decides) if a solve fails or the two disagree.
-function krylov_spectral_bases(ring, ringᵀ, N, T, r, noise)
-    howmany = min(r + 2, N)
-    krylovdim = min(2howmany + 16, N)
-    alg = Arnoldi(; krylovdim, tol = noise, maxiter = 100, verbosity = 0)
+# Right and left bases (orthonormal) of the ring's kept invariant subspace, by a two-sided block
+# Krylov-Schur: block Krylov bases for the ring and its transpose, and a Rayleigh-Ritz on the pencil
+# (Wᵀ R V, Wᵀ V), so that both sides belong to the same Ritz values; restarted from the leading Schur
+# directions, and on the whole space for small rings. At most r are kept, never splitting eigenvalues
+# that are equal at working precision (or a conjugate pair). `nothing` if the spectrum fits in r
+# above the `noise` (the SVD projector is lossless there), or if there is no gap to cut at, or no
+# convergence.
+function two_sided_bases(mats, r, noise)
+    N = size(mats[end], 2)
+    T = eltype(first(mats))
+    ring(x) = foldr(*, mats; init = x)
+    ringᵀ(y) = foldl((y, K) -> transpose(K) * y, mats; init = y)
+    orthonormal(X) = Matrix(qr(X).Q)[:, 1:size(X, 2)]
+    dense = N <= DENSE_RING
+    b = min(max(r + 4, 2r), N)
+    depth = min(3, max(1, N ÷ b))
     rng = Xoshiro(N)
-    _, vR, λR, infoR = schursolve(ring, randn(rng, T, N), howmany, :LM, alg)
-    _, vL, λL, infoL = schursolve(ringᵀ, randn(rng, T, N), howmany, :LM, alg)
-    # Fewer converged than asked is fine if the rest are noise: there is nothing more above it
-    for (λ, info) in ((λR, infoR), (λL, infoL))
-        all(μ -> abs(μ) <= noise, λ[(info.converged + 1):end]) || return nothing
+    V, W = orthonormal(randn(rng, T, N, b)), orthonormal(randn(rng, T, N, b))
+    gap = 1000 * eps(real(T))
+    for _ in 1:50
+        if dense
+            Vk = Wk = Matrix{T}(LinearAlgebra.I, N, N)
+        else
+            Vk, Wk = block_krylov(ring, V, depth, N), block_krylov(ringᵀ, W, depth, N)
+            d = min(size(Vk, 2), size(Wk, 2))
+            Vk, Wk = Vk[:, 1:d], Wk[:, 1:d]
+        end
+        M = transpose(Wk) * Vk
+        F = schur(complex(M \ (transpose(Wk) * ring(Vk))))
+        order = sortperm(abs.(F.values); rev = true)
+        λ1 = abs(F.values[order[1]])
+        a = abs.(F.values[order]) ./ λ1
+        k = findlast(j -> (j < length(a) ? a[j] - a[j + 1] : a[j]) >= gap, 1:min(r, length(a)))
+        isnothing(k) && return nothing
+        right, left = leading_pencil_bases(F, order, M, k)
+        Vo, Wo = orthonormal(Vk * right), orthonormal(Wk * left)
+        RVo, RᵀWo = ring(Vo), ringᵀ(Wo)
+        residual = max(norm(RVo - Vo * (Vo' * RVo)), norm(RᵀWo - Wo * (Wo' * RᵀWo))) / λ1
+        if dense || residual <= max(10 * noise / λ1, 100 * eps(real(T)))
+            (k >= N || (k < length(a) && a[k + 1] * λ1 <= noise)) && return nothing
+            return Vo, Wo
+        end
+        right, left = leading_pencil_bases(F, order, M, min(b, length(order)))
+        V, W = orthonormal(Vk * right), orthonormal(Wk * left)
     end
-    λR, vR = λR[1:infoR.converged], vR[1:infoR.converged]
-    λL, vL = λL[1:infoL.converged], vL[1:infoL.converged]
-    isempty(λR) && return nothing
-    kept = kept_eigenvalues(λR, r, noise, T <: Real)
-    isnothing(kept) && return nothing
-    keep, truncated = kept
-    k = count(keep)
-    all(keep[1:k]) || return nothing
-    # the left solve must find the same kept eigenvalues
-    left = collect(λL[1:min(k, length(λL))])
-    for λ in λR[1:k]
-        j = findfirst(μ -> abs(μ - λ) <= EIGENVALUE_GAP * abs(λR[1]), left)
-        isnothing(j) && return nothing
-        deleteat!(left, j)
+    return nothing
+end
+
+# Orthonormal [X, A X, …, A^(m−1) X] for X orthonormal, without the directions already in the span
+# (a breakdown), and at most `maxdim` wide.
+function block_krylov(apply, X, m, maxdim)
+    blocks = [X]
+    total = size(X, 2)
+    for _ in 2:m
+        Y = apply(blocks[end])
+        scale = norm(Y)
+        for _ in 1:2, B in blocks
+            Y -= B * (B' * Y)
+        end
+        F = svd(Y)
+        keep = min(count(>(1000 * eps(real(eltype(Y))) * scale), F.S), maxdim - total)
+        keep == 0 && break
+        push!(blocks, F.U[:, 1:keep])
+        total += keep
     end
-    return reduce(hcat, vR[1:k]), reduce(hcat, vL[1:k]), truncated
+    return reduce(hcat, blocks)
+end
+
+# The pencil's right and left coordinates (in the Krylov bases) of the invariant subspace of its k
+# eigenvalues of largest modulus, from one Schur form F of M \ (Wᵀ R V): the right ones are its leading
+# Schur vectors, the left ones the rows [I X] Z⁻¹ (X from a Sylvester solve), brought back through M.
+function leading_pencil_bases(F, order, M, k)
+    keep = falses(length(F.values))
+    keep[order[1:k]] .= true
+    G = ordschur!(LinearAlgebra.Schur(copy(F.T), copy(F.Z), copy(F.values)), keep)
+    T, Z = G.T, G.Z
+    n = size(T, 1)
+    X = k == n ? zeros(eltype(T), k, 0) : sylvester(T[1:k, 1:k], -T[(k + 1):end, (k + 1):end], -T[1:k, (k + 1):end])
+    Lt = [Matrix{eltype(T)}(LinearAlgebra.I, k, k) X] / Z
+    return Z[:, 1:k], transpose(M) \ transpose(Lt)
 end
 
 function recompute_block(cache::CTMRGCache, block; kwargs...)
@@ -486,9 +481,11 @@ Update the corners and messages of a `CTMRGCache` until they converge.
 
 # Keyword Arguments
 - `convergence::Symbol = :messages`: What has to converge. `:messages` (for expectation values):
-  the environment of every vertex, by the same distance BP uses for its messages. `:freenergy`
-  (enough for the free energy): `freenergy(cache)`, which settles first.
-- `tolerance`: Convergence threshold (default `1e-12` for `:messages`, `1e-10` relative for `:freenergy`).
+  the environment of every vertex, by the same distance BP uses for its messages, 1 − |⟨a, b⟩|² /
+  (‖a‖‖b‖)², so a tolerance τ settles the environments to about √τ relative. `:freenergy` (enough for
+  the free energy): `freenergy(cache)`, relative, which settles first.
+- `tolerance`: Convergence threshold (default `1e-12` for `:messages` and `1e-10` for `:freenergy`,
+  but never below `100 eps` of the network's precision, so `1.2e-5` in single precision).
 - `maxiter::Integer = 30`: Maximum number of passes.
 - `verbose::Bool = false`: Print the outcome.
 
@@ -498,7 +495,7 @@ Update the corners and messages of a `CTMRGCache` until they converge.
 function update(
         cache::CTMRGCache;
         convergence::Symbol = :messages,
-        tolerance::Real = convergence === :messages ? 1.0e-12 : 1.0e-10,
+        tolerance::Real = default_ctmrg_tolerance(cache, convergence),
         maxiter::Integer = 30,
         verbose::Bool = false,
     )
@@ -519,6 +516,11 @@ function update(
     return cache
 end
 
+# The default convergence threshold: what double precision resolves, and no less than the network's
+# own precision does.
+default_ctmrg_tolerance(cache::CTMRGCache, convergence) =
+    max(convergence === :messages ? 1.0e-12 : 1.0e-10, 100 * eps(real(scalartype(network(cache)))))
+
 # The environment of every vertex: the messages into it and the corners around it, contracted.
 function vertex_environments(cache::CTMRGCache)
     return map(v -> evaluate_recipe(cache, vertex_environment(cache.embedding, v)), collect(vertices(cache)))
@@ -535,23 +537,20 @@ incoming_messages(cache::CTMRGCache, vs::Vector) = recipe_tensors(cache, environ
 """
     freenergy(cache::CTMRGCache)
 
-The free energy `-ln Z` of the network, `ln Z` estimated from the cache by the Kikuchi expansion
-over the regions with one vertex, edge or face explicit.
+The free energy `-ln Z` of the network, `ln Z` from the cache by the standard CTM estimator,
+`Σ_v ln Z_v − Σ_e ln Z_e + Σ_f ln Z_f`: `Z_v` closes vertex `v` (its site, messages and corners), `Z_e`
+is the cut across edge `e` (its two messages and the corners between them) and `Z_f` the ring of face
+`f`'s corners. Every message and corner enters with net count zero, so their normalisations drop out.
+With `env_maxdim = 1` the corners are scalars and this is the Bethe free energy of the messages.
 """
 function freenergy(cache::CTMRGCache)
     emb = cache.embedding
     g = graph(emb)
     memo = Dict{Any, Tensor}()
     lnZ(parts) = principal_log(scalar(evaluate_recipe(cache, parts; memo)))
-    F = sum(lnZ(face_region(emb, f)) for f in eachindex(faces(emb)); init = 0.0)
-    for v in vertices(g)
-        c = counting_number(emb, v)
-        iszero(c) || (F += c * lnZ(vertex_region(emb, v)))
-    end
-    for e in edges(g)
-        c = counting_number(emb, src(e), dst(e))
-        iszero(c) || (F += c * lnZ(edge_region(emb, src(e), dst(e))))
-    end
+    F = sum(lnZ(vertex_region(emb, v)) for v in vertices(g); init = 0.0)
+    F -= sum(lnZ(edge_cut(emb, src(e), dst(e))) for e in edges(g); init = 0.0)
+    F += sum(lnZ(face_cut(emb, f)) for f in eachindex(faces(emb)); init = 0.0)
     return -F
 end
 

@@ -164,7 +164,7 @@ The order in which the corners and messages are updated is worked out from the g
 
 - **Accurate expectation values on planar graphs that are not grids**, where boundary MPS cannot partition the graph into rows or columns.
 - **Free energies and partition functions** of planar classical models, via `contract(tn; alg = "ctmrg", env_maxdim)`.
-- Like boundary MPS, results converge to the exact answer as `env_maxdim` grows.
+- Like boundary MPS, results become exact at large enough `env_maxdim`. On graphs whose corner updates need pseudo-inverses (triangular faces, trivalent vertices, kagome and Penrose tilings) that is up to their regularisation, which can leave an error of about `1e-9`, more for corner spectra spread over many orders of magnitude.
 
 ### Basic usage
 
@@ -195,7 +195,7 @@ Observables can act on one vertex or on the two ends of an edge.
 )
 ```
 
-`convergence = :messages` waits for the environment of every vertex to settle, which is what expectation values need. The free energy settles earlier, so `convergence = :freenergy` is enough, and cheaper, when only the free energy is wanted.
+`convergence = :messages` waits for the environment of every vertex to settle, which is what expectation values need. The free energy settles earlier, so `convergence = :freenergy` is enough, and cheaper, when only the free energy is wanted. The `:messages` tolerance is on 1 − fidelity, as for BP, so `1e-12` settles the environments to about `1e-6`; the defaults are never below what the network's precision resolves (`1.2e-5` in single precision).
 
 ### Projectors
 
