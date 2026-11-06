@@ -535,23 +535,20 @@ incoming_messages(cache::CTMRGCache, vs::Vector) = recipe_tensors(cache, environ
 """
     freenergy(cache::CTMRGCache)
 
-The free energy `-ln Z` of the network, `ln Z` estimated from the cache by the Kikuchi expansion
-over the regions with one vertex, edge or face explicit.
+The free energy `-ln Z` of the network, `ln Z` from the cache by the standard CTM estimator,
+`Σ_v ln Z_v − Σ_e ln Z_e + Σ_f ln Z_f`: `Z_v` closes vertex `v` (its site, messages and corners), `Z_e`
+is the cut across edge `e` (its two messages and the corners between them) and `Z_f` the ring of face
+`f`'s corners. Every message and corner enters with net count zero, so their normalisations drop out.
+With `env_maxdim = 1` the corners are scalars and this is the Bethe free energy of the messages.
 """
 function freenergy(cache::CTMRGCache)
     emb = cache.embedding
     g = graph(emb)
     memo = Dict{Any, Tensor}()
     lnZ(parts) = principal_log(scalar(evaluate_recipe(cache, parts; memo)))
-    F = sum(lnZ(face_region(emb, f)) for f in eachindex(faces(emb)); init = 0.0)
-    for v in vertices(g)
-        c = counting_number(emb, v)
-        iszero(c) || (F += c * lnZ(vertex_region(emb, v)))
-    end
-    for e in edges(g)
-        c = counting_number(emb, src(e), dst(e))
-        iszero(c) || (F += c * lnZ(edge_region(emb, src(e), dst(e))))
-    end
+    F = sum(lnZ(vertex_region(emb, v)) for v in vertices(g); init = 0.0)
+    F -= sum(lnZ(edge_cut(emb, src(e), dst(e))) for e in edges(g); init = 0.0)
+    F += sum(lnZ(face_cut(emb, f)) for f in eachindex(faces(emb)); init = 0.0)
     return -F
 end
 

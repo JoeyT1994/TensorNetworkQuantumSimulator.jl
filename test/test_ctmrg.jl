@@ -35,6 +35,14 @@ end
     @test errs[2] < 1.0e-6
 end
 
+@testset "CTMRG at χ = 1 (:eig) is BP: its free energy is the Bethe free energy" begin
+    Random.seed!(5)
+    tn = positive_network(named_grid((4, 4)))
+    bp = update(BeliefPropagationCache(tn); maxiter = 500, tolerance = 1.0e-15)
+    ct = update(CTMRGCache(tn, 1; projector = :eig); maxiter = 500, tolerance = 1.0e-14)
+    @test freenergy(ct) ≈ freenergy(bp) rtol = 1.0e-10
+end
+
 @testset "CTMRG observables on a state" begin
     Random.seed!(7)
     g = named_hexagonal_lattice_graph(2, 2)

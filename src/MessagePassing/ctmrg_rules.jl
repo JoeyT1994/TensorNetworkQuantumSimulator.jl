@@ -313,10 +313,18 @@ function factor_enlarged(emb::PlanarEmbedding, parts, candidates)
     return parts
 end
 
-# Kikuchi counting numbers: 1 for a face, 1 − (inner faces on it) for an edge and
-# 1 + (inner faces at it) − (its degree) for a vertex.
-counting_number(emb::PlanarEmbedding, v) = 1 + count(isinner ∘ last, vertex_polygon(emb, v)) - length(vertex_polygon(emb, v))
-counting_number(emb::PlanarEmbedding, u, v) = 1 - isinner(face_of_dart(emb, u, v)) - isinner(face_of_dart(emb, v, u))
+# The closed regions with no sites, for the free energy: the cut across the edge {u, v} (its two
+# messages, joined by the corners of the faces either side except those at u and v), and the ring of
+# face f's own corners.
+function edge_cut(emb::PlanarEmbedding, u, v)
+    parts = Any[(:message, (u, v)), (:message, (v, u))]
+    for h in (face_of_dart(emb, u, v), face_of_dart(emb, v, u))
+        isinner(h) && append!(parts, corner_parts(h, filter(x -> x != u && x != v, face_vertices(emb, h))))
+    end
+    return parts
+end
+
+face_cut(emb::PlanarEmbedding, f) = corner_parts(f, face_vertices(emb, f))
 
 # The sites and blocks a recipe reads, each with the sign it enters with (an inverse subtracts;
 # projectors are the identity at lossless χ, so they read nothing).
@@ -401,6 +409,8 @@ function certify_rules(emb::PlanarEmbedding, exits, modes, order)
         (vertex_region(emb, v) for v in vertices(g)),
         (edge_region(emb, src(e), dst(e)) for e in edges(g)),
         (face_region(emb, f) for f in eachindex(faces(emb))),
+        (edge_cut(emb, src(e), dst(e)) for e in edges(g)),
+        (face_cut(emb, f) for f in eachindex(faces(emb))),
     ))
     return all(r -> recipe_coverage(emb, r, coverage) == whole, closed)
 end
