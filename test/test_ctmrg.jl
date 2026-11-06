@@ -2,16 +2,19 @@
 using TensorNetworkQuantumSimulator
 using TensorNetworkQuantumSimulator: freenergy, map_tensors
 using Random
-using Test: @testset, @test
+using Random: Xoshiro
+using LinearAlgebra: Diagonal, I, norm, opnorm, eigvals
+using Test: @testset, @test, @test_nowarn
 
 # Positive random tensors, so ln Z is real and the exact contraction is the reference.
-function positive_network(g; D = 2)
-    tn = random_tensornetwork(Float64, g; bond_dimension = D)
+function positive_network(g; D = 2, T = Float64)
+    tn = random_tensornetwork(T, g; bond_dimension = D)
     return map_tensors(t -> abs.(t), tn)
 end
 
-# kagome 3×3 and Penrose need directional corners, whose regularised pseudo-inverses set a floor
-# of about 1e-9 on lossless results; the others are exact to roundoff.
+# Triangular faces and trivalent vertices use pseudo-inverses of single corners, well conditioned
+# here; kagome 3×3 and Penrose also need directional corners, whose regularised pseudo-inverses of
+# corner chains set a floor of about 1e-9 on lossless results.
 @testset "CTMRG is exact at lossless χ: $label" for (label, g, tol) in [
         ("square", named_grid((4, 3)), 1.0e-8),
         ("honeycomb", named_hexagonal_lattice_graph(2, 2), 1.0e-8),
@@ -41,6 +44,27 @@ end
     bp = update(BeliefPropagationCache(tn); maxiter = 500, tolerance = 1.0e-15)
     ct = update(CTMRGCache(tn, 1; projector = :eig); maxiter = 500, tolerance = 1.0e-14)
     @test freenergy(ct) ≈ freenergy(bp) rtol = 1.0e-10
+end
+
+@testset "CTMRG in single precision converges at its default tolerance" begin
+    Random.seed!(6)
+    tn = positive_network(named_grid((4, 3)); T = Float32)
+    @test_nowarn update(CTMRGCache(tn, 64))
+    @test_nowarn update(CTMRGCache(tn, 64); convergence = :freenergy)
+end
+
+@testset "The :eig ring solver: two-sided invariant subspaces, N = $N (dense below 400, Krylov above)" for N in (64, 600)
+    rng = Xoshiro(N)
+    # a ring of 4 blocks with a gap after its 5 dominant eigenvalues
+    D = Diagonal([[4.0, 3.5, 3.0, 2.5, 2.0]; 0.5 .* rand(rng, N - 5)])
+    S = randn(rng, N, N)
+    R = S * D / S
+    mats = [R, Matrix{Float64}(I, N, N), Matrix{Float64}(I, N, N), Matrix{Float64}(I, N, N)]
+    V, W = TensorNetworkQuantumSimulator.two_sided_bases(mats, 5, N * eps() * opnorm(R))
+    @test size(V, 2) == size(W, 2) == 5
+    @test norm(R * V - V * (V' * R * V)) < 1.0e-8 * opnorm(R)
+    @test norm(transpose(R) * W - W * (W' * transpose(R) * W)) < 1.0e-8 * opnorm(R)
+    @test sort(real.(eigvals((transpose(W) * V) \ (transpose(W) * R * V)))) ≈ [2.0, 2.5, 3.0, 3.5, 4.0]
 end
 
 @testset "CTMRG observables on a state" begin
