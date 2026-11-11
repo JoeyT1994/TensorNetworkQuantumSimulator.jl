@@ -10,7 +10,7 @@ const ψ0 = tensornetworkstate(ComplexF64, v -> "↑", named_path_graph(2), "S=1
 # The state from a two-qubit QASM program, after the fixed non-trivial preparation in `HEADER`.
 function run_qasm(body)
     circuit = circuit_from_qasm(HEADER * body)
-    return first(apply_gates(circuit, ψ0; apply_kwargs = (; maxdim = 4, cutoff = 1.0e-14)))
+    return apply_gates(circuit, ψ0; apply_kwargs = (; maxdim = 4, cutoff = 1.0e-14))
 end
 
 fidelity(ψ, ϕ) = abs2(inner(ψ, ϕ; alg = "exact")) / (norm_sqr(ψ; alg = "exact") * norm_sqr(ϕ; alg = "exact"))

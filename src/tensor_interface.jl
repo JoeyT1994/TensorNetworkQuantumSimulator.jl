@@ -5,7 +5,8 @@ src/Backends/Backends.jl selects it (currently ITensorBaseBackend: ITensorBase n
 dense arrays or GradedArrays block-sparse arrays, i.e. abelian symmetries and fermions).
 
 Rules:
-  1. Nothing outside src/Backends/ references a tensor library.
+  1. Tensor-level code reaches the tensor library only through this module; network-level code
+     calls ITensorNetworksNext directly.
   2. Functions the package also extends for its own types are seam functions too: `contract`,
      `truncate`, `inner`, `uniqueinds`, `datatype`, `scalartype`.
   3. Base/LinearAlgebra generics (`qr`, `svd`, `eigen`, `factorize`, `norm`, `normalize`, `dot`,
@@ -21,10 +22,8 @@ Rules:
      fermions, so use the right one. `gram(a, b, legs) = dag(a, legs) * b`.
   6. `Tensor` and `Index` (bound in Backends.jl) are used only in annotations; new indices come
      from `new_index`, new tensors from the construction verbs.
-  7. Verbs have no fallbacks. Hooks (`fused_norm_message`, `fused_norm_scalar`, `site_op`,
-     `site_state`) are optional: their fallback returns `nothing` and the caller takes the generic
-     path. Their
-     scratch memory lives in `kernel_workspace()`, scoped by `with_kernel_workspace`.
+  7. Verbs have no fallbacks. Hooks (`site_op`, `site_state`) are optional: their fallback returns
+     `nothing` and the caller takes the generic path.
 =#
 module TensorInterface
 
@@ -155,23 +154,6 @@ end
 
 # Hooks (rule 7)
 """
-    fused_norm_message(ψ, sinds, incoming)
-
-Optional fused double-layer BP kernel: the outgoing message on the one bond of `ψ` not covered by
-the `incoming` (b, b′) messages, i.e. `contract([incoming; ψ; ψ̄])` with ket and bra sharing the
-site indices `sinds` and the bra's virtual legs primed, without forming the double-layer tensor.
-"""
-fused_norm_message(ψ, sinds, incoming) = nothing
-
-"""
-    fused_norm_scalar(ψ, sinds, incoming, ops)
-
-Optional fused single-vertex closure: the scalar `contract([incoming; ψ; ops; ψ̄])`, where `ops`
-are (s′, s) operators on site legs `s ∈ sinds` (empty for the norm).
-"""
-fused_norm_scalar(ψ, sinds, incoming, ops) = nothing
-
-"""
     site_op(name, sites...; kwargs...)
 
 Optional backend operator library, consulted by `op` before the package's own: the operator `name`
@@ -185,26 +167,6 @@ site_op(name, sites...; kwargs...) = nothing
 Optional backend state library, consulted by `state` before the package's own, or `nothing`.
 """
 site_state(name, site) = nothing
-
-"""
-    with_kernel_workspace(f)
-
-Run `f()` with the fused kernels sharing one set of scratch buffers across calls (e.g. a BP
-sweep). On return the workspace is held only weakly: the next scope reuses it unless a GC has
-collected it in between, so buffers are never kept alive past a GC. Nested scopes share the
-outermost workspace.
-"""
-function with_kernel_workspace(f)
-    tls = task_local_storage()
-    haskey(tls, :tnqs_kernel_workspace) && return f()
-    last = get(tls, :tnqs_kernel_workspace_last, WeakRef()).value
-    workspace = last === nothing ? Dict{Any, Any}() : last
-    tls[:tnqs_kernel_workspace_last] = WeakRef(workspace)
-    return task_local_storage(f, :tnqs_kernel_workspace, workspace)
-end
-
-# The current scope's workspace (a Dict for the backend's kernels to pool buffers in), or nothing.
-kernel_workspace() = get(task_local_storage(), :tnqs_kernel_workspace, nothing)
 
 export Algorithm, @Algorithm_str
 

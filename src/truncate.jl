@@ -23,7 +23,7 @@ identity_gate(ref, s, e) = adapt(datatype(ref))(prod(op("I", sv) for sv in [s[sr
 function truncate(bpc::BeliefPropagationCache; cache_update_kwargs = default_bp_update_kwargs(bpc), maxdim::Integer, cutoff = nothing, edge_color = true, normalize_tensors = true)
     bpc = copy(bpc)
     s = siteinds(network(bpc))
-    apply_kwargs = (; maxdim, cutoff, normalize_tensors)
+    alg = ITNN.BPApplyGate(; trunc = ITensorBaseBackend._mak_trunc(; maxdim, cutoff), normalize = normalize_tensors)
     # Truncate a group of disjoint edges at a time (the colours of an edge colouring), or one edge
     # at a time, updating the cache after each group.
     edge_groups = if edge_color
@@ -41,8 +41,17 @@ function truncate(bpc::BeliefPropagationCache; cache_update_kwargs = default_bp_
         [[e] for e in edges(bpc)]
     end
     for eg in edge_groups
-        for e in eg
-            truncatable_edge(bpc, e) && apply_gate!(identity_gate(bpc, s, e), bpc; v⃗ = [src(e), dst(e)], apply_kwargs)
+        tn = network(bpc)
+        for e in filter(e -> truncatable_edge(bpc, e), eg)
+            sv = [s[src(e)]; s[dst(e)]]
+            # `apply_operator!` overwrites the data of the tensors it reads, which `copy(bpc)` shares.
+            foreach(v -> tn[v] = copy(tn[v]), (src(e), dst(e)))
+            # The new bond keeps the old bond's name, which the norm network's bra-name map contains.
+            l = ITensorBase.name(only(virtualinds(tn, e)))
+            ITNN.apply_operator!(
+                alg, tn, ITensorBase.operator(identity_gate(bpc, s, e), prime.(sv), sv), tn, bpc.messages;
+                vertices = [src(e), dst(e)], bondnames = (l, ITensorBase.prime(l))
+            )
         end
         bpc = update(bpc; cache_update_kwargs...)
     end
@@ -67,8 +76,8 @@ function truncate(bmps_cache::BoundaryMPSCache; maxdim::Integer, cutoff = nothin
                     ρv1 = normalize(ρv1)
                     ρv2 = normalize(ρv2)
                 end
-                setindex_preserve!(bmps_cache, ρv1, src(e))
-                setindex_preserve!(bmps_cache, ρv2, dst(e))
+                network(bmps_cache)[src(e)] = ρv1
+                network(bmps_cache)[dst(e)] = ρv2
             end
             update_partition!(bmps_cache, [e])
         end

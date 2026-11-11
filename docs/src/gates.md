@@ -39,11 +39,11 @@ Apply gates to a `TensorNetworkState` or a `BeliefPropagationCache`:
 apply_kwargs = (; maxdim = 10, cutoff = 1e-10, normalize_tensors = true)
 
 # Apply to a TensorNetworkState (constructs a BP cache internally)
-ψ, errors = apply_gates(circuit, ψ; apply_kwargs)
+ψ = apply_gates(circuit, ψ; apply_kwargs)
 
 # Apply to a BeliefPropagationCache (reuses existing messages)
 ψ_bpc = BeliefPropagationCache(ψ)
-ψ_bpc, errors = apply_gates(circuit, ψ_bpc; apply_kwargs)
+ψ_bpc = apply_gates(circuit, ψ_bpc; apply_kwargs)
 ```
 
 ### Keyword Arguments
@@ -57,11 +57,9 @@ apply_kwargs = (; maxdim = 10, cutoff = 1e-10, normalize_tensors = true)
 
 ### Return Values
 
-`apply_gates` returns a tuple `(ψ_updated, errors)` where:
-- `ψ_updated` is the updated state (or cache).
-- `errors` is a vector of truncation errors, one per gate.
+`apply_gates` returns the updated `TensorNetworkState` when given a state, and the updated `BeliefPropagationCache` when given a cache. It does not return truncation errors.
 
-The product `prod(1 .- errors)` gives a lower bound on the fidelity accumulated across all gate applications.
+The method `apply_gates(gates::Vector{<:Tensor}, ψ, messages; cache_update_kwargs)`, which takes a network and the messages of its norm network instead of a cache, returns the pair `(ψ, messages)`.
 
 ## Simple Update Algorithm
 
@@ -136,7 +134,7 @@ For a one-off gate, register its matrix with [`register_op!`](@ref) (first site 
 s = siteinds(ψ)
 register_op!("MyGate", my_nn_gate; nsites = 2)
 gate = op("MyGate", only(s[v1]), only(s[v2]))
-ψ, errors = apply_gates([gate], ψ; apply_kwargs)
+ψ = apply_gates([gate], ψ; apply_kwargs)
 ```
 
 #### Path 2: Register a named gate
@@ -160,7 +158,7 @@ register_gate!("FSim"; paramkeys = (:θ, :ϕ))
 
 # 3. Use it in circuits like any built-in
 circuit = [("FSim", [v1, v2], (π/4, π/8))]
-ψ, _ = apply_gates(circuit, ψ)
+ψ = apply_gates(circuit, ψ)
 ```
 
 The keyword arguments map as:

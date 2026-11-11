@@ -9,7 +9,7 @@
         end
         circuit = reduce(vcat, [layer for _ in 1:2])
         bp_update_kwargs = (; maxiter = 30, tolerance = 1.0e-12)
-        ψ, errs = apply_gates(
+        ψ = apply_gates(
             circuit, ψ;
             apply_kwargs = (; maxdim = 4, cutoff = 1.0e-14), cache_update_kwargs = bp_update_kwargs
         )

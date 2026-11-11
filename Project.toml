@@ -1,16 +1,18 @@
 name = "TensorNetworkQuantumSimulator"
 uuid = "4de3b72a-362e-43dd-83ff-3f381eda9f9c"
 license = "MIT"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["JoeyT1994 <jtindall@flatironinstitute.org>", "and contributors"]
 description = "A Julia package for quantum simulation with tensor networks of near-arbitrary topology."
 
 [deps]
 Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
+DataGraphs = "b5a273c3-7e6c-41f6-98bd-8d7f1525a36a"
 Dictionaries = "85a47980-9c8c-11e8-2b9f-f7ca1fa99fb4"
 GradedArrays = "bc96ca6e-b7c8-4bb6-888e-c93f838762c2"
 Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
 ITensorBase = "4795dd04-0d67-49bb-8f44-b89c448a1dc7"
+ITensorNetworksNext = "302f2e75-49f0-4526-aef7-d8ba550cb06c"
 KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
@@ -35,12 +37,26 @@ Qiskit = "91d9a17d-f964-4b6c-a3c4-2f4cfdea2c95"
 [extensions]
 TensorNetworkQuantumSimulatorQiskitExt = "Qiskit"
 
+[sources.ITensorBase]
+rev = "qr-compact-inplace"
+url = "https://github.com/ITensor/ITensorBase.jl.git"
+
+[sources.ITensorNetworksNext]
+rev = "dev"
+url = "https://github.com/jack-dunham/ITensorNetworksNext.jl.git"
+
+[sources.TensorAlgebra]
+rev = "qr-compact-inplace"
+url = "https://github.com/ITensor/TensorAlgebra.jl.git"
+
 [compat]
 Adapt = "4.3.0"
+DataGraphs = "0.6"
 Dictionaries = "0.4"
 GradedArrays = "0.17"
 Graphs = "1.8.0"
-ITensorBase = "0.16"
+ITensorBase = "0.16.1"
+ITensorNetworksNext = "0.11.2"
 KrylovKit = "0.10.2"
 LinearAlgebra = "1.10"
 Logging = "1.10"

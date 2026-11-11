@@ -4,12 +4,9 @@ using NamedGraphs: post_order_dfs_edges, forest_cover_edge_sequence, boundary_ed
 using LinearAlgebra: normalize
 
 #TODO: Make this show() nicely.
-struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M} <:
-    AbstractBeliefPropagationCache{V}
-    network::N
-    messages::Dictionary{NamedEdge, M}
-    contraction_sequences::Dictionary{Pair, Vector}
-    edge_sequence::Vector
+struct BeliefPropagationCache{V, F, M <: ITNN.MessageCache} <: AbstractBeliefPropagationCache{V}
+    factors::F
+    messages::M
 end
 
 function message_diff(message_a, message_b)
@@ -18,42 +15,64 @@ function message_diff(message_a, message_b)
     return 1 - f
 end
 
+function BeliefPropagationCache(factors, messages::ITNN.MessageCache)
+    return BeliefPropagationCache{vertextype(factors), typeof(factors), typeof(messages)}(factors, messages)
+end
+function BeliefPropagationCache(form::ITNN.AbstractBilinearFormNetwork)
+    return BeliefPropagationCache(form, ITNN.message_environment(one, form))
+end
+# A network without site indices is contracted as it is; a state through its norm network.
+function BeliefPropagationCache(ψ::ITensorNetwork)
+    all(isempty, siteinds(ψ)) && return BeliefPropagationCache(ψ, default_messages(ψ))
+    return BeliefPropagationCache(ITNN.normnetwork(ITensorBase.prime, ψ))
+end
+BeliefPropagationCache(blf::BilinearForm) = BeliefPropagationCache(blf, default_messages(blf))
+
+# Starting messages for a network whose factor at each vertex is contracted as plain tensors:
+# a `delta` over the link indices of each edge, in both directions.
+function default_messages(tn::AbstractTensorNetwork)
+    es = collect(edges(tn))
+    return ITNN.messagecache(e -> adapt_like(tn, dense(delta(virtualinds(tn, e)))), [es; reverse.(es)])
+end
+
 messages(bp_cache::BeliefPropagationCache) = bp_cache.messages
-network(bp_cache::BeliefPropagationCache) = bp_cache.network
+message(bp_cache::BeliefPropagationCache, edge::AbstractEdge) = ITensorBase.state(bp_cache.messages[edge])
+function network(bp_cache::AbstractBeliefPropagationCache)
+    return bp_cache.factors isa ITNN.NormNetwork ? ITNN.ketnetwork(bp_cache.factors) : bp_cache.factors
+end
 graph(bp_cache::BeliefPropagationCache) = graph(network(bp_cache))
 
-function BeliefPropagationCache(network, messages, contraction_sequences)
-    return BeliefPropagationCache(network, messages, contraction_sequences, forest_cover_edge_sequence(graph(network)))
+copy_factors(factors) = copy(factors)
+copy_factors(nn::ITNN.NormNetwork) = ITNN.normnetwork(copy(ITNN.ketnetwork(nn)), ITNN.branamemap(nn))
+function copy_factors(qf::ITNN.QuadraticFormNetwork)
+    return ITNN.quadraticformnetwork(copy(ITNN.ketnetwork(qf)), ITNN.operatornetwork(qf), ITNN.branamemap(qf))
 end
-BeliefPropagationCache(network, messages) = BeliefPropagationCache(network, messages, Dictionary{Pair, Vector}())
-BeliefPropagationCache(network) = BeliefPropagationCache(network, default_messages())
-
-contraction_sequences(bp_cache::BeliefPropagationCache) = bp_cache.contraction_sequences
 
 function Base.copy(bp_cache::BeliefPropagationCache)
-    return BeliefPropagationCache(copy(network(bp_cache)), copy(messages(bp_cache)), copy(contraction_sequences(bp_cache)), copy(edge_sequence(bp_cache)))
+    return BeliefPropagationCache(copy_factors(bp_cache.factors), copy(bp_cache.messages))
 end
 
 default_bp_maxiter(g::AbstractGraph) = is_tree(g) ? 1 : DEFAULT_BP_MAXITER
 
-edge_sequence(bp_cache::BeliefPropagationCache) = bp_cache.edge_sequence
-
-function edge_scalar(bp_cache::BeliefPropagationCache, edge::AbstractEdge)
-    return scalar(message(bp_cache, edge) * message(bp_cache, reverse(edge)))
-end
-
 #Algorithmic defaults
-default_update_alg(bp_cache::BeliefPropagationCache) = "bp"
-default_message_update_alg(bp_cache::BeliefPropagationCache) = "contract"
 function set_default_kwargs(alg::Algorithm"contract", bp_cache::AbstractBeliefPropagationCache)
     return Algorithm("contract"; merge((; normalize = true, sequence_alg = "optimal"), alg.kwargs)...)
 end
-function set_default_kwargs(alg::Algorithm"bp", bp_cache::BeliefPropagationCache)
-    defaults = (; verbose = false, maxiter = default_bp_maxiter(bp_cache), edge_sequence = edge_sequence(bp_cache), tolerance = nothing)
-    kwargs = merge(defaults, alg.kwargs)
-    message_update_alg = set_default_kwargs(get(kwargs, :message_update_alg, Algorithm(default_message_update_alg(bp_cache))), bp_cache)
-    return Algorithm("bp"; merge(kwargs, (; message_update_alg))...)
+
+function update(
+        bp_cache::BeliefPropagationCache;
+        maxiter = default_bp_maxiter(bp_cache),
+        tolerance = nothing,
+        verbose = false,
+        edge_sequence = forest_cover_edge_sequence(graph(bp_cache)),
+    )
+    stopping_criterion = isnothing(tolerance) ? (; maxiter) : (; maxiter, tol = tolerance)
+    factors = copy_factors(bp_cache.factors)
+    ms = ITNN.beliefpropagation(factors, bp_cache.messages; edges = edge_sequence, stopping_criterion)
+    return BeliefPropagationCache(factors, ms)
 end
+
+freenergy(bp_cache::BeliefPropagationCache) = ITNN.bethe_free_energy(bp_cache.factors, bp_cache.messages)
 
 function rescale_vertices!(
         bpc::BeliefPropagationCache,
@@ -62,12 +81,12 @@ function rescale_vertices!(
     tn = network(bpc)
 
     for v in vertices
-        vn = vertex_scalar(bpc, v)
+        vn = ITNN.vertex_scalar(bpc.factors, bpc.messages, v)
         s = isreal(vn) ? sign(vn) : one(vn)
-        if tn isa TensorNetworkState
-            setindex_preserve!(tn, tn[v] * s * inv(sqrt(vn)), v)
-        elseif tn isa TensorNetwork
-            setindex_preserve!(tn, tn[v] * s * inv(vn), v)
+        if bpc.factors isa ITNN.NormNetwork
+            tn[v] = tn[v] * s * inv(sqrt(vn))
+        elseif bpc.factors isa ITensorNetwork
+            tn[v] = tn[v] * s * inv(vn)
         else
             error("Don't know how to rescale the vertices of this type")
         end
@@ -92,15 +111,16 @@ end
 default_bp_update_kwargs(bp_cache::BeliefPropagationCache) = default_bp_update_kwargs(network(bp_cache))
 
 function rescale_messages!(bp_cache::BeliefPropagationCache, edges::Vector{<:AbstractEdge})
+    ms = messages(bp_cache)
     for e in edges
-        me, mer = normalize(message(bp_cache, e)), normalize(message(bp_cache, reverse(e)))
-        n = scalar(me * mer)
+        me, mer = normalize(ms[e]), normalize(ms[reverse(e)])
+        n = (me * mer)[]
         if isreal(n)
             me *= sign(n)
             n *= sign(n)
         end
-        setmessage!(bp_cache, e, me * inv(sqrt(n)))
-        setmessage!(bp_cache, reverse(e), mer * inv(sqrt(n)))
+        ms[e] = me * inv(sqrt(n))
+        ms[reverse(e)] = mer * inv(sqrt(n))
     end
     return bp_cache
 end
@@ -118,9 +138,9 @@ function loop_correlation(bpc::BeliefPropagationCache, loop::Vector{<:NamedEdge}
     e_virtualinds = inds(message(bpc, target_e))
     e_virtualinds_sim = sim.(e_virtualinds)
 
-    local_tensors = Tensor[replace_matching_ind(t, e_virtualinds, e_virtualinds_sim) for t in bp_factors(bpc, src_vertex)]
+    local_tensors = Tensor[replace_matching_ind(t, e_virtualinds, e_virtualinds_sim) for t in ITNN.factor_tensors(bpc.factors, src_vertex)]
 
-    tensors = Tensor[local_tensors; reduce(vcat, [bp_factors(bpc, v) for v in setdiff(vs, [src_vertex])]); incoming_messages]
+    tensors = Tensor[local_tensors; reduce(vcat, [collect(ITNN.factor_tensors(bpc.factors, v)) for v in setdiff(vs, [src_vertex])]); incoming_messages]
     seq = contraction_sequence(tensors; alg = "omeinsum", optimizer = GreedyMethod())
     t = contract(tensors; sequence = seq)
 

@@ -1,39 +1,35 @@
-# A Form wraps a `ket`, an `operator` and a `bra` tensor network (the bra may be stored
-# or derived from the ket). Concrete subtypes must define `ket`, `operator`, and the
-# per-vertex / per-edge dual accessors `bra_tensor` and `bra_virtualinds`. A whole-network
-# `bra` is optional: `QuadraticForm` derives its bra lazily and does not provide one.
-abstract type AbstractForm{V} <: AbstractTensorNetwork{V} end
-
-ket(form::AbstractForm) = not_implemented()
-operator(form::AbstractForm) = not_implemented()
-bra_tensor(form::AbstractForm, v) = not_implemented()
-bra_virtualinds(form::AbstractForm, edge) = not_implemented()
+# A Form wraps a `ket` and a `bra` tensor network. Concrete subtypes define
+# `ITNN.ketnetwork`, `ITNN.branetwork` and `ITNN.factor_tensors`.
+abstract type AbstractForm{T, V} <: AbstractTensorNetwork{T, V} end
 
 #Forward onto the ket
 for f in [
-        :(graph),
-        :datatype,
-        :(scalartype),
-        :tensortype,
-        :(NamedGraphs.leafless_edge_induced_subgraphs),
+        :(Graphs.vertices),
+        :(Graphs.edges),
+        :(NamedGraphs.encoded_vertex),
+        :(NamedGraphs.decoded_vertex),
+        :(NamedGraphs.encoded_graph),
+        :(DataGraphs.is_vertex_assigned),
     ]
     @eval begin
         function $f(form::AbstractForm, args...; kwargs...)
-            return $f(ket(form), args...; kwargs...)
+            return $f(ITNN.ketnetwork(form), args...; kwargs...)
         end
     end
 end
 
-function virtualinds(form::AbstractForm, edge::NamedEdge)
-    return vcat(virtualinds(ket(form), edge), virtualinds(operator(form), edge), bra_virtualinds(form, edge))
-end
-
-function bp_factors(form::AbstractForm, verts::Vector)
-    factors = Tensor[]
-    for v in verts
-        append!(factors, Tensor[ket(form)[v], operator(form)[v], bra_tensor(form, v)])
+for f in [
+        :datatype,
+        :scalartype,
+        :tensortype,
+    ]
+    @eval begin
+        function $f(form::Union{AbstractForm, ITNN.AbstractBilinearFormNetwork}, args...; kwargs...)
+            return $f(ITNN.ketnetwork(form), args...; kwargs...)
+        end
     end
-    return factors
 end
 
-bp_factors(form::AbstractForm, v) = bp_factors(form, [v])
+function virtualinds(form::Union{AbstractForm, ITNN.AbstractBilinearFormNetwork}, edge::NamedEdge)
+    return vcat(collect(ITNN.linkinds(ITNN.ketnetwork(form), edge)), collect(ITNN.linkinds(ITNN.branetwork(form), edge)))
+end

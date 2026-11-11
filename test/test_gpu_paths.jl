@@ -36,14 +36,14 @@ if HAS_CUDA
         @test z(expect(ψg, obs; alg = "bp")) ≈ z(expect(ψ, obs; alg = "bp")) atol = 1.0e-12
         @test z(expect(ψg, obs; alg = "exact")) ≈ z(expect(ψ, obs; alg = "exact")) atol = 1.0e-12
 
-        ψ2, _ = apply_gates(layer, ψ; apply_kwargs)
-        ψ2g, _ = apply_gates(layer, ψg; apply_kwargs)
+        ψ2 = apply_gates(layer, ψ; apply_kwargs)
+        ψ2g = apply_gates(layer, ψg; apply_kwargs)
         @test z(expect(ψ2g, obs; alg = "bp")) ≈ z(expect(ψ2, obs; alg = "bp")) atol = 1.0e-12
         @test TNQS.TensorInterface.data(ψ2g[(2, 2)]) isa CuArray             # stays on the device
-        # the consuming entry point (fused kernel + consumed destinations on device storage)
+        # the consuming entry point (`ITensorNetworksNext.apply_operators!` on device storage)
         bpc = BeliefPropagationCache(deepcopy(ψ)); bpcg = BeliefPropagationCache(deepcopy(ψg))
-        bpc, _ = apply_gates!(layer, bpc; apply_kwargs, update_cache = true)
-        bpcg, _ = apply_gates!(layer, bpcg; apply_kwargs, update_cache = true)
+        bpc = apply_gates!(layer, bpc; apply_kwargs, update_cache = true)
+        bpcg = apply_gates!(layer, bpcg; apply_kwargs, update_cache = true)
         @test z(expect(bpcg, obs)) ≈ z(expect(bpc, obs)) atol = 1.0e-12
 
         # CTMRG host/device agreement, on a lossless case (D = 2 at χ = 16 on a 4×4)

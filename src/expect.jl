@@ -70,9 +70,8 @@ function expect(
 
     joint_op = joint_operator(op_strings, obs_vs)
     op_string_f = isnothing(joint_op) ? op_string_function(op_strings, obs_vs) : (v -> "I")
-    numer, denom = with_kernel_workspace() do
-        region_scalar(cache, region, op_string_f; joint_op), region_scalar(cache, region, v -> "I")
-    end
+    numer = region_scalar(cache, region, op_string_f; joint_op)
+    denom = region_scalar(cache, region, v -> "I")
 
     return coeff * numer / denom
 end
@@ -114,7 +113,7 @@ function expect(
         cache::AbstractBeliefPropagationCache,
         observables::Vector{<:Tuple}
     )
-    return with_kernel_workspace(() -> map(obs -> expect(alg, cache, obs), observables))
+    return map(obs -> expect(alg, cache, obs), observables)
 end
 
 # bp and ctmrg: converge a cache over ψ (`cache_kwargs` are the cache's, e.g. `env_maxdim`), then measure.

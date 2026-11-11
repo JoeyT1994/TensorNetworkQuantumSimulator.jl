@@ -20,7 +20,7 @@ build_graph_from_circuit(circuit::Circuit) = build_graph_from_circuit(circuit.ga
 function apply_gates(circuit::Circuit, ψ::Union{TensorNetworkState, BeliefPropagationCache}; kwargs...)
     all(v -> has_vertex(graph(ψ), v), circuit.qubits) ||
         throw(ArgumentError("the state must contain every declared qubit of the circuit"))
-    isempty(circuit.gates) && return copy(ψ), Float64[]
+    isempty(circuit.gates) && return copy(ψ)
     return apply_gates(circuit.gates, ψ; kwargs...)
 end
 

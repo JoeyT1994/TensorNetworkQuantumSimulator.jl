@@ -55,7 +55,7 @@ end
 # 4. Apply 50 layers of the circuit
 apply_kwargs = (; maxdim = 10, cutoff = 1e-10, normalize_tensors = true)
 circuit = reduce(vcat, [layer for _ in 1:50])
-ψ, errors = apply_gates(circuit, ψ; apply_kwargs)
+ψ = apply_gates(circuit, ψ; apply_kwargs)
 
 # 5. Measure an expectation value
 sz_bp = expect(ψ, ("Z", (3, 3)); alg = "bp")
@@ -89,9 +89,9 @@ Custom graphs can also be built directly with [NamedGraphs.jl](https://github.co
 
 ![Tensor network types](docs/src/tensor_network_types.svg)
 
-The library provides two core tensor network types:
+The library provides two names for tensor networks, which refer to the same type, `ITensorNetworksNext.ITensorNetwork`:
 - **`TensorNetwork`**: A network of tensors connected by virtual bond indices only, contracting to a scalar (e.g. classical partition functions).
-- **`TensorNetworkState`**: Extends `TensorNetwork` with physical site indices per vertex, representing quantum states ``|\psi\rangle`` (1 index per site) or density matrices / Heisenberg operators (2 indices per site).
+- **`TensorNetworkState`**: A `TensorNetwork` whose tensors also carry physical site indices per vertex, representing quantum states ``|\psi\rangle`` (1 index per site) or density matrices / Heisenberg operators (2 indices per site).
 
 ```julia
 # Scalar TensorNetwork (e.g. classical Ising partition function Z(β))
@@ -141,14 +141,14 @@ Apply gates to the TNS using `apply_gates`. The `apply_kwargs` control bond dime
 
 ```julia
 apply_kwargs = (; maxdim = 10, cutoff = 1e-10, normalize_tensors = true)
-ψ, errors = apply_gates(circuit, ψ; apply_kwargs)
+ψ = apply_gates(circuit, ψ; apply_kwargs)
 ```
 
 You can also pass a `BeliefPropagationCache` directly to reuse BP messages between gate applications:
 
 ```julia
 ψ_bpc = update(BeliefPropagationCache(ψ))
-ψ_bpc, errors = apply_gates(circuit, ψ_bpc; apply_kwargs)
+ψ_bpc = apply_gates(circuit, ψ_bpc; apply_kwargs)
 ```
 
 ### Expectation Values
@@ -257,7 +257,7 @@ s = siteinds("Fermion", g; symmetry = "fU1")
 
 # Trotterized hopping evolution exp(-i θ (c†ᵢcⱼ + c†ⱼcᵢ))
 circuit = [("F_hop", pair, θ) for pair in edge_pairs]
-ψ, errors = apply_gates(circuit, ψ; apply_kwargs)
+ψ = apply_gates(circuit, ψ; apply_kwargs)
 
 # Occupations and two-point functions (any pair of vertices, strings handled internally)
 n = expect(ψ, ("N", [v]); alg = "bp")
@@ -351,13 +351,13 @@ We encourage users to read the literature listed below and explore the [tests](t
 You can also work directly in the Heisenberg picture, representing a many-body operator as a TNS with two indices per site.
 
 ```julia
-using TensorNetworkQuantumSimulator: noprime, setindex_preserve!
+using TensorNetworkQuantumSimulator: noprime
 
 # Start with the Z operator on a single site vz, identity elsewhere
 s = siteinds("S=1/2", g; inds_per_site = 2)
 ψI = identity_tensornetworkstate(ComplexF64, g, s)
 ψ0 = copy(ψI)
-setindex_preserve!(ψ0, noprime(ψ0[vz] * op("Z", s[vz][1])), vz)
+ψ0[vz] = noprime(ψ0[vz] * op("Z", s[vz][1]))
 ```
 
 Gates are then applied as pairs to the ket (`s[v][1]`) and bra (`s[v][2]`) indices, and observables are extracted via inner products with other operators (e.g. the identity network gives the trace; see `examples/2dIsing_dynamics_Heisenbergpicture.jl`).

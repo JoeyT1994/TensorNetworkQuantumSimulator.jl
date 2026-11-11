@@ -40,7 +40,7 @@ circuit = jl.circuit_from_qasm(qasm2.dumps(qc))
 g = jl.build_graph_from_circuit(circuit)
 
 psi0 = jl.tensornetworkstate(jl.ComplexF64, jl.seval('v -> "↑"'), g, "S=1/2")
-psi, errors = jl.apply_gates(circuit, psi0, apply_kwargs=jl.seval("(; maxdim = 16, cutoff = 1e-12)"))
+psi = jl.apply_gates(circuit, psi0, apply_kwargs=jl.seval("(; maxdim = 16, cutoff = 1e-12)"))
 
 observables = jl.seval('[("Z", [1]), ("ZZ", [1, 4]), ("XXXX", [1, 2, 3, 4])]')
 values = [complex(v) for v in jl.expect(psi, observables, alg="bp")]
@@ -66,7 +66,7 @@ function simulate(qasm; maxdim = 16)
     circuit = circuit_from_qasm(qasm)
     g = build_graph_from_circuit(circuit)
     ψ0 = tensornetworkstate(ComplexF64, v -> "↑", g, "S=1/2")
-    ψ, _ = apply_gates(circuit, ψ0; apply_kwargs = (; maxdim, cutoff = 1e-12))
+    ψ = apply_gates(circuit, ψ0; apply_kwargs = (; maxdim, cutoff = 1e-12))
     return [real(only(expect(ψ, [("Z", [v])]; alg = "bp"))) for v in circuit.qubits]
 end
 """)

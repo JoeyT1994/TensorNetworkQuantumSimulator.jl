@@ -13,8 +13,7 @@
         append!(layer, ("F_pair", (src(e), dst(e)), 0.29) for e in es)
         append!(layer, ("F_hop", (src(e), dst(e)), 0.37) for e in es)
         append!(layer, ("F_phase", [v], 0.21) for v in vs)
-        ψt, errs = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 64))
-        @test maximum(errs) < 1.0e-12
+        ψt = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 64))
         cs = jw_ops(n)
         ψv = jw_evolve(layer, cs, mode, n)
         nrm = real(ψv' * ψv)
@@ -53,7 +52,7 @@
         for ces in edge_color(g, 4)
             append!(half, ("F_hop", pair, -0.05) for pair in ces)
         end
-        ψt, _ = apply_gates(
+        ψt = apply_gates(
             vcat(half, reverse(half)), ψ;
             apply_kwargs = (; maxdim = 8, cutoff = 1.0e-12)
         )
@@ -75,7 +74,7 @@
         s = TNQS.siteinds("Fermion", g)
         ψ = tensornetworkstate(ComplexF64, v -> v == (1, 1) ? "Occ" : "Emp", g, s)
         layer = Any[("F_hop", (src(e), dst(e)), 0.4) for e in edges(g)]
-        ψ, _ = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 4, cutoff = 1.0e-14))
+        ψ = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 4, cutoff = 1.0e-14))
         bpc = update(BeliefPropagationCache(ψ); maxiter = 50, tolerance = 1.0e-12)
         for e in edges(TNQS.graph(bpc))
             M = TNQS.parity_message_gauge(TNQS.message(bpc, e))

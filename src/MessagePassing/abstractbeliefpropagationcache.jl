@@ -22,9 +22,7 @@ end
 
 function vertex_scalar(bp_cache::AbstractBeliefPropagationCache, vertex)
     incoming_ms = incoming_messages(bp_cache, vertex)
-    fast = norm_scalar_kernel(network(bp_cache), [vertex], incoming_ms; op_strings = v -> "I")
-    fast !== nothing && return fast
-    return scalar(contract_optimal([bp_factors(bp_cache, vertex); incoming_ms]))
+    return scalar(contract_optimal([ITNN.factor_tensors(bp_cache.factors, vertex); incoming_ms]))
 end
 
 function edge_scalar(
@@ -33,18 +31,15 @@ function edge_scalar(
     return not_implemented()
 end
 
-network(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 graph(bp_cache::AbstractBeliefPropagationCache) = not_implemented()
 
 #Forward onto the network
 for f in [
-        :(bp_factors),
         :(default_bp_maxiter),
         :(virtualinds),
         :datatype,
         :scalartype,
         :(maxvirtualdim),
-        :(default_message),
         :(siteinds),
     ]
     @eval begin
@@ -57,11 +52,6 @@ end
 function invalidate_contraction_sequences!(bp_cache::AbstractBeliefPropagationCache)
     seq_cache = contraction_sequences(bp_cache)
     !isnothing(seq_cache) && empty!(seq_cache)
-    return bp_cache
-end
-
-function setindex_preserve!(bp_cache::AbstractBeliefPropagationCache, value, vertex)
-    setindex_preserve!(network(bp_cache), value, vertex)
     return bp_cache
 end
 
@@ -99,7 +89,7 @@ end
 
 function message(bp_cache::AbstractBeliefPropagationCache, edge::AbstractEdge; kwargs...)
     ms = messages(bp_cache)
-    return get(() -> default_message(bp_cache, edge; kwargs...), ms, edge)
+    return get(() -> default_message(bp_cache.factors, edge; kwargs...), ms, edge)
 end
 
 function messages(bp_cache::AbstractBeliefPropagationCache, edges::Vector{<:AbstractEdge})
@@ -188,14 +178,8 @@ function contract_region(
     return contract_optimal([factors; incoming_ms])
 end
 
-# `contract_region` as a scalar, through the backend's fused kernel where it has one.
 function region_scalar(bp_cache::AbstractBeliefPropagationCache, region, op_strings::Function; joint_op = nothing)
-    incoming_ms = incoming_messages(bp_cache, region)
-    if isnothing(joint_op)
-        fast = norm_scalar_kernel(network(bp_cache), region, incoming_ms; op_strings)
-        fast !== nothing && return fast
-    end
-    return scalar(contract_region(bp_cache, region, op_strings; incoming_ms, joint_op))
+    return scalar(contract_region(bp_cache, region, op_strings; joint_op))
 end
 
 # The message on `edge` recomputed from the cache. The same list recurs every sweep, so its
@@ -206,12 +190,9 @@ function updated_message(
     )
     vertex = src(edge)
     incoming_ms = incoming_messages(bp_cache, vertex; ignore_edges = (reverse(edge),))
-    m = norm_message_kernel(network(bp_cache), vertex, incoming_ms)
-    if isnothing(m)
-        ts = Tensor[incoming_ms; bp_factors(bp_cache, vertex)]
-        sequence = get!(() -> contraction_sequence(ts; alg = alg.kwargs.sequence_alg), contraction_sequences(bp_cache), vertex => edge)
-        m = contract(ts; sequence)
-    end
+    ts = Tensor[incoming_ms; ITNN.factor_tensors(bp_cache.factors, vertex)]
+    sequence = get!(() -> contraction_sequence(ts; alg = alg.kwargs.sequence_alg), contraction_sequences(bp_cache), vertex => edge)
+    m = contract(ts; sequence)
     return alg.kwargs.normalize ? normalize_message(m) : m
 end
 
@@ -283,10 +264,7 @@ function update(alg::Algorithm"bp", bpc::AbstractBeliefPropagationCache)
     diff = !isnothing(alg.kwargs.tolerance)
     # the change per sweep is the average message change
     step!() = (d = update_iteration!(alg, bpc, es; diff); diff ? d / length(es) : nothing)
-    # the fused kernels share one set of scratch buffers across all the sweeps
-    with_kernel_workspace() do
-        iterate_to_convergence(step!, alg.kwargs.maxiter, alg.kwargs.tolerance; name = "BP", verbose = alg.kwargs.verbose)
-    end
+    iterate_to_convergence(step!, alg.kwargs.maxiter, alg.kwargs.tolerance; name = "BP", verbose = alg.kwargs.verbose)
     invalidate_contraction_sequences!(bpc)
     return bpc
 end
@@ -306,7 +284,7 @@ end
 function map_factors(f, bp_cache::AbstractBeliefPropagationCache, vs = vertices(bp_cache))
     bp_cache = copy(bp_cache)
     for v in vs
-        setindex_preserve!(bp_cache, f(network(bp_cache)[v]), v)
+        network(bp_cache)[v] = f(network(bp_cache)[v])
     end
     return bp_cache
 end

@@ -2,7 +2,9 @@
 
 ![Tensor network types](tensor_network_types.svg)
 
-TensorNetworkQuantumSimulator provides two core types, `TensorNetworkState` and `TensorNetwork`, both subtypes of `AbstractTensorNetwork`. They share the same graph-based interface but differ in that `TensorNetworkState` carries physical (site) indices — representing a quantum wavefunction ``|\psi\rangle`` — while `TensorNetwork` does not, representing a scalar quantity. See [Graphs](graphs.md) for how to define the underlying graph.
+TensorNetworkQuantumSimulator provides two names for tensor networks, `TensorNetworkState` and `TensorNetwork`, both subtypes of `AbstractTensorNetwork`. They share the same graph-based interface but differ in that `TensorNetworkState` carries physical (site) indices — representing a quantum wavefunction ``|\psi\rangle`` — while `TensorNetwork` does not, representing a scalar quantity. See [Graphs](graphs.md) for how to define the underlying graph.
+
+Both names refer to the same type, `ITensorNetworksNext.ITensorNetwork`, so a function cannot tell a single-layer network from a state by its type. Cache constructors treat a network with site indices as a state and contract its norm network, and contract a network without site indices as it is (see [Caches](caches.md)).
 
 ## TensorNetwork
 
@@ -46,7 +48,7 @@ Z_tn = ising_partitionfunction(g, β; Js)
 
 ## TensorNetworkState
 
-A `TensorNetworkState` extends `TensorNetwork` by additionally storing **site indices** — a vector of them per vertex — that represent the physical (local) degrees of freedom. This is the type we expect users to use most often, as it represents a quantum state ``|\psi\rangle`` on a lattice. The typical use case is one site index per vertex, but there is full flexibility here.
+A `TensorNetworkState` is a tensor network whose tensors additionally carry **site indices** — a vector of them per vertex — that represent the physical (local) degrees of freedom. This is the type we expect users to use most often, as it represents a quantum state ``|\psi\rangle`` on a lattice. The typical use case is one site index per vertex, but there is full flexibility here.
 
 ### Product States
 
@@ -193,9 +195,6 @@ scalartype(tn)        # element type of the tensors (e.g. ComplexF64)
 datatype(tn)          # storage type (e.g. Array, CuArray)
 virtualinds(tn, e)    # Indices connecting the tensors at tn[src(e)], tn[dst(e)]
 is_tree(tn)           # Is the effective graph a tree? If yes, stick to BP exclusively as the contraction backend.
-
-# Internal, not exported — import explicitly as TensorNetworkQuantumSimulator.setindex_preserve!
-setindex_preserve!(tn, t, v) # Set the tensor at vertex v to t. Assumes graph structure unchanged
 ```
 
 Additionally, `TensorNetworkState` provides:

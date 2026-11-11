@@ -25,7 +25,7 @@ end
 # 4. Apply 50 layers of the circuit
 apply_kwargs = (; maxdim = 10, cutoff = 1e-10, normalize_tensors = true)
 circuit = reduce(vcat, [layer for _ in 1:50])
-ψ, errors = apply_gates(circuit, ψ; apply_kwargs)
+ψ = apply_gates(circuit, ψ; apply_kwargs)
 
 # 5. Measure an expectation value
 sz_bp = expect(ψ, ("Z", (3, 3)); alg = "bp")
@@ -76,10 +76,10 @@ The `apply_gates` function applies a sequence of gates using the simple update a
 ```julia
 apply_kwargs = (; maxdim = 10, cutoff = 1e-10, normalize_tensors = true)
 circuit = reduce(vcat, [layer for _ in 1:50])
-ψ, errors = apply_gates(circuit, ψ; apply_kwargs)
+ψ = apply_gates(circuit, ψ; apply_kwargs)
 ```
 
-The returned `errors` vector contains the truncation error for each gate application.
+`apply_gates` returns the updated state; it does not return truncation errors.
 
 ### 5. Measure Observables
 
@@ -114,7 +114,7 @@ For repeated operations (e.g. many Trotter steps), it is more efficient to wrap 
 
 ```julia
 ψ_bpc = BeliefPropagationCache(ψ)
-ψ_bpc, errors = apply_gates(circuit, ψ_bpc; apply_kwargs)
+ψ_bpc = apply_gates(circuit, ψ_bpc; apply_kwargs)
 
 # The cache already has messages — use them directly for expectations
 sz = expect(ψ_bpc, [("Z", [(3, 3)])])

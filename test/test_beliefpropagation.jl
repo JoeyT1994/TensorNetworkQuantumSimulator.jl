@@ -1,5 +1,7 @@
 @eval module $(gensym())
 using LinearAlgebra: norm
+using ITensorBase: ITensorBase
+import ITensorNetworksNext as ITNN
 using Random
 using TensorNetworkQuantumSimulator
 using Test: @testset, @test
@@ -17,7 +19,7 @@ const TNQS = TensorNetworkQuantumSimulator
         @test network(ψ_BPC) isa TensorNetwork
         @test ψ_BPC isa BeliefPropagationCache
         @test graph(ψ_BPC) == g
-        @test isempty(messages(ψ_BPC))
+        @test length(keys(messages(ψ_BPC))) == 2 * length(edges(g))
         @test datatype(ψ_BPC) == datatype(ψ)
         @test scalartype(ψ_BPC) == scalartype(ψ)
 
@@ -37,7 +39,7 @@ const TNQS = TensorNetworkQuantumSimulator
         @test ψ_BPC isa BeliefPropagationCache
         @test network(ψ_BPC) isa TensorNetworkState
         @test graph(ψ_BPC) == g
-        @test isempty(messages(ψ_BPC))
+        @test length(keys(messages(ψ_BPC))) == 2 * length(edges(g))
         @test datatype(ψ_BPC) == datatype(ψ)
         @test scalartype(ψ_BPC) == scalartype(ψ)
 
@@ -50,8 +52,9 @@ const TNQS = TensorNetworkQuantumSimulator
 
         # converged messages are fixed points of the message update
         e = first(edges(g))
-        m = TNQS.updated_message(ψ_BPC, e)
-        @test m ≈ message(ψ_BPC, e)
+        ms = copy(messages(ψ_BPC))
+        ITNN.message_update!(ms, ψ_BPC.factors, e)
+        @test ITensorBase.state(ms[e]) ≈ message(ψ_BPC, e)
 
         vc = first(center(g))
         ρ_bp = reduced_density_matrix(ψ, vc; alg = "bp")
@@ -60,43 +63,16 @@ const TNQS = TensorNetworkQuantumSimulator
     end
 end
 
-@testset "Test contraction sequence cache clearing" begin
-    Random.seed!(456)
-    g = named_comb_tree((3, 3))
-
-    # Test that sequences are empty before update
-    ψ = random_tensornetworkstate(Float64, g; bond_dimension = 2)
-    bpc = BeliefPropagationCache(ψ)
-    @test isempty(TNQS.contraction_sequences(bpc))
-
-    # Test that sequences are cleared after update returns (only live during update)
-    bpc = update(bpc)
-    @test isempty(TNQS.contraction_sequences(bpc))
-end
-
 @testset "Test setting multiple messages" begin
     g = named_path_graph(2)
     tn = random_tensornetwork(Float64, g; bond_dimension = 2)
     bpc = BeliefPropagationCache(tn)
     e = first(edges(g))
     directed_edges = [e, reverse(e)]
-    new_messages = [TNQS.default_message(bpc, edge) for edge in directed_edges]
+    new_messages = [2 * message(bpc, edge) for edge in directed_edges]
 
     @test TNQS.setmessages!(bpc, directed_edges, new_messages) === bpc
     @test all(message(bpc, edge) == new_message for (edge, new_message) in zip(directed_edges, new_messages))
-end
-
-@testset "BP uses the fused kernels, which match the generic contraction" begin
-    Random.seed!(1)
-    ψ = random_tensornetworkstate(ComplexF64, named_grid((3, 3)); bond_dimension = 2)
-    bpc = update(BeliefPropagationCache(ψ))
-    v = (2, 2)
-    incoming = TNQS.incoming_messages(bpc, v; ignore_edges = (NamedEdge((2, 3) => v),))
-    fast = TNQS.norm_message_kernel(ψ, v, incoming)
-    @test !isnothing(fast)
-    ts = [incoming; TNQS.bp_factors(ψ, v)]
-    @test TNQS.normalize_message(fast) ≈ TNQS.normalize_message(contract(ts; sequence = TNQS.contraction_sequence(ts; alg = "optimal")))
-    @test !isnothing(TNQS.norm_scalar_kernel(ψ, [v], TNQS.incoming_messages(bpc, v); op_strings = _ -> "Z"))
 end
 
 @testset "Loop corrections are exact on a single loop" begin

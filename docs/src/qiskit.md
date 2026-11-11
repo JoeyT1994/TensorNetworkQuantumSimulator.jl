@@ -37,7 +37,7 @@ circuit = circuit_from_qasm(read("circuit.qasm", String))
 g = build_graph_from_circuit(circuit)
 
 ψ0 = tensornetworkstate(ComplexF64, v -> "↑", g, "S=1/2")
-ψ, errors = apply_gates(circuit, ψ0; apply_kwargs = (; maxdim = 16, cutoff = 1e-12))
+ψ = apply_gates(circuit, ψ0; apply_kwargs = (; maxdim = 16, cutoff = 1e-12))
 expect(ψ, [("Z", [1]), ("ZZ", [1, 4])]; alg = "bp")
 ```
 
@@ -92,7 +92,7 @@ qc.rzz(0.4, 1, 3)
 
 circuit = circuit_from_qiskit(qc)
 g = build_graph_from_circuit(circuit)
-ψ, errors = apply_gates(circuit, tensornetworkstate(ComplexF64, v -> "↑", g, "S=1/2"))
+ψ = apply_gates(circuit, tensornetworkstate(ComplexF64, v -> "↑", g, "S=1/2"))
 ```
 
 Qiskit.jl numbers qubits from 1, and qubit `k` becomes vertex `k`. The `qubits` keyword works as for `circuit_from_qasm`.

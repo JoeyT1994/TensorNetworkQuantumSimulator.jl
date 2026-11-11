@@ -19,8 +19,7 @@
             append!(layer, ("F_int", [v], 0.23) for v in 1:n)
             append!(layer, ("F_hop_up", (v, v + 1), 0.155) for v in 1:2:(n - 1))
         end
-        ψt, errs = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 32, cutoff = 1.0e-14))
-        @test maximum(errs) < 1.0e-12
+        ψt = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 32, cutoff = 1.0e-14))
         hop_m(j, k) = cs[j]' * cs[k] + cs[k]' * cs[j]
         ψv = zeros(ComplexF64, 2^nm)
         ψv[1 + sum(m -> 2^(nm - m), [up(1), dn(2), up(3), dn(3)]; init = 0)] = 1.0

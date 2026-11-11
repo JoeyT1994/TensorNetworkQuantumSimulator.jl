@@ -4,8 +4,8 @@ using NamedGraphs: add_edges!, forest_cover_edge_sequence, all_edges
 using SplitApplyCombine: group
 
 #TODO: Make this show() nicely.
-struct BoundaryMPSCache{V, N <: AbstractTensorNetwork{V}, M} <: AbstractBeliefPropagationCache{V}
-    network::N
+struct BoundaryMPSCache{V, F <: AbstractTensorNetwork{<:Any, V}, M} <: AbstractBeliefPropagationCache{V}
+    factors::F
     messages::Dictionary{NamedEdge, M}
     supergraph::PartitionedGraph
     sorted_edges::Dictionary{QuotientEdge, Vector{NamedEdge}}
@@ -33,14 +33,14 @@ const _default_boundarymps_bp_maxiter = 5
 default_bp_maxiter(bmps_cache::BoundaryMPSCache) =
     is_tree(quotient_graph(supergraph(bmps_cache))) ? 1 : _default_boundarymps_bp_maxiter
 function default_bmps_message_update_alg(tn)
-    if tn isa TensorNetworkState || tn isa BilinearForm || tn isa QuadraticForm
+    if tn isa ITNN.NormNetwork || tn isa BilinearForm || tn isa ITNN.QuadraticFormNetwork
         return "fitting"
     elseif tn isa TensorNetwork
         return "zipup"
     end
     return error("Unrecognized network type. Don't know what BMPS message update alg to use.")
 end
-default_message_update_alg(bmps_cache::BoundaryMPSCache) = default_bmps_message_update_alg(network(bmps_cache))
+default_message_update_alg(bmps_cache::BoundaryMPSCache) = default_bmps_message_update_alg(bmps_cache.factors)
 
 default_tolerance(bmps_cache::BoundaryMPSCache) = default_tolerance(scalartype(bmps_cache))
 const DEFAULT_BMPS_NITERS = 50
@@ -72,7 +72,6 @@ function is_correct_format(bmps_cache::BoundaryMPSCache)
     return true
 end
 
-network(bmps_cache::BoundaryMPSCache) = bmps_cache.network
 messages(bmps_cache::BoundaryMPSCache) = bmps_cache.messages
 supergraph(bmps_cache::BoundaryMPSCache) = bmps_cache.supergraph
 graph(bmps_cache::BoundaryMPSCache) = unpartitioned_graph(supergraph(bmps_cache))
@@ -98,7 +97,7 @@ contraction_sequences(bmps_cache::BoundaryMPSCache) = bmps_cache.contraction_seq
 
 function Base.copy(bmps_cache::BoundaryMPSCache)
     return BoundaryMPSCache(
-        copy(network(bmps_cache)),
+        copy_factors(bmps_cache.factors),
         copy(messages(bmps_cache)),
         copy(supergraph(bmps_cache)),
         copy(sorted_edges(bmps_cache)),
@@ -116,23 +115,30 @@ function virtual_index_dimension(
     es = sorted_edges(bmps_cache, quotientedge(supergraph(bmps_cache), e1))
     i, j = minmax(findfirst(==(e1), es), findfirst(==(e2), es))
     # the dimension of the message legs on the edges above, and below, the bond (Float64: it can be huge)
-    legs_dim(es) = prod(Float64(dim(l)) for e in es for l in message_inds(network(bmps_cache), e); init = 1.0)
+    legs_dim(es) = prod(Float64(dim(l)) for e in es for l in message_inds(bmps_cache.factors, e); init = 1.0)
     return Int(min(legs_dim(es[(i + 1):end]), legs_dim(es[1:(j - 1)]), Float64(env_maxdim(bmps_cache))))
 end
 
+# A network without site indices is contracted as it is; a state through its norm network.
+function BoundaryMPSCache(ψ::ITensorNetwork, env_maxdim::Integer; gauge_state = false, kwargs...)
+    all(isempty, siteinds(ψ)) && return BoundaryMPSCache(ψ, default_messages(), env_maxdim; kwargs...)
+    gauge_state && (ψ = gauge_and_scale(ψ))
+    return BoundaryMPSCache(ITNN.normnetwork(ITensorBase.prime, ψ), default_messages(), env_maxdim; kwargs...)
+end
+function BoundaryMPSCache(form::Union{BilinearForm, ITNN.QuadraticFormNetwork}, env_maxdim::Integer; kwargs...)
+    return BoundaryMPSCache(form, default_messages(), env_maxdim; kwargs...)
+end
+
 function BoundaryMPSCache(
-        tn::Union{TensorNetworkState, TensorNetwork, BilinearForm, QuadraticForm},
+        tn::Union{ITNN.NormNetwork, TensorNetwork, BilinearForm, ITNN.QuadraticFormNetwork},
+        messages::Dictionary,
         env_maxdim::Integer;
         partition_by = "row",
-        gauge_state = false,
         set_messages = true,
     )
     grouping_function = partition_by == "row" ? v -> first(v) : v -> last(v)
     group_sorting_function = partition_by == "row" ? v -> last(v) : v -> first(v)
 
-    if gauge_state && (tn isa TensorNetworkState)
-        tn = gauge_and_scale(tn)
-    end
     pseudo_edges = pseudo_planar_edges(tn; grouping_function)
 
     planar_graph = add_edges(graph(tn), pseudo_edges)
@@ -144,13 +150,14 @@ function BoundaryMPSCache(
     pes = all_quotientedges(supergraph)
     sorted_es = Dictionary{QuotientEdge, Vector{NamedEdge}}(pes, Vector{NamedEdge}[sorted_edges(supergraph, pe) for pe in pes])
 
-    messages = default_messages()
     bmps_cache = BoundaryMPSCache(tn, messages, supergraph, sorted_es, env_maxdim, Dictionary{Pair, Vector}())
     is_correct_format(bmps_cache)
     set_messages && set_interpartition_messages!(bmps_cache, pes)
 
     return bmps_cache
 end
+
+default_message(tn::AbstractTensorNetwork, e::AbstractEdge) = adapt_like(tn, dense(delta(message_inds(tn, e))))
 
 #`all_edges` enumerates directed edges; the quotient graph is undirected, so convert it
 #before wrapping. Calling `all_edges` directly on the undirected quotient silently yielded
@@ -175,7 +182,7 @@ function set_interpartition_messages!(
         es = sorted_edges(bmps_cache, pe)
         for e in es
             if e ∉ m_keys
-                setmessage!(bmps_cache, e, default_message(bmps_cache, e))
+                setmessage!(bmps_cache, e, default_message(bmps_cache.factors, e))
             end
         end
         if isgraded(message(bmps_cache, first(es)))

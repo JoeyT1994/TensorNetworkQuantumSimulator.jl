@@ -48,7 +48,7 @@ function main()
         println("Layer $l")
 
         # pass BP cache manually
-        t = @timed ψ_bpc, errors =
+        t = @timed ψ_bpc =
             apply_gates(layer, ψ_bpc; apply_kwargs, verbose = false)
 
         # push BP measured expectation to list
@@ -56,7 +56,6 @@ function main()
 
         # printing
         println("Took time: $(t.time) [s]. Max bond dimension: $(maxvirtualdim(ψ_bpc))")
-        println("Maximum Gate error for layer was $(maximum(errors))")
         println("Sigma z on central site is $(last(Zs))")
     end
     return

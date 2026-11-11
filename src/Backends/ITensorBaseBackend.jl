@@ -528,16 +528,9 @@ function TensorInterface.contract(ts::Vector; sequence = nothing, kwargs...)
     all(t -> t isa AbstractTensor, ts) || error("contract: expected a tensor list, got $(unique(typeof.(ts)))")
     return TensorInterface.contract(collect(AbstractTensor, ts); sequence, kwargs...)
 end
-function TensorInterface.contract(ts::Vector{<:AbstractTensor}; sequence = nothing, dest = nothing, kwargs...)
+function TensorInterface.contract(ts::Vector{<:AbstractTensor}; sequence = nothing, kwargs...)
     isnothing(sequence) && return reduce(*, ts)
     sequence isa Integer && return ts[sequence]
-    # `dest`: a tensor the caller has finished with, offered as storage for the result. Honoured for
-    # a two-factor contraction whose result fits it and does not alias either operand (else the
-    # result goes to a pooled buffer and is copied into `dest`); longer trees ignore it.
-    if length(ts) == 2 && dest isa AbstractTensor
-        r = _contract_into(ts[1], ts[2], dest)
-        r === nothing || return r
-    end
     return _contract_seq(ts, sequence)
 end
 _contract_seq(ts::Vector, x::Integer) = ts[x]
@@ -550,95 +543,6 @@ _contract_seq(ts::Vector, x::Union{Vector, Tuple}) = mapreduce(y -> _contract_se
 
 _dense_storage(t::AbstractTensor) = (A = IB.unnamed(t); (!isgraded(t) && A isa StridedArray) ? A : nothing)
 _aliases(a::AbstractArray, b::AbstractArray) = Base.mightalias(a, b)
-
-# The result indices of `a * b` (a's open legs, then b's) and their dimensions.
-function _product_inds(a::AbstractTensor, b::AbstractTensor)
-    ia, ib = collect(Index, inds(a)), collect(Index, inds(b))
-    open_a = filter(i -> !(i in ib), ia); open_b = filter(i -> !(i in ia), ib)
-    return vcat(open_a, open_b)
-end
-
-# A tensor on `is` viewing the first prod(dims) entries of `storage` (a Vector or Array).
-function _view_tensor(storage::StridedArray, is::Vector{<:Index})
-    n = prod(TensorInterface.dim.(is); init = 1)
-    v = reshape(view(vec(storage), 1:n), TensorInterface.dim.(is)...)
-    return ITensor(v, Tuple(is))
-end
-
-# `a * b` written into `dest`'s storage when it fits and aliases neither operand. Otherwise into a
-# pooled buffer, then copied into `dest` (a memcpy, so the caller's storage still ends up holding
-# the result). Returns a tensor over `dest`'s storage, or nothing when the types do not allow it.
-function _contract_into(a::AbstractTensor, b::AbstractTensor, dest::AbstractTensor)
-    A, B, Dst = _dense_storage(a), _dense_storage(b), _dense_storage(dest)
-    (A === nothing || B === nothing || Dst === nothing) && return nothing
-    T = promote_type(eltype(A), eltype(B))
-    eltype(Dst) == T || return nothing
-    out = _product_inds(a, b)
-    n = prod(TensorInterface.dim.(out); init = 1)
-    n <= length(Dst) || return nothing
-    if _aliases(Dst, A) || _aliases(Dst, B)
-        buf = first(fused_buffers(A, T, n))
-        tmp = _view_tensor(buf, out)
-        LinearAlgebra.mul!(tmp, a, b)
-        r = _view_tensor(Dst, out)
-        copyto!(IB.unnamed(r), IB.unnamed(tmp))
-        return r
-    end
-    r = _view_tensor(Dst, out)
-    LinearAlgebra.mul!(r, a, b)
-    return r
-end
-
-# Environment chain t · e₁ · e₂ ⋯ (shape-preserving 2-index factors), the result in `dest`'s storage
-# (or fresh when `dest` is nothing). Intermediates ping-pong between one pooled buffer and `dest`'s
-# storage once `t`'s data is no longer needed, so the chain costs t + one buffer live instead of one
-# fresh tensor per factor.
-function absorb_chain(t::AbstractTensor, envs::Vector, dest)
-    isempty(envs) && return t
-    A = _dense_storage(t)
-    ok = A !== nothing && all(e -> _dense_storage(e) !== nothing, envs) &&
-        (dest === nothing || _dense_storage(dest) !== nothing)
-    ok || return reduce(*, envs; init = t)
-    T = promote_type(eltype(A), (eltype(IB.unnamed(e)) for e in envs)...)
-    n = length(A)
-    Dst = dest === nothing ? nothing : _dense_storage(dest)
-    (Dst !== nothing && (eltype(Dst) != T || length(Dst) < n)) && (Dst = nothing)
-    buf1, buf2 = fused_buffers(A, T, n)
-    # slots: the pooled buffer, and dest's storage once the input has been read (when dest aliases
-    # t, that is after the first step; otherwise immediately). With no dest, the second slot is the
-    # other pooled buffer and the result is copied out fresh at the end.
-    slots = Dst === nothing ? (buf1, buf2) : (buf1, Dst)
-    cur = t
-    k = 0
-    for e in envs
-        k += 1
-        out_inds = _product_inds(cur, e)
-        # Lay the result out with the leg the NEXT factor contracts last, so that step matricises
-        # by a free reshape instead of a permuted copy of the whole intermediate (measured: a two-
-        # factor chain drops from 3 F to 1 F of transient allocation).
-        if k < length(envs)
-            nxt = envs[k + 1]
-            j = findfirst(i -> i in inds(nxt), out_inds)
-            j === nothing || (out_inds = vcat(out_inds[1:(j - 1)], out_inds[(j + 1):end], out_inds[j:j]))
-        end
-        target = slots[mod1(k, 2)]
-        if target === Dst && k == 1 && _aliases(Dst, A)
-            target = buf2                                    # first step may not overwrite the input
-        end
-        r = _view_tensor(target, out_inds)
-        LinearAlgebra.mul!(r, cur, e)
-        cur = r
-    end
-    if Dst === nothing
-        return ITensor(copy(IB.unnamed(cur)), Tuple(inds(cur)))
-    end
-    if !_aliases(IB.unnamed(cur), Dst)
-        r = _view_tensor(Dst, collect(Index, inds(cur)))
-        copyto!(IB.unnamed(r), IB.unnamed(cur))
-        cur = r
-    end
-    return cur
-end
 
 # Left-orthogonalisation Q·R with Q on `linds`. Consuming: the matricised copy is factorised in place
 # by LAPACK (geqrf + or/ungqr — Q overwrites the workspace, no second F-sized array), and when the
@@ -1334,8 +1238,5 @@ function _hdot(a::AbstractTensor, b::AbstractTensor)
 end
 LinearAlgebra.dot(a::Tensor, b::Tensor) = _hdot(a, b)
 VectorInterface.inner(a::Tensor, b::Tensor) = _hdot(a, b)
-
-const TI = TensorInterface
-include("ITensorBaseKernels.jl")
 
 end

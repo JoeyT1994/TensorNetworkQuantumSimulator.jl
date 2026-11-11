@@ -2,27 +2,14 @@ using Graphs: Graphs, has_vertex
 using NamedGraphs: NamedGraphs
 using Adapt
 
-abstract type AbstractTensorNetwork{V} <: AbstractNamedGraph{V} end
+const AbstractTensorNetwork = ITNN.AbstractITensorNetwork
 
-graph(tn::AbstractTensorNetwork) = not_implemented()
-tensors(tn::AbstractTensorNetwork) = not_implemented()
-NamedGraphs.rem_vertex!(tn::AbstractTensorNetwork, v) = not_implemented()
-add_tensor!(tn::AbstractTensorNetwork, tensor, v) = not_implemented()
+graph(tn::AbstractTensorNetwork) = DataGraphs.underlying_graph(tn)
 
 #The tensor type this network holds (e.g. Tensor), stripped of type parameters
 #since derived tensors (e.g. real singular-value messages in a complex network) may differ in
 #eltype or rank.
-tensortype(tn::AbstractTensorNetwork) = unspecify_type_parameters(eltype(tensors(tn)))
-
-Graphs.is_directed(::Type{<:AbstractTensorNetwork}) = false
-
-NamedGraphs.encoded_vertex(tn::AbstractTensorNetwork, vertex) = NamedGraphs.encoded_vertex(graph(tn), vertex)
-NamedGraphs.decoded_vertex(tn::AbstractTensorNetwork, code::Integer) = NamedGraphs.decoded_vertex(graph(tn), code)
-NamedGraphs.encoded_graph(tn::AbstractTensorNetwork) = NamedGraphs.encoded_graph(graph(tn))
-NamedGraphs.vertices(tn::AbstractTensorNetwork) = NamedGraphs.vertices(graph(tn))
-NamedGraphs.edges(tn::AbstractTensorNetwork) = NamedGraphs.edges(graph(tn))
-NamedGraphs.edgetype(tn::AbstractTensorNetwork) = NamedGraphs.edgetype(graph(tn))
-NamedGraphs.vertextype(tn::AbstractTensorNetwork) = NamedGraphs.vertextype(graph(tn))
+tensortype(::AbstractTensorNetwork{T}) where {T} = unspecify_type_parameters(T)
 
 # A new index of dimension `d` for every edge of `g` (tagged `tags(e)`), under both orientations.
 function edge_indices(g::AbstractGraph, d::Integer; tags = e -> "")
@@ -30,7 +17,7 @@ function edge_indices(g::AbstractGraph, d::Integer; tags = e -> "")
     return merge(l, Dictionary(reverse.(collect(edges(g))), collect(l)))
 end
 
-virtualinds(tn::AbstractTensorNetwork, e::NamedEdge) = commoninds(tn[src(e)], tn[dst(e)])
+virtualinds(tn::AbstractTensorNetwork, e::NamedEdge) = ITNN.linkinds(tn, e)
 virtualind(tn::AbstractTensorNetwork, e::NamedEdge) = only(virtualinds(tn, e))
 
 # The legs a BP message carries for the virtual legs `l` of an edge: `l` itself (a form's virtual
@@ -38,22 +25,7 @@ virtualind(tn::AbstractTensorNetwork, e::NamedEdge) = only(virtualinds(tn, e))
 message_legs(tn::AbstractTensorNetwork, l) = l
 message_inds(tn::AbstractTensorNetwork, e) = message_legs(tn, virtualinds(tn, e))
 
-default_message(tn::AbstractTensorNetwork, e::AbstractEdge) = adapt_like(tn, dense(delta(message_inds(tn, e))))
-
 maxvirtualdim(tn::AbstractTensorNetwork) = maximum(e -> maximum(dim, virtualinds(tn, e)), edges(tn))
-
-uniqueinds(tn::AbstractTensorNetwork, v) = Index[i for i in setdiff(inds(tn[v]), (i for vn in neighbors(tn, v) for i in inds(tn[vn])))]
-
-function setindex_preserve!(tn::AbstractTensorNetwork, value, vertex)
-    tensors(tn)[vertex] = value
-    return tn
-end
-
-function Base.setindex!(tn::AbstractTensorNetwork, value, vertex)
-    !has_vertex(graph(tn), vertex) && error("Vertex not in tensor network")
-    add_tensor!(tn, value, vertex)
-    return tn
-end
 
 function scalartype(tn::AbstractTensorNetwork)
     return mapreduce(v -> scalartype(tn[v]), promote_type, vertices(tn))
@@ -65,7 +37,7 @@ end
 
 function map_tensors!(f::Function, tn::AbstractTensorNetwork)
     for v in vertices(tn)
-        setindex_preserve!(tn, f(tn[v]), v)
+        tn[v] = f(tn[v])
     end
     return tn
 end
@@ -79,30 +51,12 @@ function Adapt.adapt_structure(to, tn::AbstractTensorNetwork)
     return map_tensors(x -> adapt(to)(x), tn)
 end
 
-function insert_virtualinds!(tn::AbstractTensorNetwork; bond_dimension::Integer = 1)
-    dtype = datatype(tn)
-    for e in edges(tn)
-        if isempty(commoninds(tn[src(e)], tn[dst(e)]))
-            l = new_index(bond_dimension)
-            p = adapt(dtype)(onehot(l => 1))
-            setindex_preserve!(tn, tn[src(e)] * p, src(e))
-            setindex_preserve!(tn, tn[dst(e)] * p, dst(e))
-        end
-    end
-    return tn
-end
-
-function insert_virtualinds(tn::AbstractTensorNetwork; kwargs...)
-    tn = copy(tn)
-    return insert_virtualinds!(tn; kwargs...)
-end
-
 function map_virtualinds!(f::Function, tn::AbstractTensorNetwork)
-    for e in edges(tn)
+    for e in collect(edges(tn))
         vinds = commoninds(tn[src(e)], tn[dst(e)])
         vinds_sim = f(vinds)
-        setindex_preserve!(tn, replaceinds(tn[src(e)], vinds, vinds_sim), src(e))
-        setindex_preserve!(tn, replaceinds(tn[dst(e)], vinds, vinds_sim), dst(e))
+        tn[src(e)] = replaceinds(tn[src(e)], vinds, vinds_sim)
+        tn[dst(e)] = replaceinds(tn[dst(e)], vinds, vinds_sim)
     end
     return tn
 end
@@ -114,13 +68,13 @@ end
 
 function combine_virtualinds!(tn::AbstractTensorNetwork)
     dtype = datatype(tn)
-    for e in edges(tn)
+    for e in collect(edges(tn))
         vinds = commoninds(tn[src(e)], tn[dst(e)])
         if length(vinds) > 1
             C = adapt(dtype)(combiner(vinds))
-            setindex_preserve!(tn, tn[src(e)] * C, src(e))
+            tn[src(e)] = tn[src(e)] * C
             # the other end contracts the combined leg with the opposite orientation
-            setindex_preserve!(tn, tn[dst(e)] * dag(C), dst(e))
+            tn[dst(e)] = tn[dst(e)] * dag(C)
         end
     end
     return tn
@@ -134,12 +88,7 @@ end
 """Add two tensornetworks together. The network structures need to be have the same graph structure"""
 function add(tn1::AbstractTensorNetwork, tn2::AbstractTensorNetwork)
     graph(tn1) == graph(tn2) || error("add: the two networks must share the same graph")
-    if tn1 isa TensorNetworkState && tn2 isa TensorNetworkState
-        siteinds(tn1) == siteinds(tn2) || error("add: the two states must share the same site indices")
-    else
-        tn1 isa TensorNetwork && tn2 isa TensorNetwork ||
-            error("add: expected two TensorNetworks or two TensorNetworkStates")
-    end
+    siteinds(tn1) == siteinds(tn2) || error("add: the two networks must share the same site indices")
 
     es = collect(edges(tn1))
     tn12 = copy(tn1)
@@ -162,12 +111,10 @@ function add(tn1::AbstractTensorNetwork, tn2::AbstractTensorNetwork)
         tn2v_linkinds = [only(virtualinds(tn2, e)) for e in es_v]
         tn12v_linkinds = [new_edge_indices[e] for e in es_v]
 
-        setindex_preserve!(
-            tn12, directsum(
-                tn12v_linkinds,
-                tn1[v] => Tuple(tn1v_linkinds),
-                tn2[v] => Tuple(tn2v_linkinds)
-            ), v
+        tn12[v] = directsum(
+            tn12v_linkinds,
+            tn1[v] => Tuple(tn1v_linkinds),
+            tn2[v] => Tuple(tn2v_linkinds)
         )
     end
 

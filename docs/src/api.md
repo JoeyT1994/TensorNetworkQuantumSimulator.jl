@@ -25,7 +25,6 @@ ising_partitionfunction
 
 ```@docs
 apply_gates
-simple_update
 full_update
 Circuit
 circuit_from_qasm

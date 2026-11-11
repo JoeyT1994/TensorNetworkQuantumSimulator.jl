@@ -47,9 +47,14 @@ using .TensorInterface: inds, commonind, commoninds, unioninds, noncommonind, no
     new_index, from_array, random_tensor, onehot, delta, dense, combiner, combinedind, directsum,
     projector, charge_sectors, pad_index,
     scalar, apply, map_diag, map_diag!, factorize_svd, truncated_svd, truncation_strategy, gram,
-    array, data, scale!, has_closure_gauge, site_op, site_state,
-    fused_norm_message, fused_norm_scalar, with_kernel_workspace
+    array, data, scale!, has_closure_gauge, site_op, site_state
 import .TensorInterface: contract, truncate, inner, uniqueinds, datatype, scalartype
+
+# Networks, their BP messages and norm networks come from ITensorNetworksNext; its name maps
+# (e.g. `ITensorBase.prime` in `normnetwork`) and message wrappers are ITensorBase objects.
+using ITensorBase: ITensorBase
+using ITensorNetworksNext: ITensorNetworksNext as ITNN, ITensorNetwork
+using DataGraphs: DataGraphs
 
 using Adapt: adapt
 using MatrixAlgebraKit: defaulttol

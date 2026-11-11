@@ -17,6 +17,13 @@ end
 function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
     bpc = copy(bpc)
     vs = collect(vertices(eg))
+    # Site indices recorded before the bond relabeling below, which leaves the relabeled bond
+    # dangling so that `siteinds` would count it and `norm_factors` would unprime it on the bra.
+    sinds = if bpc.factors isa ITNN.NormNetwork
+        Dictionary(vs, [siteinds(network(bpc), v) for v in vs])
+    else
+        nothing
+    end
     es =
         unique(collect(Iterators.flatten(boundary_edges(bpc, [v]; dir = :out) for v in vs)))
     updated_es = NamedEdge[]
@@ -27,12 +34,13 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
             linds = collect(inds(mer; plev = 0))
             linds_sim = sim.(linds)
             # the message's legs: the virtual legs, and for a state their bra copies too
-            row_inds, col_inds = message_legs(network(bpc), linds), message_legs(network(bpc), linds_sim)
-            mer = replaceinds(mer, row_inds, col_inds)
-            setmessage!(bpc, reverse(e), mer)
+            row_inds, col_inds = message_legs(bpc.factors, linds), message_legs(bpc.factors, linds_sim)
+            ms = messages(bpc)
+            ms[reverse(e)] = ITensorBase.rename(ms[reverse(e)], (row_inds .=> col_inds)...)
+            mer = message(bpc, reverse(e))
             t = network(bpc)[src(e)]
             t2 = replace_matching_ind(t, linds, linds_sim)
-            t2 === t || setindex_preserve!(bpc, t2, src(e))
+            t2 === t || (network(bpc)[src(e)] = t2)
             push!(updated_es, e)
 
             if e ∈ edges(eg) || reverse(e) ∈ edges(eg)
@@ -42,7 +50,7 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
                 #picks up a parity twist on the odd fused sector and is not the identity
                 #morphism (verified numerically; the two coincide for bosonic/dense data).
                 parts = [delta(dag(l), ls) for (l, ls) in zip(linds, linds_sim)]
-                if network(bpc) isa TensorNetworkState
+                if bpc.factors isa ITNN.NormNetwork
                     append!(parts, [delta(prime(l), dag(prime(ls))) for (l, ls) in zip(linds, linds_sim)])
                 end
                 p = message(bpc, e) * mer
@@ -52,7 +60,7 @@ function sim_edgeinduced_subgraph(bpc::BeliefPropagationCache, eg)
             end
         end
     end
-    return bpc, antiprojectors, projectors
+    return bpc, antiprojectors, projectors, sinds
 end
 
 # The edges into the region spanned by the edges `es`, from outside it.
@@ -65,9 +73,15 @@ end
 function weight(bpc::BeliefPropagationCache, eg)
     vs = collect(vertices(eg))
     es = collect(edges(eg))
-    bpc, antiprojectors, projectors = sim_edgeinduced_subgraph(bpc, eg)
-    incoming_ms = [message(bpc, e) for e in incoming_edges(bpc, es)]
-    local_tensors = collect(Iterators.flatten(bp_factors(bpc, v) for v in vs))
+    # Taken before the relabeling, which removes the relabeled edges from the network's graph.
+    in_es = incoming_edges(bpc, es)
+    bpc, antiprojectors, projectors, sinds = sim_edgeinduced_subgraph(bpc, eg)
+    incoming_ms = [message(bpc, e) for e in in_es]
+    local_tensors = if isnothing(sinds)
+        collect(Iterators.flatten(ITNN.factor_tensors(bpc.factors, v) for v in vs))
+    else
+        collect(Iterators.flatten(norm_factors(network(bpc), [v]; siteinds_f = u -> sinds[u]) for v in vs))
+    end
     ts = [incoming_ms; local_tensors; antiprojectors]
     seq = contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
     w = scalar(contract(ts; sequence = seq))

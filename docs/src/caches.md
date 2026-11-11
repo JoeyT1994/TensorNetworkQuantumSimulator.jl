@@ -4,16 +4,18 @@
 
 The central data structures in TensorNetworkQuantumSimulator.jl are the `BeliefPropagationCache`, the `BoundaryMPSCache` and the `CTMRGCache`, all subtypes of `AbstractBeliefPropagationCache`. Each wraps a tensor network together with auxiliary _message_ tensors that encode approximate environment information — the effective contribution of the rest of the network as seen from each bond. Understanding what these caches store, how they are updated, and when to use each is key to getting the most out of the package.
 
+A cache built from a network with site indices, such as a `TensorNetworkState` `ψ`, contracts its norm network ``\langle \psi \vert \psi \rangle``. A cache built from a network without site indices, such as `ising_partitionfunction(g, β)`, contracts that network itself.
+
 ## Belief Propagation Cache
 
 ### What it stores
 
 A `BeliefPropagationCache` holds:
 
-1. **The tensor network** (`network`): a `TensorNetwork` or `TensorNetworkState` whose tensors live on the vertices of a graph.
-2. **Messages** (`messages`): a `Dictionary` mapping each directed edge ``e = (u \to v)`` to a message tensor. These messages form a basis with which to approximate the contraction of the entire network down to the given edge. In the case of a `TensorNetworkState` $\vert \psi \rangle$ the messages reflect the contraction of the norm $\langle \psi \vert \psi \rangle$ around that edge.
-3. **An edge sequence** (`edge_sequence`): the order in which edges are visited during each BP iteration. Computed once from a forest cover of the graph [[Tindall2023]](index.md#references) and reused across iterations. Custom orders may slightly affect performance or the fixed point found --- although often the algorithm is robust to these choices.
-4. **A contraction sequence cache** (`contraction_sequences`): a `Dictionary` that caches the optimal tensor contraction orderings discovered during message updates. This avoids recomputing contraction sequences when the local tensor structure hasn't changed and many iterations of BP are run. The cache is populated during each call to `update` and cleared at the start and end of every update to prevent stale sequences from leaking across operations.
+1. **The factors**: for a `TensorNetworkState` $\vert \psi \rangle$, its norm network $\langle \psi \vert \psi \rangle$; for a single-layer network built with explicit messages, the network itself. `network(ψ_bpc)` returns the state (or the single-layer network).
+2. **Messages** (`messages`): an `ITensorNetworksNext.MessageCache` mapping each directed edge ``e = (u \to v)`` to a message tensor. These messages form a basis with which to approximate the contraction of the entire network down to the given edge. In the case of a `TensorNetworkState` $\vert \psi \rangle$ the messages reflect the contraction of the norm $\langle \psi \vert \psi \rangle$ around that edge.
+
+The order in which edges are visited during each BP iteration is the `edge_sequence` keyword of `update`, by default a forest cover of the graph [[Tindall2023]](index.md#references). Custom orders may slightly affect performance or the fixed point found --- although often the algorithm is robust to these choices.
 
 ### How belief propagation works
 
@@ -57,8 +59,7 @@ The `update` function accepts several keyword arguments:
 ```julia
 ψ_bpc = update(ψ_bpc;
     maxiter = 50,          # maximum number of BP iterations (default: 25 on loopy graphs, 1 on trees)
-    tolerance = 1e-10,     # convergence threshold on message change (default depends on scalar type)
-    verbose = true,        # print convergence info
+    tolerance = 1e-10,     # convergence threshold on message change (default: nothing, run all maxiter iterations)
 )
 ```
 
@@ -69,7 +70,7 @@ The `update` function accepts several keyword arguments:
 ψ_bpc = update(ψ_bpc)
 
 # Apply gates — the cache is reused and updated between gate groups
-ψ_bpc, errors = apply_gates(circuit, ψ_bpc; apply_kwargs = (; maxdim = 10, cutoff = 1e-10))
+ψ_bpc = apply_gates(circuit, ψ_bpc; apply_kwargs = (; maxdim = 10, cutoff = 1e-10))
 
 # Messages are still available for immediate measurements
 sz = expect(ψ_bpc, [("Z", [(3, 3)])])
@@ -102,7 +103,7 @@ A `BoundaryMPSCache` holds:
 3. **A partitioned graph** (`supergraph`): a `PartitionedGraph` that encodes how the 2D lattice has been partitioned into rows or columns.
 4. **Sorted edges** (`sorted_edges`): for each partition edge, the ordered list of underlying graph edges, which determines the MPS structure and is reused for efficiency.
 5. **MPS bond dimension** (`env_maxdim`): the maximum dimension of the index connecting up the message tensors into an implicit MPS, controlling the accuracy–cost tradeoff.
-6. **A contraction sequence cache** (`contraction_sequences`): same role as in the BP cache.
+6. **A contraction sequence cache** (`contraction_sequences`): a `Dictionary` of the tensor contraction orderings found during message updates, reused while the local tensor structure is unchanged.
 
 ### How boundary MPS contraction works
 
@@ -164,7 +165,7 @@ The order in which the corners and messages are updated is worked out from the g
 
 - **Accurate expectation values on planar graphs that are not grids**, where boundary MPS cannot partition the graph into rows or columns.
 - **Free energies and partition functions** of planar classical models, via `contract(tn; alg = "ctmrg", env_maxdim)`.
-- Like boundary MPS, results converge to the exact answer as `env_maxdim` grows.
+- Like boundary MPS, results become exact at large enough `env_maxdim`. On graphs whose corner updates need pseudo-inverses (triangular faces, trivalent vertices, kagome and Penrose tilings) that is up to their regularisation, which can leave an error of about `1e-9`, more for corner spectra spread over many orders of magnitude.
 
 ### Basic usage
 
@@ -195,7 +196,7 @@ Observables can act on one vertex or on the two ends of an edge.
 )
 ```
 
-`convergence = :messages` waits for the environment of every vertex to settle, which is what expectation values need. The free energy settles earlier, so `convergence = :freenergy` is enough, and cheaper, when only the free energy is wanted.
+`convergence = :messages` waits for the environment of every vertex to settle, which is what expectation values need. The free energy settles earlier, so `convergence = :freenergy` is enough, and cheaper, when only the free energy is wanted. The `:messages` tolerance is on 1 − fidelity, as for BP, so `1e-12` settles the environments to about `1e-6`; the defaults are never below what the network's precision resolves (`1.2e-5` in single precision).
 
 ### Projectors
 
@@ -216,7 +217,7 @@ In practice, a common workflow is to use BP for gate application — where speed
 ```julia
 # Fast gate application with BP
 ψ_bpc = BeliefPropagationCache(ψ)
-ψ_bpc, errors = apply_gates(circuit, ψ_bpc; apply_kwargs = (; maxdim = 10))
+ψ_bpc = apply_gates(circuit, ψ_bpc; apply_kwargs = (; maxdim = 10))
 
 # Accurate measurement with boundary MPS
 ψ = network(ψ_bpc)

@@ -48,16 +48,14 @@ function kicked_ising_layer(g, θh)
 end
 
 # Evolve `ψ0` for `nsteps` Trotter steps with bond dimension `maxdim`. Returns the BP cache, which
-# holds the state and its environment, and the product of the gate fidelities.
+# holds the state and its environment.
 function kicked_ising(g, θh, nsteps, ψ0; maxdim)
     layer = kicked_ising_layer(g, θh)
     ψ = BeliefPropagationCache(ψ0)
-    fidelity = 1.0
     for _ in 1:nsteps
-        ψ, errors = apply_gates(layer, ψ; apply_kwargs = (; maxdim, cutoff = 1.0e-12, normalize_tensors = true))
-        fidelity *= prod(1 .- errors)
+        ψ = apply_gates(layer, ψ; apply_kwargs = (; maxdim, cutoff = 1.0e-12, normalize_tensors = true))
     end
-    return ψ, fidelity
+    return ψ
 end
 
 ψ0 = tensornetworkstate(ComplexF64, v -> "↑", g, "S=1/2")
@@ -71,7 +69,7 @@ The experiment's first test was the average magnetisation ``M_z = \frac{1}{127}\
 
 ```julia
 for θh in (0.0, π / 8, π / 4, 3π / 8, π / 2)
-    ψ, fidelity = kicked_ising(g, θh, 5, ψ0; maxdim = 32)
+    ψ = kicked_ising(g, θh, 5, ψ0; maxdim = 32)
     mz = mean(real, expect(ψ, [("Z", [v]) for v in vertices(g)]))
     println("θh = $(round(θh; digits = 3)): Mz = $(round(mz; digits = 4))")
 end
@@ -81,7 +79,7 @@ end
 |---|---|---|---|---|---|
 | ``M_z`` | 1.0 | 0.9048 | 0.4528 | 0.0373 | 0.0 |
 
-Each ``R_{ZZ}`` gate at most doubles the bond dimension between two qubits, so after 5 steps no bond needs more than ``2^5 = 32``. With `maxdim = 32` nothing is truncated (`fidelity` is 1), and the only approximation left is BP's estimate of the environment. At ``\theta_h = \pi/2`` the circuit is Clifford and ``M_z`` is exactly zero, which BP reproduces. The whole sweep takes a few seconds.
+Each ``R_{ZZ}`` gate at most doubles the bond dimension between two qubits, so after 5 steps no bond needs more than ``2^5 = 32``. With `maxdim = 32` no bond is cut down by `maxdim`, and the only approximation left is BP's estimate of the environment. At ``\theta_h = \pi/2`` the circuit is Clifford and ``M_z`` is exactly zero, which BP reproduces. The whole sweep takes a few seconds.
 
 ## A single qubit after 20 steps
 
@@ -89,9 +87,9 @@ The experiment's deepest circuits ran 20 Trotter steps and measured ``\langle Z_
 
 ```julia
 for maxdim in (4, 8, 16, 32)
-    ψ, fidelity = kicked_ising(g, π / 8, 20, ψ0; maxdim)
+    ψ = kicked_ising(g, π / 8, 20, ψ0; maxdim)
     z62 = real(only(expect(ψ, [("Z", [62])])))
-    println("maxdim = $maxdim: <Z_62> = $(round(z62; digits = 4)), fidelity = $(round(fidelity; digits = 4))")
+    println("maxdim = $maxdim: <Z_62> = $(round(z62; digits = 4))")
 end
 ```
 
@@ -100,9 +98,7 @@ end
 | ``\theta_h = \pi/8`` | 0.8669 | 0.8552 | 0.8539 | 0.8538 |
 | ``\theta_h = \pi/4`` | 0.7034 | 0.6614 | 0.5549 | 0.4266 |
 
-At ``\theta_h = \pi/8`` the result has converged by `maxdim = 16`, and the gate fidelity is essentially 1. At ``\theta_h = \pi/4`` the state is far more entangled: ``\langle Z_{62} \rangle`` is still moving at `maxdim = 32` and the gate fidelity has collapsed, so a converged answer needs a larger bond dimension (see [Tindall2024]). Each run at `maxdim = 32` takes about half a minute on a laptop.
-
-`fidelity` is the product, over every gate, of the fraction of the state's norm that the truncation kept. It is a rough guide: a value near 1 means truncation barely affected the state, while a value near 0 only says that many small truncations added up, not that the observable is wrong.
+At ``\theta_h = \pi/8`` the result has converged by `maxdim = 16`: ``\langle Z_{62} \rangle`` changes only in the fourth decimal place from `maxdim = 16` to `maxdim = 32`. At ``\theta_h = \pi/4`` the state is far more entangled: ``\langle Z_{62} \rangle`` still changes in the first decimal place from `maxdim = 16` to `maxdim = 32`, so a converged answer needs a larger bond dimension (see [Tindall2024]). Each run at `maxdim = 32` takes about half a minute on a laptop.
 
 ## Going further
 

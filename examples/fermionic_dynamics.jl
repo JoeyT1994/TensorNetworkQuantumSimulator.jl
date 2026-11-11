@@ -45,7 +45,7 @@ function evolve(g, occupied; tt = 1.0, dt = 0.05, nsteps = 10, χ = 4)
     layer = vcat(half, reverse(half))
     ψ_bpc = update(BeliefPropagationCache(ψ))
     for _ in 1:nsteps
-        ψ_bpc, _ = apply_gates(layer, ψ_bpc; apply_kwargs = (; maxdim = χ, cutoff = 1.0e-16))
+        ψ_bpc = apply_gates(layer, ψ_bpc; apply_kwargs = (; maxdim = χ, cutoff = 1.0e-16))
     end
     return network(ψ_bpc), nsteps * dt
 end

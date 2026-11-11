@@ -37,7 +37,7 @@ circuit = circuit_from_qasm(\"\"\"
     rz(pi/4) q[2];
 \"\"\")
 g = build_graph_from_circuit(circuit)
-ψ, errors = apply_gates(circuit, tensornetworkstate(v -> "↑", g))
+ψ = apply_gates(circuit, tensornetworkstate(v -> "↑", g))
 ```
 """
 function circuit_from_qasm(qasm::AbstractString; qubits = nothing)

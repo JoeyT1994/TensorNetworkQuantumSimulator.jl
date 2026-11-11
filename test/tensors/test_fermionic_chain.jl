@@ -28,8 +28,7 @@
             append!(layer, ("F_hop", (v, v + 1), 0.37) for v in 1:2:(n - 1))
             append!(layer, ("F_phase", [v], 0.21) for v in 1:n)
         end
-        ψt, errs = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 32, cutoff = 1.0e-14))
-        @test maximum(errs) < 1.0e-12
+        ψt = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 32, cutoff = 1.0e-14))
         cs = jw_ops(n)
         ψv = jw_evolve(layer, cs, Dict(v => v for v in 1:n), n; occupied = (2, 5))
         nrm = real(ψv' * ψv)
@@ -52,7 +51,7 @@
         end
 
         ψc = tensornetworkstate(ComplexF64, v -> v in (2, 4, 5) ? "Occ" : "Emp", g, s)
-        ψct, _ = apply_gates(layer, ψc; apply_kwargs = (; maxdim = 32, cutoff = 1.0e-14))
+        ψct = apply_gates(layer, ψc; apply_kwargs = (; maxdim = 32, cutoff = 1.0e-14))
         ψcv = jw_evolve(layer, cs, Dict(v => v for v in 1:n), n; occupied = (2, 4, 5))
         nrmc = real(ψcv' * ψcv)
         occ3 = real(only(expect(ψct, ("N", [3]); alg = "bp")))
@@ -62,10 +61,10 @@
         for x in ((0, 1, 0, 1, 1, 0), (1, 1, 1, 1, 1, 0))
             p_jw = abs2(ψcv[1 + sum(v -> x[v] * 2^(n - v), 1:n)]) / nrmc
             sd = TNQS.siteinds(ψct)
-            tnp = copy(TNQS.tensornetwork(ψct))
+            tnp = copy(ψct)
             for v in vertices(tnp)
                 P = TNQS.adapt_like(tnp[v], TI.projector(ComplexF64, only(sd[v]) => x[v] + 1))
-                TNQS.setindex_preserve!(tnp, tnp[v] * P, v)
+                tnp[v] = tnp[v] * P
             end
             ts = [tnp[v] for v in vertices(tnp)]
             amp = TI.scalar(TI.contract(ts; sequence = TNQS.contraction_sequence(ts; alg = "optimal")))
@@ -94,7 +93,7 @@
         ψ = tensornetworkstate(ComplexF64, v -> v == 2 ? "Occ" : "Emp", g, s)
         @test real(norm_sqr(ψ; alg = "exact")) ≈ 1.0
         layer = Any[("F_hop", (v, v + 1), 0.37) for v in 1:(n - 1)]
-        ψt, _ = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 8, cutoff = 1.0e-14))
+        ψt = apply_gates(layer, ψ; apply_kwargs = (; maxdim = 8, cutoff = 1.0e-14))
         cs = jw_ops(n)
         ψv = jw_evolve(layer, cs, Dict(v => v for v in 1:n), n; occupied = (2,))
         nrm = real(ψv' * ψv)

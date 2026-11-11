@@ -4,36 +4,7 @@ backend-agnostic: charged product states (`graded_tensornetworkstate`), graded
 identity/purification constructors, graded site indices, boundary-MPS message
 initialization over charged link spectra, and the tensor-gate passthrough. These are the
 sole implementations of their entry points.
-
-The entry points of the fused double-layer BP kernels (message updates and single-vertex region
-scalars) live here too; the kernels themselves are backend hooks (see tensor_interface.jl).
 =#
-
-# Fused double-layer BP paths (message updates and single-vertex scalars) that never form the
-# ket⊗bra tensor. `nothing` (e.g. for ρ insertions, multi-vertex regions, boundary-MPS messages or
-# graded tensors) means the caller takes the generic contraction.
-norm_message_kernel(net, vertex, incoming_ms) = nothing
-norm_scalar_kernel(net, vertices, incoming_ms; kwargs...) = nothing
-
-# The kernels pool their scratch buffers in a workspace, which a caller (e.g. a BP update) may
-# already have opened.
-function norm_message_kernel(tns::TensorNetworkState, v, incoming_ms::Vector)
-    return with_kernel_workspace(() -> fused_norm_message(tns[v], siteinds(tns, v), incoming_ms))
-end
-
-function norm_scalar_kernel(tns::TensorNetworkState, vs::Vector, incoming_ms::Vector; op_strings::Function)
-    length(vs) == 1 || return nothing
-    v = only(vs)
-    sinds = siteinds(tns, v)
-    name = op_strings(v)
-    name isa String || return nothing
-    ops = Tensor[]
-    if name != "I"
-        (name == "ρ" || length(sinds) != 1) && return nothing
-        push!(ops, adapt_like(tns[v], op(name, only(sinds))))
-    end
-    return with_kernel_workspace(() -> fused_norm_scalar(tns[v], sinds, incoming_ms, ops))
-end
 
 #Backend tensor gates inside generic (e.g. Any-typed) circuit vectors pass through the
 #circuit-tuple path unchanged; the acting vertices are inferred from the site indices.
@@ -43,8 +14,8 @@ function totensor(gate::Tensor, g::NamedGraph, sinds::Dictionary)
 end
 
 # ── GradedTensor (graded / fermionic) capability methods ────────────────────────────────────
-# Backend-specific counterparts of generic entry points, gathered here with the fused
-# dense kernels so the generic files stay backend-agnostic.
+# Backend-specific counterparts of generic entry points, gathered here so the generic files
+# stay backend-agnostic.
 
 #Graded (symmetric, TensorKit-backed) site indices: `sectors` is a list of
 #charge => dimension pairs under the group named by `symmetry`. With an even number of
@@ -105,8 +76,8 @@ function graded_tensornetworkstate(eltype, f::Function, g::AbstractGraph, sitein
         set!(tensors, v, ITensorBaseBackend.product_vertex_tensor(eltype, svec[v], only(siteinds[v]), links))
     end
     tensors = Dictionary(vs, narrow_tensors(collect(tensors)))
-    #explicit siteinds: a dangling "Charge" leg must not be auto-classified as a site
-    return TensorNetworkState(TensorNetwork(tensors, g), siteinds)
+    #`siteinds` excludes the dangling "Charge" leg by its tag
+    return TensorNetworkState(tensors)
 end
 
 #Graded boundary-MPS message initialization, following the recipe validated on the
@@ -174,5 +145,5 @@ function graded_identity_tensornetworkstate(eltype, g::NamedGraph, s::Dictionary
         end
     end
     ts = Dictionary(collect(keys(ts)), narrow_tensors(collect(ts)))
-    return TensorNetworkState(TensorNetwork(ts, g), s)
+    return TensorNetworkState(ts)
 end

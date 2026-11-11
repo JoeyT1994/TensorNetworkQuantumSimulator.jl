@@ -1,7 +1,7 @@
 """
     apply_gates(circuit, ψ::Union{TensorNetworkState, BeliefPropagationCache}; cache_update_kwargs = default_bp_update_kwargs(ψ), kwargs...)
 
-Apply a sequence of gates, via simple update, to a `TensorNetworkState` or a `BeliefPropagationCache` wrapping a `TensorNetworkState`, using belief propagation to update the environment.
+Apply a sequence of gates, via simple update (`ITensorNetworksNext.apply_operators` with `BPApplyGate`), to a `TensorNetworkState` or a `BeliefPropagationCache` wrapping a `TensorNetworkState`, using belief propagation to update the environment.
 
 # Arguments
 - `circuit`: A [`Circuit`](@ref), or a vector of gates as tuples `(name, vertices)` or `(name, vertices, parameters)`, or as gate tensors.
@@ -9,12 +9,11 @@ Apply a sequence of gates, via simple update, to a `TensorNetworkState` or a `Be
 
 # Keyword Arguments
 - `cache_update_kwargs`: Keyword arguments for updating the belief propagation cache between gates (reasonable defaults are set).
-- `apply_kwargs`: Keyword arguments for the gate application, such as `maxdim` and `cutoff` for bond dimension truncation.
+- `apply_kwargs`: Keyword arguments for the gate application, `maxdim` and `cutoff` for bond dimension truncation and `normalize_tensors`.
 - `update_cache`: Whether to update the BP cache between gates (default `true`).
-- `verbose`: Print progress and timing of the cache updates (default `false`).
 
 # Returns
-- A tuple containing the updated `TensorNetworkState` or `BeliefPropagationCache` and a vector of truncation errors for each gate application.
+- The updated `TensorNetworkState` or `BeliefPropagationCache`.
 """
 function apply_gates(
         circuit::Vector,
@@ -23,8 +22,7 @@ function apply_gates(
         kwargs...,
     )
     ψ_bpc = converged_cache(Algorithm("bp"), ψ; cache_update_kwargs)
-    ψ_bpc, truncation_errors = apply_gates(circuit, ψ_bpc; cache_update_kwargs, kwargs...)
-    return network(ψ_bpc), truncation_errors
+    return network(apply_gates(circuit, ψ_bpc; cache_update_kwargs, kwargs...))
 end
 
 function apply_gates(
@@ -34,22 +32,14 @@ function apply_gates(
     )
     g = graph(ψ_bpc)
     circuit = totensor(circuit, g, siteinds(network(ψ_bpc)))
-    return apply_gate_tensors(first.(circuit), ψ_bpc; gate_vertices = last.(circuit), kwargs...)
+    return apply_gate_tensors(first.(circuit), ψ_bpc; kwargs...)
 end
-
-apply_gates(circuit::Vector{<:Tensor}, ψ_bpc::BeliefPropagationCache; kwargs...) = apply_gate_tensors(circuit, ψ_bpc; kwargs...)
 
 """
     apply_gates!(circuit, ψ; kwargs...)
 
-Like [`apply_gates`](@ref) but consumes the input state or cache: its tensors are overwritten in
-place and must not be used afterwards.
-
-`simple_update` writes each gate's gauged tensors into the storage of the inputs it was handed,
-since gauging is their last use, which saves the memory of the two tensors per gate. Plain
-`apply_gates` already does this for the tensors the gate loop created itself, protecting the
-caller's originals with a one-time copy on first touch; `apply_gates!` skips those copies too.
-Results are identical either way.
+Like [`apply_gates`](@ref) but consumes the input state or cache: `ITensorNetworksNext.apply_operators!`
+overwrites its tensors and messages in place, so it must not be used afterwards.
 """
 apply_gates!(circuit, ψ; kwargs...) = apply_gates(circuit, ψ; consume_inputs = true, kwargs...)
 
@@ -58,93 +48,51 @@ function adapt_gate(gate::Tensor, ψ_bpc::BeliefPropagationCache)
     return adapt(unspecify_type_parameters(datatype(ψ_bpc)), gate)
 end
 
+# The gate as an operator from its unprimed indices to their primes.
+gate_operator(gate) = (s = inds(gate; plev = 0); ITensorBase.operator(gate, prime.(s), s))
+
 function apply_gate_tensors(
         circuit::Vector,
         ψ_bpc::BeliefPropagationCache;
-        gate_vertices::Vector = vertices.(circuit, (network(ψ_bpc),)),
-        apply_kwargs = (;),
         cache_update_kwargs = default_bp_update_kwargs(ψ_bpc),
         update_cache = true,
         verbose = false,
-        consume_inputs = false,
+        kwargs...,
     )
-    # `consume_inputs` hands the caller's own tensors to the gates; otherwise they are protected by a
-    # one-time copy on first touch, and the copies are consumed freely thereafter.
-    ψ_bpc = consume_inputs ? ψ_bpc : copy(ψ_bpc)
-    owned = consume_inputs ? nothing : Set{eltype(vertices(network(ψ_bpc)))}()
-    # The vertices gates have acted on since the last cache update: a two-site gate touching one of
-    # them needs the cache updated first.
-    affected = Set{eltype(vertices(network(ψ_bpc)))}()
-    truncation_errors = zeros(length(circuit))
-    # the gates' environment absorptions share one set of scratch buffers
-    with_kernel_workspace() do
-        for (ii, (gate, vs)) in enumerate(zip(circuit, gate_vertices))
-            if update_cache && length(vs) >= 2 && any(in(affected), vs)
-                verbose && println("Updating BP cache")
-                t = @elapsed ψ_bpc = update(ψ_bpc; cache_update_kwargs...)
-                verbose && println("Done in $t secs")
-                empty!(affected)
-            end
-            if !isnothing(owned)
-                for v in setdiff(vs, owned)
-                    setindex_preserve!(ψ_bpc, copy(network(ψ_bpc)[v]), v)
-                    push!(owned, v)
-                end
-            end
-            ψ_bpc, truncation_errors[ii] = apply_gate!(adapt_gate(gate, ψ_bpc), ψ_bpc; v⃗ = vs, consume_inputs = true, apply_kwargs)
-            union!(affected, vs)
-        end
-    end
-
-    if update_cache
-        ψ_bpc = update(ψ_bpc; cache_update_kwargs...)
-    end
-
-    return ψ_bpc, truncation_errors
+    cache_update_kwargs = (; default_bp_update_kwargs(ψ_bpc)..., cache_update_kwargs...)
+    ψ, ms = apply_gates(
+        adapt_gate.(circuit, (ψ_bpc,)), network(ψ_bpc), ψ_bpc.messages;
+        cache_update_kwargs, update_cache, kwargs...
+    )
+    ψ_bpc = BeliefPropagationCache(ITNN.normnetwork(ITensorBase.prime, ψ), ms)
+    return update_cache ? update(ψ_bpc; cache_update_kwargs...) : ψ_bpc
 end
 
-#Apply function for a single gate
-function apply_gate!(
-        gate::Tensor,
-        ψ_bpc::BeliefPropagationCache;
-        v⃗ = vertices(gate, network(ψ_bpc)),
-        consume_inputs = false,
-        apply_kwargs
+"""
+    apply_gates(circuit::Vector{<:Tensor}, ψ, messages; cache_update_kwargs, apply_kwargs = (;), update_cache = true, consume_inputs = false) -> (ψ, messages)
+
+Apply `circuit` to the network `ψ` with the norm-network `messages`, returning both updated. `ψ` and `messages` may be
+an `ITensorNetworksMPI.DistITensorNetwork` and its `DistMessageCache`, in which case the call is collective.
+"""
+function apply_gates(
+        circuit::Vector{<:Tensor}, ψ, messages;
+        cache_update_kwargs, apply_kwargs = (;), update_cache = true, consume_inputs = false,
     )
-    nv = length(v⃗)
-
-    1 <= nv <= 2 || error(
-        "apply_gate!: only one- and two-site gates are supported; " *
-        "received a gate acting on $nv vertices: $v⃗.",
+    (; maxdim, cutoff, normalize_tensors) = (; maxdim = nothing, cutoff = nothing, normalize_tensors = true, apply_kwargs...)
+    ops = gate_operator.(circuit)
+    (; maxiter, tolerance) = cache_update_kwargs
+    stopping_criterion = isnothing(tolerance) ? (; maxiter) : (; maxiter, tol = tolerance)
+    environment_alg = update_cache ? (; stopping_criterion) : nothing
+    apply_operators = consume_inputs ? ITNN.apply_operators! : ITNN.apply_operators
+    ψ, ms = apply_operators(
+        ops, ψ, messages;
+        trunc = ITensorBaseBackend._mak_trunc(; maxdim, cutoff), normalize = normalize_tensors, environment_alg
     )
-
-    if nv == 2
-        has_edge(graph(ψ_bpc), NamedEdge(first(v⃗) => last(v⃗))) || error(
-            "apply_gate!: cannot apply a two-site gate on the non-adjacent vertices " *
-            "$(first(v⃗)) and $(last(v⃗)). Simple update requires the two sites to share an " *
-            "edge of the tensor-network graph.",
-        )
+    # New bonds carry names minted by `svd_trunc`; the bra name of each is reset to the prime of its ket name.
+    for e in keys(ITNN.MessageCache(ms))
+        ms[e] = ITensorBase.rename(ms[e], (ITensorBase.outputnames(ms[e]) .=> ITensorBase.prime.(ITensorBase.inputnames(ms[e])))...)
     end
-
-    envs = nv == 1 ? nothing : incoming_messages(ψ_bpc, v⃗)
-
-    ψ⃗ = [network(ψ_bpc)[v] for v in v⃗]
-    updated_tensors, s_values, err = simple_update(gate, ψ⃗; envs, consume_inputs, apply_kwargs...)
-    if nv == 2
-        v1, v2 = v⃗
-        e = NamedEdge(v1 => v2)
-        ind2 = commonind(s_values, first(updated_tensors))
-        δuv = map_diag(sign, replaceind(dag(s_values), ind2, prime(ind2)))
-        s_values = dense(s_values) * dense(δuv)
-        setmessage!(ψ_bpc, e, dag(s_values))
-        setmessage!(ψ_bpc, reverse(e), s_values)
-    end
-
-    for (i, v) in enumerate(v⃗)
-        setindex_preserve!(ψ_bpc, updated_tensors[i], v)
-    end
-
-    return ψ_bpc, err
+    return ψ, ms
 end
 
 const apply_circuit = apply_gates

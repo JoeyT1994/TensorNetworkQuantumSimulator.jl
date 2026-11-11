@@ -19,10 +19,10 @@ function full_update(
     )
 
     Qᵥ₁, Rᵥ₁ = factorize(
-        ψ[v⃗[1]], uniqueinds(uniqueinds(ψ[v⃗[1]], ψ[v⃗[2]]), uniqueinds(ψ, v⃗[1]))
+        ψ[v⃗[1]], uniqueinds(uniqueinds(ψ[v⃗[1]], ψ[v⃗[2]]), siteinds(ψ, v⃗[1]))
     )
     Qᵥ₂, Rᵥ₂ = factorize(
-        ψ[v⃗[2]], uniqueinds(uniqueinds(ψ[v⃗[2]], ψ[v⃗[1]]), uniqueinds(ψ, v⃗[2]))
+        ψ[v⃗[2]], uniqueinds(uniqueinds(ψ[v⃗[2]], ψ[v⃗[1]]), siteinds(ψ, v⃗[2]))
     )
 
     extended_envs = vcat(envs, Qᵥ₁, prime(dag(Qᵥ₁)), Qᵥ₂, prime(dag(Qᵥ₂)))
@@ -47,8 +47,10 @@ function full_update(
         )
         callback(; singular_values = singular_values![], truncation_error = spec.truncerr)
     end
-    ψᵥ₁ = Qᵥ₁ * Rᵥ₁
-    ψᵥ₂ = Qᵥ₂ * Rᵥ₂
+    # The new bond keeps the old bond's name, which the norm network's bra-name map contains.
+    bond = commonind(Rᵥ₁, Rᵥ₂) => commonind(ψ[v⃗[1]], ψ[v⃗[2]])
+    ψᵥ₁ = ITensorBase.rename(Qᵥ₁ * Rᵥ₁, bond)
+    ψᵥ₂ = ITensorBase.rename(Qᵥ₂ * Rᵥ₂, bond)
     return [ψᵥ₁, ψᵥ₂]
 end
 

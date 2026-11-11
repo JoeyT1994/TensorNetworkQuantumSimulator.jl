@@ -1,30 +1,25 @@
-struct BilinearForm{V} <: AbstractForm{V}
-    ket::TensorNetworkState{V}
-    operator::TensorNetworkState{V}
-    bra::TensorNetworkState{V}
+struct BilinearForm{T, V, K <: ITensorNetwork{<:Any, V}, B <: ITensorNetwork{<:Any, V}} <: AbstractForm{T, V}
+    ket::K
+    bra::B
 end
 
-ket(blf::BilinearForm) = blf.ket
-operator(blf::BilinearForm) = blf.operator
-bra(blf::BilinearForm) = blf.bra
-bra_tensor(blf::BilinearForm, v) = bra(blf)[v]
-bra_virtualinds(blf::BilinearForm, edge::NamedEdge) = virtualinds(bra(blf), edge)
+ITNN.ketnetwork(blf::BilinearForm) = blf.ket
+ITNN.branetwork(blf::BilinearForm) = blf.bra
+ITNN.factor_tensors(blf::BilinearForm, v) = [blf.ket[v], blf.bra[v]]
+# The bra is stored already conjugated, so no operand is flagged for conjugation.
+function ITNN.message_contraction_tensors(blf::BilinearForm, messages, v)
+    return [blf.ket[v]; messages...; blf.bra[v]], falses(length(messages) + 2)
+end
 
-Base.copy(blf::BilinearForm) = BilinearForm(copy(blf.ket), copy(blf.operator), copy(blf.bra))
+Base.copy(blf::BilinearForm) = typeof(blf)(copy(blf.ket), copy(blf.bra))
 
-#Constructor, bra is taken to be in the vector space of ket so the dual is taken.
-#The identity operator carries the PROMOTED scalar type: a real ket with a complex bra
-#(or vice versa) must not silently truncate either side.
-function BilinearForm(ket::TensorNetworkState, bra::TensorNetworkState)
+#Constructor, bra is taken to be in the vector space of ket so the dual is taken
+function BilinearForm(ket::ITensorNetwork{T, V}, bra::ITensorNetwork) where {T, V}
     graph(ket) == graph(bra) || error("BilinearForm: ket and bra must share the same graph")
-    elt = promote_type(scalartype(ket), scalartype(bra))
-    dtype = Base.typename(datatype(ket)).wrapper{elt, 1}
-    bra = map_tensors(t -> dag(prime(t)), bra)
-    sinds = siteinds(ket)
-    verts = collect(vertices(ket))
-    operator_tensors = [adapt(dtype)(reduce(*, Tensor[dense(delta(sind, prime(dag(sind)))) for sind in sinds[v]])) for v in verts]
-    operator = TensorNetworkState(Dictionary(verts, operator_tensors))
-    return BilinearForm(ket, operator, bra)
+    nn = ITNN.normnetwork(ITensorBase.prime, bra)
+    verts = collect(vertices(bra))
+    bra = ITensorNetwork(Dictionary(verts, [ITNN.bratensor(nn, v) for v in verts]))
+    return BilinearForm{T, V, typeof(ket), typeof(bra)}(ket, bra)
 end
 
 #scalar/storage types must span both stored networks (the generic AbstractForm methods
