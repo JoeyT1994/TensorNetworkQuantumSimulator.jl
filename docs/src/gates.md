@@ -78,6 +78,40 @@ Under the hood, each two-site gate is applied via the _simple update_ algorithm 
 
 Single-site gates are applied by direct contraction with the site tensor (no truncation needed). If the gate is unitary the BP messages will be unchanged.
 
+## Full Update Algorithm
+
+On planar graphs, two-site gates can instead be applied by the _full update_: each bond is truncated to maximise the fidelity of the result in a CTMRG environment of the bond, which accounts for the loops of the network that the BP environment of simple update leaves out. It costs more per gate, but stays accurate for longer in an evolution.
+
+```julia
+# maxdim: bond dimension of the state; env_maxdim: bond dimension of the CTMRG environment
+ψ, diagnostics = apply_gates_full_update(circuit, ψ; maxdim = 4, env_maxdim = 16)
+
+# or carry the CTMRG environment between calls, e.g. to measure between Trotter steps
+cache = CTMRGCache(ψ, 16)
+for step in 1:nsteps
+    cache, diagnostics = apply_gates_full_update(trotter_step, cache; maxdim = 4)
+    cache = update(cache; maxiter = 100)
+    z = expect(cache, [("Z", [v]) for v in vertices(ψ)])
+end
+```
+
+For each two-site gate:
+
+1. QR-decompose each of the two tensors to isolate a small `R` tensor carrying its physical leg and the shared bond, and contract the CTMRG environment with the `Q` tensors into a reduced environment `N` acting on the two `R`s.
+2. Make `N` Hermitian and positive definite: negative eigenvalues are set to zero and all of them are raised by a small relative amount, so no direction of the bond drops out of the objective.
+3. Gauge the `R` tensors with the square roots of the environment of each leg, which conditions the optimisation.
+4. Apply the gate, start from the truncated SVD and sweep, solving for one tensor with the other fixed, until the fidelity in the environment settles.
+5. Balance the bond with an SVD, undo the gauge and multiply the `Q` tensors back in.
+
+The environment is updated before any two-site gate that acts on a tensor changed since the last update, so a layer of gates on disjoint bonds shares one environment. With the default `cutoff = nothing`, a gate whose bond can hold the result without truncation (as while bonds grow from a product state) is applied exactly, with no environment. A gate whose environment is unhealthy (its `negativity` or `nonhermiticity` above the thresholds in `health`) is applied by a plain truncated SVD instead.
+
+`diagnostics` has an entry for each two-site gate, including its `fidelity` in the environment (`NaN` if it fell back to the plain SVD), the `negativity` and `nonhermiticity` of `N`, the number of `sweeps`, and whether it used an `environment` and whether it fell back (`fallback`). The product of the fidelities estimates the fidelity accumulated over the circuit; as each is local to its environment, it tends to overestimate the global one.
+
+Truncation by full update is also available as `truncate(ψ; alg = "ctmrg", maxdim, env_maxdim)`.
+
+!!! note "Choosing env_maxdim"
+    The accuracy of the environment is set by `env_maxdim`, which has to grow with `maxdim`: at a fixed `env_maxdim`, increasing `maxdim` stops helping once the environment can no longer resolve the bonds.
+
 ## Supported Gates
 
 All parameterised gates follow the qiskit convention. The canonical names below

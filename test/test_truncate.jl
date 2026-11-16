@@ -18,19 +18,19 @@ using TensorNetworkQuantumSimulator: virtualinds, tensors
     ψ = gauge_and_scale(ψ)
 
     ψ_trunc_bp = truncate(ψ; alg = "bp", maxdim = 2, cutoff = 1.0e-10, normalize_tensors = false)
-    ψ_trunc_bmps = truncate(ψ; alg = "boundarymps", maxdim = 2, cutoff = 1.0e-10, normalize_tensors = false, gauge_state = false, env_maxdim = 9)
+    ψ_trunc_ctmrg = truncate(ψ; alg = "ctmrg", maxdim = 2, cutoff = 1.0e-10, normalize_tensors = false, env_maxdim = 9)
 
     f_bp = inner(ψ_trunc_bp, ψ; alg = "exact") / sqrt(norm_sqr(ψ_trunc_bp; alg = "exact") * norm_sqr(ψ; alg = "exact"))
-    f_bmps = inner(ψ_trunc_bmps, ψ; alg = "exact") / sqrt(norm_sqr(ψ_trunc_bmps; alg = "exact") * norm_sqr(ψ; alg = "exact"))
+    f_ctmrg = inner(ψ_trunc_ctmrg, ψ; alg = "exact") / sqrt(norm_sqr(ψ_trunc_ctmrg; alg = "exact") * norm_sqr(ψ; alg = "exact"))
 
     f_bp = real(f_bp * conj(f_bp))
-    f_bmps = real(f_bmps * conj(f_bmps))
+    f_ctmrg = real(f_ctmrg * conj(f_ctmrg))
 
     @test 0 ≤ f_bp ≤ 1
-    @test 0 ≤ f_bmps ≤ 1
-    @test f_bmps ≥ f_bp
+    @test 0 ≤ f_ctmrg ≤ 1
+    @test f_ctmrg ≥ f_bp
     @test maxvirtualdim(ψ_trunc_bp) ≤ 2
-    @test maxvirtualdim(ψ_trunc_bmps) ≤ 2
+    @test maxvirtualdim(ψ_trunc_ctmrg) ≤ 2
 
 end
 

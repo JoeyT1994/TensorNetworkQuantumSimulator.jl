@@ -25,6 +25,7 @@ ising_partitionfunction
 
 ```@docs
 apply_gates
+apply_gates_full_update
 simple_update
 full_update
 Circuit
@@ -104,8 +105,6 @@ freenergy
 ```@docs
 safe_eigen
 add
-fidelity
-optimise_p_q
 TensorNetworkQuantumSimulator.TensorInterface.Algorithm
 ```
 

@@ -57,12 +57,19 @@ function CTMRGCache(
         projector::Symbol = :svd,
     )
     projector in (:svd, :eig) || throw(ArgumentError("projector must be :svd or :eig, got $(repr(projector))"))
-    g = graph(network)
-    V = vertextype(g)
-    emb = planar_embedding(g; positions)
+    emb = planar_embedding(graph(network); positions)
     rules = ctmrg_rules(emb; jacobi = projector === :eig)
+    return fresh_cache(network, emb, rules, env_maxdim, projector, Dict{Any, Any}())
+end
+
+# A fresh cache on `network`, which has the graph of `cache`, with the embedding, rules and
+# contraction orders of `cache`: for a network whose bonds have changed dimension.
+CTMRGCache(network, cache::CTMRGCache) =
+    fresh_cache(network, cache.embedding, cache.rules, cache.env_maxdim, cache.projector, cache.sequences)
+
+function fresh_cache(network, emb::PlanarEmbedding{V}, rules::CTMRGRules{V}, env_maxdim, projector, sequences) where {V}
     bonds = Dict{Tuple{V, V}, Vector{Index}}()
-    for e in edges(g)
+    for e in edges(graph(network))
         u, v = src(e), dst(e)
         bonds[(u, v)] = bonds[(v, u)] = shared_legs(network, u, v)
     end
@@ -70,11 +77,16 @@ function CTMRGCache(
     cache = CTMRGCache(
         network, emb, rules, Int(env_maxdim), projector,
         bonds, sides, Dictionary{NamedEdge, Tensor}(), Dict{Tuple{V, Int}, Tensor}(),
-        Dict{Tuple{V, V}, Tuple{Tensor, Tensor, Index}}(), Dict{Any, Any}()
+        Dict{Tuple{V, V}, Tuple{Tensor, Tensor, Index}}(), sequences
     )
     initialize_blocks!(cache)
     return cache
 end
+
+# Whether the blocks are stale on some bond: a bond whose legs have changed (a new dimension, after
+# a truncation or a gate) since they were built.
+stale_bonds(cache::CTMRGCache) =
+    any(e -> cache.bonds[(src(e), dst(e))] != shared_legs(network(cache), src(e), dst(e)), edges(graph(cache)))
 
 # A message or corner by its recipe part, (:message, (u, v)) or (:corner, (p, f)).
 block_tensor(cache::CTMRGCache, (kind, key)) = kind === :message ? cache.messages[NamedEdge(key[1] => key[2])] : cache.corners[key]
@@ -140,17 +152,7 @@ end
 evaluate_recipe(cache::CTMRGCache, parts; kwargs...) = contract_blocks(cache, recipe_tensors(cache, parts; kwargs...))
 
 # The same lists recur every pass, so contraction orders are kept by the lists' structure.
-function contract_blocks(cache::CTMRGCache, ts::Vector)
-    length(ts) == 1 && return only(ts)
-    length(ts) == 2 && return ts[1] * ts[2]
-    seen = Dict{Any, Int}()
-    structure = Tuple(Tuple((get!(seen, i, length(seen) + 1), dim(i)) for i in inds(t)) for t in ts)
-    sequence = get!(cache.sequences, structure) do
-        length(ts) <= 12 ? contraction_sequence(ts; alg = "optimal") :
-            contraction_sequence(ts; alg = "omeinsum", optimizer = GreedyMethod())
-    end
-    return contract(ts; sequence)
-end
+contract_blocks(cache::CTMRGCache, ts::Vector) = contract_memoized(cache.sequences, ts)
 
 # The relative cutoff regularising the pseudo-inverses some corner updates use.
 const PINV_RTOL = 1.0e-3
@@ -474,7 +476,9 @@ end
 """
     update(cache::CTMRGCache; convergence = :messages, tolerance, maxiter = 30, verbose = false)
 
-Update the corners and messages of a `CTMRGCache` until they converge.
+Update the corners and messages of a `CTMRGCache` until they converge, or for a fixed number of
+passes (`tolerance = nothing`). If a bond of its network has changed since the corners and messages
+were built (as after `apply_gates_full_update` on the cache), they are rebuilt from scratch first.
 
 # Arguments
 - `cache::CTMRGCache`: The cache to update.
@@ -485,7 +489,8 @@ Update the corners and messages of a `CTMRGCache` until they converge.
   (‖a‖‖b‖)², so a tolerance τ settles the environments to about √τ relative. `:freenergy` (enough for
   the free energy): `freenergy(cache)`, relative, which settles first.
 - `tolerance`: Convergence threshold (default `1e-12` for `:messages` and `1e-10` for `:freenergy`,
-  but never below `100 eps` of the network's precision, so `1.2e-5` in single precision).
+  but never below `100 eps` of the network's precision, so `1.2e-5` in single precision). With
+  `nothing`, exactly `maxiter` passes are run and convergence isn't measured.
 - `maxiter::Integer = 30`: Maximum number of passes.
 - `verbose::Bool = false`: Print the outcome.
 
@@ -495,18 +500,20 @@ Update the corners and messages of a `CTMRGCache` until they converge.
 function update(
         cache::CTMRGCache;
         convergence::Symbol = :messages,
-        tolerance::Real = default_ctmrg_tolerance(cache, convergence),
+        tolerance::Union{Real, Nothing} = default_ctmrg_tolerance(cache, convergence),
         maxiter::Integer = 30,
         verbose::Bool = false,
     )
     convergence in (:messages, :freenergy) || throw(ArgumentError("convergence must be :messages or :freenergy, got $(repr(convergence))"))
-    cache = copy(cache)
+    # a network whose bonds have changed dimension since the blocks were built needs fresh blocks
+    cache = stale_bonds(cache) ? CTMRGCache(copy(network(cache)), cache) : copy(cache)
     pass! = isnothing(cache.rules.order) ? jacobi_pass! : sequential_pass!
     signal() = convergence === :messages ? vertex_environments(cache) : freenergy(cache)
     change(a, b) = convergence === :messages ? maximum(message_diff.(a, b)) : abs(a - b) / max(1, abs(a))
     previous = nothing
     function step!()
         pass!(cache)
+        isnothing(tolerance) && return nothing
         current = signal()
         c = isnothing(previous) ? nothing : change(current, previous)
         previous = current
