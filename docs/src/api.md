@@ -105,7 +105,6 @@ freenergy
 ```@docs
 safe_eigen
 add
-fidelity
 TensorNetworkQuantumSimulator.TensorInterface.Algorithm
 ```
 
