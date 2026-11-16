@@ -21,6 +21,20 @@ end
 # Contract `tensors` in an optimal order (for the small lists of a vertex and its environment).
 contract_optimal(tensors::Vector{<:Tensor}) = contract(tensors; sequence = contraction_sequence(tensors))
 
+# Contract `tensors`, for lists that recur: the order is kept in `sequences` by the list's structure
+# (which legs each tensor shares, and their dimensions). Optimal for short lists, greedy for longer.
+function contract_memoized(sequences::AbstractDict, tensors::Vector)
+    length(tensors) == 1 && return only(tensors)
+    length(tensors) == 2 && return tensors[1] * tensors[2]
+    seen = Dict{Any, Int}()
+    structure = Tuple(Tuple((get!(seen, i, length(seen) + 1), dim(i)) for i in inds(t)) for t in tensors)
+    sequence = get!(sequences, structure) do
+        length(tensors) <= 12 ? contraction_sequence(tensors; alg = "optimal") :
+            contraction_sequence(tensors; alg = "omeinsum", optimizer = GreedyMethod())
+    end
+    return contract(tensors; sequence)
+end
+
 #OMEinsumContractionOrders helpers
 function to_eincode(tensors::Vector{<:Tensor})
     ixs = map(t -> collect(inds(t)), tensors)

@@ -52,6 +52,7 @@ export
     add_edge,
     degree,
     apply_gates,
+    apply_gates_full_update,
     apply_circuit,
     register_gate!,
     register_alias!,
