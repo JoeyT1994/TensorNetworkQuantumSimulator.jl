@@ -341,9 +341,18 @@ or
 
 ## Authors and Acknowledgements
 
-The package was developed by Joseph Tindall ([JoeyT1994](https://github.com/JoeyT1994)), an Associate Research Scientist at the Center for Computational Quantum Physics, Flatiron Institute NYC, and Manuel S. Rudolph ([MSRudolph](https://github.com/MSRudolph)), a PhD Candidate at EPFL, Switzerland, during a research stay at the Center for Computational Quantum Physics, Flatiron Institute NYC.
+The package is developed and maintained by Joseph Tindall ([JoeyT1994](https://github.com/JoeyT1994)), an Associate Research Scientist at the Center for Computational Quantum Physics, Flatiron Institute NYC. Manuel S. Rudolph ([MSRudolph](https://github.com/MSRudolph)) contributed to early versions in 2025 during a research stay at the Center for Computational Quantum Physics. We thank all the [contributors](https://github.com/JoeyT1994/TensorNetworkQuantumSimulator.jl/graphs/contributors).
 
 The package was strongly influenced by [ITensorNetworks](https://github.com/ITensor/ITensorNetworks.jl), a general tensor network package developed by Matt Fishman ([mtfishman](https://github.com/mtfishman)), Joseph Tindall ([JoeyT1994](https://github.com/JoeyT1994)) and others. The next generation of ITensorNetworks is currently being developed [here](https://github.com/ITensor/ITensorNetworksNext.jl). A quantum simulation package such as this will hopefully then be able to utilize many of its general features for working with tensor networks.
+
+## Breaking changes in v0.6
+
+Coming from v0.5, these need changes in user code:
+
+| v0.5 | v0.6 |
+|---|---|
+| `truncate(ψ; alg = "boundarymps", maxdim, env_maxdim)`, `truncate(::BoundaryMPSCache; maxdim)` | `truncate(ψ; alg = "ctmrg", maxdim, env_maxdim)`: a full update of each bond in its CTMRG environment |
+| `optimise_p_q`, `fidelity` (the boundary MPS full update's internals) | removed; gates are applied by full update with `apply_gates_full_update(circuit, ψ; maxdim, env_maxdim)` |
 
 ## Breaking changes in v0.5
 
