@@ -47,8 +47,9 @@ function truncate(alg::Algorithm"bp", tns::TensorNetworkState; cache_update_kwar
     return network(truncate(bp_cache; cache_update_kwargs, kwargs...))
 end
 
-# Truncate every bond by a full update of the identity in its CTMRG environment, a colour of an edge
-# colouring at a time, updating the environment between colours.
+# Truncate every bond by a full update of the identity in its CTMRG environment, in the order of an
+# edge colouring (or of the edges); the environment is updated before a bond next to one truncated
+# since the last update.
 function truncate(
         alg::Algorithm"ctmrg", tns::TensorNetworkState; env_maxdim::Integer, edge_color = true,
         positions = default_positions(graph(tns)), kwargs...
@@ -59,7 +60,7 @@ function truncate(
             for eg in truncation_edge_groups(graph(tns); edge_color) for e in eg if any(i -> dim(i) > 1, virtualinds(tns, e))
     ]
     cache = CTMRGCache(copy(tns), env_maxdim; positions, projector = :svd)
-    return copy(network(first(full_update_sequence(gates, cache; kwargs...))))
+    return network(first(full_update_sequence(gates, cache; kwargs...)))
 end
 
 """
@@ -73,7 +74,7 @@ Truncate the virtual indices of tensors in the given `TensorNetworkState` using 
 # Keyword Arguments
 - `alg`: The algorithm to use for truncation. Supported algorithms:
     - `"bp"`: Belief propagation-based truncation (works on any network, cheap but can be less accurate when loop correlations are present).
-    - `"ctmrg"`: Full update of each bond in its CTMRG environment (requires `env_maxdim`; works only on planar networks, more expensive but more accurate when loop correlations are present).
+    - `"ctmrg"`: Full update of each bond in its CTMRG environment (requires `env_maxdim`; works only on planar networks, more expensive but more accurate when loop correlations are present). Takes the keyword arguments of [`apply_gates_full_update`](@ref).
 - `maxdim::Integer`: The maximum bond dimension to retain after truncation.
 - `cutoff::Number`: The singular value cutoff for truncation (optional).
 

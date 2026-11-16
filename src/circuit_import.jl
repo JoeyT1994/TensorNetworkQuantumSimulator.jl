@@ -7,7 +7,7 @@
 
 A circuit's qubits, in declaration order, and its gates as `(name, vertices)` or
 `(name, vertices, parameters)` tuples. Idle qubits remain in `qubits` without adding gates.
-Pass the circuit directly to `build_graph_from_circuit` or `apply_gates`; access its gate
+Pass the circuit directly to `build_graph_from_circuit`, `apply_gates` or `apply_gates_full_update`; access its gate
 list as `circuit.gates`.
 """
 struct Circuit{V, G}
@@ -22,6 +22,13 @@ function apply_gates(circuit::Circuit, ψ::Union{TensorNetworkState, BeliefPropa
         throw(ArgumentError("the state must contain every declared qubit of the circuit"))
     isempty(circuit.gates) && return copy(ψ), Float64[]
     return apply_gates(circuit.gates, ψ; kwargs...)
+end
+
+function apply_gates_full_update(circuit::Circuit, ψ::Union{TensorNetworkState, CTMRGCache}; kwargs...)
+    all(v -> has_vertex(graph(ψ), v), circuit.qubits) ||
+        throw(ArgumentError("the state must contain every declared qubit of the circuit"))
+    isempty(circuit.gates) && return copy(ψ), NamedTuple[]
+    return apply_gates_full_update(circuit.gates, ψ; kwargs...)
 end
 
 mutable struct ImportedCircuit

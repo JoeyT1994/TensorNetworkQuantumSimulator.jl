@@ -35,10 +35,12 @@ function apply_gates(
     return apply_gates(first.(circuit), ψ_bpc; gate_vertices = last.(circuit), kwargs...)
 end
 
-function adapt_gate(gate::Tensor, ψ_bpc::BeliefPropagationCache)
-    gate = scalartype(gate) <: Complex ? adapt(complex(scalartype(ψ_bpc)), gate) : adapt(scalartype(ψ_bpc), gate)
-    return adapt(unspecify_type_parameters(datatype(ψ_bpc)), gate)
+# The gate in the element type (made complex if the gate is) and storage of the state.
+function adapt_gate(gate::Tensor, ψ::TensorNetworkState)
+    gate = scalartype(gate) <: Complex ? adapt(complex(scalartype(ψ)), gate) : adapt(scalartype(ψ), gate)
+    return adapt(unspecify_type_parameters(datatype(ψ)), gate)
 end
+adapt_gate(gate::Tensor, ψ_bpc::BeliefPropagationCache) = adapt_gate(gate, network(ψ_bpc))
 
 function apply_gates(
         circuit::Vector{<:Tensor},

@@ -477,8 +477,8 @@ end
     update(cache::CTMRGCache; convergence = :messages, tolerance, maxiter = 30, verbose = false)
 
 Update the corners and messages of a `CTMRGCache` until they converge, or for a fixed number of
-passes (`tolerance = nothing`). If a bond of its network has changed dimension since the blocks were
-built (as after `apply_gates_full_update` on the cache), the blocks are rebuilt first.
+passes (`tolerance = nothing`). If a bond of its network has changed since the corners and messages
+were built (as after `apply_gates_full_update` on the cache), they are rebuilt from scratch first.
 
 # Arguments
 - `cache::CTMRGCache`: The cache to update.
@@ -506,7 +506,7 @@ function update(
     )
     convergence in (:messages, :freenergy) || throw(ArgumentError("convergence must be :messages or :freenergy, got $(repr(convergence))"))
     # a network whose bonds have changed dimension since the blocks were built needs fresh blocks
-    cache = stale_bonds(cache) ? CTMRGCache(network(cache), cache) : copy(cache)
+    cache = stale_bonds(cache) ? CTMRGCache(copy(network(cache)), cache) : copy(cache)
     pass! = isnothing(cache.rules.order) ? jacobi_pass! : sequential_pass!
     signal() = convergence === :messages ? vertex_environments(cache) : freenergy(cache)
     change(a, b) = convergence === :messages ? maximum(message_diff.(a, b)) : abs(a - b) / max(1, abs(a))

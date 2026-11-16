@@ -352,7 +352,8 @@ Coming from v0.5, these need changes in user code:
 | v0.5 | v0.6 |
 |---|---|
 | `truncate(ψ; alg = "boundarymps", maxdim, env_maxdim)`, `truncate(::BoundaryMPSCache; maxdim)` | `truncate(ψ; alg = "ctmrg", maxdim, env_maxdim)`: a full update of each bond in its CTMRG environment |
-| `optimise_p_q`, `fidelity` (the boundary MPS full update's internals) | removed; gates are applied by full update with `apply_gates_full_update(circuit, ψ; maxdim, env_maxdim)` |
+| `full_update(o, ψ, v⃗; envs, nfullupdatesweeps, apply_kwargs...)` | `full_update(o, ψ₁, ψ₂, envs; maxdim, cutoff, maxsweeps, …)` on the two tensors, returning them and diagnostics; for whole circuits, `apply_gates_full_update(circuit, ψ; maxdim, env_maxdim)` |
+| `optimise_p_q`, `fidelity` (the boundary MPS full update's internals) | removed |
 
 ## Breaking changes in v0.5
 
