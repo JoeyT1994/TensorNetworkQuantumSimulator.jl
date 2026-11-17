@@ -18,7 +18,7 @@ g = named_triangular_lattice_graph(5, 5)        # triangular lattice
 g = kagome_lattice(3, 3)                        # kagome lattice
 g = penrose_tiling(3)                           # Penrose tiling (3 generations of deflation)
 g = named_path_graph(10)                        # 1D chain (MPS)
-g = named_comb_tree(4, 4)                       # comb tree
+g = named_comb_tree((4, 4))                     # comb tree
 ```
 
 Vertices are typically integers or tuples. For instance, `named_grid((5, 5))` produces vertices `(1,1), (1,2), ..., (5,5)`, and `named_path_graph(10)` produces integer vertices `1, 2, ..., 10`.

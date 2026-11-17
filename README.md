@@ -80,7 +80,7 @@ g = named_triangular_lattice_graph(5, 5)        # triangular lattice
 g = kagome_lattice(3, 3)                        # kagome lattice
 g = penrose_tiling(3)                           # Penrose rhombus tiling
 g = named_path_graph(10)                        # 1D chain (MPS)
-g = named_comb_tree(4, 4)                       # comb tree
+g = named_comb_tree((4, 4))                     # comb tree
 ```
 
 Custom graphs can also be built directly with [NamedGraphs.jl](https://github.com/ITensor/NamedGraphs.jl) or inferred from imported quantum circuits with `build_graph_from_circuit(circuit)`.
@@ -354,21 +354,3 @@ Coming from v0.5, these need changes in user code:
 | `truncate(ψ; alg = "boundarymps", maxdim, env_maxdim)`, `truncate(::BoundaryMPSCache; maxdim)` | `truncate(ψ; alg = "ctmrg", maxdim, env_maxdim)`: a full update of each bond in its CTMRG environment |
 | `full_update(o, ψ, v⃗; envs, nfullupdatesweeps, apply_kwargs...)` | `full_update(o, ψ₁, ψ₂, envs; maxdim, cutoff, maxsweeps, …)` on the two tensors, returning them and diagnostics; for whole circuits, `apply_gates_full_update(circuit, ψ; maxdim, env_maxdim)` |
 | `optimise_p_q`, `fidelity` (the boundary MPS full update's internals) | removed |
-
-## Breaking changes in v0.5
-
-Coming from v0.4, these need changes in user code:
-
-| v0.4 | v0.5 |
-|---|---|
-| `mps_bond_dimension` (boundary MPS) | `env_maxdim` — the bond dimension of any environment; CTMRG uses the same name |
-| `norm_mps_bond_dimension`, `projected_mps_bond_dimension`, `certification_mps_bond_dimension` (sampling) | `norm_env_maxdim`, `projected_env_maxdim`, `certification_env_maxdim` |
-| `bp_update_kwargs` (`apply_gates`, `truncate`, `sample`, `contract`, `loop_correlations`), `bmps_update_kwargs` (`contract`) | `cache_update_kwargs`, everywhere |
-| `freenergy(cache)` returned ln *Z* | returns the free energy −ln *Z*; `partitionfunction(cache) = exp(-freenergy(cache))` |
-| Operators and states from ITensors' `op` / `state` system | the package's own registry (`op`, `state`, `register_op!`), in qiskit's parameter conventions; names outside it need `register_op!` |
-| `contract` and `inner` were methods of `ITensors.contract` / `ITensors.inner` | the package's own functions; with `using ITensors` as well, an unqualified `contract` or `inner` is ambiguous, so write `ITensors.contract(ψ)` (still forwarded) or `TensorNetworkQuantumSimulator.contract(ψ)` |
-| Pauli-string gates in either case (`"xz"`) | upper case only (`"XZ"`), one letter per vertex |
-| `build_graph_from_gates` (and its alias `build_graph_from_circuit`) | `build_graph_from_circuit` only; it also takes a `Circuit`, and idle qubits give isolated vertices instead of an error |
-| `topologytograph` | removed: build the graph with `NamedGraph` |
-
-Results also change where v0.4 was wrong: the `xx_plus_yy` gate now follows qiskit's sign of β, and `sample_certified` certifies samples against the state they were drawn from (the gauged one).
