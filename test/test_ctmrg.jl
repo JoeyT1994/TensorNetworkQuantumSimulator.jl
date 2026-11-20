@@ -80,5 +80,10 @@ end
     @test norm_sqr(cache; alg = "ctmrg") ≈ norm_sqr(ψ; alg = "exact") rtol = 1.0e-8
     ϕ = random_tensornetworkstate(ComplexF64, g, siteinds(ψ); bond_dimension = 2)
     @test inner(ψ, ϕ; alg = "ctmrg", env_maxdim = 64) ≈ inner(ψ, ϕ; alg = "exact") rtol = 1.0e-8
+    # convergence on a state is measured on each vertex's environment applied to its ket: one leg per
+    # bond and the site, not the environment's two legs per bond (D^(2 × degree) entries)
+    for (u, s) in zip(vertices(g), TensorNetworkQuantumSimulator.vertex_environments(cache))
+        @test length(TensorNetworkQuantumSimulator.inds(s)) == degree(g, u) + 1
+    end
 end
 end

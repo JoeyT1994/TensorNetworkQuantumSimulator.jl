@@ -485,8 +485,9 @@ were built (as after `apply_gates_full_update` on the cache), they are rebuilt f
 
 # Keyword Arguments
 - `convergence::Symbol = :messages`: What has to converge. `:messages` (for expectation values):
-  the environment of every vertex, by the same distance BP uses for its messages, 1 − |⟨a, b⟩|² /
-  (‖a‖‖b‖)², so a tolerance τ settles the environments to about √τ relative. `:freenergy` (enough for
+  the environment of every vertex (on a state, applied to the vertex's tensor, which keeps it small),
+  by the same distance BP uses for its messages, 1 − |⟨a, b⟩|² / (‖a‖‖b‖)², so a tolerance τ settles
+  the environments to about √τ relative. `:freenergy` (enough for
   the free energy): `freenergy(cache)`, relative, which settles first.
 - `tolerance`: Convergence threshold (default `1e-12` for `:messages` and `1e-10` for `:freenergy`,
   but never below `100 eps` of the network's precision, so `1.2e-5` in single precision). With
@@ -528,9 +529,16 @@ end
 default_ctmrg_tolerance(cache::CTMRGCache, convergence) =
     max(convergence === :messages ? 1.0e-12 : 1.0e-10, 100 * eps(real(scalartype(network(cache)))))
 
-# The environment of every vertex: the messages into it and the corners around it, contracted.
+# The environment of every vertex: the messages into it and the corners around it, contracted. On a
+# state, the environment (of the norm network) has two legs per bond, D^(2 × degree) entries (3 GB per
+# vertex at D = 12 on a square lattice), too much to keep for every vertex, so it is applied to the
+# vertex's ket: the vector on the bra's legs and the site that it maps the state's tensor to.
 function vertex_environments(cache::CTMRGCache)
-    return map(v -> evaluate_recipe(cache, vertex_environment(cache.embedding, v)), collect(vertices(cache)))
+    ψ = network(cache)
+    return map(collect(vertices(cache))) do v
+        ts = recipe_tensors(cache, vertex_environment(cache.embedding, v))
+        return contract_blocks(cache, ψ isa TensorNetworkState ? vcat(ts, Tensor[ψ[v]]) : ts)
+    end
 end
 
 """
