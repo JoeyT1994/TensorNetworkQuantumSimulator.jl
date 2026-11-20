@@ -107,7 +107,17 @@ function expect(
         cache::AbstractBeliefPropagationCache,
         observables::Vector{<:Tuple}
     )
-    return with_kernel_workspace(() -> map(obs -> expect(alg, cache, obs), observables))
+    # observables on the same region share its contraction without operators (the denominator)
+    denominators = Dict{Any, Any}()
+    return with_kernel_workspace() do
+        map(observables) do obs
+            op_strings, obs_vs, coeff = collectobservable(obs, graph(cache))
+            iszero(coeff) && return zero(coeff)
+            region = observable_region(cache, obs_vs)
+            denom = get!(() -> region_scalar(cache, region, v -> "I"), denominators, region)
+            return coeff * region_scalar(cache, region, op_string_function(op_strings, obs_vs)) / denom
+        end
+    end
 end
 
 # bp and ctmrg: converge a cache over ψ (`cache_kwargs` are the cache's, e.g. `env_maxdim`), then measure.

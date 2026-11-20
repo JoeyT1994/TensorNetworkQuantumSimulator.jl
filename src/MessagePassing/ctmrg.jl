@@ -255,6 +255,14 @@ end
 function carried_projectors!(cache::CTMRGCache)
     emb, rules = cache.embedding, cache.rules
     memo = Dict{Any, Tensor}()
+    # an enlarged corner serves the interfaces either side of it on its face: drop it after the last
+    uses = Dict{Any, Int}()
+    for (p, q) in rules.interfaces
+        f = face_of_dart(emb, p, q)
+        for k in ((p, f), (q, f))
+            uses[k] = get(uses, k, 0) + 1
+        end
+    end
     new = empty(cache.projectors)
     carry = Dict{Any, Tensor}()
     for I in rules.interfaces
@@ -282,6 +290,9 @@ function carried_projectors!(cache::CTMRGCache)
             end
         end
         new[I] = projector_pair(left, right, interface_legs(cache, I, J -> new[J][3]), cache.env_maxdim)
+        for k in ((p, f), (q, f))
+            (uses[k] -= 1) == 0 && delete!(memo, k)
+        end
         old = cache.projectors[I]
         carry[(I, :A)] = contract_blocks(cache, isnothing(J) ? [old[2], new[I][1]] : [old[2], carry[(J, :A)], new[I][1]])
         carry[(I, :B)] = contract_blocks(cache, isnothing(J) ? [old[1], new[I][2]] : [old[1], carry[(J, :B)], new[I][2]])
@@ -489,7 +500,7 @@ were built (as after `apply_gates_full_update` on the cache), they are rebuilt f
   (‖a‖‖b‖)², so a tolerance τ settles the environments to about √τ relative. `:freenergy` (enough for
   the free energy): `freenergy(cache)`, relative, which settles first.
 - `tolerance`: Convergence threshold (default `1e-12` for `:messages` and `1e-10` for `:freenergy`,
-  but never below `100 eps` of the network's precision, so `1.2e-5` in single precision). With
+  the latter never below `100 eps` of the network's precision). With
   `nothing`, exactly `maxiter` passes are run and convergence isn't measured.
 - `maxiter::Integer = 30`: Maximum number of passes.
 - `verbose::Bool = false`: Print the outcome.
@@ -523,14 +534,19 @@ function update(
     return cache
 end
 
-# The default convergence threshold: what double precision resolves, and no less than the network's
-# own precision does.
+# The default convergence threshold. The free energy is computed in the network's precision, so its
+# threshold can't be finer than that.
 default_ctmrg_tolerance(cache::CTMRGCache, convergence) =
-    max(convergence === :messages ? 1.0e-12 : 1.0e-10, 100 * eps(real(scalartype(network(cache)))))
+    convergence === :messages ? 1.0e-12 : max(1.0e-10, 100 * eps(real(scalartype(network(cache)))))
 
-# The environment of every vertex: the messages into it and the corners around it, contracted.
+# The environment of every vertex: its messages and corners, contracted. On a state it is applied to
+# the vertex's ket, rather than formed with its D^(2 × degree) entries.
 function vertex_environments(cache::CTMRGCache)
-    return map(v -> evaluate_recipe(cache, vertex_environment(cache.embedding, v)), collect(vertices(cache)))
+    ψ = network(cache)
+    return map(collect(vertices(cache))) do v
+        ts = recipe_tensors(cache, vertex_environment(cache.embedding, v))
+        return contract_blocks(cache, ψ isa TensorNetworkState ? vcat(ts, Tensor[ψ[v]]) : ts)
+    end
 end
 
 """
@@ -553,8 +569,8 @@ With `env_maxdim = 1` the corners are scalars and this is the Bethe free energy 
 function freenergy(cache::CTMRGCache)
     emb = cache.embedding
     g = graph(emb)
-    memo = Dict{Any, Tensor}()
-    lnZ(parts) = principal_log(scalar(evaluate_recipe(cache, parts; memo)))
+    # no memo: no enlarged corner recurs
+    lnZ(parts) = principal_log(scalar(evaluate_recipe(cache, parts)))
     F = sum(lnZ(vertex_region(emb, v)) for v in vertices(g); init = 0.0)
     F -= sum(lnZ(edge_cut(emb, src(e), dst(e))) for e in edges(g); init = 0.0)
     F += sum(lnZ(face_cut(emb, f)) for f in eachindex(faces(emb)); init = 0.0)

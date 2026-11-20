@@ -195,7 +195,7 @@ Observables can act on one vertex or on the two ends of an edge.
 )
 ```
 
-`convergence = :messages` waits for the environment of every vertex to settle, which is what expectation values need. The free energy settles earlier, so `convergence = :freenergy` is enough, and cheaper, when only the free energy is wanted. The `:messages` tolerance is on 1 − fidelity, as for BP, so `1e-12` settles the environments to about `1e-6`; the defaults are never below what the network's precision resolves (`1.2e-5` in single precision).
+`convergence = :messages` waits for the environment of every vertex to settle, which is what expectation values need. The free energy settles earlier, so `convergence = :freenergy` is enough, and cheaper, when only the free energy is wanted. The `:messages` tolerance is on 1 − fidelity, as for BP, so `1e-12` settles the environments to about `1e-6`, in any precision.
 
 ### Projectors
 
