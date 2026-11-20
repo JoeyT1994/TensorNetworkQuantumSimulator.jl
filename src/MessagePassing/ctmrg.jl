@@ -496,13 +496,11 @@ were built (as after `apply_gates_full_update` on the cache), they are rebuilt f
 
 # Keyword Arguments
 - `convergence::Symbol = :messages`: What has to converge. `:messages` (for expectation values):
-  the environment of every vertex (on a state, applied to the vertex's tensor, which keeps it small),
-  by the same distance BP uses for its messages, 1 − |⟨a, b⟩|² / (‖a‖‖b‖)², so a tolerance τ settles
-  the environments to about √τ relative. `:freenergy` (enough for
+  the environment of every vertex, by the same distance BP uses for its messages, 1 − |⟨a, b⟩|² /
+  (‖a‖‖b‖)², so a tolerance τ settles the environments to about √τ relative. `:freenergy` (enough for
   the free energy): `freenergy(cache)`, relative, which settles first.
 - `tolerance`: Convergence threshold (default `1e-12` for `:messages` and `1e-10` for `:freenergy`,
-  in any precision, since the change is measured in double precision; the free energy's is never
-  below `100 eps` of the network's precision, which it is computed in). With
+  the latter never below `100 eps` of the network's precision). With
   `nothing`, exactly `maxiter` passes are run and convergence isn't measured.
 - `maxiter::Integer = 30`: Maximum number of passes.
 - `verbose::Bool = false`: Print the outcome.
@@ -536,15 +534,13 @@ function update(
     return cache
 end
 
-# The default convergence threshold. The environments' change is measured in double precision in any
-# precision; the free energy is computed in the network's, so its threshold is no finer than that.
+# The default convergence threshold. The free energy is computed in the network's precision, so its
+# threshold can't be finer than that.
 default_ctmrg_tolerance(cache::CTMRGCache, convergence) =
     convergence === :messages ? 1.0e-12 : max(1.0e-10, 100 * eps(real(scalartype(network(cache)))))
 
-# The environment of every vertex: the messages into it and the corners around it, contracted. On a
-# state, the environment (of the norm network) has two legs per bond, D^(2 × degree) entries (3 GB per
-# vertex at D = 12 on a square lattice), too much to keep for every vertex, so it is applied to the
-# vertex's ket: the vector on the bra's legs and the site that it maps the state's tensor to.
+# The environment of every vertex: its messages and corners, contracted. On a state it is applied to
+# the vertex's ket, rather than formed with its D^(2 × degree) entries.
 function vertex_environments(cache::CTMRGCache)
     ψ = network(cache)
     return map(collect(vertices(cache))) do v
@@ -573,8 +569,7 @@ With `env_maxdim = 1` the corners are scalars and this is the Bethe free energy 
 function freenergy(cache::CTMRGCache)
     emb = cache.embedding
     g = graph(emb)
-    # no memo: each vertex region has its own enlarged corner, and none recurs, so keeping them would
-    # only hold memory
+    # no memo: no enlarged corner recurs
     lnZ(parts) = principal_log(scalar(evaluate_recipe(cache, parts)))
     F = sum(lnZ(vertex_region(emb, v)) for v in vertices(g); init = 0.0)
     F -= sum(lnZ(edge_cut(emb, src(e), dst(e))) for e in edges(g); init = 0.0)

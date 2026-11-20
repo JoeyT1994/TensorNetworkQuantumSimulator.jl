@@ -12,8 +12,7 @@ struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{Tenso
     edge_sequence::Vector
 end
 
-# 1 - |⟨a, b⟩|² / (‖a‖‖b‖)², in double precision whatever the messages' own: in single precision
-# the overlap only resolves 1 - f to ~1e-4, which hides convergence the messages themselves reach.
+# 1 - |⟨a, b⟩|² / (‖a‖‖b‖)², in double precision: in single precision it can't resolve below ~1e-4.
 function message_diff(message_a::Tensor, message_b::Tensor)
     a, b = in_double(message_a), in_double(message_b)
     n_a, n_b = norm(a), norm(b)

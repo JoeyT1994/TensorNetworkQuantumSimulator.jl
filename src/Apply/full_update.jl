@@ -83,11 +83,8 @@ function bond_side(envs, Q)
     return sort!(collect(side))
 end
 
-# The environment of a bond contracted with the Qs of its two ends and their conjugates. Each end's
-# half (its side of the environment with its Q and Q†) is contracted first, then the two halves with
-# whatever joins them: lists short enough for the exact order search on any lattice, where all of
-# them at once (14 tensors on a square lattice) leave it to a greedy order whose intermediates can
-# be far larger than the result.
+# The bond's environment contracted with the Qs of its ends and their conjugates: each end's half
+# first, then the halves, so every list is short enough for the exact order search.
 function bond_environment(envs, Q₁, Q₂, sequences)
     side₁, side₂ = bond_side(envs, Q₁), bond_side(envs, Q₂)
     if isempty(side₁) || isempty(side₂) || !isempty(intersect(side₁, side₂))
@@ -238,7 +235,7 @@ end
 # Whether a bond's environment can be trusted: its negativity and non-Hermiticity within `health`.
 healthy(d, health) = d.negativity <= health.negativity && d.nonhermiticity <= health.nonhermiticity
 
-# The CTMRG convergence threshold for a state, in any precision (the change is measured in double).
+# The CTMRG convergence threshold for a state.
 default_env_tolerance(ψ) = 1.0e-6
 
 """

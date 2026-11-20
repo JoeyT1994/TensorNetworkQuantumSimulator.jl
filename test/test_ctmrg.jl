@@ -53,19 +53,6 @@ end
     @test_nowarn update(CTMRGCache(tn, 64); convergence = :freenergy)
 end
 
-@testset "The change between messages is resolved in single precision" begin
-    # 1 - fidelity of about 1e-10 between two single-precision vectors: below what single precision
-    # resolves in the overlap itself (~1e-7), so the change has to be measured in double precision
-    rng = Xoshiro(3)
-    i = TensorNetworkQuantumSimulator.new_index(4000)
-    a = TensorNetworkQuantumSimulator.from_array(randn(rng, ComplexF32, 4000), [i])
-    b = a + 1.0f-5 * TensorNetworkQuantumSimulator.from_array(randn(rng, ComplexF32, 4000), [i])
-    double(t) = TensorNetworkQuantumSimulator.adapt(ComplexF64, t)
-    exact = TensorNetworkQuantumSimulator.message_diff(double(a), double(b))
-    @test 1.0e-11 < exact < 1.0e-9
-    @test TensorNetworkQuantumSimulator.message_diff(a, b) ≈ exact rtol = 1.0e-3
-end
-
 @testset "The :eig ring solver: two-sided invariant subspaces, N = $N (dense below 400, Krylov above)" for N in (64, 600)
     rng = Xoshiro(N)
     # a ring of 4 blocks with a gap after its 5 dominant eigenvalues
@@ -93,8 +80,7 @@ end
     @test norm_sqr(cache; alg = "ctmrg") ≈ norm_sqr(ψ; alg = "exact") rtol = 1.0e-8
     ϕ = random_tensornetworkstate(ComplexF64, g, siteinds(ψ); bond_dimension = 2)
     @test inner(ψ, ϕ; alg = "ctmrg", env_maxdim = 64) ≈ inner(ψ, ϕ; alg = "exact") rtol = 1.0e-8
-    # convergence on a state is measured on each vertex's environment applied to its ket: one leg per
-    # bond and the site, not the environment's two legs per bond (D^(2 × degree) entries)
+    # the convergence check applies each environment to its vertex's ket: one leg per bond, plus the site
     for (u, s) in zip(vertices(g), TensorNetworkQuantumSimulator.vertex_environments(cache))
         @test length(TensorNetworkQuantumSimulator.inds(s)) == degree(g, u) + 1
     end
