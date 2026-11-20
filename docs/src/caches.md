@@ -195,7 +195,7 @@ Observables can act on one vertex or on the two ends of an edge.
 )
 ```
 
-`convergence = :messages` waits for the environment of every vertex to settle, which is what expectation values need. On a state, each environment is measured applied to its vertex's tensor, so the check holds one small tensor per vertex rather than the environment's two legs per bond (at bond dimension 12 on a square lattice, 3 GB per vertex). The free energy settles earlier, so `convergence = :freenergy` is enough, and cheaper, when only the free energy is wanted. The `:messages` tolerance is on 1 − fidelity, as for BP, so `1e-12` settles the environments to about `1e-6`; the defaults are never below what the network's precision resolves (`1.2e-5` in single precision).
+`convergence = :messages` waits for the environment of every vertex to settle, which is what expectation values need. On a state, each environment is measured applied to its vertex's tensor, so the check holds one small tensor per vertex rather than the environment's two legs per bond (at bond dimension 12 on a square lattice, 3 GB per vertex). The free energy settles earlier, so `convergence = :freenergy` is enough, and cheaper, when only the free energy is wanted. The `:messages` tolerance is on 1 − fidelity, as for BP, so `1e-12` settles the environments to about `1e-6`; the change is measured in double precision, so the same tolerance holds in single precision.
 
 ### Projectors
 

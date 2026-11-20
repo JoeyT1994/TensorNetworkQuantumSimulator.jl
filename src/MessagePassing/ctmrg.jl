@@ -501,7 +501,8 @@ were built (as after `apply_gates_full_update` on the cache), they are rebuilt f
   the environments to about √τ relative. `:freenergy` (enough for
   the free energy): `freenergy(cache)`, relative, which settles first.
 - `tolerance`: Convergence threshold (default `1e-12` for `:messages` and `1e-10` for `:freenergy`,
-  but never below `100 eps` of the network's precision, so `1.2e-5` in single precision). With
+  in any precision, since the change is measured in double precision; the free energy's is never
+  below `100 eps` of the network's precision, which it is computed in). With
   `nothing`, exactly `maxiter` passes are run and convergence isn't measured.
 - `maxiter::Integer = 30`: Maximum number of passes.
 - `verbose::Bool = false`: Print the outcome.
@@ -535,10 +536,10 @@ function update(
     return cache
 end
 
-# The default convergence threshold: what double precision resolves, and no less than the network's
-# own precision does.
+# The default convergence threshold. The environments' change is measured in double precision in any
+# precision; the free energy is computed in the network's, so its threshold is no finer than that.
 default_ctmrg_tolerance(cache::CTMRGCache, convergence) =
-    max(convergence === :messages ? 1.0e-12 : 1.0e-10, 100 * eps(real(scalartype(network(cache)))))
+    convergence === :messages ? 1.0e-12 : max(1.0e-10, 100 * eps(real(scalartype(network(cache)))))
 
 # The environment of every vertex: the messages into it and the corners around it, contracted. On a
 # state, the environment (of the norm network) has two legs per bond, D^(2 × degree) entries (3 GB per

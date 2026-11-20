@@ -238,9 +238,8 @@ end
 # Whether a bond's environment can be trusted: its negativity and non-Hermiticity within `health`.
 healthy(d, health) = d.negativity <= health.negativity && d.nonhermiticity <= health.nonhermiticity
 
-# The CTMRG convergence threshold for a state: 1e-6, or what its precision can reach (in single
-# precision the change stalls at a few hundred ε, so 1000ε).
-default_env_tolerance(ψ) = max(1.0e-6, 1000 * eps(real(scalartype(ψ))))
+# The CTMRG convergence threshold for a state, in any precision (the change is measured in double).
+default_env_tolerance(ψ) = 1.0e-6
 
 """
     apply_gates_full_update(circuit, ψ::TensorNetworkState; maxdim, env_maxdim, kwargs...)
@@ -273,7 +272,7 @@ projector. Call `update` on it before measuring.
   without an environment only when it is `nothing`.
 - `normalize_tensors = true`: Normalise the two tensors after each gate.
 - `cache_update_kwargs`: Passed to `update` on the cache before a gate that needs it. The default,
-  `(; tolerance = max(1e-6, 1000ε), maxiter = 100)` with ε the machine epsilon of the state, is
+  `(; tolerance = 1e-6, maxiter = 100)`, is
   merged with what is given.
 - `health`: The largest `negativity` and `nonhermiticity` (see `full_update`) an environment may
   have before the gate falls back to a plain SVD. Default `(; negativity = 5e-2, nonhermiticity = 5e-2)`,
