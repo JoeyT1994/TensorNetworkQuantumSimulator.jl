@@ -63,6 +63,42 @@ function hermitian_map(f, A)
     return W * LinearAlgebra.Diagonal(f.(λ)) * W'
 end
 
+# The environment tensors on Q's side of the bond: those sharing a leg with Q, then, until none is
+# added, any whose links to the other environment tensors all stay within the side.
+function bond_side(envs, Q)
+    side = Set(i for (i, t) in enumerate(envs) if hascommoninds(t, Q))
+    links(i) = [j for j in eachindex(envs) if j != i && hascommoninds(envs[i], envs[j])]
+    grown = true
+    while grown
+        grown = false
+        for i in eachindex(envs)
+            i in side && continue
+            l = links(i)
+            if !isempty(l) && all(in(side), l)
+                push!(side, i)
+                grown = true
+            end
+        end
+    end
+    return sort!(collect(side))
+end
+
+# The environment of a bond contracted with the Qs of its two ends and their conjugates. Each end's
+# half (its side of the environment with its Q and Q†) is contracted first, then the two halves with
+# whatever joins them: lists short enough for the exact order search on any lattice, where all of
+# them at once (14 tensors on a square lattice) leave it to a greedy order whose intermediates can
+# be far larger than the result.
+function bond_environment(envs, Q₁, Q₂, sequences)
+    side₁, side₂ = bond_side(envs, Q₁), bond_side(envs, Q₂)
+    if isempty(side₁) || isempty(side₂) || !isempty(intersect(side₁, side₂))
+        return contract_memoized(sequences, vcat(envs, Tensor[Q₁, Q₂, dag(prime(Q₁)), dag(prime(Q₂))]))
+    end
+    half₁ = contract_memoized(sequences, vcat(envs[side₁], Tensor[Q₁, dag(prime(Q₁))]))
+    half₂ = contract_memoized(sequences, vcat(envs[side₂], Tensor[Q₂, dag(prime(Q₂))]))
+    rest = envs[setdiff(eachindex(envs), side₁, side₂)]
+    return contract_memoized(sequences, vcat(rest, Tensor[half₁, half₂]))
+end
+
 """
     full_update(o, ψ₁, ψ₂, envs; maxdim, cutoff = nothing, gauge_fix = true, maxsweeps = 100,
                 tol = 1e-8, regularization = 1e-10, gauge_regularization = 1e-8)
@@ -103,7 +139,7 @@ function full_update(
 
     # 1. the reduced environment, rows on the bra legs, rotated to a real positive trace (CTMRG
     # corners carry arbitrary phases)
-    N = adapt(Array, contract_memoized(sequences, vcat(envs, Tensor[Q₁, Q₂, dag(prime(Q₁)), dag(prime(Q₂))])))
+    N = adapt(Array, bond_environment(envs, Q₁, Q₂, sequences))
     Nm = reshape(array(N, prime(r₁), prime(r₂), r₁, r₂), d₁ * d₂, d₁ * d₂)
     τ = LinearAlgebra.tr(Nm)
     iszero(τ) || (Nm = Nm * (conj(τ) / abs(τ)))

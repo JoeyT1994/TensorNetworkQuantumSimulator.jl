@@ -255,6 +255,14 @@ end
 function carried_projectors!(cache::CTMRGCache)
     emb, rules = cache.embedding, cache.rules
     memo = Dict{Any, Tensor}()
+    # an enlarged corner serves the interfaces either side of it on its face: drop it after the last
+    uses = Dict{Any, Int}()
+    for (p, q) in rules.interfaces
+        f = face_of_dart(emb, p, q)
+        for k in ((p, f), (q, f))
+            uses[k] = get(uses, k, 0) + 1
+        end
+    end
     new = empty(cache.projectors)
     carry = Dict{Any, Tensor}()
     for I in rules.interfaces
@@ -282,6 +290,9 @@ function carried_projectors!(cache::CTMRGCache)
             end
         end
         new[I] = projector_pair(left, right, interface_legs(cache, I, J -> new[J][3]), cache.env_maxdim)
+        for k in ((p, f), (q, f))
+            (uses[k] -= 1) == 0 && delete!(memo, k)
+        end
         old = cache.projectors[I]
         carry[(I, :A)] = contract_blocks(cache, isnothing(J) ? [old[2], new[I][1]] : [old[2], carry[(J, :A)], new[I][1]])
         carry[(I, :B)] = contract_blocks(cache, isnothing(J) ? [old[1], new[I][2]] : [old[1], carry[(J, :B)], new[I][2]])
@@ -561,8 +572,9 @@ With `env_maxdim = 1` the corners are scalars and this is the Bethe free energy 
 function freenergy(cache::CTMRGCache)
     emb = cache.embedding
     g = graph(emb)
-    memo = Dict{Any, Tensor}()
-    lnZ(parts) = principal_log(scalar(evaluate_recipe(cache, parts; memo)))
+    # no memo: each vertex region has its own enlarged corner, and none recurs, so keeping them would
+    # only hold memory
+    lnZ(parts) = principal_log(scalar(evaluate_recipe(cache, parts)))
     F = sum(lnZ(vertex_region(emb, v)) for v in vertices(g); init = 0.0)
     F -= sum(lnZ(edge_cut(emb, src(e), dst(e))) for e in edges(g); init = 0.0)
     F += sum(lnZ(face_cut(emb, f)) for f in eachindex(faces(emb)); init = 0.0)
