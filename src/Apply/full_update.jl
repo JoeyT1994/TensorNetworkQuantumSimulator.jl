@@ -1,21 +1,14 @@
 #=
-Full update: apply a two-site gate and truncate the bond to maximise the fidelity of the result
-in an environment of the bond. For a gate `o` on the bond (v₁, v₂):
-  1. Split ψᵥ = Qᵥ Rᵥ with Qᵥ carrying the outer virtual legs, and contract the environment with
-     the Qs into a reduced environment N on the legs (r₁, r₂) of R₁, R₂, with its overall phase
-     removed (an environment is only fixed up to a scalar).
-  2. Make N Hermitian and positive definite: negative eigenvalues are set to zero, then all of them
-     are shifted by `regularization` (relative to the largest). An approximate environment can give
-     almost no weight to directions that matter; the shift keeps them in the objective, so the
-     truncation error isn't dumped there, where undoing the gauge (step 3) would amplify it.
-  3. Gauge fix: absorb Lᵢ = (ρᵢ + δ)^{1/2} into Rᵢ, with ρᵢ the reduced environment of leg rᵢ, so
-     the gauged tensors see an environment close to the identity. The shift δ keeps Lᵢ invertible.
-  4. Start from the truncated SVD of the gated, gauged tensors, then sweep: with one tensor fixed,
-     the other solves a small positive-definite linear system. Stop when the fidelity settles.
-  5. Re-split with an SVD to balance the bond, undo the gauge, and multiply back the Qs.
-
-The environment is contracted where the tensors are (on a GPU, if they are there); everything after
-it is on small dense matrices on the host. This is for dense (non-graded) backends.
+Full update: apply a two-site gate and truncate the bond to maximise the fidelity in the bond's
+environment. For a gate on (v₁, v₂):
+  1. Split ψᵥ = Qᵥ Rᵥ and contract the environment with the Qs into N, on the legs of R₁, R₂.
+  2. Make N Hermitian and positive definite, its eigenvalues shifted by `regularization` so no
+     direction of the bond drops out of the objective.
+  3. Gauge each Rᵢ with the square root of its leg's reduced environment (shifted by δ).
+  4. Start from the truncated SVD, then sweep, each tensor in turn solving a small linear system.
+  5. Re-split with an SVD, undo the gauge, and multiply back the Qs.
+N is contracted where the tensors are (on a GPU, if they are there); the rest runs on the host.
+Dense (non-graded) backends only.
 =#
 
 # ψᵥ = Qᵥ Rᵥ with Rᵥ on `keep` (the site and the bond) and a new leg rᵥ. A tensor with no other
@@ -63,6 +56,39 @@ function hermitian_map(f, A)
     return W * LinearAlgebra.Diagonal(f.(λ)) * W'
 end
 
+# The environment tensors on Q's side of the bond: those sharing a leg with Q, then, until none is
+# added, any whose links to the other environment tensors all stay within the side.
+function bond_side(envs, Q)
+    side = Set(i for (i, t) in enumerate(envs) if hascommoninds(t, Q))
+    links(i) = [j for j in eachindex(envs) if j != i && hascommoninds(envs[i], envs[j])]
+    grown = true
+    while grown
+        grown = false
+        for i in eachindex(envs)
+            i in side && continue
+            l = links(i)
+            if !isempty(l) && all(in(side), l)
+                push!(side, i)
+                grown = true
+            end
+        end
+    end
+    return sort!(collect(side))
+end
+
+# The bond's environment contracted with the Qs of its ends and their conjugates: each end's half
+# first, then the halves, so every list is short enough for the exact order search.
+function bond_environment(envs, Q₁, Q₂, sequences)
+    side₁, side₂ = bond_side(envs, Q₁), bond_side(envs, Q₂)
+    if isempty(side₁) || isempty(side₂) || !isempty(intersect(side₁, side₂))
+        return contract_memoized(sequences, vcat(envs, Tensor[Q₁, Q₂, dag(prime(Q₁)), dag(prime(Q₂))]))
+    end
+    half₁ = contract_memoized(sequences, vcat(envs[side₁], Tensor[Q₁, dag(prime(Q₁))]))
+    half₂ = contract_memoized(sequences, vcat(envs[side₂], Tensor[Q₂, dag(prime(Q₂))]))
+    rest = envs[setdiff(eachindex(envs), side₁, side₂)]
+    return contract_memoized(sequences, vcat(rest, Tensor[half₁, half₂]))
+end
+
 """
     full_update(o, ψ₁, ψ₂, envs; maxdim, cutoff = nothing, gauge_fix = true, maxsweeps = 100,
                 tol = 1e-8, regularization = 1e-10, gauge_regularization = 1e-8)
@@ -83,11 +109,10 @@ network with the bra's virtual legs primed, as returned by `incoming_messages`).
 - `gauge_regularization`: The same shift for the environments of each leg used by the gauge.
 
 # Returns
-The new tensors and a named tuple of diagnostics: `fidelity` (in the environment, after the
-sweeps), `initial_fidelity` (of the starting SVD), `negativity` (the norm of the environment's
-negative eigenvalues relative to all of them), `nonhermiticity` (the norm of its anti-Hermitian part
-relative to its norm), `condition` (the ratio of its largest to smallest eigenvalue, after the
-shift), `sweeps` and the bond's `singular_values` in the gauged frame.
+The new tensors and diagnostics: `fidelity` in the environment (after the sweeps) and
+`initial_fidelity` (of the starting SVD); the environment's `negativity` and `nonhermiticity` (the
+relative norms of its negative eigenvalues and anti-Hermitian part) and `condition` (after the
+shift); `sweeps`; and the bond's `singular_values` in the gauged frame.
 """
 function full_update(
         o::Tensor, ψ₁::Tensor, ψ₂::Tensor, envs::Vector{<:Tensor};
@@ -103,7 +128,7 @@ function full_update(
 
     # 1. the reduced environment, rows on the bra legs, rotated to a real positive trace (CTMRG
     # corners carry arbitrary phases)
-    N = adapt(Array, contract_memoized(sequences, vcat(envs, Tensor[Q₁, Q₂, dag(prime(Q₁)), dag(prime(Q₂))])))
+    N = adapt(Array, bond_environment(envs, Q₁, Q₂, sequences))
     Nm = reshape(array(N, prime(r₁), prime(r₂), r₁, r₂), d₁ * d₂, d₁ * d₂)
     τ = LinearAlgebra.tr(Nm)
     iszero(τ) || (Nm = Nm * (conj(τ) / abs(τ)))
@@ -135,8 +160,7 @@ function full_update(
     ĀB̄Ñ = contract([reduced_bra(A, [s₁]), reduced_bra(B, [s₂]), Ñ])
     initial_fidelity = abs2(scalar(ĀB̄Ñ * Θ)) / (real(scalar(contract([ĀB̄Ñ, A, B]))) * nΘ)
 
-    # With `other` fixed, the tensor on (r, s, c) that maximises the fidelity, K x = h, and the
-    # fidelity of the result
+    # with `other` fixed, the tensor maximising the fidelity (K x = h), and that fidelity
     function solve(other, s_other, r, s)
         ōÑ = reduced_bra(other, [s_other]) * Ñ
         n = dim(r) * dim(c)
@@ -178,9 +202,8 @@ function full_update(
     return Q₁ * adapt_like(Q₁, A), Q₂ * adapt_like(Q₂, B), diagnostics
 end
 
-# The two-site gate `o` applied to the neighbours ψ₁, ψ₂ with no environment, the bond split by an
-# SVD truncated by `maxdim` and `cutoff`, with its singular values. With `exact`, the SVD keeps every
-# singular value above rounding, or `nothing` is returned if that is more than `maxdim`.
+# The gate applied with no environment and the bond split by a truncated SVD, with its singular
+# values. With `exact`, nothing above rounding is truncated, or `nothing` is returned.
 function svd_update(o::Tensor, ψ₁::Tensor, ψ₂::Tensor; maxdim::Integer, cutoff = nothing, exact = false)
     b = commonind(ψ₁, ψ₂)
     s₁, s₂ = commonind(ψ₁, o), commonind(ψ₂, o)
@@ -202,9 +225,8 @@ end
 # Whether a bond's environment can be trusted: its negativity and non-Hermiticity within `health`.
 healthy(d, health) = d.negativity <= health.negativity && d.nonhermiticity <= health.nonhermiticity
 
-# The CTMRG convergence threshold for a state: 1e-6, or what its precision can reach (in single
-# precision the change stalls at a few hundred ε, so 1000ε).
-default_env_tolerance(ψ) = max(1.0e-6, 1000 * eps(real(scalartype(ψ))))
+# The CTMRG convergence threshold for a state.
+default_env_tolerance(ψ) = 1.0e-6
 
 """
     apply_gates_full_update(circuit, ψ::TensorNetworkState; maxdim, env_maxdim, kwargs...)
@@ -213,16 +235,12 @@ default_env_tolerance(ψ) = max(1.0e-6, 1000 * eps(real(scalartype(ψ))))
 Apply a sequence of gates to `ψ`, two-site gates by [`full_update`](@ref) in the CTMRG environment
 of their bond. The graph must be planar.
 
-The environment is updated, from where it was, before any two-site gate that acts on a tensor changed
-since the last update, so a layer of gates on disjoint bonds (one colour of an edge colouring) shares
-one environment. While a bond can hold a gate's result without truncation (as while bonds grow from a
-product state), the gate is applied exactly, with no environment. A gate whose environment fails the
-health checks is applied by a plain truncated SVD instead.
+The environment is updated, from where it was, before any two-site gate on a tensor changed since the
+last update, so a layer of disjoint gates shares one. A gate whose bond can hold the result without
+truncation is applied exactly; one whose environment fails the health checks, by a truncated SVD.
 
-Given a `CTMRGCache` (as returned by a previous call) instead of a state, its environment is carried
-over rather than built from scratch, and the updated cache is returned: a circuit split into several
-calls gets the same environments as in one call. The cache keeps its `env_maxdim`, embedding and
-projector. Call `update` on it before measuring.
+Given a `CTMRGCache` (e.g. from a previous call), its environment is carried over and the updated
+cache returned. Call `update` on it before measuring.
 
 # Arguments
 - `circuit`: A [`Circuit`](@ref), or a vector of gates as tuples `(name, vertices)` or
@@ -231,26 +249,22 @@ projector. Call `update` on it before measuring.
 
 # Keyword Arguments
 - `maxdim::Integer`: The maximum bond dimension of the state.
-- `env_maxdim::Integer`: The bond dimension of the CTMRG environment (state method only). It needs
-  to grow with `maxdim` for the full update to keep improving on simple update.
-- `cutoff = nothing`: A singular value cutoff, as for `apply_gates`. Gates are applied exactly
-  without an environment only when it is `nothing`.
+- `env_maxdim::Integer`: The bond dimension of the CTMRG environment (state method only); it should
+  grow with `maxdim`.
+- `cutoff = nothing`: A singular value cutoff, as for `apply_gates`. Gates are only applied exactly
+  when it is `nothing`.
 - `normalize_tensors = true`: Normalise the two tensors after each gate.
-- `cache_update_kwargs`: Passed to `update` on the cache before a gate that needs it. The default,
-  `(; tolerance = max(1e-6, 1000ε), maxiter = 100)` with ε the machine epsilon of the state, is
-  merged with what is given.
-- `health`: The largest `negativity` and `nonhermiticity` (see `full_update`) an environment may
-  have before the gate falls back to a plain SVD. Default `(; negativity = 5e-2, nonhermiticity = 5e-2)`,
-  merged with what is given.
+- `cache_update_kwargs`: Passed to `update`, merged into `(; tolerance = 1e-6, maxiter = 100)`.
+- `health`: The largest `negativity` and `nonhermiticity` (see `full_update`) before a gate falls
+  back to a truncated SVD, merged into `(; negativity = 5e-2, nonhermiticity = 5e-2)`.
 - `gauge_fix = true`: Passed to `full_update`.
 - `positions`: The planar embedding of the graph (state method only; default: the vertex names,
   when they are coordinates).
 
 # Returns
-- The new state (or, given a cache, the updated cache) and the diagnostics of each two-site gate:
-  those of `full_update`, with `environment` (false for the gates applied exactly: fidelity 1, no
-  sweeps) and `fallback` (true for the gates applied by a plain SVD because their environment
-  failed the health checks: fidelity `NaN`, no sweeps).
+- The new state (or cache) and each two-site gate's diagnostics: those of `full_update`, with
+  `environment` (false for exact gates) and `fallback` (true for health-check fallbacks, whose
+  `fidelity` is `NaN`).
 """
 function apply_gates_full_update(
         circuit::Vector, ψ::TensorNetworkState; env_maxdim::Integer, positions = default_positions(graph(ψ)), kwargs...

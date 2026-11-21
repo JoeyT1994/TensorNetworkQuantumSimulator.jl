@@ -12,10 +12,17 @@ struct BeliefPropagationCache{V, N <: AbstractTensorNetwork{V}, M <: Union{Tenso
     edge_sequence::Vector
 end
 
+# 1 - |⟨a, b⟩|² / (‖a‖‖b‖)², in double precision: in single precision it can't resolve below ~1e-4.
 function message_diff(message_a::Tensor, message_b::Tensor)
-    n_a, n_b = norm(message_a), norm(message_b)
-    f = abs2(dot(message_a, message_b) / (n_a * n_b))
+    a, b = in_double(message_a), in_double(message_b)
+    n_a, n_b = norm(a), norm(b)
+    f = abs2(dot(a, b) / (n_a * n_b))
     return 1 - f
+end
+function in_double(t::Tensor)
+    T = scalartype(t)
+    real(T) == Float64 && return t
+    return adapt(T <: Complex ? ComplexF64 : Float64, t)
 end
 
 messages(bp_cache::BeliefPropagationCache) = bp_cache.messages
